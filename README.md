@@ -13,8 +13,9 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 0 (skeleton).** The app boots and shows a window. The tray, sessions, tools,
-> approval gate and provider integration land in later phases — see `PLAN.md` § 6.
+> **Status: Phase 1 (tray and window lifecycle).** The app boots, lives in the system tray and
+> hides instead of quitting when the window is closed. Sessions, tools, the approval gate and
+> provider integration land in later phases — see `PLAN.md` § 6.
 
 ---
 

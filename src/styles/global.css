@@ -73,3 +73,40 @@ body {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+.boot__actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.boot__actions button {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.boot__actions button:hover {
+  border-color: var(--muted);
+}
+
+.boot__actions button:focus-visible {
+  outline: 2px solid var(--muted);
+  outline-offset: 2px;
+}
+
+.boot__error {
+  margin: 0.75rem 0 0;
+  color: #b3261e;
+  font-size: 0.85rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .boot__error {
+    color: #f2b8b5;
+  }
+}
