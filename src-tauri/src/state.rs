@@ -1,30 +1,44 @@
 //! Application-wide runtime state, managed by Tauri.
 //!
 //! Anything a command needs and cannot derive from its arguments lives here,
-//! behind `&self` so commands never take a lock they do not need. Phase 1
-//! carries only what the window lifecycle requires; later phases add the
-//! project/session stores, the policy engine, per-session grants and the
-//! per-turn cancellation registry as separate fields with their own locks,
-//! rather than one coarse mutex around everything.
+//! behind `&self` so commands never take a lock they do not need. Each concern
+//! owns its own synchronization rather than sharing one coarse mutex: Phase 2
+//! adds the project store, and the policy engine, per-session grants and the
+//! per-turn cancellation registry land the same way.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// Shared state, registered with `Builder::manage` and read from commands via
+use crate::store::Store;
+
+/// Shared state, registered with `Manager::manage` and read from commands via
 /// `tauri::State<'_, AppState>`.
 #[derive(Debug)]
 pub struct AppState {
     started_at: Instant,
     quitting: AtomicBool,
+    store: Store,
 }
 
 impl AppState {
-    /// Builds the state for a fresh process.
-    pub fn new() -> Self {
+    /// Builds the state for a fresh process, loading persisted data from
+    /// `data_dir` (the OS application-data directory).
+    ///
+    /// Infallible on purpose. A store that cannot be read yields an empty one
+    /// and a log line; the app still boots, and the failure is reported to the
+    /// user on the first save rather than as a window that never appears.
+    pub fn new(data_dir: &Path) -> Self {
         Self {
             started_at: Instant::now(),
             quitting: AtomicBool::new(false),
+            store: Store::load(data_dir),
         }
+    }
+
+    /// The project store.
+    pub fn store(&self) -> &Store {
+        &self.store
     }
 
     /// How long this process has been up. Used by logging and, later, by the
@@ -51,19 +65,16 @@ impl AppState {
     }
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use tempfile::TempDir;
+
     #[test]
     fn quitting_latches_once() {
-        let state = AppState::new();
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
         assert!(!state.is_quitting());
         assert!(state.begin_quit(), "first call wins");
         assert!(state.is_quitting());

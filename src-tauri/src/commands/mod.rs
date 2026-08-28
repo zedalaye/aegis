@@ -4,7 +4,13 @@
 //! glue around them. Real behaviour belongs to the runtime modules they call,
 //! so a command stays readable as a permission-and-shape check.
 //!
-//! Domains land with their phases: `window` now, then `project`, `session`,
+//! Domains land with their phases: `window` and `project` now, then `session`,
 //! `approval`, `settings` and `audit`.
+//!
+//! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
+//! accept `camelCase` from JavaScript and rename it, so every command taking
+//! arguments carries `#[tauri::command(rename_all = "snake_case")]` and the
+//! TypeScript wrappers spell the Rust names.
 
+pub mod project;
 pub mod window;

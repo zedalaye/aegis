@@ -1,13 +1,26 @@
 /*
  * Plain CSS only. Linux ships WebKitGTK rather than Chromium (PLAN 5.3), so
- * Blink-only effects are avoided from the start.
+ * Blink-only effects are avoided from the start: no `backdrop-filter`, no
+ * `:has()`, no container queries. Flexbox and grid only, and nothing that
+ * depends on pixel-exact layout — fractional scaling under Wayland does not
+ * guarantee it.
  */
 
 :root {
   --bg: #f7f7f8;
+  --panel: #ffffff;
   --fg: #1b1b1f;
   --muted: #6b6b76;
   --border: #e0e0e4;
+  --accent: #3a5bcc;
+  --accent-fg: #ffffff;
+  --selected: #eaeefc;
+  --danger: #b3261e;
+  --danger-bg: #fdeceb;
+  --warning: #8a5a00;
+  --warning-bg: #fdf3e0;
+
+  --radius: 6px;
 
   color-scheme: light dark;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
@@ -19,9 +32,17 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #18181b;
+    --panel: #1f1f23;
     --fg: #ededf0;
     --muted: #9a9aa4;
     --border: #2e2e34;
+    --accent: #7d97ee;
+    --accent-fg: #14161f;
+    --selected: #262b3d;
+    --danger: #f2b8b5;
+    --danger-bg: #3a1f1e;
+    --warning: #e5bf74;
+    --warning-bg: #2f2718;
   }
 }
 
@@ -39,74 +60,386 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  /* The window chrome is the only place a text selection is unwanted. */
   -webkit-font-smoothing: antialiased;
 }
 
-.boot {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
-  padding: 2rem;
-  text-align: center;
-}
+/* --- Shared controls ------------------------------------------------------ */
 
-.boot__title {
-  margin: 0;
-  font-size: 2rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.boot__subtitle {
-  margin: 0;
-  color: var(--muted);
-}
-
-.boot__phase {
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.boot__actions {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 1.5rem;
-}
-
-.boot__actions button {
-  padding: 0.4rem 0.9rem;
+.button {
+  padding: 0.35rem 0.8rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
+  border-radius: var(--radius);
+  background: var(--panel);
   color: inherit;
   font: inherit;
   cursor: pointer;
 }
 
-.boot__actions button:hover {
+.button:hover:enabled {
   border-color: var(--muted);
 }
 
-.boot__actions button:focus-visible {
-  outline: 2px solid var(--muted);
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.button--wide {
+  display: block;
+  width: 100%;
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* One focus treatment for every interactive element in the app. */
+:focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.boot__error {
-  margin: 0.75rem 0 0;
-  color: #b3261e;
+/* --- Shell ---------------------------------------------------------------- */
+
+.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* The panes scroll, the frame does not. */
+  overflow: hidden;
+}
+
+.shell__body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.shell__main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+/* --- Title bar ------------------------------------------------------------ */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.titlebar__identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.titlebar__name {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.titlebar__project {
+  padding-left: 0.6rem;
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.titlebar__hint {
+  color: var(--muted);
+}
+
+.titlebar__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+/* --- Sidebar -------------------------------------------------------------- */
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.75rem;
+  gap: 0.5rem;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sidebar__heading {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.sidebar__empty {
+  margin: 0;
+  color: var(--muted);
   font-size: 0.85rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  .boot__error {
-    color: #f2b8b5;
-  }
+.sidebar__list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar__item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.sidebar__footer {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.project {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project:hover:enabled {
+  background: var(--bg);
+}
+
+.project--open {
+  background: var(--selected);
+  border-color: var(--border);
+}
+
+.project:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.project__name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project__remove {
+  flex-shrink: 0;
+  width: 1.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.project__remove:hover:enabled {
+  color: var(--danger);
+  border-color: var(--border);
+}
+
+.project__remove:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- Workspace badge ------------------------------------------------------ */
+
+.workspace {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.workspace--missing {
+  color: var(--warning);
+}
+
+.workspace__icon {
+  flex-shrink: 0;
+}
+
+.workspace__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace__note {
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+}
+
+/* --- Project picker ------------------------------------------------------- */
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.picker__label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.picker__input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+.picker__actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.picker__actions .button {
+  flex: 1;
+}
+
+/* --- Work area ------------------------------------------------------------ */
+
+.work {
+  max-width: 46rem;
+  padding: 1.5rem;
+}
+
+.work--empty {
+  color: var(--muted);
+}
+
+.work__title {
+  margin: 0 0 1rem;
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+.work__subtitle {
+  margin: 2rem 0 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.work__body {
+  margin: 0;
+  color: var(--muted);
+  max-width: 34rem;
+}
+
+.work__warning {
+  margin: 1rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.facts__path {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  /* Long paths wrap rather than widen the pane; the break stays at a
+     separator so each line is still a readable fragment of the path. */
+  overflow-wrap: anywhere;
+}
+
+/* --- Error banner --------------------------------------------------------- */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.banner__message {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner__code {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.banner__dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
 }

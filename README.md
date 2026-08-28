@@ -13,9 +13,10 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 1 (tray and window lifecycle).** The app boots, lives in the system tray and
-> hides instead of quitting when the window is closed. Sessions, tools, the approval gate and
-> provider integration land in later phases — see `PLAN.md` § 6.
+> **Status: Phase 2 (persistence and projects).** The app boots, lives in the system tray, hides
+> instead of quitting when the window is closed, and remembers the workspace folders you point it
+> at. Sessions, tools, the approval gate and provider integration land in later phases — see
+> `PLAN.md` § 6.
 
 ---
 
@@ -57,9 +58,29 @@ see *Troubleshooting*.
 ## Tests
 
 ```sh
-cd src-tauri && cargo test     # Rust: policy, tools, audit, wire protocol
+cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol
+cd src-tauri && cargo clippy --all-targets -- -D warnings
 pnpm typecheck                 # TypeScript, strict
 ```
+
+---
+
+## Where your data lives
+
+Projects are stored as one small JSON document, `projects.json`, under the application-data
+directory:
+
+| | Path |
+| --- | --- |
+| Windows | `%APPDATA%\dev.aegis.harness\` |
+| macOS | `~/Library/Application Support/dev.aegis.harness/` |
+| Linux | `~/.local/share/dev.aegis.harness/` |
+
+It holds names and workspace paths — no file contents, and never a key. It is meant to be
+readable and is safe to edit by hand while Aegis is closed; a document Aegis cannot parse is
+renamed to `projects.corrupt-<timestamp>.json` and the app starts with an empty list rather than
+refusing to open. Deleting a project forgets it here; the workspace folder itself is never
+touched.
 
 ---
 
@@ -67,7 +88,7 @@ pnpm typecheck                 # TypeScript, strict
 
 ```
 src/           React app — presentation and typed IPC glue only
-  ipc/         invoke() / listen() wrappers; bindings.ts is generated, do not edit
+  ipc/         invoke() / listen() wrappers; bindings.ts mirrors the Rust payload structs
   state/       zustand stores
   components/  layout, chat, sessions, approvals, projects, settings, audit
 src-tauri/

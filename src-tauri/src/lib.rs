@@ -1,17 +1,20 @@
 //! Aegis runtime.
 //!
 //! The WebView renders UI only. The agent loop, tool execution, secrets and
-//! policy all live here (AGENTS.md). Phase 1 wires logging, managed state, the
-//! IPC command surface, the tray and the window lifecycle; later phases add
-//! commands and modules without changing this entry shape.
+//! policy all live here (AGENTS.md). Phase 1 wired logging, managed state, the
+//! IPC command surface, the tray and the window lifecycle; Phase 2 adds the
+//! project store. Later phases add commands and modules without changing this
+//! entry shape.
 
 mod commands;
 mod error;
 mod state;
+mod store;
 mod tray;
 
 pub use error::{AppError, AppResult, ErrorCode};
 pub use state::AppState;
+pub use store::{Project, ProjectDetail, SessionState, SessionSummary};
 
 use tauri::{Manager, RunEvent, WindowEvent};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -77,13 +80,31 @@ pub fn run() {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting Aegis");
 
     let app = tauri::Builder::default()
-        .manage(AppState::new())
+        // Registered for the runtime's use only: the folder picker is opened
+        // by `project_pick_workspace`, and `capabilities/main.json` grants the
+        // WebView no `dialog:` permission of its own.
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::window::window_toggle,
             commands::window::window_hide,
             commands::window::app_quit,
+            commands::project::project_pick_workspace,
+            commands::project::project_create,
+            commands::project::project_list,
+            commands::project::project_open,
+            commands::project::project_delete,
         ])
         .setup(|app| {
+            // State is built here rather than on the builder because loading
+            // it needs the application-data directory, and that is only
+            // resolvable once there is an app to ask. Nothing observes the
+            // gap: the tray and the close handler both reach for the state
+            // with `try_state` and cope with its absence, and a command can
+            // only arrive once the WebView has loaded, which is after setup.
+            let data_dir = app.path().app_data_dir()?;
+            tracing::info!(dir = %data_dir.display(), "application data directory");
+            app.manage(AppState::new(&data_dir));
+
             // A missing tray is a degraded app, not a broken one (PLAN 5.3).
             if let Err(err) = tray::init(app.handle()) {
                 tracing::warn!(%err, "no tray icon; the window remains the only surface");

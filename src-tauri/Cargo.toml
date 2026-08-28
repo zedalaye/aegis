@@ -22,11 +22,27 @@ tauri-build = { version = "2", features = [] }
 # `tray-icon` is the only feature the MVP needs from Tauri itself; the tray
 # lives in Rust so the WebView never gets window or process permissions.
 tauri = { version = "2", features = ["tray-icon"] }
+# The folder picker is driven from Rust (PLAN 2.1). The plugin is registered
+# on the builder but deliberately granted to no window: `capabilities/main.json`
+# carries no `dialog:` permission, so the WebView cannot open a dialog itself.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Persistence support. `chrono` and `uuid` give RFC3339 stamps and v4 ids for
+# the project records; `dunce` canonicalizes without leaving Windows verbatim
+# (`\\?\C:\...`) prefixes in a path the user is meant to read. `tokio` is
+# already in the tree via Tauri — only the `sync` feature is pulled in, for the
+# oneshot channel that awaits the native dialog callback.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+uuid = { version = "1", features = ["v4"] }
+dunce = "1"
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 codegen-units = 1

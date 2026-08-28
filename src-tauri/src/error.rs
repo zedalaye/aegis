@@ -124,8 +124,8 @@ impl Serialize for ErrorCode {
 
 /// Every failure a Tauri command can hand back to the WebView.
 ///
-/// Phase 1 needs only the window and runtime variants; later phases add their
-/// own, each mapping onto an existing [`ErrorCode`].
+/// Each variant maps onto an existing [`ErrorCode`]; a new failure mode adds a
+/// variant here, never a code.
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     /// The named window is gone — closed, or never created.
@@ -138,13 +138,64 @@ pub enum AppError {
     /// A Tauri runtime call failed.
     #[error("runtime error: {0}")]
     Runtime(#[from] tauri::Error),
+
+    /// A path offered as a workspace cannot be used as one.
+    ///
+    /// The path is echoed back deliberately — the user just chose it, so it is
+    /// theirs already, and naming it is what makes the message actionable.
+    #[error("`{path}` cannot be used as a workspace: {reason}")]
+    WorkspacePath {
+        /// The path as it was given.
+        path: String,
+        /// Why it was refused, in words a user can act on.
+        reason: String,
+    },
+
+    /// No project carries that id, so the UI is holding a stale list.
+    ///
+    /// The right response is to refetch rather than to branch on this: the
+    /// project may have been deleted, or the store may have been reset.
+    #[error("that project no longer exists")]
+    ProjectNotFound {
+        /// The id that was looked up. Logged, not shown.
+        id: String,
+    },
+
+    /// A runtime invariant broke somewhere outside the agent and tool
+    /// domains — a channel that closed, a resource that vanished mid-call.
+    ///
+    /// The text is written for a user; the diagnosis belongs in the log.
+    #[error("{what}")]
+    Internal {
+        /// What went wrong, in one clause.
+        what: &'static str,
+    },
+
+    /// Reading or writing the on-disk store failed.
+    ///
+    /// The message stays deliberately vague: the underlying `io::Error` and
+    /// the path are logged at the call site, where they help, rather than
+    /// handed to the WebView, where they only describe the machine.
+    #[error("could not {action} your projects")]
+    Store {
+        /// What was being attempted, for the message.
+        action: &'static str,
+        /// The underlying failure. Never rendered into the message.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl AppError {
     /// The stable code for this failure.
     pub const fn code(&self) -> ErrorCode {
         match self {
-            Self::WindowUnavailable { .. } | Self::Runtime(_) => ErrorCode::Internal,
+            Self::WorkspacePath { .. } => ErrorCode::PathInvalid,
+            Self::WindowUnavailable { .. }
+            | Self::Runtime(_)
+            | Self::ProjectNotFound { .. }
+            | Self::Internal { .. }
+            | Self::Store { .. } => ErrorCode::Internal,
         }
     }
 }
@@ -189,6 +240,39 @@ mod tests {
         assert_eq!(json["code"], "E_INTERNAL");
         assert_eq!(json["message"], "window `main` is not available");
         assert_eq!(json["retryable"], false);
+    }
+
+    #[test]
+    fn a_bad_workspace_names_itself_and_the_reason() {
+        let err = AppError::WorkspacePath {
+            path: r"C:\gone".to_owned(),
+            reason: "the folder does not exist".to_owned(),
+        };
+        let json = serde_json::to_value(&err).expect("AppError serializes");
+
+        assert_eq!(json["code"], "E_PATH_INVALID");
+        assert_eq!(
+            json["message"],
+            r"`C:\gone` cannot be used as a workspace: the folder does not exist"
+        );
+    }
+
+    #[test]
+    fn store_failures_do_not_describe_the_machine() {
+        let err = AppError::Store {
+            action: "save",
+            source: std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                r"C:\Users\someone\AppData\Roaming\Aegis\projects.json is locked",
+            ),
+        };
+        let message = err.to_string();
+
+        assert_eq!(message, "could not save your projects");
+        assert!(
+            !message.contains("AppData"),
+            "the source is for the log, not the WebView"
+        );
     }
 
     #[test]
