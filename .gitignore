@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Frontend build output
+dist/
+*.tsbuildinfo
+
+# Rust build output
+src-tauri/target/
+
+# Tauri generated (schemas + capability bindings)
+src-tauri/gen/schemas/
+
+# Local runtime data - never commit an audit log or a capture
+*.jsonl
+src-tauri/captures/
+
+# Secrets - keys live in the OS keyring or the environment, never in the repo
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

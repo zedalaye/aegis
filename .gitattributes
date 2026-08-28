@@ -1,0 +1,13 @@
+# Normalize to LF in the repository on every platform. Aegis is built on
+# Windows, macOS and Linux; without this the working tree churns line
+# endings between checkouts.
+* text=auto eol=lf
+
+# Binary assets - never touch these.
+*.png binary
+*.ico binary
+*.icns binary
+
+# Generated lockfiles: keep them, but keep them out of review diffs.
+pnpm-lock.yaml linguist-generated=true
+src-tauri/Cargo.lock linguist-generated=true

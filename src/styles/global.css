@@ -1,0 +1,75 @@
+/*
+ * Plain CSS only. Linux ships WebKitGTK rather than Chromium (PLAN 5.3), so
+ * Blink-only effects are avoided from the start.
+ */
+
+:root {
+  --bg: #f7f7f8;
+  --fg: #1b1b1f;
+  --muted: #6b6b76;
+  --border: #e0e0e4;
+
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181b;
+    --fg: #ededf0;
+    --muted: #9a9aa4;
+    --border: #2e2e34;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  /* The window chrome is the only place a text selection is unwanted. */
+  -webkit-font-smoothing: antialiased;
+}
+
+.boot {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.boot__title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.boot__subtitle {
+  margin: 0;
+  color: var(--muted);
+}
+
+.boot__phase {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
