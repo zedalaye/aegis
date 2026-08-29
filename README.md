@@ -445,12 +445,14 @@ Read this before pointing Aegis at anything you care about.
   worse: AppIndicator loads, WSLg maps the *tray* as the taskbar icon, and `center: true`
   can park the real window off the X11 screen. `DRI3 error: Could not get DRI3 device` means
   there is no GPU for WebKit to draw with. Aegis now skips the tray under WSL, pins the
-  window at (64, 64), and — unless you already exported them — sets X11, software GL,
-  `GTK_CSD=0` and disables the WebKit bwrap sandbox *before* GTK starts. Rebuild and
-  relaunch. The log should contain `WSL: skipping the tray` and a `main window` line with
-  `visible`, size and position; if `visible=Some(true)` and you still see nothing, click the
-  taskbar icon (WSLg sometimes leaves it iconic). The Secret Service D-Bus warning is
-  expected; use `AEGIS_API_KEY`. This is still not the Phase 10 walkthrough.
+  window after the compositor maps it (not at `(0,0)` during setup), and — unless you
+  already exported them — sets X11, software GL, and disables the WebKit bwrap sandbox
+  *before* GTK starts. Rebuild and relaunch. The log should contain `WSL: skipping the tray`,
+  then `WSL: delayed raise after compositor map` and a `main window` line with `visible`,
+  size and a position that is not `(0, 0)`. If `visible=Some(true)` and you still see
+  nothing, Alt+Tab or click the taskbar icon. Confirm WSLg itself with `xeyes` from
+  `x11-apps`. The Secret Service D-Bus warning is expected; use `AEGIS_API_KEY`. This is
+  still not the Phase 10 walkthrough.
 - **No keyring.** Without a running Secret Service (gnome-keyring, kwallet), use the
   `AEGIS_API_KEY` environment variable. This is normal on headless and minimal window managers.
 

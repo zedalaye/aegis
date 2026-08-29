@@ -54,16 +54,14 @@ pub fn describe_main<R: Runtime>(window: &WebviewWindow<R>) {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use tauri::{LogicalPosition, LogicalSize, Runtime, WebviewWindow};
+    use tauri::{PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
     /// Env vars WebKitGTK / GDK read at init. Set only when unset.
     const DMABUF: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
     const COMPOSITING: &str = "WEBKIT_DISABLE_COMPOSITING_MODE";
     const GDK_BACKEND: &str = "GDK_BACKEND";
     const LIBGL_SOFTWARE: &str = "LIBGL_ALWAYS_SOFTWARE";
-    const GTK_CSD: &str = "GTK_CSD";
     const WEBKIT_SANDBOX: &str = "WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS";
-    const WEBKIT_FORCE_SANDBOX: &str = "WEBKIT_FORCE_SANDBOX";
 
     pub(super) fn prepare() {
         // PLAN 5.3: blank window on NVIDIA/Wayland. Harmless elsewhere; the
@@ -73,19 +71,17 @@ mod linux {
 
         if is_wsl() {
             // WSLg advertises Wayland *and* X11. GTK3 prefers Wayland, then
-            // WebKit tries GBM against a virtual GPU that ZINK cannot use,
-            // and the RAIL window Windows shows in the taskbar never paints.
-            // X11 + llvmpipe, no CSD, no bwrap sandbox: that is the path
-            // that has a chance of drawing. The AppIndicator "tray" is
-            // skipped in `lib.rs` — WSLg maps it as the taskbar icon and
-            // the real window stays invisible.
-            tracing::info!("WSL detected; WebKitGTK will use X11, software GL, no CSD, no sandbox");
+            // WebKit tries GBM against a virtual GPU that ZINK cannot use.
+            // X11 + llvmpipe + no bwrap sandbox is the path that can draw.
+            // Do not set `WEBKIT_FORCE_SANDBOX=0`: current WebKitGTK ignores
+            // it and warns. Do not set `GTK_CSD=0`: without client chrome
+            // and with an unpainted WebView the window has nothing opaque
+            // for WSLg to show — a taskbar icon and no pixels.
+            tracing::info!("WSL detected; WebKitGTK will use X11, software GL, no sandbox");
             set_if_unset(GDK_BACKEND, "x11");
             set_if_unset(COMPOSITING, "1");
             set_if_unset(LIBGL_SOFTWARE, "1");
-            set_if_unset(GTK_CSD, "0");
             set_if_unset(WEBKIT_SANDBOX, "1");
-            set_if_unset(WEBKIT_FORCE_SANDBOX, "0");
         }
     }
 
@@ -93,11 +89,16 @@ mod linux {
         if !is_wsl() {
             return;
         }
-        if let Err(err) = window.set_position(LogicalPosition::new(64.0, 64.0)) {
+        // Physical, not logical: a logical (64,64) reported as (0,0), which
+        // RAIL then treats as "not placed".
+        if let Err(err) = window.set_position(PhysicalPosition::new(120, 80)) {
             tracing::warn!(%err, "could not pin the WSL window on screen");
         }
-        if let Err(err) = window.set_size(LogicalSize::new(1100.0, 720.0)) {
+        if let Err(err) = window.set_size(PhysicalSize::new(1100, 720)) {
             tracing::warn!(%err, "could not size the WSL window");
+        }
+        if let Err(err) = window.set_always_on_top(true) {
+            tracing::warn!(%err, "could not raise the WSL window above others");
         }
     }
 

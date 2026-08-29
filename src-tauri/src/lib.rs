@@ -215,6 +215,22 @@ pub fn run() {
         .expect("error while building the Aegis application");
 
     app.run(|app, event| match event {
+        // WSLg maps the X11 window to a Windows RAIL surface *after* setup.
+        // A show/position during setup reports visible=true at (0,0) and then
+        // the compositor never presents it. Re-raise once the event loop is
+        // running, after a beat so Weston has the surface.
+        RunEvent::Ready if display::is_wsl() => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                tracing::info!("WSL: delayed raise after compositor map");
+                if let Err(err) = commands::window::show_main(&handle) {
+                    tracing::warn!(%err, "WSL delayed raise failed");
+                } else if let Ok(window) = commands::window::main_window(&handle) {
+                    display::describe_main(&window);
+                }
+            });
+        }
         // Closing the last window must not end the process when the tray is
         // there to bring it back. Without an icon, that same swallow would
         // leave a headless process. An explicit quit passes an exit code,
