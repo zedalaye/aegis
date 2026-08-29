@@ -76,6 +76,9 @@ Out of scope for MVP (do not start, even as a "head start"):
 
 - domain connectors (mail, SMS, WhatsApp, GitHub/GitLab, Coolify, monitoring, X, brokers)
 
+- messaging faces / control channels (Keybase, X Chat, Telegram, Discord). A
+  face is a later UI onto this runtime, not a reason to enlarge the MVP loop.
+
 - Playwright / browser-use
 
 - accessibility-tree desktop control
@@ -110,10 +113,34 @@ or a system prompt is not a skill — do not schedule it (`PLAN.md` § 7.6).
 | Revenue experiments | propose (trading ideas, X drafts); never execute | an autonomous trader or poster |
 | Wish list | prioritized goals; CoS tracks, human decides spend | a shopping agent |
 
-Remote control, if any, is the **same runtime** over a private network
-(e.g. Tailscale). A messaging face (e.g. X Chat) is a UI onto this
-runtime, not a second agent. Do not expose the runtime on the public
-internet.
+Three later surfaces, not one:
+
+- **Remote access** is the same runtime over a private network
+  (e.g. Tailscale). It is not a second process and not a crate in
+  this repo. Preferred path: the host joins the tailnet and you
+  drive the existing window (OS remote desktop or Tailscale SSH).
+  A later optional loopback HTTP/WS on `127.0.0.1` may mirror the
+  same commands as the WebView, reached via Tailscale Serve — never
+  Funnel, never `0.0.0.0`. Outbound SSH or MCP to another machine
+  is a **tool** under the approval gate, not remote access and not
+  a second agent loop. See `PLAN.md` § 7.8.
+- **Messaging face** (Keybase first for confidentiality; X Chat as the
+  other E2EE-shaped adapter; then Telegram or Discord) is a UI onto this
+  runtime — same sessions, same approval gate, same audit. It is not an
+  agent and not an inbox. Preferred first face: Keybase, via the local
+  `keybase` CLI already logged in (`chat api` / `api-listen`): chat is
+  E2EE, the client is outbound-only, nothing listens on a public port.
+  X Chat (Chat XDK + `GET /2/activity/stream`) is the same outbound
+  shape with client-side E2EE and an official Rust core; it is not a
+  second agent and not the Phase 19 social pack. Telegram long-poll and
+  Discord Gateway fit that outbound shape with weaker confidentiality.
+  See `PLAN.md` § 7.7.
+- **Inbox intake** (mail, SMS, WhatsApp) is a domain pack later
+  (`PLAN.md` § 7.3 Phase 19). WhatsApp is not a control channel.
+
+Do not expose the runtime on the public internet. A face that needs an
+inbound webhook (WhatsApp Cloud API, Telegram `setWebhook`, X
+`POST /2/webhooks`, ngrok) is the wrong shape.
 
 Multi-LLM: the MVP has one OpenAI-compatible provider. Later, a roster of
 providers and a per-agent binding (CoS on one model, a coding specialist
@@ -144,6 +171,17 @@ A CoS without (1) recites. Do not build (2) first.
 - Irreversible actions (send, pay, merge, publish, deploy, trade) stay
   behind a human gate. Later domain tools inherit this matrix; they do
   not get a bypass.
+
+- The MVP has no OS sandbox: tools run as the user. The approval gate is
+  a human boundary, not containment. Do not treat "allow this session"
+  as "the agent owns the host". A fleet of agent processes and a
+  hypervisor control plane are **not products in this repo** — not
+  because the work is useless, but because they do not belong in the
+  harness: multi-agent is in-process (CoS + specialists + files);
+  `docker` / `ssh` / `sbx` on PATH are already `shell_exec` under the
+  gate; a later workspace-scoped executor (`PLAN.md` § 7.9) is
+  containment for *our* tools, not a VM manager and not computer-use of
+  the desktop.
 
 ## Code rules
 
