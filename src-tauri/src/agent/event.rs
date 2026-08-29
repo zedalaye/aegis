@@ -26,6 +26,7 @@ use ts_rs::TS;
 use crate::approval::{ApprovalRequest, Decision, ResolvedBy};
 use crate::audit::{AuditEntry, Outcome};
 use crate::store::{Message, SessionSummary};
+use crate::tools::Stream;
 
 use super::wire::{StopReason, Usage};
 
@@ -49,6 +50,8 @@ pub mod name {
     pub const TOOL_APPROVAL_RESOLVED: &str = "tool:approval_resolved";
     /// A tool began running.
     pub const TOOL_STARTED: &str = "tool:started";
+    /// A running tool produced output.
+    pub const TOOL_PROGRESS: &str = "tool:progress";
     /// A tool finished, whatever became of it.
     pub const TOOL_FINISHED: &str = "tool:finished";
     /// A session's row changed.
@@ -189,6 +192,35 @@ pub struct ToolStarted {
     pub tool: String,
 }
 
+/// `tool:progress` — output from a tool that is still running.
+///
+/// `shell_exec` only (PLAN 2.2): a file is read in one call, but a command can
+/// take two minutes, and a pane that only fills in at the end is
+/// indistinguishable from a hang.
+///
+/// Frames are coalesced to roughly 50 ms and the total is capped, so this is
+/// a live view rather than a record — the transcript keeps the one-line
+/// summary and the audit log keeps the byte counts. A `tool:finished` carrying
+/// `truncated` is what says the pane stopped short of everything the command
+/// printed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct ToolProgress {
+    /// The session.
+    pub session_id: String,
+    /// The turn.
+    pub turn_id: String,
+    /// The call.
+    pub call_id: String,
+    /// Which pipe this came from.
+    pub stream: Stream,
+    /// Per-turn monotonic counter, as on `turn:delta`. The UI drops anything
+    /// out of order or repeated.
+    pub seq: u32,
+    /// The text to append.
+    pub chunk: String,
+}
+
 /// `tool:finished` — the call ended, whatever became of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
@@ -235,6 +267,8 @@ pub enum Event {
     ToolApprovalResolved(ToolApprovalResolved),
     /// `tool:started`.
     ToolStarted(ToolStarted),
+    /// `tool:progress`.
+    ToolProgress(ToolProgress),
     /// `tool:finished`.
     ToolFinished(ToolFinished),
     /// `session:updated`.
@@ -256,6 +290,7 @@ impl Event {
             Self::ToolApprovalRequired(_) => name::TOOL_APPROVAL_REQUIRED,
             Self::ToolApprovalResolved(_) => name::TOOL_APPROVAL_RESOLVED,
             Self::ToolStarted(_) => name::TOOL_STARTED,
+            Self::ToolProgress(_) => name::TOOL_PROGRESS,
             Self::ToolFinished(_) => name::TOOL_FINISHED,
             Self::SessionUpdated(_) => name::SESSION_UPDATED,
             Self::AuditAppended(_) => name::AUDIT_APPENDED,
@@ -274,6 +309,7 @@ impl Event {
             Self::ToolApprovalRequired(payload) => &payload.session_id,
             Self::ToolApprovalResolved(payload) => &payload.session_id,
             Self::ToolStarted(payload) => &payload.session_id,
+            Self::ToolProgress(payload) => &payload.session_id,
             Self::ToolFinished(payload) => &payload.session_id,
             Self::SessionUpdated(payload) => &payload.id,
             Self::AuditAppended(payload) => &payload.session_id,
@@ -296,6 +332,7 @@ impl Event {
             Self::ToolApprovalRequired(payload) => serde_json::to_value(payload),
             Self::ToolApprovalResolved(payload) => serde_json::to_value(payload),
             Self::ToolStarted(payload) => serde_json::to_value(payload),
+            Self::ToolProgress(payload) => serde_json::to_value(payload),
             Self::ToolFinished(payload) => serde_json::to_value(payload),
             Self::SessionUpdated(payload) => serde_json::to_value(payload),
             Self::AuditAppended(payload) => serde_json::to_value(payload),
@@ -389,6 +426,26 @@ mod tests {
         assert_eq!(payload["seq"], 4);
         assert_eq!(
             payload["text"], "hello ",
+            "whitespace is content and must not be trimmed"
+        );
+    }
+
+    #[test]
+    fn progress_names_its_pipe_on_the_wire() {
+        let payload = Event::ToolProgress(ToolProgress {
+            session_id: "s".to_owned(),
+            turn_id: "t".to_owned(),
+            call_id: "c".to_owned(),
+            stream: Stream::Stderr,
+            seq: 2,
+            chunk: "warning: ".to_owned(),
+        })
+        .payload();
+
+        assert_eq!(payload["stream"], "stderr");
+        assert_eq!(payload["seq"], 2);
+        assert_eq!(
+            payload["chunk"], "warning: ",
             "whitespace is content and must not be trimmed"
         );
     }

@@ -11,6 +11,7 @@
 import type { Message } from "../../ipc/bindings";
 import { formatTimestamp } from "../../lib/format";
 import { useApprovals } from "../../state/approvals";
+import { useSessions } from "../../state/sessions";
 
 import ToolCallCard from "./ToolCallCard";
 
@@ -41,6 +42,11 @@ export default function MessageBubble({
   // would re-render on every store change in the application.
   const waiting = useApprovals((s) => s.pending);
 
+  // Selected as the whole map for the same reason: a selector that built a
+  // per-message object would never compare equal, and this bubble would
+  // re-render on every frame of a command running in another one.
+  const output = useSessions((s) => s.output);
+
   return (
     <article className={`bubble bubble--${message.role}`}>
       <header className="bubble__meta">
@@ -63,6 +69,7 @@ export default function MessageBubble({
             <ToolCallCard
               key={call.call_id}
               call={call}
+              output={output[call.call_id] ?? null}
               awaiting={waiting.some(
                 (request) => request.call_id === call.call_id,
               )}

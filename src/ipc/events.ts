@@ -27,6 +27,7 @@ import type {
   SessionSummary,
   ToolApprovalResolved,
   ToolFinished,
+  ToolProgress,
   ToolRequested,
   ToolStarted,
   TrayActivate,
@@ -68,6 +69,13 @@ export type EventPayloads = {
   "tool:approval_resolved": ToolApprovalResolved;
   /** A tool was cleared and is running. */
   "tool:started": ToolStarted;
+  /**
+   * Output from a tool that is still running — `shell_exec` only. Frames are
+   * coalesced to ~50 ms and the total is capped, so this is a live view rather
+   * than the record: `tool:finished` carrying `truncated` is what says the
+   * pane stopped short of everything the command printed.
+   */
+  "tool:progress": ToolProgress;
   /** A tool ended, whatever became of it. */
   "tool:finished": ToolFinished;
   /** A session's sidebar row changed. */

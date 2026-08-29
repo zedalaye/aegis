@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, GrantStore, PolicyCtx};
-use aegis_lib::tools::{self, ToolCtx, ToolOutcome, READ_MAX_BYTES};
+use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome, READ_MAX_BYTES};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -27,6 +27,12 @@ struct Fixture {
     outside: PathBuf,
     grants: GrantStore,
     audit: AuditLog,
+    /// `tools::run` is `async` for the sake of one tool, `shell_exec`. The
+    /// filesystem tools have nothing to await, so rather than turn thirty
+    /// tests into async ones this drives the future to completion here — the
+    /// tests stay a description of the pipeline instead of a description of
+    /// the runtime.
+    runtime: tokio::runtime::Runtime,
 }
 
 impl Fixture {
@@ -44,6 +50,10 @@ impl Fixture {
             _data_guard: data_guard,
             grants: GrantStore::new(),
             audit,
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a tokio runtime"),
         }
     }
 
@@ -73,21 +83,28 @@ impl Fixture {
     /// step, minus the events.
     fn call(&self, tool_name: &str, args: Value) -> ToolOutcome {
         let ctx = PolicyCtx::new("session-1", Some(&self.workspace), &self.grants);
+        let cancel = tokio_util::sync::CancellationToken::new();
         let tools_ctx = ToolCtx {
             session_id: "session-1",
             turn_id: "turn-1",
             call_id: "call-1",
             audit: &self.audit,
             args: &args,
+            progress: &NullProgress,
+            cancel: &cancel,
         };
 
         match decide(&ctx, tool_name, args.clone()) {
             Decision::Auto { call, reason } => {
-                tools::run(&tools_ctx, AuditDecision::Auto, reason, &call)
+                self.runtime
+                    .block_on(tools::run(&tools_ctx, AuditDecision::Auto, reason, &call))
             }
-            Decision::Ask { call, request } => {
-                tools::run(&tools_ctx, AuditDecision::AllowOnce, &request.reason, &call)
-            }
+            Decision::Ask { call, request } => self.runtime.block_on(tools::run(
+                &tools_ctx,
+                AuditDecision::AllowOnce,
+                &request.reason,
+                &call,
+            )),
             Decision::Deny { code, reason } => {
                 tools::refuse(&tools_ctx, tool_name, AuditDecision::Deny, code, &reason)
             }
@@ -399,9 +416,10 @@ fn a_refusal_is_an_envelope_the_model_can_read() {
 fn a_tool_this_build_does_not_have_says_so_rather_than_failing_silently() {
     let fixture = Fixture::new();
 
-    // `shell_exec` has a policy row from Phase 3 and no implementation until
-    // Phase 7. A model that names it anyway must get an answer it can act on.
-    let outcome = fixture.call(tool::SHELL_EXEC, json!({ "program": "echo" }));
+    // `screen_capture` has a policy row from Phase 3 and no implementation
+    // until Phase 9. A model that names it anyway must get an answer it can
+    // act on.
+    let outcome = fixture.call(tool::SCREEN_CAPTURE, json!({}));
     let envelope = envelope(&outcome);
 
     assert_eq!(envelope["ok"], false);
@@ -422,7 +440,7 @@ fn the_tools_offered_to_the_model_are_the_ones_this_build_runs() {
         .map(|schema| schema["function"]["name"].as_str().unwrap_or("").to_owned())
         .collect();
 
-    assert_eq!(names, vec!["fs_list", "fs_read", "fs_write"]);
+    assert_eq!(names, vec!["fs_list", "fs_read", "fs_write", "shell_exec"]);
 }
 
 /// The exit criterion of Phase 4 (PLAN § 6).

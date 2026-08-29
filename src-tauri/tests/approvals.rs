@@ -9,9 +9,14 @@
 //! that can be listed and taken back.
 //!
 //! It uses the improvising [`FakeProvider`] rather than a script, because the
-//! provider's own trigger is part of the walkthrough: typing `/write` is how a
-//! person reaches this gate before there is a model, and a test that scripted
-//! the call instead would not notice if that stopped working.
+//! provider's own triggers are part of the walkthrough: typing `/write` or
+//! `/run` is how a person reaches this gate before there is a model, and a
+//! test that scripted the call instead would not notice if that stopped
+//! working.
+//!
+//! Phase 7 adds the `shell_exec` half at the bottom, because a command is the
+//! first tool whose *running* the user can watch — the gate has to hold, and
+//! then the output has to arrive while it is still being produced.
 //!
 //! The command layer above this needs a running Tauri application and is not
 //! reachable from a test binary. Everything below it is, against real files in
@@ -24,7 +29,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use aegis_lib::agent::event::EventSink;
-use aegis_lib::agent::provider::fake::{WRITE_TARGET, WRITE_TRIGGER};
+use aegis_lib::agent::provider::fake::{RUN_TRIGGER, WRITE_TARGET, WRITE_TRIGGER};
 use aegis_lib::agent::turn::{self, TurnPlan};
 use aegis_lib::{
     ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditDecision, AuditLog, Event,
@@ -73,6 +78,28 @@ impl Recorder {
                 Event::ToolApprovalResolved(resolved) => {
                     Some((resolved.decision, resolved.resolved_by))
                 }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Everything a running tool printed, in the order the frames arrived.
+    fn printed(&self) -> String {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::ToolProgress(progress) => Some(progress.chunk),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The `seq` on each progress frame, in arrival order.
+    fn progress_seqs(&self) -> Vec<u32> {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::ToolProgress(progress) => Some(progress.seq),
                 _ => None,
             })
             .collect()
@@ -207,6 +234,17 @@ impl App {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         panic!("no approval was raised");
+    }
+
+    /// Stores a message that makes the fake provider ask to run a command.
+    fn ask_for_a_run(&self) {
+        self.sessions
+            .append(
+                &self.session_id,
+                Message::user(format!("{RUN_TRIGGER} something for me")),
+                SessionState::Running,
+            )
+            .expect("the user's message is stored");
     }
 
     /// Stores a message that makes the fake provider ask to write a file.
@@ -502,4 +540,160 @@ async fn deleting_a_session_drops_what_it_was_waiting_on() {
 
     assert!(app.grants.list(&app.session_id).is_empty());
     assert!(app.approvals.list(Some(&app.session_id)).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 — the shell tool through the same gate
+// ---------------------------------------------------------------------------
+
+/// The Phase 7 walkthrough (PLAN § 6): the model asks to run a command, the
+/// user reads the exact program, arguments and working directory, allows it
+/// once, and the output arrives as `tool:progress` while the command is still
+/// running rather than in one lump at the end.
+#[tokio::test]
+async fn a_command_runs_under_approval_and_streams_its_output() {
+    let app = App::new();
+    app.ask_for_a_run();
+
+    let sink = Recorder::default();
+    let reason = app.turn(&sink, &[ApprovalDecision::AllowOnce]).await;
+    assert_eq!(reason, StopReason::Stop);
+
+    // What the user was shown before deciding. The dialog carries the command
+    // in pieces, not as a string that something would have to re-split.
+    let asked = sink.asked();
+    assert_eq!(asked.len(), 1);
+    let request = &asked[0];
+    assert_eq!(request.tool, "shell_exec");
+    assert_eq!(request.title, "Run shell command");
+    assert!(
+        request.session_grant_allowed,
+        "a command in the workspace can be granted for the session"
+    );
+    assert!(
+        request.scope_label.contains("rest of this session"),
+        "{}",
+        request.scope_label
+    );
+    match &request.detail {
+        aegis_lib::policy::ApprovalDetail::Shell {
+            program,
+            cwd,
+            shell_line,
+            ..
+        } => {
+            assert!(!program.is_empty());
+            assert_eq!(cwd, &app.workspace.display().to_string());
+            assert!(shell_line.starts_with(program), "{shell_line}");
+        }
+        other => panic!("a shell call must render as a shell detail, got {other:?}"),
+    }
+
+    // It ran, and the pane saw it run. The command lists the workspace, so its
+    // output names the file the earlier phases' demo writes into it — proof
+    // the frames are the command's own output and not a placeholder.
+    assert_eq!(sink.count("tool:started"), 1);
+    assert!(sink.count("tool:progress") > 0, "the output was streamed");
+    assert!(
+        !sink.printed().is_empty(),
+        "the frames carried the command's own output"
+    );
+
+    // `seq` is per-turn and increasing, which is what lets the UI drop a
+    // duplicated or reordered frame.
+    let seqs = sink.progress_seqs();
+    assert!(
+        seqs.windows(2).all(|pair| pair[0] < pair[1]),
+        "progress frames are numbered in order: {seqs:?}"
+    );
+
+    let detail = app
+        .sessions
+        .open(&app.session_id, SessionState::Idle)
+        .expect("the session opens");
+    let call = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.tool_calls.iter())
+        .find(|call| call.tool == "shell_exec")
+        .expect("the call is in the transcript");
+    assert_eq!(call.status, ToolCallStatus::Ok);
+    assert!(
+        call.summary
+            .as_deref()
+            .is_some_and(|line| line.contains("ms")),
+        "the transcript keeps one line, not the output: {:?}",
+        call.summary
+    );
+
+    // The model saw an envelope with an exit code in it, not a bare string.
+    let answer = detail
+        .messages
+        .iter()
+        .find(|message| message.tool_call_id.as_deref() == Some(call.call_id.as_str()))
+        .expect("the call was answered");
+    let envelope: serde_json::Value = serde_json::from_str(&answer.text).expect("an envelope");
+    assert_eq!(envelope["ok"], serde_json::json!(true), "{envelope}");
+    assert_eq!(envelope["meta"]["exit_code"], serde_json::json!(0));
+
+    let audit = app.audit.tail(10, None).expect("tail");
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].tool, "shell_exec");
+    assert_eq!(audit[0].decision, AuditDecision::AllowOnce);
+    assert_eq!(audit[0].outcome, Outcome::Ok);
+}
+
+/// A refused command never starts, so there is nothing to stream. The turn
+/// carries on, exactly as it does for a refused write.
+#[tokio::test]
+async fn a_refused_command_never_runs_and_prints_nothing() {
+    let app = App::new();
+    app.ask_for_a_run();
+
+    let sink = Recorder::default();
+    let reason = app.turn(&sink, &[ApprovalDecision::Deny]).await;
+
+    assert_eq!(reason, StopReason::Stop, "a denial is not a failed turn");
+    assert_eq!(sink.count("tool:started"), 0);
+    assert_eq!(
+        sink.count("tool:progress"),
+        0,
+        "nothing ran, so nothing printed"
+    );
+
+    let audit = app.audit.tail(10, None).expect("tail");
+    assert_eq!(audit[0].tool, "shell_exec");
+    assert_eq!(audit[0].outcome, Outcome::Denied);
+    assert_eq!(audit[0].error_code.as_deref(), Some("E_DENIED"));
+}
+
+/// PLAN 3.1: the shell grant is keyed on the program, and it says so in the
+/// words the dialog used.
+#[tokio::test]
+async fn a_command_granted_for_the_session_names_the_program_it_covers() {
+    let app = App::new();
+    app.ask_for_a_run();
+
+    let sink = Recorder::default();
+    app.turn(&sink, &[ApprovalDecision::AllowSession]).await;
+
+    let granted = app.grants.list(&app.session_id);
+    assert_eq!(granted.len(), 1);
+    assert_eq!(granted[0].tool(), "shell_exec");
+    assert_eq!(granted[0].scope_label(), sink.asked()[0].scope_label);
+    assert!(
+        matches!(&granted[0], Grant::Shell { program } if !program.is_empty()),
+        "the grant is one program, not the tool: {:?}",
+        granted[0]
+    );
+
+    // A second turn asking for the same command is not put to the user again.
+    app.ask_for_a_run();
+    let second = Recorder::default();
+    app.turn(&second, &[]).await;
+
+    assert_eq!(second.count("tool:approval_required"), 0, "the grant held");
+    assert!(second.count("tool:progress") > 0, "and it still ran");
+    let audit = app.audit.tail(10, None).expect("tail");
+    assert_eq!(audit[0].decision, AuditDecision::Auto);
 }

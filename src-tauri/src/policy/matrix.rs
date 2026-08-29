@@ -642,7 +642,12 @@ fn human_bytes(bytes: u64) -> String {
 /// its argument vector directly, with no shell in between (PLAN 5.1). Quoting
 /// here is for legibility, not for safety, and must never be described as the
 /// latter.
-fn shell_line(program: &str, args: &[String]) -> String {
+///
+/// Shared with [`tools::shell`](crate::tools::shell) so the line a user reads
+/// in the approval dialog and the line the transcript reports afterwards are
+/// produced by the same function, and cannot come to disagree about what was
+/// run.
+pub(crate) fn shell_line(program: &str, args: &[String]) -> String {
     std::iter::once(program)
         .chain(args.iter().map(String::as_str))
         .map(quote)

@@ -401,6 +401,11 @@ state: SessionState, };
 export type StopReason = "stop" | "tool_calls" | "cancelled" | "length" | "error";
 
 /**
+ * Which pipe a chunk of tool output came from (PLAN 2.2, `tool:progress`).
+ */
+export type Stream = "stdout" | "stderr";
+
+/**
  * `tool:approval_resolved` — an approval stopped being pending.
  *
  * Emitted for every way one can end, not only for a click: a turn that was
@@ -501,6 +506,46 @@ duration_ms: number,
  * Whether the result the model saw was shorter than what was available.
  */
 truncated: boolean, };
+
+/**
+ * `tool:progress` — output from a tool that is still running.
+ *
+ * `shell_exec` only (PLAN 2.2): a file is read in one call, but a command can
+ * take two minutes, and a pane that only fills in at the end is
+ * indistinguishable from a hang.
+ *
+ * Frames are coalesced to roughly 50 ms and the total is capped, so this is
+ * a live view rather than a record — the transcript keeps the one-line
+ * summary and the audit log keeps the byte counts. A `tool:finished` carrying
+ * `truncated` is what says the pane stopped short of everything the command
+ * printed.
+ */
+export type ToolProgress = { 
+/**
+ * The session.
+ */
+session_id: string, 
+/**
+ * The turn.
+ */
+turn_id: string, 
+/**
+ * The call.
+ */
+call_id: string, 
+/**
+ * Which pipe this came from.
+ */
+stream: Stream, 
+/**
+ * Per-turn monotonic counter, as on `turn:delta`. The UI drops anything
+ * out of order or repeated.
+ */
+seq: number, 
+/**
+ * The text to append.
+ */
+chunk: string, };
 
 /**
  * `tool:requested` — the model asked, before policy has judged it.

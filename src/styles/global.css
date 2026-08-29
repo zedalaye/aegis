@@ -811,6 +811,33 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* What a running command has printed. Taller than the argument pane and
+   scrolled to the bottom, because this one is watched rather than consulted. */
+.toolcall__output {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.toolcall__stderr {
+  color: var(--danger);
+}
+
+.toolcall__elision {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* --- Approvals ------------------------------------------------------------ */
 
 /*

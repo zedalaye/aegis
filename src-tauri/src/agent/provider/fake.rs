@@ -17,13 +17,15 @@
 //!   per turn, consumed in order. This is how a test drives a tool call, a
 //!   truncated arguments string or a provider error through the loop.
 //!
-//! The improvised mode has one deliberate exception to "never touch the
-//! filesystem", and it is what makes the approval gate usable before there is
-//! a model: a message containing [`WRITE_TRIGGER`] makes it ask for an
+//! The improvised mode has two deliberate exceptions to "never touch the
+//! machine", and they are what make the approval gate usable before there is a
+//! model: a message containing [`WRITE_TRIGGER`] makes it ask for an
 //! `fs_write` (PLAN 6, Phase 6 — "the fake provider is scripted to request an
-//! `fs_write`"). The trigger is a word the user has to type, not a heuristic
-//! over what they said, because a fake model that decided on its own when to
-//! reach for the disk would be exactly the behaviour the gate exists to catch.
+//! `fs_write`"), and one containing [`RUN_TRIGGER`] makes it ask for a
+//! `shell_exec` (Phase 7). Both are words the user has to type, not heuristics
+//! over what they said: a fake model that decided on its own when to reach for
+//! the disk or for a process would be exactly the behaviour the gate exists to
+//! catch.
 //!
 //! Tokens are emitted with a small delay so streaming is visibly streaming and
 //! a cancel has something to interrupt. Tests use [`FakeProvider::instant`],
@@ -48,6 +50,14 @@ pub const FAKE_MODEL: &str = "aegis-fake-1";
 /// opens, and allow-once / allow-session / deny can each be seen to do what
 /// they say. Matched case-insensitively anywhere in the user's message.
 pub const WRITE_TRIGGER: &str = "/write";
+
+/// The word that makes the improvising provider ask to run a command.
+///
+/// Typing it is the Phase 7 walkthrough: the dialog names the exact program,
+/// arguments and working directory, and once allowed the output streams into
+/// the transcript as the command produces it. Matched case-insensitively
+/// anywhere in the user's message.
+pub const RUN_TRIGGER: &str = "/run";
 
 /// The file the triggered write targets, relative to the workspace.
 ///
@@ -162,10 +172,16 @@ impl Provider for FakeProvider {
 fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
     let said = last_user_text(request);
 
-    // The one thing this provider will reach for the disk over, and only
-    // because the user asked for it by name.
-    if said.to_lowercase().contains(WRITE_TRIGGER) && !already_answered(request) {
-        return ask_to_write(&said);
+    // The two things this provider will reach for the machine over, and only
+    // because the user named them.
+    if !already_answered(request) {
+        let asked = said.to_lowercase();
+        if asked.contains(WRITE_TRIGGER) {
+            return ask_to_write(&said);
+        }
+        if asked.contains(RUN_TRIGGER) {
+            return ask_to_run();
+        }
     }
 
     let workspace = workspace_line(request);
@@ -179,10 +195,7 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
          exercised end to end. Phase 8 replaces it with an OpenAI-compatible \
          client and nothing above this line changes.\n\n\
          {workspace}\n\
-         I was offered {tools} tool{plural}, and I will not call one unless you \
-         ask: send a message containing `{WRITE_TRIGGER}` and I will request a \
-         file write, so you can see the approval gate refuse it, allow it once, \
-         or allow it for the session.",
+         I was offered {tools} tool{plural}, and I will not call one unless you \n         ask. Send a message containing `{WRITE_TRIGGER}` and I will request a file \n         write; send one containing `{RUN_TRIGGER}` and I will request a command. \n         Either way you can refuse it, allow it once, or allow it for the rest of \n         the session, and find the audit line on disk afterwards.",
         plural = if tools == 1 { "" } else { "s" },
     );
 
@@ -243,7 +256,64 @@ fn ask_to_write(said: &str) -> Vec<ModelEvent> {
     ]
 }
 
-/// Whether the write this turn asked for has already been answered.
+/// A turn that asks to list the workspace, and nothing else.
+///
+/// The command is chosen for three properties and no others: it exists on
+/// every platform the MVP targets, it prints enough to watch arriving, and on
+/// Windows it prints it in colour — which is the interesting case, because
+/// ANSI escape sequences are the other thing a pipe carries besides text, and
+/// the point of a demo is to make what the runtime does with them visible
+/// rather than to arrange for it never to come up.
+///
+/// `powershell` rather than `cmd`: it is what a Windows user actually works
+/// in, and Windows PowerShell 5.1 does not colour a redirected `Get-ChildItem`
+/// on its own, so the escapes are written explicitly. Note that the script is
+/// one argument, which PowerShell then parses itself — that is PowerShell's
+/// doing and it is visible in the approval dialog. `shell_exec` still passes
+/// an argument vector and still puts no shell of its own in the way.
+fn ask_to_run() -> Vec<ModelEvent> {
+    let (program, args, what): (&str, Vec<&str>, &str) = if cfg!(windows) {
+        (
+            "powershell",
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r#"$e=[char]27; "${e}[1m$PWD${e}[0m"; Get-ChildItem | ForEach-Object { "  ${e}[36m$($_.Name)${e}[0m  $($_.Length)" }"#,
+            ],
+            "list the workspace in colour",
+        )
+    } else {
+        ("ls", vec!["-la"], "list the workspace")
+    };
+
+    let arguments = serde_json::json!({
+        "program": program,
+        "args": args,
+    })
+    .to_string();
+
+    vec![
+        ModelEvent::TextDelta {
+            text: format!(
+                "Running `{program}` to {what} — this needs your approval. The dialog shows \
+                 the exact arguments.\n"
+            ),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::SHELL_EXEC.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// Whether the call this turn asked for has already been answered.
 ///
 /// Scoped to the messages after the most recent user message, which is what
 /// makes it "this turn" rather than "this conversation". Without the scope the
@@ -503,6 +573,41 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// PLAN 6, Phase 7: the fake provider asks for a `shell_exec` on demand,
+    /// so the shell tool can be walked through without a model.
+    #[tokio::test]
+    async fn the_run_trigger_produces_a_real_shell_exec_call() {
+        let asked = drain(
+            &FakeProvider::instant(),
+            request_saying("please /run something"),
+        )
+        .await;
+
+        let call = asked
+            .iter()
+            .find_map(|event| match event {
+                ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                } => Some((name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .expect("a tool call");
+
+        assert_eq!(call.0.as_deref(), Some(crate::policy::tool::SHELL_EXEC));
+
+        let args: serde_json::Value = serde_json::from_str(&call.1).expect("valid arguments");
+        let program = args["program"].as_str().expect("a program");
+        assert!(!program.is_empty());
+        assert!(args["args"].is_array());
+
+        // The arguments have to be a vector, not a command line: a single
+        // element carrying spaces would be a program name with spaces in it,
+        // and it would not resolve.
+        for argument in args["args"].as_array().expect("an array") {
+            assert!(argument.is_string());
+        }
     }
 
     /// The trigger fires once per turn, not once per round. A provider that

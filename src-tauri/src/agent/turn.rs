@@ -41,6 +41,7 @@
 //! who presses stop leaves a turn holding a call forever.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
@@ -53,11 +54,11 @@ use crate::policy::{self, AskRequest, Decision, GrantStore, PolicyCtx};
 use crate::store::{
     Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
 };
-use crate::tools::{self, ToolCtx, ToolOutcome, ToolResult};
+use crate::tools::{self, NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult};
 
 use super::event::{
-    Event, EventSink, ToolApprovalResolved, ToolFinished, ToolRequested, ToolStarted, TurnDelta,
-    TurnError, TurnFinished, TurnMessage, TurnStarted,
+    Event, EventSink, ToolApprovalResolved, ToolFinished, ToolProgress, ToolRequested, ToolStarted,
+    TurnDelta, TurnError, TurnFinished, TurnMessage, TurnStarted,
 };
 use super::provider::Provider;
 use super::registry::TurnRegistry;
@@ -118,6 +119,43 @@ pub struct Turn<'a> {
     pub self_exe: Option<&'a Path>,
 }
 
+/// The [`ProgressSink`] one tool call writes its live output to.
+///
+/// A tool produces text; the turn decides what that text *is* on the wire —
+/// which session and call it belongs to, and where it falls in the turn's
+/// sequence. Keeping the numbering here rather than in the tool is what lets
+/// the UI drop a duplicated or reordered frame with one rule, and what keeps
+/// `tools/` from having to know anything about events.
+struct Progress<'a> {
+    /// Where the event goes.
+    sink: &'a dyn EventSink,
+    /// The session.
+    session_id: &'a str,
+    /// The turn.
+    turn_id: &'a str,
+    /// The call whose output this is.
+    call_id: &'a str,
+    /// The turn's frame counter, shared by every call in it.
+    seq: &'a AtomicU32,
+}
+
+impl ProgressSink for Progress<'_> {
+    fn chunk(&self, stream: Stream, text: &str) {
+        // `Relaxed` is enough: the ordering that matters is the `seq` value
+        // itself, which the UI reads, and no other state is published with it.
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+
+        self.sink.emit(Event::ToolProgress(ToolProgress {
+            session_id: self.session_id.to_owned(),
+            turn_id: self.turn_id.to_owned(),
+            call_id: self.call_id.to_owned(),
+            stream,
+            seq,
+            chunk: text.to_owned(),
+        }));
+    }
+}
+
 /// How one round of streaming ended.
 enum Streamed {
     /// The provider finished normally.
@@ -155,6 +193,14 @@ impl Turn<'_> {
         let mut seq = 0u32;
         let mut rounds = 0u32;
         let mut usage = None;
+
+        // Per-turn, like the delta counter, and shared with every tool call in
+        // the turn — the UI drops anything out of order, and a counter that
+        // restarted per call would make two calls' frames indistinguishable
+        // after a reload. Atomic because the sink that bumps it is handed to a
+        // tool as a `&dyn`, and a tool has no business holding a `&mut` to the
+        // turn's state.
+        let progress_seq = AtomicU32::new(0);
 
         let reason = loop {
             let history = match self.sessions.messages(&plan.session_id) {
@@ -222,7 +268,7 @@ impl Turn<'_> {
                         break StopReason::Stop;
                     }
 
-                    self.execute(plan, &calls, cancel).await;
+                    self.execute(plan, &calls, cancel, &progress_seq).await;
                     rounds += 1;
 
                     if cancel.is_cancelled() {
@@ -395,8 +441,15 @@ impl Turn<'_> {
     ///
     /// The filesystem tools themselves are short and local, so they still run
     /// inline rather than on a blocking thread. What makes this `async` is the
-    /// waiting: [`Turn::ask`] parks here until a person answers.
-    async fn execute(&self, plan: &TurnPlan, calls: &[AssembledCall], cancel: &CancellationToken) {
+    /// waiting: [`Turn::ask`] parks here until a person answers, and
+    /// `shell_exec` awaits a child process for as long as two minutes.
+    async fn execute(
+        &self,
+        plan: &TurnPlan,
+        calls: &[AssembledCall],
+        cancel: &CancellationToken,
+        progress_seq: &AtomicU32,
+    ) {
         for call in calls {
             if cancel.is_cancelled() {
                 self.abandon(plan, call);
@@ -426,12 +479,21 @@ impl Turn<'_> {
                 args_redacted: crate::audit::redact(&args),
             }));
 
+            let progress = Progress {
+                sink: self.sink,
+                session_id: &plan.session_id,
+                turn_id: &plan.turn_id,
+                call_id: &call.call_id,
+                seq: progress_seq,
+            };
             let ctx = ToolCtx {
                 session_id: &plan.session_id,
                 turn_id: &plan.turn_id,
                 call_id: &call.call_id,
                 audit: self.audit,
                 args: &args,
+                progress: &progress,
+                cancel,
             };
             let policy_ctx =
                 PolicyCtx::new(&plan.session_id, plan.workspace.as_deref(), self.grants)
@@ -443,7 +505,7 @@ impl Turn<'_> {
                     reason,
                 } => {
                     self.starting(plan, call);
-                    Some(tools::run(&ctx, AuditDecision::Auto, reason, &resolved))
+                    Some(tools::run(&ctx, AuditDecision::Auto, reason, &resolved).await)
                 }
 
                 // A hard denial (PLAN 3.2). Never offered to the user, because
@@ -468,12 +530,10 @@ impl Turn<'_> {
                     }
                     Some(answer) if answer.decision.allows() => {
                         self.starting(plan, call);
-                        Some(tools::run(
-                            &ctx,
-                            answer.decision.audit(),
-                            &request.reason,
-                            &resolved,
-                        ))
+                        Some(
+                            tools::run(&ctx, answer.decision.audit(), &request.reason, &resolved)
+                                .await,
+                        )
                     }
                     Some(answer) => Some(tools::refuse(
                         &ctx,
@@ -494,6 +554,9 @@ impl Turn<'_> {
             // as one that ran and failed.
             let status = match outcome.audit.outcome {
                 Outcome::Denied => ToolCallStatus::Denied,
+                // A command killed by a Stop is not a tool that failed. The
+                // transcript says so, and the model is told the same thing.
+                Outcome::Cancelled => ToolCallStatus::Cancelled,
                 _ if outcome.result.ok => ToolCallStatus::Ok,
                 _ => ToolCallStatus::Error,
             };
@@ -611,6 +674,8 @@ impl Turn<'_> {
     /// call it made, or the next request it appears in is structurally
     /// invalid (see [`transcript`]).
     fn refuse_all(&self, plan: &TurnPlan, calls: &[AssembledCall]) {
+        let refused = CancellationToken::new();
+
         for call in calls {
             let reason = format!(
                 "this turn already ran {MAX_TOOL_ROUNDS} rounds of tools, which is the limit; \
@@ -622,6 +687,10 @@ impl Turn<'_> {
                 call_id: &call.call_id,
                 audit: self.audit,
                 args: call.args.as_ref().unwrap_or(&serde_json::Value::Null),
+                // Nothing runs down this path, so nothing produces output and
+                // nothing is there to cancel.
+                progress: &NullProgress,
+                cancel: &refused,
             };
             let outcome = tools::refuse(
                 &ctx,

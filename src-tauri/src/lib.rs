@@ -6,9 +6,10 @@
 //! project store; Phase 3 adds the approval gate every tool call will pass
 //! through; Phase 4 the tool registry, the filesystem tools and the audit log
 //! behind them; Phase 5 the sessions, the provider seam and the turn loop that
-//! drives the two; and Phase 6 the approval registry that turn parks on when
-//! policy asks. Later phases add commands and modules without changing this
-//! entry shape.
+//! drives the two; Phase 6 the approval registry that turn parks on when
+//! policy asks; and Phase 7 the shell tool, which is the first one whose
+//! running the user watches rather than only its result. Later phases add
+//! commands and modules without changing this entry shape.
 
 pub mod agent;
 pub mod approval;
@@ -36,7 +37,7 @@ pub use store::{
     Message, Project, ProjectDetail, Role, SessionDetail, SessionState, SessionStore,
     SessionSummary, Store, ToolCallRecord, ToolCallStatus, TurnHandle,
 };
-pub use tools::{ToolCtx, ToolOutcome, ToolResult, ToolSpec};
+pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
 
 use tauri::{Manager, RunEvent, WindowEvent};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};

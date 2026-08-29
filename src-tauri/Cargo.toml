@@ -42,9 +42,12 @@ dunce = "1"
 # `tokio` is already in the tree via Tauri. Phase 5 widens the feature set the
 # turn loop needs: `rt` and `macros` for `select!` and for the runtime the
 # tests spin up, `time` for the delta-coalescing window and the fake provider's
-# pacing. `tokio-util` is here for `CancellationToken` alone — one token per
-# turn, held by the session registry and awaited by the loop (PLAN 4.2).
-tokio = { version = "1", default-features = false, features = ["sync", "rt", "time", "macros"] }
+# pacing. Phase 7 adds `process` and `io-util`, which are what let `shell_exec`
+# stream a child's pipes while staying inside the same `select!` as the turn's
+# cancel token — a blocking `wait()` would make a running command unstoppable.
+# `tokio-util` is here for `CancellationToken` alone — one token per turn, held
+# by the session registry and awaited by the loop (PLAN 4.2).
+tokio = { version = "1", default-features = false, features = ["sync", "rt", "time", "macros", "process", "io-util"] }
 tokio-util = { version = "0.7", default-features = false }
 # The audit log digests a tool call's arguments so two calls can be compared
 # without either line quoting what they carried. Phase 9 hashes captured PNGs
@@ -55,6 +58,14 @@ sha2 = "0.10"
 # `cargo test`, so nothing generates during a release build; the `TS` impls are
 # all that reach the binary. See `.cargo/config.toml` for where the file lands.
 ts-rs = "12"
+
+# Console programs on Windows do not write UTF-8. `cmd`, `dir`, `ver` and most
+# of the built-in tooling emit the system OEM code page (437, 850, 932 …), so
+# `shell_exec` needs `MultiByteToWideChar` to turn that back into text. This is
+# the only Windows API the runtime calls directly; everything else goes through
+# Tauri. The version is the one already in the tree via Tauri.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -13,25 +13,31 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 6 (the approval gate, end to end).** The app boots, lives in the system tray,
-> remembers the workspace folders you point it at, and holds conversations in them: create a
-> session, send a message, watch the reply stream in a token at a time, and stop it mid-sentence.
-> Transcripts are on disk and survive a restart.
+> **Status: Phase 7 (the shell tool).** The app boots, lives in the system tray, remembers the
+> workspace folders you point it at, and holds conversations in them: create a session, send a
+> message, watch the reply stream in a token at a time, and stop it mid-sentence. Transcripts are
+> on disk and survive a restart.
 >
-> A tool call that needs your permission now asks for it. `fs_list`, `fs_read` and `fs_write` run
-> through the decision matrix; anything it will not allow on its own opens a prompt showing the
-> exact path, size and content that would be written, and you answer **deny**, **allow once** or
+> A tool call that needs your permission asks for it. `fs_list`, `fs_read`, `fs_write` and
+> `shell_exec` run through the decision matrix; anything it will not allow on its own opens a
+> prompt showing the exact path and content that would be written, or the exact program,
+> arguments and working directory that would run, and you answer **deny**, **allow once** or
 > **allow for this session**. A denial is an ordinary result — the model is told, and the turn
 > carries on. Session grants are listed under the transcript while they are in force, with a
 > Revoke button beside each; they never touch disk and die with the session. Every call is
 > audited whichever way you answer.
 >
+> A running command's output arrives in the transcript as it is produced, stderr marked apart
+> from stdout, capped and scrolled. Stop kills it. So does its deadline — two minutes, or
+> whatever shorter one the caller asked for.
+>
 > **There is no model yet.** Replies come from a scripted provider that tells you what the
 > runtime actually sent it — the workspace it was given, the tools it was offered, what you said.
 > It is deliberately useless as an assistant and deliberately honest as a diagnostic. To see the
-> gate, send a message containing **`/write`**: the fake provider asks to write one file in your
-> workspace, and everything from the prompt to the audit line is real. The shell tool (Phase 7)
-> and a real OpenAI-compatible provider (Phase 8) follow — see `PLAN.md` § 6.
+> gate, send a message containing **`/write`** and it asks to write one file in your workspace, or
+> **`/run`** and it asks to list that workspace with a real command. Everything from the prompt to
+> the audit line is real. A real OpenAI-compatible provider (Phase 8) and the screenshot tool
+> (Phase 9) follow — see `PLAN.md` § 6.
 
 ---
 
@@ -166,9 +172,12 @@ Read this before pointing Aegis at anything you care about.
   refused, as is one whose turn you stop. Neither ends the conversation: the model is told the
   call was refused and carries on.
 - **`shell_exec` does not use a shell.** It takes a program and an argument vector and spawns them
-  directly, so there is no metacharacter or quoting layer to defeat. The risk badges on commands
-  like `rm` or `curl` are *presentational* — they change the wording of the prompt, not what is
-  permitted.
+  directly, so there is no metacharacter or quoting layer to defeat. Pipes, redirection, globs and
+  `&&` are not features: one call runs one program. The risk badges on commands like `rm` or
+  `curl` are *presentational* — they change the wording of the prompt, not what is permitted.
+- **A command is bounded, not contained.** It is killed at its deadline (two minutes at most) and
+  when you press Stop, its output is capped at 64 KB in what the model sees, and every call is
+  audited. None of that is a sandbox — see the next point.
 - **There is no sandbox.** Approved tools run as you, with your privileges and environment. The
   real boundary is that you read the exact path, program, arguments and working directory before
   approving. Treat every approval as if you were typing the command yourself.
@@ -198,9 +207,26 @@ Read this before pointing Aegis at anything you care about.
   Add performance exclusions for `%USERPROFILE%\.rustup\`, `%USERPROFILE%\.cargo\` and this
   repo's `src-tauri\target\`.
 - **`.cmd` shims via `shell_exec`.** `pnpm`, `npm` and `yarn` on Windows are `.cmd` files, which
-  `CreateProcess` cannot launch directly. Aegis resolves the program through `PATHEXT` and
-  re-invokes `.cmd` targets through `cmd /c`, keeping arguments as a vector. This is a launcher
-  detail, not a shell: your arguments are still not parsed by `cmd`.
+  `CreateProcess` cannot launch directly. Aegis resolves the program through `PATHEXT`, so a bare
+  `pnpm` finds `pnpm.cmd`, and the launch goes through `cmd.exe` with the arguments escaped for
+  `cmd`'s own parser by the Rust standard library. This is a launcher detail, not a shell: your
+  arguments are still not a command line, and nothing splits or joins them.
+- **`echo` and `dir` are not programs.** They are `cmd.exe` builtins, so `shell_exec` cannot find
+  them on `PATH` and says so, naming the builtin. Run `cmd` with `["/c", "dir"]` if you want one —
+  and note that `cmd` then parses those arguments itself, which the direct path does not.
+- **Colour and progress bars are stripped.** A command that writes ANSI escape sequences is
+  talking to a terminal; the transcript is not one, so they are removed from both what the model
+  reads and what you see. Cursor movement goes with the colour — otherwise every frame of a
+  `cargo` or `pnpm` progress bar would stack up in the pane instead of overwriting itself.
+- **Accented output from `cmd`, `dir` and friends.** Windows console programs write the system
+  OEM code page (850 on a French install, 437 on a US one), not UTF-8. Aegis tries UTF-8 first —
+  `git`, `cargo` and `node` all emit it — and decodes through that code page when the output is
+  not valid UTF-8, so `numéro` stays `numéro` instead of turning into `num?ro`.
+- **Stopping a command stops its children too.** Killing a process on Windows does not kill what it
+  started, and every `.cmd` shim runs under a `cmd.exe` that is not itself doing the work — so Stop
+  and the deadline kill the whole tree via `taskkill /T`. On macOS and Linux only the process Aegis
+  started is killed; a shell script that spawns a build and waits for it can leave the build
+  running. Process groups would fix that and are not in the MVP.
 
 ### macOS
 

@@ -25,19 +25,29 @@
 //! with `ok: false` and `E_DENIED`, not an exception — the model reads it,
 //! explains itself and tries something else, and the turn keeps going.
 //!
-//! Tools land with their phases. `fs_list`, `fs_read` and `fs_write` are here
-//! now; `shell_exec` (Phase 7) and `screen_capture` (Phase 9) have policy rows
-//! already but no implementation, and [`run`] answers a call for one with an
-//! honest "not in this build" envelope rather than pretending. They are absent
+//! Tools land with their phases. `fs_list`, `fs_read`, `fs_write` and
+//! `shell_exec` are here now; `screen_capture` (Phase 9) has a policy row
+//! already but no implementation, and [`run`] answers a call for it with an
+//! honest "not in this build" envelope rather than pretending. It is absent
 //! from [`schemas`] for the same reason: a model should not be offered a tool
 //! that cannot run.
+//!
+//! [`run`] is `async` because of `shell_exec` and only because of it. The
+//! filesystem tools are short, local and synchronous, and are called inline;
+//! a child process is neither, and it has to be awaited inside the same
+//! cancellation as the turn or a two-minute command would be a two-minute
+//! stall with a Stop button that does nothing.
 
 pub mod fs;
+pub mod shell;
 
+use std::fmt;
 use std::time::Instant;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
+use ts_rs::TS;
 
 use crate::audit::{AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 use crate::error::ErrorCode;
@@ -48,6 +58,53 @@ pub const READ_MAX_BYTES: u64 = 256 * 1024;
 
 /// Most entries `fs_list` will return in one envelope (PLAN 4.3).
 pub const LIST_MAX_ENTRIES: u32 = 1000;
+
+/// Most bytes of combined stdout and stderr `shell_exec` will return in one
+/// envelope (PLAN 4.3).
+pub const EXEC_MAX_BYTES: u64 = 64 * 1024;
+
+// ---------------------------------------------------------------------------
+// Progress
+// ---------------------------------------------------------------------------
+
+/// Which pipe a chunk of tool output came from (PLAN 2.2, `tool:progress`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "bindings.ts")]
+pub enum Stream {
+    /// The child's standard output.
+    Stdout,
+    /// The child's standard error.
+    Stderr,
+}
+
+/// Where a running tool's output goes while it is still running.
+///
+/// Only `shell_exec` produces any: a file is read in one call, but a command
+/// can take two minutes, and a progress pane that only fills in at the end is
+/// indistinguishable from a hang.
+///
+/// The tool hands over text; the runtime numbers it. That split is deliberate
+/// — `seq` is a property of the event stream, not of the child process, and a
+/// tool that assigned its own would have to know what else the turn had
+/// already emitted.
+pub trait ProgressSink: Send + Sync {
+    /// Delivers one frame of output. Never fails, for the same reason
+    /// [`EventSink`](crate::agent::EventSink) never does: a UI that missed a
+    /// frame is cosmetic, and a command killed because a window closed is not.
+    fn chunk(&self, stream: Stream, text: &str);
+}
+
+/// A [`ProgressSink`] that drops everything.
+///
+/// For a tool call with nobody watching — a test, or a future background run
+/// with no window open.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NullProgress;
+
+impl ProgressSink for NullProgress {
+    fn chunk(&self, _stream: Stream, _text: &str) {}
+}
 
 // ---------------------------------------------------------------------------
 // The envelope
@@ -185,6 +242,14 @@ pub(crate) struct Produced {
     bytes_in: u64,
     /// Bytes the call produced.
     bytes_out: u64,
+    /// What the audit line should say, when `ok` alone does not say it.
+    ///
+    /// `None` means the ordinary reading: a successful envelope is
+    /// [`Outcome::Ok`] and a failed one is [`Outcome::Error`]. The one tool
+    /// that needs more is `shell_exec`, whose command can be killed by a
+    /// cancel — that is neither a tool that failed nor one that was refused,
+    /// and the log has a word for it.
+    outcome: Option<Outcome>,
 }
 
 impl Produced {
@@ -203,6 +268,7 @@ impl Produced {
             summary: summary.into(),
             bytes_in: 0,
             bytes_out,
+            outcome: None,
         }
     }
 
@@ -214,6 +280,15 @@ impl Produced {
             summary: message,
             bytes_in: 0,
             bytes_out: 0,
+            outcome: None,
+        }
+    }
+
+    /// A tool that was still running when the turn was cancelled.
+    pub(crate) fn cancelled(tool: &str, message: impl Into<String>) -> Self {
+        Self {
+            outcome: Some(Outcome::Cancelled),
+            ..Self::failed(tool, ErrorCode::Cancelled, message)
         }
     }
 
@@ -288,6 +363,16 @@ pub fn registry() -> &'static [ToolSpec] {
                           exactly, adding nothing. Paths may be relative to the workspace root.",
             parameters: fs::write_schema,
         },
+        ToolSpec {
+            name: tool::SHELL_EXEC,
+            description: "Run a program in the workspace and return its output. There is no \
+                          shell: `program` is looked up on PATH and spawned with `args` as a \
+                          vector, so pipes, redirection, globs, `&&` and variable expansion do \
+                          not work — run one program per call and compose the steps yourself. \
+                          stdout and stderr come back interleaved, capped at 64 KB, and \
+                          `meta.exit_code` says how the program ended.",
+            parameters: shell::exec_schema,
+        },
     ]
 }
 
@@ -310,7 +395,7 @@ pub fn spec(name: &str) -> Option<&'static ToolSpec> {
 /// The ids are the model's and the turn loop's; `args` is what the model
 /// actually sent, kept for the audit line so the log records the call as it
 /// was made rather than as policy rewrote it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ToolCtx<'a> {
     /// Which session made the call. Every audit line carries it.
     pub session_id: &'a str,
@@ -323,6 +408,29 @@ pub struct ToolCtx<'a> {
     /// The arguments as the model sent them, for the digest and the redacted
     /// copy.
     pub args: &'a Value,
+    /// Where a running tool's output goes while it is still running.
+    pub progress: &'a dyn ProgressSink,
+    /// The turn's cancellation token.
+    ///
+    /// A tool that can outlive a click on Stop has to hold this, or Stop
+    /// becomes a button with no effect the user can see. Only `shell_exec`
+    /// reads it today; everything else finishes faster than a person can ask
+    /// it not to.
+    pub cancel: &'a CancellationToken,
+}
+
+// Written out rather than derived: `&dyn ProgressSink` has no `Debug`, and
+// demanding one of every sink would be a constraint on implementors for the
+// sake of one line of diagnostics.
+impl fmt::Debug for ToolCtx<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ToolCtx")
+            .field("session_id", &self.session_id)
+            .field("turn_id", &self.turn_id)
+            .field("call_id", &self.call_id)
+            .field("cancelled", &self.cancel.is_cancelled())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Runs a call that policy — or the user — has cleared, and audits it.
@@ -335,7 +443,7 @@ pub struct ToolCtx<'a> {
 /// Never returns an `Err`: a tool that fails produces an envelope saying so
 /// (PLAN 4.3), because the turn continues either way and the model is the one
 /// that has to react.
-pub fn run(
+pub async fn run(
     ctx: &ToolCtx<'_>,
     decision: AuditDecision,
     reason: &str,
@@ -356,10 +464,16 @@ pub fn run(
             content,
             create_dirs,
         } => fs::write(path, content, *create_dirs),
-        // Policy has a row for these from Phase 3, and the model is not
-        // offered them until they exist. A model that names one anyway gets an
-        // answer it can act on rather than a silent nothing.
-        ResolvedCall::ShellExec { .. } | ResolvedCall::ScreenCapture { .. } => Produced::failed(
+        ResolvedCall::ShellExec {
+            program,
+            args,
+            cwd,
+            timeout_ms,
+        } => shell::exec(program, args, cwd, *timeout_ms, ctx.progress, ctx.cancel).await,
+        // Policy has a row for this from Phase 3, and the model is not offered
+        // it until it exists. A model that names it anyway gets an answer it
+        // can act on rather than a silent nothing.
+        ResolvedCall::ScreenCapture { .. } => Produced::failed(
             name,
             ErrorCode::ToolFailed,
             format!("`{name}` is not available in this build"),
@@ -379,11 +493,11 @@ pub fn run(
         decision,
         policy_reason: reason,
         args: ctx.args,
-        outcome: if produced.result.ok {
+        outcome: produced.outcome.unwrap_or(if produced.result.ok {
             Outcome::Ok
         } else {
             Outcome::Error
-        },
+        }),
         duration_ms,
         bytes_in: produced.bytes_in,
         bytes_out: produced.bytes_out,
@@ -501,7 +615,7 @@ mod tests {
     fn tools_not_in_this_build_are_not_offered_to_the_model() {
         let offered: Vec<&str> = registry().iter().map(|spec| spec.name).collect();
 
-        assert!(!offered.contains(&tool::SHELL_EXEC), "Phase 7");
+        assert!(offered.contains(&tool::SHELL_EXEC), "Phase 7");
         assert!(!offered.contains(&tool::SCREEN_CAPTURE), "Phase 9");
     }
 

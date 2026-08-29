@@ -19,13 +19,24 @@
  *
  * - Anything for a session other than the open one is ignored, except
  *   `session:updated`, which keeps the sidebar honest for every row.
- * - `turn:delta` is dropped unless its `seq` is greater than the last one
- *   applied, so a duplicated or reordered frame cannot double a word.
+ * - `turn:delta` and `tool:progress` are dropped unless their `seq` is greater
+ *   than the last one applied, so a duplicated or reordered frame cannot
+ *   double a word.
+ *
+ * Live command output is the one thing here that reconciliation does *not*
+ * replace. It has no counterpart on disk — the runtime keeps a one-line
+ * summary and an audit line, not the transcript of every build — so the pane
+ * is kept in this store, keyed by call, for as long as the session stays open.
  */
 
 import { create } from "zustand";
 
-import type { Message, SessionDetail, SessionSummary } from "../ipc/bindings";
+import type {
+  Message,
+  SessionDetail,
+  SessionSummary,
+  Stream,
+} from "../ipc/bindings";
 import {
   sessionCancel,
   sessionCreate,
@@ -49,6 +60,30 @@ export type Streaming = {
   readonly seq: number;
 };
 
+/** One unbroken run of output from the same pipe. */
+export type OutputRun = {
+  /** Which pipe it came from. */
+  readonly stream: Stream;
+  /** The text. */
+  readonly text: string;
+};
+
+/** What a running — or finished — command printed. */
+export type ToolOutput = {
+  /**
+   * The runs, in arrival order. Consecutive frames from the same pipe are
+   * merged, so a command printing a megabyte does not become a million nodes.
+   */
+  readonly runs: readonly OutputRun[];
+  /** Highest `seq` applied. Frames at or below it are duplicates. */
+  readonly seq: number;
+  /** Whether the command produced more than what is shown. */
+  readonly truncated: boolean;
+};
+
+/** How much text one call's pane keeps before it starts dropping the front. */
+const OUTPUT_MAX_CHARS = 64 * 1024;
+
 export type SessionsState = {
   /** The open project's sessions, most recently active first. */
   readonly sessions: readonly SessionSummary[];
@@ -56,6 +91,8 @@ export type SessionsState = {
   readonly detail: SessionDetail | null;
   /** The reply in flight, or `null` when nothing is streaming. */
   readonly streaming: Streaming | null;
+  /** What each tool call has printed, by `call_id`. */
+  readonly output: Readonly<Record<string, ToolOutput>>;
   /** True while a command is in flight. */
   readonly busy: boolean;
   /** The last failure, or `null`. */
@@ -98,6 +135,55 @@ export function isVisible(message: Message): boolean {
  * typing in halfway down the list. Timestamps are fixed-width UTC RFC3339, so
  * comparing them as strings is comparing them as instants.
  */
+/**
+ * Adds a frame to what a call has printed.
+ *
+ * Consecutive frames from the same pipe are merged into one run: a command
+ * printing steadily produces a frame every 50 ms, and one node per frame would
+ * be thousands of nodes for a build that says nothing interesting. The pane
+ * keeps the *end* of a long run rather than the start — the tail of a build log
+ * is the part someone watching it is waiting for.
+ */
+function appended(
+  current: ToolOutput | undefined,
+  stream: Stream,
+  text: string,
+  seq: number,
+): ToolOutput {
+  const previous = current?.runs ?? [];
+  const last = previous.at(-1);
+  const runs =
+    last !== undefined && last.stream === stream
+      ? [...previous.slice(0, -1), { stream, text: last.text + text }]
+      : [...previous, { stream, text }];
+
+  return {
+    runs: capped(runs),
+    seq,
+    truncated: current?.truncated ?? false,
+  };
+}
+
+/** Drops the front of a pane that has grown past what it will hold. */
+function capped(runs: readonly OutputRun[]): OutputRun[] {
+  let total = runs.reduce((sum, run) => sum + run.text.length, 0);
+  if (total <= OUTPUT_MAX_CHARS) {
+    return [...runs];
+  }
+
+  const kept = [...runs];
+  while (kept.length > 1 && total - (kept[0]?.text.length ?? 0) > OUTPUT_MAX_CHARS) {
+    total -= kept[0]?.text.length ?? 0;
+    kept.shift();
+  }
+
+  const first = kept[0];
+  if (first !== undefined && total > OUTPUT_MAX_CHARS) {
+    kept[0] = { ...first, text: first.text.slice(total - OUTPUT_MAX_CHARS) };
+  }
+  return kept;
+}
+
 function ordered(sessions: readonly SessionSummary[]): SessionSummary[] {
   return [...sessions].sort(
     (a, b) =>
@@ -145,10 +231,12 @@ export const useSessions = create<SessionsState>((set, get) => {
     sessions: [],
     detail: null,
     streaming: null,
+    output: {},
     busy: false,
     error: null,
 
-    reset: () => set({ sessions: [], detail: null, streaming: null, error: null }),
+    reset: () =>
+      set({ sessions: [], detail: null, streaming: null, output: {}, error: null }),
 
     loadFor: async (projectId) => {
       const outcome = await guard("session_list", async () => {
@@ -159,7 +247,7 @@ export const useSessions = create<SessionsState>((set, get) => {
       });
 
       if (outcome.ok) {
-        set({ ...outcome.value, streaming: null });
+        set({ ...outcome.value, streaming: null, output: {} });
       }
     },
 
@@ -169,10 +257,12 @@ export const useSessions = create<SessionsState>((set, get) => {
       }
       const outcome = await guard("session_open", () => sessionOpen(sessionId));
       if (outcome.ok) {
-        // The streaming buffer belongs to the session being left, not to this
-        // one. A turn still running elsewhere keeps going; its events are
-        // filtered out until the user comes back and re-opens it.
-        set({ detail: outcome.value, streaming: null });
+        // The streaming buffer and the output panes belong to the session
+        // being left, not to this one. A turn still running elsewhere keeps
+        // going; its events are filtered out until the user comes back and
+        // re-opens it — and what a command printed is not on disk, so coming
+        // back shows the summary rather than the pane.
+        set({ detail: outcome.value, streaming: null, output: {} });
       }
     },
 
@@ -191,6 +281,7 @@ export const useSessions = create<SessionsState>((set, get) => {
           sessions: outcome.value.sessions,
           detail: outcome.value.detail,
           streaming: null,
+          output: {},
         });
       }
     },
@@ -219,6 +310,7 @@ export const useSessions = create<SessionsState>((set, get) => {
           sessions,
           detail: closing ? null : state.detail,
           streaming: closing ? null : state.streaming,
+          output: closing ? {} : state.output,
         };
       });
 
@@ -342,25 +434,57 @@ export function attachSessionEvents(): Promise<() => void> {
       );
     },
 
-    "tool:finished": ({ session_id, call_id, summary }) => {
+    // Live output from a running command. Kept in the store rather than
+    // reconciled from disk afterwards: the runtime records a one-line summary
+    // and an audit line, never the transcript of a build.
+    "tool:progress": ({ session_id, call_id, stream, seq, chunk }) => {
       if (!isOpen(session_id)) {
         return;
       }
-      setState((state) =>
-        state.detail === null
-          ? state
-          : {
-              detail: {
-                ...state.detail,
-                messages: state.detail.messages.map((message) => ({
-                  ...message,
-                  tool_calls: message.tool_calls.map((call) =>
-                    call.call_id === call_id ? { ...call, summary } : call,
-                  ),
-                })),
-              },
-            },
-      );
+      setState((state) => {
+        const current = state.output[call_id];
+        // Out of order, or already applied. Dropping rather than appending is
+        // what makes a re-sync safe, exactly as for `turn:delta`.
+        if (current !== undefined && seq <= current.seq) {
+          return state;
+        }
+        return {
+          output: {
+            ...state.output,
+            [call_id]: appended(current, stream, chunk, seq),
+          },
+        };
+      });
+    },
+
+    "tool:finished": ({ session_id, call_id, summary, truncated }) => {
+      if (!isOpen(session_id)) {
+        return;
+      }
+      setState((state) => {
+        const shown = state.output[call_id];
+
+        return {
+          // Only what the pane could not show is recorded here; the summary
+          // and the audit line carry the rest.
+          output:
+            shown === undefined || !truncated
+              ? state.output
+              : { ...state.output, [call_id]: { ...shown, truncated: true } },
+          detail:
+            state.detail === null
+              ? state.detail
+              : {
+                  ...state.detail,
+                  messages: state.detail.messages.map((message) => ({
+                    ...message,
+                    tool_calls: message.tool_calls.map((call) =>
+                      call.call_id === call_id ? { ...call, summary } : call,
+                    ),
+                  })),
+                },
+        };
+      });
     },
 
     "turn:error": ({ session_id, code, message, retryable }) => {
