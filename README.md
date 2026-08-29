@@ -86,9 +86,15 @@ runtime actually sent it. To use a real model, open **Settings** in the title ba
 | **Model** | The model id, spelled the way that server spells it. |
 | **API key** | Saved to the OS credential store. Leave it empty to keep the one already there. |
 
-**Test connection** asks the server for its model list and reports what came back, which is the
-quickest way to tell a wrong address from a wrong key. Clearing the base URL puts you back on the
-scripted provider.
+**Test connection** sends one sixteen-token completion to the endpoint Aegis actually uses and
+reports what came back — which tells a wrong address from a wrong key from a model that server
+does not serve. It costs a few tokens; that is the price of an answer you can trust. Clearing the
+base URL puts you back on the scripted provider.
+
+Anthropic's own API works through its OpenAI-compatibility layer: base URL
+`https://api.anthropic.com/v1`, a Claude model id such as `claude-opus-5`, and your Anthropic API
+key. (If your key has access to more than one workspace you may also need to pick one — Aegis
+sends no `anthropic-workspace-id` header.)
 
 If this machine has no usable credential store — headless Linux, a locked keychain, a dev build
 whose signature keeps changing — set the key in the environment instead and restart:

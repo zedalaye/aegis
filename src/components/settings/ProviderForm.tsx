@@ -213,6 +213,12 @@ export default function ProviderForm() {
         </button>
       </div>
 
+      <p className="field__hint">
+        Testing sends one very short message to the endpoint above, using the
+        model named here — a few tokens, and the only way to tell a wrong
+        address from a wrong key from a model that server does not have.
+      </p>
+
       <ProbeResult />
     </form>
   );

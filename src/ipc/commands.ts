@@ -353,12 +353,19 @@ export function settingsClearKey(): Promise<MaskedSettings> {
 }
 
 /**
- * Asks the configured server whether it is reachable and the key works.
+ * Asks the configured server whether it is reachable, the key works and the
+ * model exists.
+ *
+ * Sends one very short completion to the same endpoint a turn would use, so it
+ * costs a few tokens. That is deliberate: a probe of some *other* endpoint can
+ * fail on a configuration where chat works perfectly, and a test that cries
+ * wolf is one people stop reading.
  *
  * Never rejects. Every outcome — unreachable, rejected key, no endpoint,
- * nothing configured at all — comes back as a {@link ProviderProbe} whose
- * `message` says what happened, because "the probe failed" is not useful to
- * someone who pressed a button to find out what is wrong.
+ * unknown model, nothing configured at all — comes back as a
+ * {@link ProviderProbe} whose `message` says what happened, because "the probe
+ * failed" is not useful to someone who pressed a button to find out what is
+ * wrong.
  */
 export function settingsProbeProvider(): Promise<ProviderProbe> {
   return call<ProviderProbe>("settings_probe_provider");

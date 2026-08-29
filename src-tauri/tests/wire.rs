@@ -74,6 +74,8 @@ enum Answer {
     /// One group is one `write` — which is what lets a test put a chunk
     /// boundary in the middle of a payload and prove the decoder survives it.
     Stream(Vec<Vec<u8>>),
+    /// A `200 application/json`, for the probe's non-streamed completion.
+    Json(String),
     /// A failure status with a JSON body.
     Status(u16, String),
     /// Headers and one frame, then silence: the connection is held open until
@@ -184,6 +186,17 @@ async fn write_answer(socket: &mut TcpStream, answer: Answer) {
                 }
                 socket.flush().await.expect("a flush");
             }
+        }
+        Answer::Json(body) => {
+            let head = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).await.expect("the head");
+            socket.write_all(body.as_bytes()).await.expect("the body");
         }
         Answer::Status(status, body) => {
             let head = format!(
@@ -724,5 +737,156 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
             .is_some_and(|envelope| envelope.contains("notes.txt")),
         "the model is shown what the tool returned: {}",
         messages[3]["content"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The connection test
+// ---------------------------------------------------------------------------
+
+/// The settings the probe tests are run against.
+fn probe_settings(base_url: &str) -> ProviderSettings {
+    ProviderSettings {
+        base_url: base_url.to_owned(),
+        model: "test-model".to_owned(),
+    }
+}
+
+/// The probe exercises the endpoint a turn would use, not a models listing.
+///
+/// This is the case that sent it there: `GET /models` on a base URL whose
+/// `/models` is a different vendor's own endpoint fails on a configuration
+/// where chat works perfectly, and a test that fails on working settings is
+/// one people learn to ignore.
+#[tokio::test]
+async fn the_probe_asks_the_chat_endpoint_and_names_the_model_that_answered() {
+    let mut server = Server::start(vec![Answer::Json(
+        json!({
+            "id": "chatcmpl-1",
+            "model": "test-model",
+            "choices": [{ "index": 0, "message": { "role": "assistant", "content": "ok" },
+                          "finish_reason": "stop" }]
+        })
+        .to_string(),
+    )])
+    .await;
+
+    let key = ApiKey::new("sk-test-key-abcd1234");
+    let probe = openai::probe(
+        openai::client().as_ref(),
+        &probe_settings(&server.base_url),
+        key.as_ref(),
+    )
+    .await;
+
+    assert!(probe.ok, "{}", probe.message);
+    assert_eq!(probe.status, Some(200));
+    assert!(probe.latency_ms.is_some());
+    assert!(probe.message.contains("test-model"), "{}", probe.message);
+
+    let sent = server.recorded().await;
+    assert_eq!(sent.request_line, "POST /chat/completions HTTP/1.1");
+    assert_eq!(
+        sent.header("authorization"),
+        Some("Bearer sk-test-key-abcd1234")
+    );
+
+    let body = sent.json();
+    assert_eq!(body["model"], "test-model");
+    assert!(
+        body.get("stream").is_none_or(|stream| stream == false),
+        "a probe has nothing to watch arrive: {body}"
+    );
+    assert!(
+        body["max_tokens"].as_u64().is_some_and(|cap| cap <= 32),
+        "a probe should cost a handful of tokens: {body}"
+    );
+}
+
+/// A gateway that resolves an alias to something else is worth seeing before
+/// it turns up on an invoice.
+#[tokio::test]
+async fn the_probe_says_when_the_server_answered_as_a_different_model() {
+    let server = Server::start(vec![Answer::Json(
+        json!({ "model": "some-vendor/test-model-0709", "choices": [] }).to_string(),
+    )])
+    .await;
+
+    let probe = openai::probe(
+        openai::client().as_ref(),
+        &probe_settings(&server.base_url),
+        ApiKey::new("sk-test-key-abcd1234").as_ref(),
+    )
+    .await;
+
+    assert!(probe.ok, "{}", probe.message);
+    assert!(probe.message.contains("rather than"), "{}", probe.message);
+    assert!(probe.message.contains("some-vendor/test-model-0709"));
+}
+
+/// The three failures the probe exists to tell apart, each with the server's
+/// own words attached.
+#[tokio::test]
+async fn the_probe_separates_a_bad_key_from_a_bad_address_from_a_bad_model() {
+    let cases = [
+        (
+            401_u16,
+            json!({ "error": { "message": "invalid x-api-key" } }).to_string(),
+            "rejected the API key",
+        ),
+        (404, String::from("not found"), "no chat endpoint"),
+        (
+            400,
+            json!({ "error": { "message": "model: unknown model" } }).to_string(),
+            "not a model it serves",
+        ),
+    ];
+
+    for (status, body, expected) in cases {
+        let server = Server::start(vec![Answer::Status(status, body)]).await;
+        let probe = openai::probe(
+            openai::client().as_ref(),
+            &probe_settings(&server.base_url),
+            ApiKey::new("sk-test-key-abcd1234").as_ref(),
+        )
+        .await;
+
+        assert!(!probe.ok, "{status} should not read as success");
+        assert_eq!(probe.status, Some(status));
+        assert!(
+            probe.message.contains(expected),
+            "{status} gave `{}`",
+            probe.message
+        );
+    }
+}
+
+/// Nothing listening at all is a different answer from a server that refused,
+/// and the probe must not present it as a status.
+#[tokio::test]
+async fn the_probe_reports_a_server_that_is_not_there() {
+    // A port nothing is bound to: the fixture is started and immediately
+    // dropped, which closes the listener.
+    let base_url = {
+        let server = Server::start(Vec::new()).await;
+        server.base_url.clone()
+    };
+
+    let probe = openai::probe(
+        openai::client().as_ref(),
+        &probe_settings(&base_url),
+        ApiKey::new("sk-test-key-abcd1234").as_ref(),
+    )
+    .await;
+
+    assert!(!probe.ok);
+    assert_eq!(
+        probe.status, None,
+        "nothing answered, so there is no status"
+    );
+    assert!(
+        probe.message.contains("could not reach the server"),
+        "{}",
+        probe.message
     );
 }

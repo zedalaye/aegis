@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION};
 use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use ts_rs::TS;
 
@@ -51,8 +51,12 @@ use super::{Provider, STREAM_BUFFER};
 /// Path appended to the base URL for a completion.
 const CHAT_PATH: &str = "/chat/completions";
 
-/// Path appended to the base URL by [`probe`].
-const MODELS_PATH: &str = "/models";
+/// Output tokens [`probe`] asks for.
+///
+/// Enough that no server rejects it as a degenerate request, small enough that
+/// pressing the button repeatedly costs nothing worth thinking about. The
+/// reply is discarded — what is being tested is that there is one.
+const PROBE_MAX_TOKENS: u32 = 16;
 
 /// The `data:` payload that ends an SSE stream.
 const DONE: &str = "[DONE]";
@@ -134,14 +138,23 @@ pub struct ProviderProbe {
 
 /// Asks the configured server whether it is there, and reports what happened.
 ///
-/// `GET {base_url}/models` rather than a completion: it costs nothing, needs
-/// no model id to be correct, and separates the three failures that otherwise
-/// look identical from a chat window — the address is wrong, the key is wrong,
-/// or the server is down.
+/// The probe is a real, tiny completion against the endpoint a turn would use:
+/// `POST {base_url}/chat/completions` with the configured model and sixteen
+/// output tokens. The obvious alternative — `GET {base_url}/models` — is free
+/// but tests the wrong thing, and does so in a way that is worse than useless
+/// on a server whose `/models` is not the OpenAI-shaped one: pointing Aegis at
+/// `https://api.anthropic.com/v1` reaches that vendor's own models endpoint,
+/// which answers `400 anthropic-version: header is required` even though chat
+/// completions on the same base URL work perfectly. A test that fails on a
+/// working configuration is a test that teaches the user to ignore it.
 ///
-/// A 404 is reported as a failure with the reason spelled out rather than as
-/// success: some perfectly good local servers do not implement `/models`, and
-/// the message says so instead of leaving the user with a bare status.
+/// Testing the real endpoint also answers a question `/models` never could:
+/// whether the *model id* is one this server has. That is the second-commonest
+/// thing to get wrong after the address, and from a chat window it looks
+/// exactly like the first.
+///
+/// The cost is a handful of tokens per press of a button someone chose to
+/// press. That is the right trade for the only answer worth having.
 pub async fn probe(
     client: Option<&Client>,
     settings: &ProviderSettings,
@@ -161,17 +174,32 @@ pub async fn probe(
                 .to_owned(),
         );
     }
+    if settings.model.is_empty() {
+        return unreachable(
+            "No model is set. A request needs one, so there is nothing to test yet.".to_owned(),
+        );
+    }
     let Some(client) = client else {
         return unreachable(
             "Aegis has no HTTP client on this machine, so no request could be sent.".to_owned(),
         );
     };
-    let url = match endpoint(&settings.base_url, MODELS_PATH) {
+    let url = match endpoint(&settings.base_url, CHAT_PATH) {
         Ok(url) => url,
         Err(reason) => return unreachable(reason),
     };
 
-    let mut request = client.get(url).timeout(PROBE_TIMEOUT);
+    let mut request = client
+        .post(url)
+        .timeout(PROBE_TIMEOUT)
+        // Not streamed: there is nothing to watch arrive, and a whole-response
+        // deadline is exactly what a probe wants.
+        .json(&json!({
+            "model": settings.model,
+            "max_tokens": PROBE_MAX_TOKENS,
+            "messages": [{ "role": "user", "content": "Reply with the word ok." }],
+        }));
+
     if let Some(key) = key {
         match authorization(key) {
             Ok(header) => request = request.header(AUTHORIZATION, header),
@@ -198,18 +226,23 @@ pub async fn probe(
     };
 
     if status.is_success() {
-        let count = response
+        // The server names the model it actually used, which is not always the
+        // one that was asked for — gateways and aliases resolve to something
+        // else, and that is worth seeing before it turns up on an invoice.
+        let answered = response
             .json::<Value>()
             .await
             .ok()
-            .and_then(|body| Some(body.get("data")?.as_array()?.len()));
+            .and_then(|body| Some(body.get("model")?.as_str()?.to_owned()));
 
         return probe(
             true,
-            match count {
-                Some(models) => format!("The server answered and offers {models} models."),
-                // A 200 that is not the documented shape still proves the
-                // address and the key; only the listing is missing.
+            match answered {
+                Some(model) if model != settings.model => format!(
+                    "The server answered, as `{model}` rather than the `{}` that was asked for.",
+                    settings.model
+                ),
+                Some(model) => format!("The server answered as `{model}`."),
                 None => "The server answered.".to_owned(),
             },
         );
@@ -225,10 +258,14 @@ pub async fn probe(
             }
         ),
         StatusCode::NOT_FOUND => format!(
-            "The server answered {status} at `{}{MODELS_PATH}`. Either the base URL is wrong — \
-             it usually ends in `/v1` — or this server does not list its models, in which case \
-             chat may still work.",
+            "There is no chat endpoint at `{}{CHAT_PATH}` ({status}). The base URL is probably \
+             wrong — it usually ends in `/v1`.",
             settings.base_url
+        ),
+        StatusCode::BAD_REQUEST => format!(
+            "The server understood the request and refused it ({status}). Most often that means \
+             `{}` is not a model it serves.",
+            settings.model
         ),
         StatusCode::TOO_MANY_REQUESTS => {
             format!("The key works, but the server is rate limiting it ({status}).")
@@ -820,14 +857,36 @@ fn authorization(key: &ApiKey) -> Result<HeaderValue, String> {
 fn transport_reason(err: &reqwest::Error) -> String {
     if err.is_timeout() {
         "The server did not answer in time".to_owned()
-    } else if err.is_connect() {
-        "Aegis could not reach the server — check the base URL, and whether the server is running"
-            .to_owned()
     } else if err.is_body() || err.is_decode() {
         "The server's answer could not be read".to_owned()
+    } else if err.is_connect() || io_cause(err).is_some() {
+        // `is_connect` alone is not enough: a refused connection reaches us as
+        // a request error wrapping an `io::Error`, and which of the two it is
+        // varies by platform and by how deep in the stack it failed. An I/O
+        // error under a request that never got a response means the same thing
+        // to a user either way — nothing answered.
+        "Aegis could not reach the server — check the base URL, and whether the server is running"
+            .to_owned()
     } else {
         "The request failed".to_owned()
     }
+}
+
+/// The lowest-level I/O failure behind a request error, if there is one.
+///
+/// `reqwest` wraps its causes several layers deep and does not promise which
+/// layer a given failure surfaces at, so the chain is walked rather than the
+/// top-level predicate trusted.
+fn io_cause(err: &reqwest::Error) -> Option<&std::io::Error> {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+
+    while let Some(current) = source {
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            return Some(io);
+        }
+        source = current.source();
+    }
+    None
 }
 
 /// One sentence for a failure status.
@@ -896,8 +955,6 @@ fn truncate(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use serde_json::json;
 
     /// Every payload the decoder produces from one byte slice.
     fn decode(chunks: &[&str]) -> Vec<String> {
@@ -1258,10 +1315,10 @@ mod tests {
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            endpoint("http://127.0.0.1:11434/v1/", MODELS_PATH)
+            endpoint("http://127.0.0.1:11434/v1/", CHAT_PATH)
                 .expect("a URL")
                 .as_str(),
-            "http://127.0.0.1:11434/v1/models"
+            "http://127.0.0.1:11434/v1/chat/completions"
         );
     }
 
@@ -1354,6 +1411,26 @@ mod tests {
         assert_eq!(probe.status, None);
         assert!(
             probe.message.contains("scripted provider"),
+            "{}",
+            probe.message
+        );
+    }
+
+    /// The probe sends a real completion, so it needs a model to name. Saying
+    /// so beats sending `"model": ""` and relaying whatever the server makes
+    /// of it.
+    #[tokio::test]
+    async fn a_probe_with_no_model_says_so_without_sending_anything() {
+        let half_configured = ProviderSettings {
+            base_url: "https://api.example.test/v1".to_owned(),
+            model: String::new(),
+        };
+        let probe = probe(Some(&Client::new()), &half_configured, None).await;
+
+        assert!(!probe.ok);
+        assert_eq!(probe.status, None, "nothing was sent");
+        assert!(
+            probe.message.contains("No model is set"),
             "{}",
             probe.message
         );
