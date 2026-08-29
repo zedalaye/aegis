@@ -18,11 +18,66 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 
 import type { Message } from "../../ipc/bindings";
 import { isVisible, useSessions } from "../../state/sessions";
+import { useSettings } from "../../state/settings";
 
 import MessageBubble from "./MessageBubble";
 
 /** How close to the bottom still counts as "at the bottom", in pixels. */
 const STICK_THRESHOLD = 64;
+
+/**
+ * What an empty transcript says, which depends on what would answer it.
+ *
+ * The scripted provider understands three cues and a real model does not, so
+ * naming them unconditionally would be advice that stops working the moment a
+ * key is configured. The test mirrors `ProviderSettings::is_configured`, as
+ * the badge in the header does.
+ *
+ * Settings not being loaded yet is its own case rather than a fall-through to
+ * "no provider": that load resolves a frame or two after the window opens, and
+ * telling a configured user their provider is missing — even briefly — is the
+ * one wrong thing this paragraph could say.
+ */
+function EmptyTranscript() {
+  const settings = useSettings((s) => s.settings);
+  const configured =
+    settings !== null &&
+    settings.base_url.length > 0 &&
+    settings.model.length > 0;
+
+  const gate = (
+    <>
+      Anything it wants to do on this machine is asked about before it happens,
+      and every tool call is written to the audit log whether you allow it or
+      not.
+    </>
+  );
+
+  if (settings === null) {
+    return <p className="messages__empty">Nothing here yet. {gate}</p>;
+  }
+
+  if (configured) {
+    return (
+      <p className="messages__empty">
+        Nothing here yet. Ask for something — the reply comes from{" "}
+        <code>{settings.model}</code>. {gate}
+      </p>
+    );
+  }
+
+  return (
+    <p className="messages__empty">
+      Nothing here yet. Ask for something — no provider is configured, so the
+      reply comes from the scripted provider and tells you what the runtime
+      actually sent. Include <code>/write</code> in a message to make it ask
+      for permission to write a file, <code>/run</code> to make it ask to run a
+      command in your workspace, or <code>/capture</code> to make it ask for a
+      picture of your screen. Any of them is how you see the approval gate
+      work.
+    </p>
+  );
+}
 
 /** The bubble a streaming reply is drawn into before it is finalized. */
 function streamingMessage(text: string): Message {
@@ -72,17 +127,7 @@ export default function MessageList() {
 
   return (
     <div className="messages" ref={paneRef} aria-live="polite">
-      {empty ? (
-        <p className="messages__empty">
-          Nothing here yet. Ask for something — there is no model behind this
-          build, so the reply comes from the scripted provider and tells you
-          what the runtime actually sent. Include <code>/write</code> in a
-          message to make it ask for permission to write a file,{" "}
-          <code>/run</code> to make it ask to run a command in your workspace,
-          or <code>/capture</code> to make it ask for a picture of your screen.
-          Any of them is how you see the approval gate work.
-        </p>
-      ) : null}
+      {empty ? <EmptyTranscript /> : null}
 
       {messages.map((message) => (
         <MessageBubble key={message.id} message={message} />

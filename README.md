@@ -13,10 +13,10 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 9 (screen capture).** The app boots, lives in the system tray, remembers the
-> workspace folders you point it at, and holds conversations in them: create a session, send a
-> message, watch the reply stream in a token at a time, and stop it mid-sentence. Transcripts are
-> on disk and survive a restart.
+> **Status: Phase 10 (audit drawer, polish) — the MVP is feature-complete.** The app boots,
+> lives in the system tray, remembers the workspace folders you point it at, and holds
+> conversations in them: create a session, send a message, watch the reply stream in a token at a
+> time, and stop it mid-sentence. Transcripts are on disk and survive a restart.
 >
 > **There is a model behind it now.** Open **Settings**, give it an OpenAI-compatible base URL, a
 > model id and a key, and replies come from that server — streamed, with the tool calls the model
@@ -60,7 +60,16 @@ ever sent to it.
 > make it ask for a file write, a real command and a real screenshot, so the whole gate can be
 > walked through without spending a token or configuring a provider.
 >
-> The audit drawer (Phase 10) follows — see `PLAN.md` § 6.
+> **The audit log has a window.** *Audit log* in the title bar opens a drawer beside the
+> transcript showing the tail of `audit.jsonl`, newest first: one row per tool call with the
+> time, the tool, how it came to run, how it ended, how long it took and how many bytes it
+> carried. *More* opens the turn and call ids, the redacted arguments in full, the SHA-256 over
+> them, and the file a capture wrote. It reads the log rather than the transcript on purpose —
+> the record is kept independently of the story the model tells about a session, and a call that
+> shows up in one but not the other is exactly what you would open this to find. *This session*
+> and *Everything* switch between the conversation in front of you and the whole log, which
+> covers sessions you have since deleted. New lines appear as they are written while the drawer
+> is open. Nothing in the window can append to that file or clear it.
 
 ---
 
@@ -94,6 +103,24 @@ pnpm tauri dev
 
 `pnpm tauri dev` starts Vite on port 1420 and builds the Rust binary; the first Rust build takes
 a few minutes, later ones are incremental.
+
+### Walk through it in two minutes
+
+No provider and no key needed — the scripted provider is enough to exercise the whole runtime.
+
+1. **Add a project.** *Add workspace…* in the sidebar opens the native folder picker. The folder
+   you choose is the workspace: the only place a tool may touch without asking every time.
+2. **Start a session** and send anything. The reply streams in a token at a time; the header
+   names what produced it.
+3. **Make it ask.** Send a message containing `/write`, `/run` or `/capture`. The prompt names
+   the exact file and content, the exact program and arguments, or the display and its size.
+   Answer **deny** once to see a refusal land in the transcript without killing the turn, then
+   send it again and **allow once**.
+4. **Check the record.** Open **Audit log** in the title bar. Both calls are there — the refused
+   one and the allowed one — with the policy's reason and the outcome.
+5. **Close the window.** The app stays in the tray; the tray icon brings it back. *Quit* is the
+   only thing that ends it.
+6. **Restart.** The project, the session and the transcript are where you left them.
 
 ## Point it at a model
 
@@ -216,8 +243,11 @@ what came of it. It records the *paths* a call touched but never the contents of
 that quoted every `fs_write` would become the one place on your machine where everything the
 agent ever wrote is collected in plain text. A line for a capture carries the file's path, its
 pixel size and a SHA-256 of the bytes on disk — enough to say later which capture a call
-produced, and to check that the file is still that one, without the log holding a copy of it. Aegis never rotates or trims this file; deleting it
-is yours to do, and a new one starts on the next tool call.
+produced, and to check that the file is still that one, without the log holding a copy of it.
+The **Audit log** drawer in the title bar reads the tail of this file — the last 200 lines — and
+is the same information in a window; the file is the record, and nothing in the UI writes to it.
+Aegis never rotates or trims it; deleting it is yours to do, and a new one starts on the next
+tool call.
 
 ---
 

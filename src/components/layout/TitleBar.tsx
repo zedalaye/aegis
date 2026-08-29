@@ -11,10 +11,13 @@
  *
  * Settings is here rather than in the sidebar because it is not about a
  * project: where the model comes from is a fact about the application, and it
- * has to be reachable on a fresh install where there is no project yet.
+ * has to be reachable on a fresh install where there is no project yet. The
+ * audit log is here for the same reason and one more: the record covers every
+ * session including deleted ones, so it does not belong under any of them.
  */
 
 import { appQuit, windowHide } from "../../ipc/commands";
+import { useAudit } from "../../state/audit";
 import { useProjects } from "../../state/projects";
 import { useSettings } from "../../state/settings";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
@@ -24,6 +27,8 @@ export default function TitleBar() {
   const settingsOpen = useSettings((s) => s.open);
   const openSettings = useSettings((s) => s.openPanel);
   const closeSettings = useSettings((s) => s.closePanel);
+  const auditOpen = useAudit((s) => s.open);
+  const toggleAudit = useAudit((s) => s.toggleDrawer);
 
   return (
     <header className="titlebar">
@@ -44,6 +49,14 @@ export default function TitleBar() {
       </div>
 
       <div className="titlebar__actions">
+        <button
+          type="button"
+          className="button"
+          aria-pressed={auditOpen}
+          onClick={() => void toggleAudit()}
+        >
+          Audit log
+        </button>
         <button
           type="button"
           className="button"

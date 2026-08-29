@@ -21,9 +21,11 @@ import { useEffect } from "react";
 
 import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
+import { attachAuditEvents } from "../../state/audit";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 import { attachSettingsEvents, useSettings } from "../../state/settings";
 
+import AuditDrawer from "../audit/AuditDrawer";
 import ChatPane from "../chat/ChatPane";
 import SettingsPanel from "../settings/SettingsPanel";
 import Sidebar from "./Sidebar";
@@ -52,7 +54,12 @@ function NoProject() {
   );
 }
 
-/** The last failure from any store, dismissible, above the panes. */
+/**
+ * The last failure from any store, dismissible, above the panes.
+ *
+ * The audit drawer is deliberately absent: a log that would not read is a fact
+ * about that one panel, and the panel is on screen with a place to say it.
+ */
 function ErrorBanner() {
   const projectError = useProjects((s) => s.error);
   const sessionError = useSessions((s) => s.error);
@@ -76,6 +83,13 @@ function ErrorBanner() {
   return (
     <div className="banner" role="alert">
       <span className="banner__message">{error.message}</span>
+      {/* The runtime already decides whether an identical retry could
+          plausibly work — a timeout or a 503 can, a path outside the workspace
+          never will. Saying so is the difference between a user retrying and a
+          user guessing. */}
+      {error.retryable ? (
+        <span className="banner__hint">worth trying again</span>
+      ) : null}
       <span className="banner__code">{error.code}</span>
       <button
         type="button"
@@ -125,6 +139,7 @@ export default function AppShell() {
       attachSessionEvents(),
       attachApprovalEvents(),
       attachSettingsEvents(),
+      attachAuditEvents(),
     ];
     return () => {
       for (const pending of attaching) {
@@ -165,6 +180,7 @@ export default function AppShell() {
             <ChatPane />
           )}
         </main>
+        <AuditDrawer />
       </div>
     </div>
   );
