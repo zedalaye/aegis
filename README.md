@@ -88,11 +88,30 @@ Plus one platform toolchain:
 - **macOS** — Xcode Command Line Tools (`xcode-select --install`).
 - **Linux** — `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf` and the usual
   build essentials, plus `libssl-dev` (the HTTPS client uses the system TLS stack),
-  `libdbus-1-dev` (the credential store talks to a Secret Service over D-Bus), and — for screen
-  capture — `libxcb1-dev`, `libxrandr-dev`, `libpipewire-0.3-dev` and `clang`. None of these are
-  needed on Windows or macOS, which have their own capture and credential APIs built in. This is
-  the heaviest of the three Linux dependency sets and it exists for one tool; Linux is
-  best-effort here (`AGENTS.md`).
+  `libdbus-1-dev` (the credential store talks to a Secret Service over D-Bus), and the
+  screen-capture crate's stack: `libxcb1-dev`, `libxrandr-dev`, `libpipewire-0.3-dev`,
+  `libwayland-dev`, `libegl-dev`, `libgbm-dev`, `libdrm-dev`, `libclang-dev` and `clang`. None
+  of these are needed on Windows or macOS, which have their own capture and credential APIs
+  built in. This is the heaviest of the three Linux dependency sets and it exists for one tool;
+  Linux is best-effort here (`AGENTS.md`).
+
+  On Debian/Ubuntu the `-dev` packages are what `pkg-config` and the linker look for.
+  `libsoup-3.0-dev` is WebKitGTK 4.1's HTTP stack — not an Aegis dependency of its own, but a
+  missing soup is the usual "I installed webkit2gtk and it still won't compile" error (4.0
+  wanted soup2; 4.1 wants soup3). `libgbm-dev` / `libegl-dev` / `libwayland-dev` are the
+  Wayland side of `xcap`: the crate compiles without them, then `cc` fails with
+  `unable to find library -lgbm` (or `-lEGL`, or `-lwayland-client`). A WSL2 Ubuntu is a valid
+  compile host with the same list.
+
+  ```sh
+  sudo apt install \
+    build-essential curl wget file pkg-config clang libclang-dev patchelf \
+    libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+    libayatana-appindicator3-1 libayatana-appindicator3-dev librsvg2-dev \
+    libssl-dev libdbus-1-dev \
+    libxcb1-dev libxrandr-dev libpipewire-0.3-dev \
+    libwayland-dev libegl-dev libgbm-dev libdrm-dev
+  ```
 
 ## Run it
 
@@ -331,10 +350,29 @@ Read this before pointing Aegis at anything you care about.
 
 ### Windows
 
+- **`pnpm` is blocked in PowerShell.** Corepack installs a `pnpm.ps1` shim; the default
+  execution policy refuses it (`UnauthorizedAccess` / *l’exécution de scripts est désactivée*).
+  That is Windows, not Aegis. Either call the cmd shim, which PowerShell will not wrap:
+
+  ```powershell
+  pnpm.cmd tauri dev
+  ```
+
+  or, once per user, allow local scripts (the usual developer setting):
+
+  ```powershell
+  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+  ```
+
 - **WebView2 missing.** Aegis renders through WebView2, which ships with Windows 11 and current
   Windows 10 but is not guaranteed. If the window opens blank or the app refuses to start, install
   the *Evergreen WebView2 Runtime* from Microsoft. Installers built by `pnpm tauri build` are
   configured to download it automatically when absent.
+- **`Failed to unregister class Chrome_WidgetWin_0. Error = 1412` on quit.** Chromium, not Aegis.
+  WebView2 registers several HWNDs under that class; the first destructor calls `UnregisterClass`
+  while siblings are still alive (`ERROR_CLASS_HAS_WINDOWS`). Chrome itself prints the same line.
+  It is stderr from the runtime after `quit requested`, not a panic and not a failed shutdown.
+  Harmless; there is nothing in this process to unregister.
 - **SmartScreen warning on a built binary.** Expected. The MVP does not code-sign, so
   "Windows protected your PC" appears for unsigned output. Signing is out of scope.
 - **Antivirus breaks the Rust build.** Real-time scanners — ESET especially — lock the small
@@ -381,18 +419,42 @@ Read this before pointing Aegis at anything you care about.
 
 ### Linux
 
-- **The window is blank on Wayland + NVIDIA.** A known WebKitGTK DMA-BUF renderer bug. Launch
-  with `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
-- **No tray icon.** Requires `libayatana-appindicator3`, and GNOME additionally needs the
-  AppIndicator shell extension. Aegis stays fully usable without a tray — the window is primary.
+- **The window is blank on Wayland + NVIDIA.** A known WebKitGTK DMA-BUF renderer bug. Aegis
+  sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on Linux when that variable is unset. Export
+  it to another value before launch if you need the DMA-BUF path on a machine where it works.
+- **No tray icon.** The icon needs the *runtime* library `libayatana-appindicator3-1` (the
+  `-dev` package is only for linking). GNOME additionally needs the AppIndicator shell
+  extension. A missing `.so` used to panic at startup (`Failed to load ayatana-appindicator3`);
+  it now logs and the window is the only surface — closing it quits, because there is nothing
+  to come back from. WSL2 Ubuntu typically has no indicator host; that is expected.
 - **Screenshots on Wayland.** Wayland blocks direct framebuffer capture by design. Aegis still
   attempts one — compositors built on wlroots answer a `wlr-screencopy` request, and those work
   — and when the compositor refuses, the failure is `E_SCREEN_PERMISSION` naming the session
   type, never a black image passed off as your screen. GNOME and KDE under Wayland are the usual
   refusals. X11 sessions work.
-- **The build wants `libpipewire-0.3-dev`, `libxcb1-dev`, `libxrandr-dev` and `clang`.** These
-  are the screen-capture crate's, not the app's, and they are needed at build time even on a
-  machine that will never take a capture. See *Requirements*.
+- **The build wants the screen-capture crate's libraries, not just WebKit.** `xcap` links
+  PipeWire, XCB, Wayland, EGL and GBM even on a machine that will never take a capture. A
+  compile that dies at `unable to find library -lgbm` (or `-lEGL` / `-lwayland-client`) is
+  missing `libgbm-dev`, `libegl-dev` and `libwayland-dev`. See the apt block under
+  *Requirements*.
+- **`pkg-config` cannot find `libsoup-3.0` or `webkit2gtk-4.1`.** Install the `-dev` packages,
+  not only the runtime `.so`. WebKitGTK 4.1 links soup3; `libwebkit2gtk-4.0-dev` / soup2 is the
+  Tauri 1 stack and will not satisfy this crate. See the apt block under *Requirements*.
+- **WSL2: a Linux penguin in the Windows taskbar and no window.** WSLg created a RAIL window;
+  WebKitGTK then failed to paint it. The earlier `MESA` / `ZINK: failed to choose pdev` lines
+  are that failure, not noise. Aegis detects WSL and, unless you already exported them, sets
+  `GDK_BACKEND=x11` and `WEBKIT_DISABLE_COMPOSITING_MODE=1` (and the DMA-BUF flag above)
+  *before* GTK starts — rebuild and relaunch; do not set them only in the shell after the
+  binary is running. Click the penguin if the window is behind something. If it is still
+  blank after that:
+
+  ```sh
+  LIBGL_ALWAYS_SOFTWARE=1 pnpm tauri dev
+  ```
+
+  WSL2 is a compile host and a degraded display, not a second-platform walkthrough: no
+  AppIndicator host, no gnome-keyring (use `AEGIS_API_KEY`), and `screen_capture` returns
+  `E_SCREEN_PERMISSION` rather than a picture of the Windows desktop.
 - **No keyring.** Without a running Secret Service (gnome-keyring, kwallet), use the
   `AEGIS_API_KEY` environment variable. This is normal on headless and minimal window managers.
 

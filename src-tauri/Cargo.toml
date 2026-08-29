@@ -64,8 +64,10 @@ sha2 = "0.10"
 # policy-gated Rust command instead. `xcap` re-exports the `image` crate it
 # decodes into, so writing a PNG needs no second dependency and no second
 # version of that one. It is why `rust-version` is 1.85: `xcap` is edition
-# 2024. The Linux build wants `libxcb`, `libxrandr` and `libpipewire-0.3` dev
-# packages plus `clang` on top of the WebKitGTK ones; see the README.
+# 2024. The Linux build wants `libxcb`, `libxrandr`, `libpipewire-0.3`,
+# `libwayland`, `libegl`, `libgbm` and `libdrm` dev packages plus `clang` on
+# top of the WebKitGTK ones; see the README. `pkg-config` can succeed and
+# linking still fail if GBM/EGL/Wayland are missing (`-lgbm`).
 xcap = "0.9"
 # The real provider speaks HTTP to an OpenAI-compatible endpoint (PLAN 4.1).
 # `reqwest` is already in the tree via Tauri, but with no TLS backend at all —

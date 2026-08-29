@@ -517,6 +517,9 @@ sees it, can explain itself and try something else. The turn continues.
   token bundle later.
 - **SmartScreen** flags unsigned `tauri build` output. Out of MVP scope, but it belongs in the
   README so it is not diagnosed as a bug.
+- **WebView2 logs `Failed to unregister class Chrome_WidgetWin_0. Error = 1412` on process
+  exit.** Chromium `UnregisterClass` while sibling HWNDs of that class still exist. Not an
+  Aegis shutdown bug; do not change `app.exit` to chase it. README troubleshooting.
 
 ### 5.2 macOS
 

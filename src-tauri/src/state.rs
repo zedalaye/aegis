@@ -33,6 +33,10 @@ use crate::store::{
 pub struct AppState {
     started_at: Instant,
     quitting: AtomicBool,
+    /// Set only after [`crate::tray::init`] succeeds. Close-to-hide and
+    /// "stay resident" are tray behaviours; without an icon they strand the
+    /// process with no way back (PLAN 5.3).
+    tray: AtomicBool,
     store: Store,
     sessions: SessionStore,
     settings: SettingsStore,
@@ -60,6 +64,7 @@ impl AppState {
         Self {
             started_at: Instant::now(),
             quitting: AtomicBool::new(false),
+            tray: AtomicBool::new(false),
             store: Store::load(data_dir),
             sessions: SessionStore::load(data_dir),
             settings: SettingsStore::load(data_dir),
@@ -323,6 +328,20 @@ impl AppState {
         self.quitting.load(Ordering::SeqCst)
     }
 
+    /// Whether the tray icon is actually up.
+    ///
+    /// False until setup installs it, and stays false when the platform has
+    /// no AppIndicator library — in which case the window is the only
+    /// surface and closing it must end the process.
+    pub fn has_tray(&self) -> bool {
+        self.tray.load(Ordering::SeqCst)
+    }
+
+    /// Records that the tray icon was installed. Called once from setup.
+    pub fn mark_tray(&self) {
+        self.tray.store(true, Ordering::SeqCst);
+    }
+
     /// Marks shutdown as started; returns `true` if this call is the one that
     /// started it, so a double-quit does not run teardown twice.
     ///
@@ -385,6 +404,18 @@ mod tests {
             state.captures().file_name().and_then(|n| n.to_str()),
             Some("captures")
         );
+    }
+
+    #[test]
+    fn the_tray_is_absent_until_setup_marks_it() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+        assert!(
+            !state.has_tray(),
+            "a missing tray must not trap close-to-hide"
+        );
+        state.mark_tray();
+        assert!(state.has_tray());
     }
 
     #[test]

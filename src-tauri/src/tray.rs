@@ -16,6 +16,8 @@
 //!   the menu is the entire interface and `show_menu_on_left_click` is inert.
 //!   The toggle item carries the interaction there.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use serde::Serialize;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -25,7 +27,7 @@ use tauri::{
 use ts_rs::TS;
 
 use crate::commands::window::{self, MAIN_WINDOW};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 /// Identifier of the single tray icon.
 pub const TRAY_ID: &str = "main";
@@ -53,7 +55,28 @@ pub struct TrayActivate {
 ///
 /// Returns an error instead of panicking when the platform has no usable
 /// status area — losing the tray degrades the app, it must not stop it.
+///
+/// On Linux the AppIndicator bindings `dlopen` `libayatana-appindicator3`
+/// (or `libappindicator3`) and **panic** if neither `.so` is there, rather
+/// than returning an error Tauri can propagate. That is the WSL2 / minimal-WM
+/// case PLAN 5.3 names. [`catch_unwind`] turns it back into the `Result`
+/// this function already advertised, so a missing library is a log line, not
+/// a process that dies after printing the data directory.
 pub fn init<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
+    match catch_unwind(AssertUnwindSafe(|| install(app))) {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                "AppIndicator library missing or unusable; continuing without a tray icon"
+            );
+            Err(AppError::Internal {
+                what: "the system tray could not be installed",
+            })
+        }
+    }
+}
+
+fn install<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     let toggle = MenuItem::with_id(app, MENU_TOGGLE, "Show / Hide Aegis", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Aegis", true, None::<&str>)?;

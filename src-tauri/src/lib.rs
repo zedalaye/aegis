@@ -19,6 +19,7 @@ pub mod agent;
 pub mod approval;
 pub mod audit;
 mod commands;
+mod display;
 mod error;
 pub mod policy;
 pub mod secrets;
@@ -70,12 +71,16 @@ fn init_tracing() {
         .init();
 }
 
-/// Turns a close request on the main window into a hide.
+/// Turns a close request on the main window into a hide, when there is a
+/// tray to come back from.
 ///
 /// Aegis is a tray app: closing the window puts it away, it does not end the
-/// session. The exception is a real quit, which sets `AppState::is_quitting`
-/// first and is let through here — without that check the process would trap
-/// its own shutdown and linger with no window and no way back.
+/// session. Two cases are let through instead. A real quit sets
+/// `AppState::is_quitting` first — without that check the process would trap
+/// its own shutdown and linger with no window and no way back. And if the
+/// tray never installed (PLAN 5.3: missing AppIndicator, headless, WSL2),
+/// hide-on-close would strand the same way, so the window is allowed to
+/// close and the process ends with it.
 fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &WindowEvent) {
     let WindowEvent::CloseRequested { api, .. } = event else {
         return;
@@ -83,10 +88,10 @@ fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &WindowE
     if window.label() != MAIN_WINDOW {
         return;
     }
-    if window
+    let stay_resident = window
         .try_state::<AppState>()
-        .is_some_and(|state| state.is_quitting())
-    {
+        .is_some_and(|state| !state.is_quitting() && state.has_tray());
+    if !stay_resident {
         return;
     }
 
@@ -106,6 +111,9 @@ fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &WindowE
 /// command returns `Result` instead (AGENTS.md: no `unwrap` in library paths).
 pub fn run() {
     init_tracing();
+    // Before `Builder::build`: that is when GTK and WebKitGTK initialise,
+    // and the DMA-BUF / WSL workarounds are env vars they read once.
+    display::prepare();
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting Aegis");
 
@@ -170,8 +178,24 @@ pub fn run() {
             app.manage(state);
 
             // A missing tray is a degraded app, not a broken one (PLAN 5.3).
-            if let Err(err) = tray::init(app.handle()) {
-                tracing::warn!(%err, "no tray icon; the window remains the only surface");
+            // Linux AppIndicator bindings panic on a missing `.so`; tray::init
+            // catches that. Only a successful install latches `has_tray`, so
+            // close-to-hide cannot trap a process that has no icon.
+            match tray::init(app.handle()) {
+                Ok(()) => {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        state.mark_tray();
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "no tray icon; the window remains the only surface");
+                }
+            }
+            // WSLg can register a taskbar icon and still leave the window
+            // unmapped or behind; raising it here is cheap and is the
+            // difference between "Linux penguin in the bar" and a usable UI.
+            if let Err(err) = commands::window::show_main(app.handle()) {
+                tracing::warn!(%err, "could not raise the main window after setup");
             }
             tracing::debug!("setup complete");
             Ok(())
@@ -181,12 +205,18 @@ pub fn run() {
         .expect("error while building the Aegis application");
 
     app.run(|app, event| match event {
-        // Closing the last window must not end the process: the tray is still
-        // there to bring it back. An explicit quit passes an exit code, and
-        // that is the one exit request allowed through.
+        // Closing the last window must not end the process when the tray is
+        // there to bring it back. Without an icon, that same swallow would
+        // leave a headless process. An explicit quit passes an exit code,
+        // and that is always allowed through.
         RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
-            api.prevent_exit();
-            tracing::debug!("exit request without a code ignored; Aegis stays in the tray");
+            if app
+                .try_state::<AppState>()
+                .is_some_and(|state| state.has_tray())
+            {
+                api.prevent_exit();
+                tracing::debug!("exit request without a code ignored; Aegis stays in the tray");
+            }
         }
         // Clicking the dock icon on macOS is the platform's "come back".
         #[cfg(target_os = "macos")]
