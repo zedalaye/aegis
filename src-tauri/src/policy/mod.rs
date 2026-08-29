@@ -127,10 +127,20 @@ pub enum ApprovalDetail {
     Screen {
         /// Which display, named the way the dialog should say it.
         display: String,
-        /// Physical width in pixels, `0` when the geometry is not known yet.
+        /// Physical width in pixels, `0` when the geometry is not known.
+        ///
+        /// A capture crate returns the physical framebuffer, so this is the
+        /// size of the file that would be written. Both sizes are reported
+        /// because on a scaled display they differ, and a dialog that showed
+        /// only one of them would be describing a different picture from the
+        /// one on the screen (PLAN 5.1).
         width: u32,
-        /// Physical height in pixels, `0` when the geometry is not known yet.
+        /// Physical height in pixels, `0` when the geometry is not known.
         height: u32,
+        /// Width in the display's own points — what the user calls its size.
+        logical_width: u32,
+        /// Height in the display's own points.
+        logical_height: u32,
     },
 }
 
@@ -438,20 +448,26 @@ struct ScreenCaptureArgs {
     display: Option<String>,
 }
 
-/// The physical geometry of the display a capture would take.
+/// The geometry of the display a capture would take.
 ///
 /// Supplied by the caller rather than measured here, so policy stays a pure
-/// function of its inputs and stays testable without a screen. Phase 9 fills
-/// it from the capture backend; until then it is `None` and the dialog says
-/// the size is not known rather than inventing one.
+/// function of its inputs and stays testable without a screen — the turn loop
+/// fills it from
+/// [`screenshot::geometry`](crate::tools::screenshot::geometry). `None` is a
+/// machine with no display the window server will describe, and the dialog
+/// then says the size is not known rather than inventing one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenGeometry {
     /// How the display should be named to the user.
     pub display: String,
-    /// Physical width in pixels.
+    /// Physical width in pixels — the size of the file a capture would write.
     pub width: u32,
     /// Physical height in pixels.
     pub height: u32,
+    /// Width in the display's own points, at whatever scale it is set to.
+    pub logical_width: u32,
+    /// Height in the display's own points.
+    pub logical_height: u32,
 }
 
 /// What a decision needs to know beyond the call itself.

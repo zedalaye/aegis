@@ -46,6 +46,7 @@ pub struct AppState {
     /// [`openai::client`](crate::agent::provider::openai::client)).
     http: Option<reqwest::Client>,
     self_exe: Option<PathBuf>,
+    captures: PathBuf,
 }
 
 impl AppState {
@@ -79,6 +80,11 @@ impl AppState {
                     tracing::warn!(%err, "could not resolve this executable's path");
                 })
                 .ok(),
+            // Beside the stores, not inside the workspace (PLAN 5.4). Created
+            // here rather than on first capture so that `lib.rs` has an
+            // existing directory to scope the asset protocol to, and so a
+            // user can find the folder before there is anything in it.
+            captures: prepare_captures(data_dir),
         }
     }
 
@@ -174,6 +180,16 @@ impl AppState {
     /// This application's own binary, when the platform would name it.
     pub fn self_exe(&self) -> Option<&Path> {
         self.self_exe.as_deref()
+    }
+
+    /// Where `screen_capture` writes its PNGs.
+    ///
+    /// The one directory the WebView is allowed to read files from, and only
+    /// through the asset protocol (see `lib.rs`). Never inside a workspace: a
+    /// capture is an artefact of the harness, and one written into a project
+    /// folder would end up in someone's next commit.
+    pub fn captures(&self) -> &Path {
+        &self.captures
     }
 
     /// A project's sessions, most recently active first, at their live states.
@@ -323,11 +339,53 @@ impl AppState {
     }
 }
 
+/// Creates the capture directory and resolves it to its canonical form.
+///
+/// Canonical because Tauri's asset-protocol scope canonicalizes the path the
+/// WebView asks for before matching it against what was allowed; a scope
+/// registered under a path with a symlink or a Windows short name in it would
+/// match nothing, and every thumbnail would silently 403.
+///
+/// A directory that cannot be created is not a reason to refuse to start: the
+/// failure surfaces on the first capture, which is where a user can do
+/// something about it, rather than as a window that never appears.
+fn prepare_captures(data_dir: &Path) -> PathBuf {
+    let captures = data_dir.join("captures");
+
+    if let Err(err) = std::fs::create_dir_all(&captures) {
+        tracing::warn!(%err, dir = %captures.display(), "could not create the capture directory");
+        return captures;
+    }
+
+    dunce::canonicalize(&captures).unwrap_or(captures)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use tempfile::TempDir;
+
+    /// Captures go beside the stores and never into a workspace (PLAN 5.4).
+    /// The directory exists from startup, because the asset-protocol scope in
+    /// `lib.rs` is registered against it before anything has been captured.
+    #[test]
+    fn the_capture_directory_is_ready_before_anything_is_captured() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+
+        assert!(state.captures().is_dir(), "created at startup");
+        assert!(
+            state
+                .captures()
+                .starts_with(dunce::canonicalize(dir.path()).expect("canonical data directory")),
+            "under the application-data directory"
+        );
+        assert_eq!(
+            state.captures().file_name().and_then(|n| n.to_str()),
+            Some("captures")
+        );
+    }
 
     #[test]
     fn quitting_latches_once() {
@@ -365,6 +423,7 @@ mod tests {
             bytes_in: 0,
             bytes_out: 4,
             error_code: None,
+            artifact: None,
         });
 
         assert_eq!(log.tail(10, None).expect("tail").len(), 1);
@@ -439,6 +498,7 @@ mod tests {
             bytes_in: 1,
             bytes_out: 0,
             error_code: None,
+            artifact: None,
         });
 
         let second = AppState::new(dir.path());

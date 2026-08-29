@@ -29,8 +29,19 @@
  * the way the transcript follows a reply, and it says when it is not showing
  * everything. It is a live view, not a record — nothing is on disk but the
  * summary, so it is gone when the session is re-opened.
+ *
+ * A capture is the one result that is a picture, and it is shown as one. The
+ * bytes never come through the IPC channel (PLAN 5.4): the record carries the
+ * PNG's path, `convertFileSrc` turns it into an `asset:` URL, and the runtime
+ * has scoped that protocol to the capture directory and nothing else — a path
+ * outside it comes back 403 rather than being read. Unlike the output pane
+ * this *is* a record: the path is persisted with the call, so re-opening the
+ * session shows the capture again. It is also the one place the transcript
+ * shows a person something the model was not shown; the model got a path, a
+ * size and a digest.
  */
 
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ToolCallRecord, ToolCallStatus } from "../../ipc/bindings";
@@ -112,6 +123,51 @@ function OutputPane({ output }: { readonly output: ToolOutput }) {
   );
 }
 
+/**
+ * The capture a call produced, at a size that fits in a transcript.
+ *
+ * Clicking it grows it in place rather than opening it anywhere. A link would
+ * be a navigation, and this window is the application — nothing in the UI
+ * should be one click away from leaving it. Growing it costs nothing extra:
+ * the `<img>` already holds the full-resolution file, and only the box around
+ * it changes.
+ *
+ * A capture that has since been deleted from disk simply fails to load, and
+ * says so. The summary line above it still records what was taken and where,
+ * which is the part that was never in the picture.
+ */
+function CaptureThumbnail({ path }: { readonly path: string }) {
+  const [broken, setBroken] = useState(false);
+  const [large, setLarge] = useState(false);
+
+  if (broken) {
+    return (
+      <p className="toolcall__missing">
+        This capture is no longer at <code>{path}</code>.
+      </p>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={`toolcall__capture${large ? " toolcall__capture--large" : ""}`}
+      onClick={() => setLarge((shown) => !shown)}
+      aria-expanded={large}
+      title={path}
+    >
+      <img
+        className="toolcall__thumb"
+        // The scoped `asset:` URL. The bytes are read by the runtime from the
+        // capture directory; nothing about the image passes through `invoke`.
+        src={convertFileSrc(path)}
+        alt={`Screen capture saved to ${path}`}
+        onError={() => setBroken(true)}
+      />
+    </button>
+  );
+}
+
 export default function ToolCallCard({
   call,
   output = null,
@@ -152,6 +208,10 @@ export default function ToolCallCard({
       {open ? (
         <pre className="toolcall__args">{formatArgs(call.args_json)}</pre>
       ) : null}
+
+      {call.image_path === null ? null : (
+        <CaptureThumbnail path={call.image_path} />
+      )}
 
       {output === null || output.runs.length === 0 ? null : (
         <OutputPane output={output} />

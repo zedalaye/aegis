@@ -102,6 +102,31 @@ pub enum Outcome {
     Cancelled,
 }
 
+/// A file a tool call left on disk, identified without the log holding a copy.
+///
+/// `screen_capture` is the only tool that produces one today, and PLAN 5.4
+/// names exactly what its line may carry: the path, the dimensions and a
+/// digest, never the image. That is enough to say afterwards *which* capture a
+/// call produced, and to check that the file still on disk is the one this line
+/// is about.
+///
+/// The dimensions are pixels because the only artefact so far is an image; a
+/// later tool that writes something else will widen this shape rather than
+/// borrow it, and the field being optional is what lets it (PLAN 7.1: the audit
+/// schema has to be able to grow).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct AuditArtifact {
+    /// Where the file was written.
+    pub path: String,
+    /// SHA-256 of the bytes on disk, hex.
+    pub sha256: String,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
 /// One line of the log.
 ///
 /// Serialized and deserialized with the same struct on purpose: the file *is*
@@ -146,6 +171,13 @@ pub struct AuditEntry {
     pub bytes_out: u64,
     /// The stable code when this failed, `null` otherwise.
     pub error_code: Option<String>,
+    /// The file this call wrote, when it wrote one.
+    ///
+    /// `#[serde(default)]` because the file is its own wire format: a log
+    /// written by an earlier build has no such key, and a reader that refused
+    /// those lines would lose the history the log exists to keep.
+    #[serde(default)]
+    pub artifact: Option<AuditArtifact>,
 }
 
 /// Everything needed to append one line, before the timestamp is taken.
@@ -180,6 +212,8 @@ pub struct AuditRecord<'a> {
     pub bytes_out: u64,
     /// The stable code when this failed.
     pub error_code: Option<ErrorCode>,
+    /// The file the call wrote, when it wrote one.
+    pub artifact: Option<AuditArtifact>,
 }
 
 impl AuditRecord<'_> {
@@ -200,6 +234,7 @@ impl AuditRecord<'_> {
             bytes_in: self.bytes_in,
             bytes_out: self.bytes_out,
             error_code: self.error_code.map(|code| code.as_str().to_owned()),
+            artifact: self.artifact.clone(),
         }
     }
 }
@@ -458,6 +493,7 @@ mod tests {
             bytes_in: 0,
             bytes_out: 12,
             error_code: None,
+            artifact: None,
         }
     }
 

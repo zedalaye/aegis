@@ -137,6 +137,7 @@ impl App {
             provider,
             sink,
             self_exe: None,
+            captures: &self.data.join("captures"),
         }
         .run(&plan, &cancel)
         .await;
@@ -401,6 +402,7 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
                     args_json: r#"{"path":"a.txt"}"#.to_owned(),
                     status: ToolCallStatus::Cancelled,
                     summary: None,
+                    image_path: None,
                 }],
             ),
             SessionState::Idle,

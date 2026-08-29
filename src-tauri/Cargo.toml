@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Aegis - local desktop AI harness"
 authors = ["Pierre Yager"]
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.85"
 license = "MIT"
 publish = false
 
@@ -19,9 +19,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# `tray-icon` is the only feature the MVP needs from Tauri itself; the tray
-# lives in Rust so the WebView never gets window or process permissions.
-tauri = { version = "2", features = ["tray-icon"] }
+# Two Tauri features, and both are here so the WebView ends up with less
+# rather than more. `tray-icon` keeps the tray in Rust, so the window never
+# needs window or process permissions. `protocol-asset` registers the `asset:`
+# scheme, which is how a captured PNG reaches an `<img>` without its bytes
+# crossing the IPC channel as base64 (PLAN 5.4); the scheme is scoped at
+# runtime to the capture directory alone, in `lib.rs`.
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 # The folder picker is driven from Rust (PLAN 2.1). The plugin is registered
 # on the builder but deliberately granted to no window: `capabilities/main.json`
 # carries no `dialog:` permission, so the WebView cannot open a dialog itself.
@@ -53,6 +57,16 @@ tokio-util = { version = "0.7", default-features = false }
 # without either line quoting what they carried. Phase 9 hashes captured PNGs
 # with the same crate.
 sha2 = "0.10"
+# Screen capture (PLAN 5.1-5.3). One crate covering Windows (GDI/DXGI), macOS
+# (CoreGraphics) and Linux (xcb on X11, libwayshot on wlroots), rather than a
+# Tauri plugin: a plugin has to be granted to the window in
+# `capabilities/main.json`, and every privileged operation in Aegis is a
+# policy-gated Rust command instead. `xcap` re-exports the `image` crate it
+# decodes into, so writing a PNG needs no second dependency and no second
+# version of that one. It is why `rust-version` is 1.85: `xcap` is edition
+# 2024. The Linux build wants `libxcb`, `libxrandr` and `libpipewire-0.3` dev
+# packages plus `clang` on top of the WebKitGTK ones; see the README.
+xcap = "0.9"
 # The real provider speaks HTTP to an OpenAI-compatible endpoint (PLAN 4.1).
 # `reqwest` is already in the tree via Tauri, but with no TLS backend at all —
 # choosing one is this line's whole job. `native-tls` uses what the machine

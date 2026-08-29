@@ -66,13 +66,27 @@ shell_line: string, } | { "kind": "screen",
  */
 display: string, 
 /**
- * Physical width in pixels, `0` when the geometry is not known yet.
+ * Physical width in pixels, `0` when the geometry is not known.
+ *
+ * A capture crate returns the physical framebuffer, so this is the
+ * size of the file that would be written. Both sizes are reported
+ * because on a scaled display they differ, and a dialog that showed
+ * only one of them would be describing a different picture from the
+ * one on the screen (PLAN 5.1).
  */
 width: number, 
 /**
- * Physical height in pixels, `0` when the geometry is not known yet.
+ * Physical height in pixels, `0` when the geometry is not known.
  */
-height: number, };
+height: number, 
+/**
+ * Width in the display's own points — what the user calls its size.
+ */
+logical_width: number, 
+/**
+ * Height in the display's own points.
+ */
+logical_height: number, };
 
 /**
  * One approval, as the dialog receives it (PLAN 2.1, `ApprovalRequest`).
@@ -138,6 +152,38 @@ requested_at: string,
  * When it stops being answerable.
  */
 expires_at: string, };
+
+/**
+ * A file a tool call left on disk, identified without the log holding a copy.
+ *
+ * `screen_capture` is the only tool that produces one today, and PLAN 5.4
+ * names exactly what its line may carry: the path, the dimensions and a
+ * digest, never the image. That is enough to say afterwards *which* capture a
+ * call produced, and to check that the file still on disk is the one this line
+ * is about.
+ *
+ * The dimensions are pixels because the only artefact so far is an image; a
+ * later tool that writes something else will widen this shape rather than
+ * borrow it, and the field being optional is what lets it (PLAN 7.1: the audit
+ * schema has to be able to grow).
+ */
+export type AuditArtifact = { 
+/**
+ * Where the file was written.
+ */
+path: string, 
+/**
+ * SHA-256 of the bytes on disk, hex.
+ */
+sha256: string, 
+/**
+ * Width in pixels.
+ */
+width: number, 
+/**
+ * Height in pixels.
+ */
+height: number, };
 
 /**
  * How a tool call came to run, or not (PLAN 2.1, `AuditEntry.decision`).
@@ -212,7 +258,15 @@ bytes_out: number,
 /**
  * The stable code when this failed, `null` otherwise.
  */
-error_code: string | null, };
+error_code: string | null, 
+/**
+ * The file this call wrote, when it wrote one.
+ *
+ * `#[serde(default)]` because the file is its own wire format: a log
+ * written by an earlier build has no such key, and a reader that refused
+ * those lines would lose the history the log exists to keep.
+ */
+artifact: AuditArtifact | null, };
 
 /**
  * What the user answered (PLAN 2.1, `Decision`).
@@ -525,7 +579,19 @@ status: ToolCallStatus,
 /**
  * One human line naming the result, or `null` before there is one.
  */
-summary: string | null, };
+summary: string | null, 
+/**
+ * A local image the call produced, for the transcript to show.
+ *
+ * Only `screen_capture` sets it, and it is a path rather than the bytes
+ * (PLAN 5.4): the WebView loads it through the asset protocol, which is
+ * scoped to the capture directory. Persisted, so re-opening a session
+ * shows the capture again instead of a line saying one was taken.
+ *
+ * `#[serde(default)]` for the transcripts written before this field
+ * existed — a session on disk must keep opening.
+ */
+image_path: string | null, };
 
 /**
  * How far one tool call got.
@@ -563,7 +629,17 @@ duration_ms: number,
 /**
  * Whether the result the model saw was shorter than what was available.
  */
-truncated: boolean, };
+truncated: boolean, 
+/**
+ * A local image the call produced, for the transcript to show.
+ *
+ * A path and not the bytes (PLAN 5.4): the WebView loads it through the
+ * asset protocol, scoped to the capture directory. Carried on the event
+ * as well as persisted on the record so the thumbnail appears when the
+ * capture does, rather than when the turn ends and the transcript is
+ * re-read.
+ */
+image_path: string | null, };
 
 /**
  * `tool:progress` — output from a tool that is still running.

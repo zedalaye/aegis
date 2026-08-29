@@ -117,6 +117,12 @@ pub struct Turn<'a> {
     pub sink: &'a dyn EventSink,
     /// This application's own binary, so `shell_exec` can refuse to run it.
     pub self_exe: Option<&'a Path>,
+    /// Where `screen_capture` writes its PNGs.
+    ///
+    /// Aegis' own directory, never the workspace (PLAN 5.4): a capture is an
+    /// artefact of the harness, and one landing in a project folder would end
+    /// up in someone's next commit.
+    pub captures: &'a Path,
 }
 
 /// The [`ProgressSink`] one tool call writes its live output to.
@@ -466,6 +472,7 @@ impl Turn<'_> {
                         ToolResult::refusal(&call.name, ErrorCode::ToolFailed, reason),
                         ToolCallStatus::Error,
                         reason.clone(),
+                        None,
                     );
                     continue;
                 }
@@ -491,13 +498,25 @@ impl Turn<'_> {
                 turn_id: &plan.turn_id,
                 call_id: &call.call_id,
                 audit: self.audit,
+                captures: self.captures,
                 args: &args,
                 progress: &progress,
                 cancel,
             };
+
+            // Measured for the one tool whose prompt names a display, and for
+            // no other: asking the window server to describe the screen is a
+            // round trip, and `fs_read` has no use for the answer. Policy
+            // takes it as an argument rather than measuring it itself, which
+            // is what keeps the decision table a pure function and testable
+            // without a screen.
+            let screen = (call.name == policy::tool::SCREEN_CAPTURE)
+                .then(tools::screenshot::geometry)
+                .flatten();
             let policy_ctx =
                 PolicyCtx::new(&plan.session_id, plan.workspace.as_deref(), self.grants)
-                    .with_self_exe(self.self_exe);
+                    .with_self_exe(self.self_exe)
+                    .with_screen(screen.as_ref());
 
             let judged = match policy::decide(&policy_ctx, &call.name, args.clone()) {
                 Decision::Auto {
@@ -686,6 +705,7 @@ impl Turn<'_> {
                 turn_id: &plan.turn_id,
                 call_id: &call.call_id,
                 audit: self.audit,
+                captures: self.captures,
                 args: call.args.as_ref().unwrap_or(&serde_json::Value::Null),
                 // Nothing runs down this path, so nothing produces output and
                 // nothing is there to cancel.
@@ -715,6 +735,7 @@ impl Turn<'_> {
             ToolResult::refusal(&call.name, ErrorCode::Cancelled, message),
             ToolCallStatus::Cancelled,
             message.to_owned(),
+            None,
         );
     }
 
@@ -740,6 +761,7 @@ impl Turn<'_> {
             summary: outcome.summary.clone(),
             duration_ms: outcome.audit.duration_ms,
             truncated: outcome.result.truncated,
+            image_path: outcome.image_path.clone(),
         }));
         self.sink
             .emit(Event::AuditAppended(Box::new(outcome.audit.clone())));
@@ -750,6 +772,7 @@ impl Turn<'_> {
             outcome.result.clone(),
             status,
             outcome.summary.clone(),
+            outcome.image_path.clone(),
         );
     }
 
@@ -762,12 +785,14 @@ impl Turn<'_> {
         result: ToolResult,
         status: ToolCallStatus,
         summary: String,
+        image_path: Option<String>,
     ) {
         if let Err(err) = self.sessions.set_tool_call_status(
             &plan.session_id,
             &call.call_id,
             status,
             Some(summary),
+            image_path,
         ) {
             tracing::warn!(%err, call_id = %call.call_id, "could not update the tool call record");
         }
@@ -861,6 +886,8 @@ fn record_of(call: &AssembledCall) -> ToolCallRecord {
         args_json: call.args_json.clone(),
         status: ToolCallStatus::Pending,
         summary: None,
+        // Filled in when the call finishes, and only by `screen_capture`.
+        image_path: None,
     }
 }
 
@@ -967,6 +994,7 @@ mod tests {
         audit: AuditLog,
         sink: Recorder,
         session_id: String,
+        captures: PathBuf,
     }
 
     impl Fixture {
@@ -977,6 +1005,7 @@ mod tests {
             std::fs::create_dir_all(&data).expect("data dir");
             std::fs::create_dir_all(&workspace).expect("workspace dir");
 
+            let captures = data.join("captures");
             let sessions = SessionStore::load(&data);
             let session_id = sessions.create("p1", None).expect("session").id;
 
@@ -996,6 +1025,7 @@ mod tests {
                 audit: AuditLog::new(&data),
                 sink: Recorder::default(),
                 session_id,
+                captures,
             }
         }
 
@@ -1017,6 +1047,7 @@ mod tests {
                 provider,
                 sink: &self.sink,
                 self_exe: None,
+                captures: &self.captures,
             }
         }
 

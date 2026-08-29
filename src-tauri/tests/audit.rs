@@ -48,6 +48,7 @@ impl Fixture {
             bytes_in: 0,
             bytes_out: 12,
             error_code: None,
+            artifact: None,
         });
     }
 
@@ -134,6 +135,7 @@ fn the_decision_vocabulary_is_the_one_the_ui_branches_on() {
             bytes_in: 0,
             bytes_out: 0,
             error_code: Some(ErrorCode::Denied),
+            artifact: None,
         });
 
         let line = fixture.lines().pop().expect("a line");
@@ -166,6 +168,7 @@ fn every_outcome_has_a_stable_spelling() {
             bytes_in: 0,
             bytes_out: 0,
             error_code: None,
+            artifact: None,
         });
 
         assert_eq!(fixture.lines().pop().expect("a line")["outcome"], expected);
@@ -350,6 +353,7 @@ fn a_log_in_a_directory_that_does_not_exist_yet_is_created_with_it() {
         bytes_in: 0,
         bytes_out: 0,
         error_code: None,
+        artifact: None,
     });
 
     assert_eq!(log.tail(10, None).expect("tail").len(), 1);

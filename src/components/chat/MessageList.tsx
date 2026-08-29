@@ -77,9 +77,10 @@ export default function MessageList() {
           Nothing here yet. Ask for something — there is no model behind this
           build, so the reply comes from the scripted provider and tells you
           what the runtime actually sent. Include <code>/write</code> in a
-          message to make it ask for permission to write a file, or{" "}
-          <code>/run</code> to make it ask to run a command in your workspace.
-          Either one is how you see the approval gate work.
+          message to make it ask for permission to write a file,{" "}
+          <code>/run</code> to make it ask to run a command in your workspace,
+          or <code>/capture</code> to make it ask for a picture of your screen.
+          Any of them is how you see the approval gate work.
         </p>
       ) : null}
 

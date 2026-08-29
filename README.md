@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 8 (a real provider).** The app boots, lives in the system tray, remembers the
+> **Status: Phase 9 (screen capture).** The app boots, lives in the system tray, remembers the
 > workspace folders you point it at, and holds conversations in them: create a session, send a
 > message, watch the reply stream in a token at a time, and stop it mid-sentence. Transcripts are
 > on disk and survive a restart.
@@ -31,24 +31,36 @@ ever sent to it.
 > reads `scripted provider`, marked, so a reply with no model behind it can never be mistaken
 > for one that has.
 >
-> A tool call that needs your permission asks for it. `fs_list`, `fs_read`, `fs_write` and
-> `shell_exec` run through the decision matrix; anything it will not allow on its own opens a
-> prompt showing the exact path and content that would be written, or the exact program,
-> arguments and working directory that would run, and you answer **deny**, **allow once** or
-> **allow for this session**. A denial is an ordinary result — the model is told, and the turn
-> carries on. Session grants are listed under the transcript while they are in force, with a
-> Revoke button beside each; they never touch disk and die with the session. Every call is
-> audited whichever way you answer.
+> A tool call that needs your permission asks for it. `fs_list`, `fs_read`, `fs_write`,
+> `shell_exec` and `screen_capture` run through the decision matrix; anything it will not allow
+> on its own opens a prompt showing the exact path and content that would be written, or the
+> exact program, arguments and working directory that would run, and you answer **deny**,
+> **allow once** or **allow for this session**. A denial is an ordinary result — the model is
+> told, and the turn carries on. Session grants are listed under the transcript while they are
+> in force, with a Revoke button beside each; they never touch disk and die with the session.
+> Every call is audited whichever way you answer.
 >
 > A running command's output arrives in the transcript as it is produced, stderr marked apart
 > from stdout, capped and scrolled. Stop kills it. So does its deadline — two minutes, or
 > whatever shorter one the caller asked for.
 >
-> The scripted provider is still there and still useful: with no base URL configured it answers
-> every message with what the runtime sent it, and **`/write`** and **`/run`** make it ask for a
-> file write and a real command, so the gate can be walked through without spending a token.
+> **`screen_capture` takes a picture of your primary display**, and only ever after you say so:
+> there is no state in which it runs without a prompt. The prompt names the display and both of
+> its sizes — the pixels the file would hold, and the points your screen is set to — and says
+> what a capture contains. It deliberately shows no preview of what would be captured, because
+> taking a picture of the screen to illustrate the question would already have done the thing
+> being asked about. Once you allow it, the capture appears in the transcript as a thumbnail you
+> can click for the full-size image. The PNG is written under the app data directory, never into
+> your workspace, and the model is given its path, its size and a SHA-256 — never the image, so a
+> capture does not reach the provider you configured. The audit line records the same three
+> things and never the picture.
 >
-> The screenshot tool (Phase 9) and the audit drawer (Phase 10) follow — see `PLAN.md` § 6.
+> The scripted provider is still there and still useful: with no base URL configured it answers
+> every message with what the runtime sent it, and **`/write`**, **`/run`** and **`/capture`**
+> make it ask for a file write, a real command and a real screenshot, so the whole gate can be
+> walked through without spending a token or configuring a provider.
+>
+> The audit drawer (Phase 10) follows — see `PLAN.md` § 6.
 
 ---
 
@@ -58,7 +70,7 @@ ever sent to it.
 | --- | --- | --- |
 | Node.js | ≥ 20.19 | 24 LTS recommended |
 | pnpm | 10.x | `corepack enable pnpm` — the version is pinned by `packageManager` in `package.json` |
-| Rust | ≥ 1.82 stable | `rustup` toolchain, MSVC host on Windows |
+| Rust | ≥ 1.85 stable | `rustup` toolchain, MSVC host on Windows. 1.85 is the edition-2024 floor the screen-capture crate needs |
 
 Plus one platform toolchain:
 
@@ -66,9 +78,12 @@ Plus one platform toolchain:
   the **WebView2 runtime** (see below).
 - **macOS** — Xcode Command Line Tools (`xcode-select --install`).
 - **Linux** — `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf` and the usual
-  build essentials, plus `libssl-dev` (the HTTPS client uses the system TLS stack) and
-  `libdbus-1-dev` (the credential store talks to a Secret Service over D-Bus). Neither is needed
-  on Windows or macOS, which have both built in.
+  build essentials, plus `libssl-dev` (the HTTPS client uses the system TLS stack),
+  `libdbus-1-dev` (the credential store talks to a Secret Service over D-Bus), and — for screen
+  capture — `libxcb1-dev`, `libxrandr-dev`, `libpipewire-0.3-dev` and `clang`. None of these are
+  needed on Windows or macOS, which have their own capture and credential APIs built in. This is
+  the heaviest of the three Linux dependency sets and it exists for one tool; Linux is
+  best-effort here (`AGENTS.md`).
 
 ## Run it
 
@@ -134,6 +149,13 @@ cd src-tauri && cargo clippy --all-targets -- -D warnings
 pnpm typecheck                 # TypeScript, strict
 ```
 
+Everything runs headless. The screen-capture tests are the one place that depends on the machine,
+and they are written so that either answer passes: a capture must produce exactly one PNG whose
+digest matches its audit line, *or* be refused with `E_SCREEN_PERMISSION` and produce nothing.
+A developer's desktop takes the first branch, a macOS box without Screen Recording consent or a
+headless runner takes the second, and the thing being tested — that there is no third outcome —
+holds on all of them.
+
 ### Generated bindings
 
 `src/ipc/bindings.ts` is generated from the Rust payload structs by
@@ -179,12 +201,22 @@ A document Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` an
 with an empty list rather than refusing to open. Deleting a project forgets it and its sessions;
 the workspace folder itself is never touched.
 
+Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
+named `capture-<UTC timestamp>-<random>.png`. They are here rather than in your workspace on
+purpose: a capture is Aegis' own artefact, and one written into a project folder would end up in
+your next commit. Nothing ever deletes them; the folder is yours to empty, and a transcript that
+refers to a capture you have deleted says so instead of showing it. This is also the **only**
+directory the window is allowed to read a file from, and only through Tauri's `asset:` protocol,
+scoped to it at startup — the WebView has no filesystem permission of any kind.
+
 Beside it, `audit.jsonl` records one JSON line per tool call — every call, whether it ran, was
 refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
 running to read it. Each line names the session, the tool, why policy decided what it did, and
 what came of it. It records the *paths* a call touched but never the contents of a file: a log
 that quoted every `fs_write` would become the one place on your machine where everything the
-agent ever wrote is collected in plain text. Aegis never rotates or trims this file; deleting it
+agent ever wrote is collected in plain text. A line for a capture carries the file's path, its
+pixel size and a SHA-256 of the bytes on disk — enough to say later which capture a call
+produced, and to check that the file is still that one, without the log holding a copy of it. Aegis never rotates or trims this file; deleting it
 is yours to do, and a new one starts on the next tool call.
 
 ---
@@ -239,9 +271,17 @@ Read this before pointing Aegis at anything you care about.
 - **There is no sandbox.** Approved tools run as you, with your privileges and environment. The
   real boundary is that you read the exact path, program, arguments and working directory before
   approving. Treat every approval as if you were typing the command yourself.
-- **Screen captures are never auto-allowed.** A capture can contain anything on your display.
-  Images are written under the app data directory, never into the workspace; the audit log records
-  the path, dimensions and a SHA-256, never the image.
+- **Screen captures are never auto-allowed**, and there is no argument or grant state that makes
+  one happen without a prompt. A capture can contain anything on your display — a password
+  manager, a private conversation, someone else's face in a call — so the prompt names the
+  display and says as much, and it shows no preview, because capturing the screen to illustrate
+  the question would already have done the thing being asked about. Images are written under the
+  app data directory, never into the workspace. The **image never leaves your machine**: the
+  model is handed the path, the size and a SHA-256, and this build cannot read a capture back
+  into the conversation, so nothing about it reaches the provider you configured. The audit log
+  records those same three things and never the picture. A capture that comes back entirely
+  blank — which is how macOS reports a missing Screen Recording permission — is refused as
+  `E_SCREEN_PERMISSION` rather than handed to the model as a picture of an empty desktop.
 - **Keys stay out of the WebView.** The API key lives in the OS credential store (or in
   `AEGIS_API_KEY`) and is read only by the Rust runtime, which attaches it to the request as a
   header marked so it cannot be printed. There is no command that returns a key: the UI can save
@@ -300,7 +340,11 @@ Read this before pointing Aegis at anything you care about.
   which macOS only prompts for on the first capture attempt. Grant it under *System Settings →
   Privacy & Security → Screen Recording*. Under `pnpm tauri dev` the consent is attached to the
   dev binary and is re-evaluated whenever that binary changes, so it can need re-granting after a
-  rebuild.
+  rebuild. macOS reports the refusal by *succeeding* and handing back a blank frame rather than
+  by failing, so Aegis checks for one and answers `E_SCREEN_PERMISSION` with that path in the
+  message. The half-refused case — your wallpaper but none of your windows — is indistinguishable
+  from a tidy desktop and is **not** detected: if a capture comes back showing nothing but the
+  desktop, check the consent.
 - **Keychain re-prompts after every rebuild.** Each dev build changes the ad-hoc signature, which
   invalidates the keychain ACL. Use the `AEGIS_API_KEY` environment variable during development;
   Settings will honestly report `key_source: "env"`.
@@ -311,8 +355,14 @@ Read this before pointing Aegis at anything you care about.
   with `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 - **No tray icon.** Requires `libayatana-appindicator3`, and GNOME additionally needs the
   AppIndicator shell extension. Aegis stays fully usable without a tray — the window is primary.
-- **Screenshots fail on Wayland.** Wayland blocks direct framebuffer capture by design. Aegis
-  reports `E_SCREEN_PERMISSION` rather than returning a black image. X11 sessions work.
+- **Screenshots on Wayland.** Wayland blocks direct framebuffer capture by design. Aegis still
+  attempts one — compositors built on wlroots answer a `wlr-screencopy` request, and those work
+  — and when the compositor refuses, the failure is `E_SCREEN_PERMISSION` naming the session
+  type, never a black image passed off as your screen. GNOME and KDE under Wayland are the usual
+  refusals. X11 sessions work.
+- **The build wants `libpipewire-0.3-dev`, `libxcb1-dev`, `libxrandr-dev` and `clang`.** These
+  are the screen-capture crate's, not the app's, and they are needed at build time even on a
+  machine that will never take a capture. See *Requirements*.
 - **No keyring.** Without a running Secret Service (gnome-keyring, kwallet), use the
   `AEGIS_API_KEY` environment variable. This is normal on headless and minimal window managers.
 

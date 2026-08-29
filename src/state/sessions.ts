@@ -465,7 +465,13 @@ export function attachSessionEvents(): Promise<() => void> {
       });
     },
 
-    "tool:finished": ({ session_id, call_id, summary, truncated }) => {
+    "tool:finished": ({
+      session_id,
+      call_id,
+      summary,
+      truncated,
+      image_path,
+    }) => {
       if (!isOpen(session_id)) {
         return;
       }
@@ -487,7 +493,14 @@ export function attachSessionEvents(): Promise<() => void> {
                   messages: state.detail.messages.map((message) => ({
                     ...message,
                     tool_calls: message.tool_calls.map((call) =>
-                      call.call_id === call_id ? { ...call, summary } : call,
+                      call.call_id === call_id
+                        ? // A capture's path arrives with the event so the
+                          // thumbnail appears when the capture does, rather
+                          // than when the turn ends and the transcript is
+                          // re-read. It is on the record on disk too, which is
+                          // what makes it survive re-opening the session.
+                          { ...call, summary, image_path }
+                        : call,
                     ),
                   })),
                 },

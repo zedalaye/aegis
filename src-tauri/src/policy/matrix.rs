@@ -388,6 +388,8 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                         display: name.to_owned(),
                         width: geometry.map_or(0, |screen| screen.width),
                         height: geometry.map_or(0, |screen| screen.height),
+                        logical_width: geometry.map_or(0, |screen| screen.logical_width),
+                        logical_height: geometry.map_or(0, |screen| screen.logical_height),
                     },
                     scope_label: scope_label(Some(&grant)),
                     grant: Some(grant),
@@ -586,8 +588,8 @@ fn summarize(label: &str, bytes: Option<u64>) -> String {
     )
 }
 
-/// `the primary display (2560 x 1440)`, or the name alone before Phase 9 can
-/// measure it.
+/// `the primary display (2560 x 1440)`, or the name alone on a machine whose
+/// window server would not describe its displays.
 fn describe_screen(name: &str, geometry: Option<&ScreenGeometry>) -> String {
     geometry.map_or_else(
         || name.to_owned(),

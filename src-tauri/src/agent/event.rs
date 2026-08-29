@@ -240,6 +240,14 @@ pub struct ToolFinished {
     pub duration_ms: u64,
     /// Whether the result the model saw was shorter than what was available.
     pub truncated: bool,
+    /// A local image the call produced, for the transcript to show.
+    ///
+    /// A path and not the bytes (PLAN 5.4): the WebView loads it through the
+    /// asset protocol, scoped to the capture directory. Carried on the event
+    /// as well as persisted on the record so the thumbnail appears when the
+    /// capture does, rather than when the turn ends and the transcript is
+    /// re-read.
+    pub image_path: Option<String>,
 }
 
 /// One event, ready to emit.
@@ -407,6 +415,7 @@ mod tests {
             summary: "read a.txt".to_owned(),
             duration_ms: 3,
             truncated: false,
+            image_path: None,
         });
 
         assert_eq!(event.session_id(), "s7");

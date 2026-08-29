@@ -132,6 +132,17 @@ pub struct ToolCallRecord {
     pub status: ToolCallStatus,
     /// One human line naming the result, or `null` before there is one.
     pub summary: Option<String>,
+    /// A local image the call produced, for the transcript to show.
+    ///
+    /// Only `screen_capture` sets it, and it is a path rather than the bytes
+    /// (PLAN 5.4): the WebView loads it through the asset protocol, which is
+    /// scoped to the capture directory. Persisted, so re-opening a session
+    /// shows the capture again instead of a line saying one was taken.
+    ///
+    /// `#[serde(default)]` for the transcripts written before this field
+    /// existed — a session on disk must keep opening.
+    #[serde(default)]
+    pub image_path: Option<String>,
 }
 
 /// One message in a transcript.
@@ -511,6 +522,7 @@ impl SessionStore {
         call_id: &str,
         status: ToolCallStatus,
         summary: Option<String>,
+        image_path: Option<String>,
     ) -> AppResult<bool> {
         let mut sessions = self.sessions();
         let session = Self::find_mut(&mut sessions, id)?;
@@ -524,6 +536,12 @@ impl SessionStore {
                 call.status = status;
                 if summary.is_some() {
                     call.summary = summary;
+                }
+                // Same rule as the summary, for the same reason: a later
+                // status change carrying nothing must not erase what an
+                // earlier one recorded.
+                if image_path.is_some() {
+                    call.image_path = image_path;
                 }
             })
             .is_some();
@@ -867,6 +885,7 @@ mod tests {
                         args_json: r#"{"path":"a.txt"}"#.to_owned(),
                         status: ToolCallStatus::Pending,
                         summary: None,
+                        image_path: None,
                     }],
                 ),
                 SessionState::Running,
@@ -880,13 +899,14 @@ mod tests {
                 "call_1",
                 ToolCallStatus::Ok,
                 Some("read a.txt (12 B)".to_owned()),
+                None,
             )
             .expect("update"));
 
         // A later status change that carries no summary keeps the one on file.
         assert!(fx
             .store
-            .set_tool_call_status(&created.id, "call_1", ToolCallStatus::Cancelled, None)
+            .set_tool_call_status(&created.id, "call_1", ToolCallStatus::Cancelled, None, None)
             .expect("update"));
 
         let detail = fx
@@ -905,7 +925,7 @@ mod tests {
 
         let found = fx
             .store
-            .set_tool_call_status(&created.id, "nope", ToolCallStatus::Ok, None)
+            .set_tool_call_status(&created.id, "nope", ToolCallStatus::Ok, None, None)
             .expect("no error");
         assert!(!found);
     }
@@ -991,6 +1011,7 @@ mod tests {
                     args_json: "{}".to_owned(),
                     status: ToolCallStatus::Ok,
                     summary: None,
+                    image_path: None,
                 }],
             )],
             pending_approvals: Vec::new(),
@@ -1043,7 +1064,14 @@ mod tests {
         );
         assert_eq!(
             fields(&json["messages"][0]["tool_calls"][0]),
-            sorted(&["call_id", "tool", "args_json", "status", "summary"])
+            sorted(&[
+                "call_id",
+                "tool",
+                "args_json",
+                "status",
+                "summary",
+                "image_path"
+            ])
         );
 
         // The enums cross the wire as the snake_case strings the UI branches on.

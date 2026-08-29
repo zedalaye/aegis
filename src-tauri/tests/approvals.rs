@@ -136,6 +136,7 @@ struct App {
     approvals: ApprovalRegistry,
     audit: AuditLog,
     session_id: String,
+    captures: PathBuf,
 }
 
 impl App {
@@ -158,6 +159,7 @@ impl App {
             approvals: ApprovalRegistry::new(),
             audit: AuditLog::new(&data),
             session_id,
+            captures: data.join("captures"),
         }
     }
 
@@ -172,6 +174,7 @@ impl App {
             provider,
             sink,
             self_exe: None,
+            captures: &self.captures,
         }
     }
 

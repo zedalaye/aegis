@@ -878,6 +878,53 @@ body {
   font-style: italic;
 }
 
+/* A capture, at a size that belongs in a transcript. Bounded by width and by
+   height, because a portrait display would otherwise push the rest of the
+   conversation off the screen. Clicking grows it in place; the element is a
+   button rather than a link because nothing here should navigate. */
+.toolcall__capture {
+  display: block;
+  align-self: flex-start;
+  max-width: min(100%, 24rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+  line-height: 0;
+  cursor: zoom-in;
+}
+
+.toolcall__capture:hover,
+.toolcall__capture:focus-visible {
+  border-color: var(--accent);
+}
+
+.toolcall__capture--large {
+  max-width: 100%;
+  cursor: zoom-out;
+}
+
+.toolcall__thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 14rem;
+  /* The capture is the physical framebuffer of a display that may be scaled,
+     so it is almost never shown at its own size. `contain` keeps the aspect
+     ratio a viewer would recognize. */
+  object-fit: contain;
+}
+
+.toolcall__capture--large .toolcall__thumb {
+  max-height: none;
+}
+
+.toolcall__missing {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* --- Approvals ------------------------------------------------------------ */
 
 /*
@@ -992,6 +1039,16 @@ body {
 .detail__value--mono {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+}
+
+/* The sentence under a screen-capture approval. Not a warning banner: the risk
+   badge already says how alarming this is, and what this adds is what a capture
+   actually contains, which the user may not have thought about. */
+.detail__note {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .preview {

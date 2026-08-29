@@ -689,6 +689,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         provider: &provider(&server.base_url),
         sink: &sink,
         self_exe: None,
+        captures: &data.join("captures"),
     }
     .run(&plan, &cancel)
     .await;

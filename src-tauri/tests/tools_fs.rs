@@ -27,6 +27,9 @@ struct Fixture {
     outside: PathBuf,
     grants: GrantStore,
     audit: AuditLog,
+    /// Where a capture would go. Nothing in this file captures anything; the
+    /// path is here because a tool call is not runnable without one.
+    captures: PathBuf,
     /// `tools::run` is `async` for the sake of one tool, `shell_exec`. The
     /// filesystem tools have nothing to await, so rather than turn thirty
     /// tests into async ones this drives the future to completion here — the
@@ -41,6 +44,7 @@ impl Fixture {
         let outside_guard = TempDir::new().expect("temp dir");
         let data_guard = TempDir::new().expect("temp dir");
         let audit = AuditLog::new(data_guard.path());
+        let captures = data_guard.path().join("captures");
 
         Self {
             workspace: dunce::canonicalize(workspace_guard.path()).expect("canonical"),
@@ -50,6 +54,7 @@ impl Fixture {
             _data_guard: data_guard,
             grants: GrantStore::new(),
             audit,
+            captures,
             runtime: tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -89,6 +94,7 @@ impl Fixture {
             turn_id: "turn-1",
             call_id: "call-1",
             audit: &self.audit,
+            captures: &self.captures,
             args: &args,
             progress: &NullProgress,
             cancel: &cancel,
@@ -416,10 +422,10 @@ fn a_refusal_is_an_envelope_the_model_can_read() {
 fn a_tool_this_build_does_not_have_says_so_rather_than_failing_silently() {
     let fixture = Fixture::new();
 
-    // `screen_capture` has a policy row from Phase 3 and no implementation
-    // until Phase 9. A model that names it anyway must get an answer it can
-    // act on.
-    let outcome = fixture.call(tool::SCREEN_CAPTURE, json!({}));
+    // A model that invents a tool must get an answer it can act on, and the
+    // refusal has to happen in policy — before anything is resolved, let alone
+    // run.
+    let outcome = fixture.call("fs_delete", json!({ "path": "a.txt" }));
     let envelope = envelope(&outcome);
 
     assert_eq!(envelope["ok"], false);
@@ -428,9 +434,10 @@ fn a_tool_this_build_does_not_have_says_so_rather_than_failing_silently() {
         envelope["error"]["message"]
             .as_str()
             .expect("a message")
-            .contains("not available in this build"),
+            .contains("fs_delete"),
         "{envelope}"
     );
+    assert_eq!(outcome.audit.outcome, Outcome::Denied);
 }
 
 #[test]
@@ -440,7 +447,16 @@ fn the_tools_offered_to_the_model_are_the_ones_this_build_runs() {
         .map(|schema| schema["function"]["name"].as_str().unwrap_or("").to_owned())
         .collect();
 
-    assert_eq!(names, vec!["fs_list", "fs_read", "fs_write", "shell_exec"]);
+    assert_eq!(
+        names,
+        vec![
+            "fs_list",
+            "fs_read",
+            "fs_write",
+            "shell_exec",
+            "screen_capture"
+        ]
+    );
 }
 
 /// The exit criterion of Phase 4 (PLAN § 6).

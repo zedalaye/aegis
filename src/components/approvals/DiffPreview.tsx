@@ -13,6 +13,13 @@
  * A real before/after diff needs the old text too, which is a Phase 10 nicety —
  * what a user needs before allowing a write is the path, the size, whether it
  * overwrites, and a look at what is going in.
+ *
+ * `screen_capture` is the one case with no preview of its subject, and that is
+ * the point rather than an omission: capturing the screen to illustrate a
+ * question about capturing the screen would already have done the thing being
+ * asked about (PLAN 5.4). The prompt names the display and both of its sizes
+ * and says what a capture contains; the picture appears in the transcript
+ * afterwards, once someone has said yes.
  */
 
 import type { ApprovalDetail } from "../../ipc/bindings";
@@ -139,16 +146,45 @@ export default function DiffPreview({
         </>
       );
 
-    case "screen":
+    case "screen": {
+      // Physical and logical differ on a scaled display: the file would be the
+      // physical size, and the screen the user is looking at is the logical
+      // one (PLAN 5.1). Both are shown, and neither is called "the size".
+      const known = detail.width > 0 && detail.height > 0;
+      const scaled =
+        known &&
+        detail.logical_width > 0 &&
+        (detail.logical_width !== detail.width ||
+          detail.logical_height !== detail.height);
+
       return (
-        <dl className="detail">
-          <Field label="Display">{detail.display}</Field>
-          <Field label="Size">
-            {detail.width === 0 || detail.height === 0
-              ? "unknown"
-              : `${detail.width} × ${detail.height}`}
-          </Field>
-        </dl>
+        <>
+          <dl className="detail">
+            <Field label="Display">{detail.display}</Field>
+            <Field label="Image">
+              {known ? `${detail.width} × ${detail.height} pixels` : "unknown"}
+            </Field>
+            {scaled ? (
+              <Field label="On screen">
+                {`${detail.logical_width} × ${detail.logical_height} points`}
+              </Field>
+            ) : null}
+          </dl>
+          {/*
+            No preview of what would be captured, deliberately. Every other
+            approval can show the thing it is about because reading a path or a
+            command line costs nothing; taking a picture of the screen to ask
+            whether a picture of the screen is allowed would be doing the thing
+            being asked about (PLAN 5.4). What the prompt can honestly say is
+            which display, how big, and what a capture contains.
+          */}
+          <p className="detail__note">
+            A capture holds everything on that display at the moment you allow
+            it — every window, not only Aegis. It is written outside your
+            workspace and this build cannot read it back into the conversation.
+          </p>
+        </>
       );
+    }
   }
 }

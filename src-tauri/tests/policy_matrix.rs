@@ -384,6 +384,8 @@ fn capturing_the_screen_asks_and_names_the_display() {
         display: "the built-in display".to_owned(),
         width: 2560,
         height: 1440,
+        logical_width: 1707,
+        logical_height: 960,
     };
     let ctx = fixture.ctx().with_screen(Some(&screen));
 
@@ -397,6 +399,8 @@ fn capturing_the_screen_asks_and_names_the_display() {
             display: "the built-in display".to_owned(),
             width: 2560,
             height: 1440,
+            logical_width: 1707,
+            logical_height: 960,
         }
     );
     assert!(request.summary.contains("2560"), "{}", request.summary);

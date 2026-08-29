@@ -74,6 +74,9 @@ struct Fixture {
     outside: PathBuf,
     grants: GrantStore,
     audit: AuditLog,
+    /// Where a capture would go. Nothing in this file captures anything; the
+    /// path is here because a tool call is not runnable without one.
+    captures: PathBuf,
 }
 
 impl Fixture {
@@ -82,6 +85,7 @@ impl Fixture {
         let outside_guard = TempDir::new().expect("temp dir");
         let data_guard = TempDir::new().expect("temp dir");
         let audit = AuditLog::new(data_guard.path());
+        let captures = data_guard.path().join("captures");
 
         Self {
             workspace: dunce::canonicalize(workspace_guard.path()).expect("canonical"),
@@ -91,6 +95,7 @@ impl Fixture {
             _data_guard: data_guard,
             grants: GrantStore::new(),
             audit,
+            captures,
         }
     }
 
@@ -141,6 +146,7 @@ impl Fixture {
             turn_id: "turn-1",
             call_id: "call-1",
             audit: &self.audit,
+            captures: &self.captures,
             args: &args,
             progress,
             cancel,

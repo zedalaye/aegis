@@ -25,23 +25,26 @@
 //! with `ok: false` and `E_DENIED`, not an exception — the model reads it,
 //! explains itself and tries something else, and the turn keeps going.
 //!
-//! Tools land with their phases. `fs_list`, `fs_read`, `fs_write` and
-//! `shell_exec` are here now; `screen_capture` (Phase 9) has a policy row
-//! already but no implementation, and [`run`] answers a call for it with an
-//! honest "not in this build" envelope rather than pretending. It is absent
-//! from [`schemas`] for the same reason: a model should not be offered a tool
-//! that cannot run.
+//! Every tool the MVP names is here: `fs_list`, `fs_read`, `fs_write`,
+//! `shell_exec` and, since Phase 9, `screen_capture`. The registry and the
+//! decision table are the same list, which is what makes "a tool nothing
+//! gates" a thing this code cannot express.
 //!
-//! [`run`] is `async` because of `shell_exec` and only because of it. The
-//! filesystem tools are short, local and synchronous, and are called inline;
-//! a child process is neither, and it has to be awaited inside the same
-//! cancellation as the turn or a two-minute command would be a two-minute
-//! stall with a Stop button that does nothing.
+//! [`run`] is `async` because of the two tools that reach outside this process.
+//! The filesystem tools are short, local and synchronous, and are called
+//! inline. A child process is none of those, and it has to be awaited inside
+//! the same cancellation as the turn or a two-minute command would be a
+//! two-minute stall with a Stop button that does nothing. A capture is quick
+//! but it is a round trip to the window server — and on a compositor that
+//! shows its own consent prompt, a round trip through a person — so it goes to
+//! a blocking thread rather than parking a runtime worker on it.
 
 pub mod fs;
+pub mod screenshot;
 pub mod shell;
 
 use std::fmt;
+use std::path::Path;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize, Serializer};
@@ -49,7 +52,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
-use crate::audit::{AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
+use crate::audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 use crate::error::ErrorCode;
 use crate::policy::{tool, ResolvedCall};
 
@@ -224,6 +227,13 @@ pub struct ToolOutcome {
     pub result: ToolResult,
     /// One human line: `read src/main.rs (2.4 KB)`. Never a raw blob.
     pub summary: String,
+    /// A local image this call produced, for the transcript to show.
+    ///
+    /// Only `screen_capture` fills it. It is a path and not bytes on purpose
+    /// (PLAN 5.4): the WebView loads the file through the asset protocol,
+    /// which is scoped to the capture directory, rather than having a
+    /// megabyte of base64 pushed through the event channel.
+    pub image_path: Option<String>,
     /// The audit line that was written for this call.
     pub audit: AuditEntry,
 }
@@ -250,6 +260,12 @@ pub(crate) struct Produced {
     /// cancel — that is neither a tool that failed nor one that was refused,
     /// and the log has a word for it.
     outcome: Option<Outcome>,
+    /// The file the call left on disk, when it left one.
+    ///
+    /// Set by `screen_capture` and by nothing else so far. It reaches the
+    /// audit line and the transcript from here, which is why the tool does not
+    /// have to know about either.
+    artifact: Option<AuditArtifact>,
 }
 
 impl Produced {
@@ -269,6 +285,7 @@ impl Produced {
             bytes_in: 0,
             bytes_out,
             outcome: None,
+            artifact: None,
         }
     }
 
@@ -281,6 +298,7 @@ impl Produced {
             bytes_in: 0,
             bytes_out: 0,
             outcome: None,
+            artifact: None,
         }
     }
 
@@ -296,6 +314,12 @@ impl Produced {
     /// in this phase.
     pub(crate) const fn with_bytes_in(mut self, bytes: u64) -> Self {
         self.bytes_in = bytes;
+        self
+    }
+
+    /// Records the file the call wrote.
+    pub(crate) fn with_artifact(mut self, artifact: AuditArtifact) -> Self {
+        self.artifact = Some(artifact);
         self
     }
 }
@@ -373,6 +397,11 @@ pub fn registry() -> &'static [ToolSpec] {
                           `meta.exit_code` says how the program ended.",
             parameters: shell::exec_schema,
         },
+        ToolSpec {
+            name: tool::SCREEN_CAPTURE,
+            description: "Capture the primary display and write it to a PNG outside the                           workspace. Returns the file's path, its pixel size and a SHA-256 —                           never the image, which this build cannot read back, so do not expect                           to see what was on the screen. Every capture is approved by the user                           first and holds whatever was on that display, so ask for one only                           when the user has asked to be looked at.",
+            parameters: screenshot::capture_schema,
+        },
     ]
 }
 
@@ -405,6 +434,13 @@ pub struct ToolCtx<'a> {
     pub call_id: &'a str,
     /// Where the audit line goes.
     pub audit: &'a AuditLog,
+    /// The directory captures are written to.
+    ///
+    /// Passed in rather than derived, and deliberately not part of the
+    /// resolved call: where Aegis keeps its own artefacts is a fact about the
+    /// installation, not about what the model asked for, and policy has no
+    /// opinion about a path the model never named.
+    pub captures: &'a Path,
     /// The arguments as the model sent them, for the digest and the redacted
     /// copy.
     pub args: &'a Value,
@@ -428,6 +464,7 @@ impl fmt::Debug for ToolCtx<'_> {
             .field("session_id", &self.session_id)
             .field("turn_id", &self.turn_id)
             .field("call_id", &self.call_id)
+            .field("captures", &self.captures)
             .field("cancelled", &self.cancel.is_cancelled())
             .finish_non_exhaustive()
     }
@@ -470,14 +507,29 @@ pub async fn run(
             cwd,
             timeout_ms,
         } => shell::exec(program, args, cwd, *timeout_ms, ctx.progress, ctx.cancel).await,
-        // Policy has a row for this from Phase 3, and the model is not offered
-        // it until it exists. A model that names it anyway gets an answer it
-        // can act on rather than a silent nothing.
-        ResolvedCall::ScreenCapture { .. } => Produced::failed(
-            name,
-            ErrorCode::ToolFailed,
-            format!("`{name}` is not available in this build"),
-        ),
+        // On a blocking thread, not inline: a capture is a round trip to the
+        // window server, and on a compositor that raises its own consent
+        // prompt it is a round trip through a person. Neither belongs on a
+        // runtime worker. Nothing is passed by reference, because the work
+        // outlives this stack frame.
+        ResolvedCall::ScreenCapture { display } => {
+            let display = display.clone();
+            let dir = ctx.captures.to_path_buf();
+
+            match tokio::task::spawn_blocking(move || screenshot::capture(&display, &dir)).await {
+                Ok(produced) => produced,
+                // The capture thread panicked. Nothing here can say what the
+                // window server did, and the model still needs an answer.
+                Err(err) => {
+                    tracing::error!(%err, "the capture thread did not return");
+                    Produced::failed(
+                        name,
+                        ErrorCode::ToolFailed,
+                        "the capture did not complete".to_owned(),
+                    )
+                }
+            }
+        }
     };
 
     // `as` saturates at `u64::MAX` here, which is 584 million years: the cast
@@ -502,6 +554,7 @@ pub async fn run(
         bytes_in: produced.bytes_in,
         bytes_out: produced.bytes_out,
         error_code: produced.result.error.as_ref().map(|error| error.code),
+        artifact: produced.artifact.clone(),
     });
 
     tracing::info!(
@@ -514,6 +567,7 @@ pub async fn run(
     ToolOutcome {
         result: produced.result,
         summary: produced.summary,
+        image_path: produced.artifact.map(|artifact| artifact.path),
         audit,
     }
 }
@@ -548,6 +602,10 @@ pub fn refuse(
         bytes_in: 0,
         bytes_out: 0,
         error_code: Some(code),
+        // A call that never ran wrote nothing. This is the one place that is
+        // worth stating rather than defaulting: a refusal that still carried
+        // an artefact would mean a file on disk nobody approved.
+        artifact: None,
     });
 
     tracing::info!(tool = tool_name, code = %code, "tool call refused");
@@ -555,6 +613,7 @@ pub fn refuse(
     ToolOutcome {
         result: ToolResult::failure(tool_name, code, reason),
         summary: reason.to_owned(),
+        image_path: None,
         audit,
     }
 }
@@ -611,12 +670,22 @@ mod tests {
         assert_eq!(schema["additionalProperties"], json!(false));
     }
 
+    /// The registry and the decision table are one list. A tool in the table
+    /// and not the registry would be a tool the model cannot reach; one in the
+    /// registry and not the table would be a tool nothing gates.
     #[test]
-    fn tools_not_in_this_build_are_not_offered_to_the_model() {
+    fn every_tool_the_matrix_judges_is_a_tool_the_model_is_offered() {
         let offered: Vec<&str> = registry().iter().map(|spec| spec.name).collect();
 
-        assert!(offered.contains(&tool::SHELL_EXEC), "Phase 7");
-        assert!(!offered.contains(&tool::SCREEN_CAPTURE), "Phase 9");
+        for name in [
+            tool::FS_LIST,
+            tool::FS_READ,
+            tool::FS_WRITE,
+            tool::SHELL_EXEC,
+            tool::SCREEN_CAPTURE,
+        ] {
+            assert!(offered.contains(&name), "`{name}` is gated but not offered");
+        }
     }
 
     #[test]

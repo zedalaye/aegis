@@ -186,6 +186,7 @@ async fn run_turn<R: Runtime>(
         provider: provider.as_ref(),
         sink: &sink,
         self_exe: state.self_exe(),
+        captures: state.captures(),
     }
     .run(&plan, &cancel)
     .await;

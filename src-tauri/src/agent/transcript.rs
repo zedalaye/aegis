@@ -210,6 +210,7 @@ mod tests {
             args_json: r#"{"path":"a.txt"}"#.to_owned(),
             status: ToolCallStatus::Pending,
             summary: None,
+            image_path: None,
         }
     }
 

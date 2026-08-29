@@ -17,15 +17,16 @@
 //!   per turn, consumed in order. This is how a test drives a tool call, a
 //!   truncated arguments string or a provider error through the loop.
 //!
-//! The improvised mode has two deliberate exceptions to "never touch the
+//! The improvised mode has three deliberate exceptions to "never touch the
 //! machine", and they are what make the approval gate usable before there is a
 //! model: a message containing [`WRITE_TRIGGER`] makes it ask for an
 //! `fs_write` (PLAN 6, Phase 6 — "the fake provider is scripted to request an
-//! `fs_write`"), and one containing [`RUN_TRIGGER`] makes it ask for a
-//! `shell_exec` (Phase 7). Both are words the user has to type, not heuristics
-//! over what they said: a fake model that decided on its own when to reach for
-//! the disk or for a process would be exactly the behaviour the gate exists to
-//! catch.
+//! `fs_write`"), one containing [`RUN_TRIGGER`] makes it ask for a
+//! `shell_exec` (Phase 7), and one containing [`CAPTURE_TRIGGER`] makes it ask
+//! for a `screen_capture` (Phase 9). All three are words the user has to type,
+//! not heuristics over what they said: a fake model that decided on its own
+//! when to reach for the disk, for a process or for the screen would be exactly
+//! the behaviour the gate exists to catch.
 //!
 //! Tokens are emitted with a small delay so streaming is visibly streaming and
 //! a cancel has something to interrupt. Tests use [`FakeProvider::instant`],
@@ -58,6 +59,14 @@ pub const WRITE_TRIGGER: &str = "/write";
 /// the transcript as the command produces it. Matched case-insensitively
 /// anywhere in the user's message.
 pub const RUN_TRIGGER: &str = "/run";
+
+/// The word that makes the improvising provider ask to capture the screen.
+///
+/// Typing it is the Phase 9 walkthrough: the dialog names the display and both
+/// of its sizes, and once allowed the capture appears in the transcript as a
+/// thumbnail while the model is told only where the file is. Matched
+/// case-insensitively anywhere in the user's message.
+pub const CAPTURE_TRIGGER: &str = "/capture";
 
 /// The file the triggered write targets, relative to the workspace.
 ///
@@ -172,7 +181,7 @@ impl Provider for FakeProvider {
 fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
     let said = last_user_text(request);
 
-    // The two things this provider will reach for the machine over, and only
+    // The three things this provider will reach for the machine over, and only
     // because the user named them.
     if !already_answered(request) {
         let asked = said.to_lowercase();
@@ -182,6 +191,9 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         if asked.contains(RUN_TRIGGER) {
             return ask_to_run();
         }
+        if asked.contains(CAPTURE_TRIGGER) {
+            return ask_to_capture();
+        }
     }
 
     let workspace = workspace_line(request);
@@ -189,13 +201,18 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
 
     let reply = format!(
         "You said: \u{201c}{said}\u{201d}\n\n\
-         There is no model behind this build yet. This reply comes from the \
-         scripted provider in `agent/provider/fake.rs`, streamed a token at a \
-         time so the transcript, the session list and cancellation can all be \
-         exercised end to end. Phase 8 replaces it with an OpenAI-compatible \
-         client and nothing above this line changes.\n\n\
+         There is no model behind this reply. It comes from the scripted \
+         provider in `agent/provider/fake.rs`, streamed a token at a time so \
+         the transcript, the session list and cancellation can all be \
+         exercised end to end. Name a base URL and a model in Settings and a \
+         real one answers instead; nothing above this line changes.\n\n\
          {workspace}\n\
-         I was offered {tools} tool{plural}, and I will not call one unless you \n         ask. Send a message containing `{WRITE_TRIGGER}` and I will request a file \n         write; send one containing `{RUN_TRIGGER}` and I will request a command. \n         Either way you can refuse it, allow it once, or allow it for the rest of \n         the session, and find the audit line on disk afterwards.",
+         I was offered {tools} tool{plural}, and I will not call one unless \
+         you ask. Send a message containing `{WRITE_TRIGGER}` and I will \
+         request a file write; `{RUN_TRIGGER}` and I will request a command; \
+         `{CAPTURE_TRIGGER}` and I will ask to photograph your primary \
+         display. Any of them you can refuse, allow once, or allow for the \
+         rest of the session, and find the audit line on disk afterwards.",
         plural = if tools == 1 { "" } else { "s" },
     );
 
@@ -305,6 +322,33 @@ fn ask_to_run() -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::SHELL_EXEC.to_owned()),
             args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// A turn that asks to capture the screen, and nothing else.
+///
+/// No arguments at all: `display` defaults to the primary one, which is the
+/// only display this build captures, and a demo that spelled it out would be
+/// demonstrating a field rather than the gate. What is worth watching here is
+/// the asymmetry the tool is built around — the person sees the picture in the
+/// transcript, and the model is told only that a file exists and how big it is.
+fn ask_to_capture() -> Vec<ModelEvent> {
+    vec![
+        ModelEvent::TextDelta {
+            text: "Capturing your primary display — this needs your approval, every time, \
+                   and you will see the result. I will only be told where it was written.\n"
+                .to_owned(),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::SCREEN_CAPTURE.to_owned()),
+            args_delta: "{}".to_owned(),
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -608,6 +652,36 @@ mod tests {
         for argument in args["args"].as_array().expect("an array") {
             assert!(argument.is_string());
         }
+    }
+
+    /// PLAN 6, Phase 9: the fake provider asks for a `screen_capture` on
+    /// demand, so the capture gate can be walked through without a model — and
+    /// without a capture ever reaching a provider, since there is none.
+    #[tokio::test]
+    async fn the_capture_trigger_produces_a_real_screen_capture_call() {
+        let asked = drain(
+            &FakeProvider::instant(),
+            request_saying("please /capture the screen"),
+        )
+        .await;
+
+        let call = asked
+            .iter()
+            .find_map(|event| match event {
+                ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                } => Some((name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .expect("a tool call");
+
+        assert_eq!(call.0.as_deref(), Some(crate::policy::tool::SCREEN_CAPTURE));
+
+        // An empty object, not an absent one: the turn parses the accumulated
+        // arguments as JSON before anything is decided, and a call whose
+        // arguments do not parse is answered rather than asked about.
+        let args: serde_json::Value = serde_json::from_str(&call.1).expect("valid arguments");
+        assert_eq!(args, serde_json::json!({}));
     }
 
     /// The trigger fires once per turn, not once per round. A provider that

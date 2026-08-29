@@ -8,10 +8,12 @@
 //! behind them; Phase 5 the sessions, the provider seam and the turn loop that
 //! drives the two; Phase 6 the approval registry that turn parks on when
 //! policy asks; Phase 7 the shell tool, which is the first one whose running
-//! the user watches rather than only its result; and Phase 8 the settings, the
+//! the user watches rather than only its result; Phase 8 the settings, the
 //! API key and the OpenAI-compatible provider that finally puts a model behind
-//! the loop. Later phases add commands and modules without changing this entry
-//! shape.
+//! the loop; and Phase 9 the screen capture tool, the first whose result is a
+//! file rather than text — which is why the `asset:` protocol is turned on and
+//! scoped, below, to the one directory those files go in. Later phases add
+//! commands and modules without changing this entry shape.
 
 pub mod agent;
 pub mod approval;
@@ -32,7 +34,7 @@ pub use agent::{
 pub use approval::{
     Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
 };
-pub use audit::{AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
+pub use audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 pub use error::{AppError, AppResult, ErrorCode};
 pub use policy::{Decision, Grant, GrantStore, PolicyCtx, ResolvedCall, ToolCall};
 pub use secrets::{ApiKey, KeySource, SecretStore};
@@ -148,7 +150,24 @@ pub fn run() {
             // only arrive once the WebView has loaded, which is after setup.
             let data_dir = app.path().app_data_dir()?;
             tracing::info!(dir = %data_dir.display(), "application data directory");
-            app.manage(AppState::new(&data_dir));
+            let state = AppState::new(&data_dir);
+
+            // The one directory the WebView may read a file from, and the
+            // whole reason the `asset:` scheme is enabled at all (PLAN 5.4).
+            // A captured PNG reaches the transcript through this protocol
+            // rather than through `invoke` as base64, which would copy a
+            // megabyte several times and block the IPC channel while it went.
+            // Non-recursive, and nothing else is ever added: the scope starts
+            // empty in `tauri.conf.json`, so this line is the only thing that
+            // widens it, and a capture is the only file it widens it to.
+            if let Err(err) = app
+                .asset_protocol_scope()
+                .allow_directory(state.captures(), false)
+            {
+                tracing::warn!(%err, "captures will not be viewable in the transcript");
+            }
+
+            app.manage(state);
 
             // A missing tray is a degraded app, not a broken one (PLAN 5.3).
             if let Err(err) = tray::init(app.handle()) {
