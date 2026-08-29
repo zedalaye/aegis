@@ -1,8 +1,14 @@
 # Aegis — MVP Implementation Plan
 
-Design document only. No application code exists yet. Scope is strictly the MVP defined in
-`AGENTS.md`; everything listed as out of scope there is out of scope here, and anything below
-marked *(post-MVP)* is a seam left open, not work to do now.
+Design of record for the MVP in `AGENTS.md`. Implementation is in progress; the README states
+the current phase. Everything listed as out of scope in `AGENTS.md` is out of scope here.
+Anything marked *(post-MVP)* is a seam left open, not work to do now.
+
+Section 7 records the Chef-de-Cabinet horizon so remaining MVP work does not paint those
+later phases into a corner. `COS.md` is the invariant brief for that mode (roles, memory,
+skills contract, handoff schema, CoS loop) — not a second plan. **Do not implement § 7,
+and do not code from `COS.md`, until the MVP "Done when" in `AGENTS.md` is true.** A CoS
+graph started "as a head start" is a chatbot that recites.
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite on the front, Rust runtime in `src-tauri`,
 pnpm, Rust edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets
@@ -16,6 +22,7 @@ and policy all live in Rust.
 aegis/
 ├── AGENTS.md
 ├── PLAN.md
+├── COS.md                          # Chef of Staff brief (invariants, not MVP)
 ├── README.md                       # English, run instructions (Phase 0)
 ├── .gitignore
 ├── package.json                    # pnpm, scripts: dev / build / tauri
@@ -117,6 +124,10 @@ Notes on structure:
 - The `mcp/` module exists in the tree as a named seam. The MVP tools are in-process Rust
   functions behind the same `ToolSpec` registry, so an MCP client later registers tools into
   the same registry without touching the agent loop or the policy layer.
+- `agent/turn.rs` talks to a `Provider` trait and a name-keyed tool registry. That is the
+  whole point of the remaining MVP phases: one loop, one default agent, one provider — without
+  encoding "there will only ever be one" into storage or settings. Seams to keep open are
+  listed in § 7.1.
 
 ---
 
@@ -631,3 +642,241 @@ Exit: the `AGENTS.md` "Done when" walkthrough passes on at least two platforms.
 **Post-MVP seam (not now):** `mcp/mod.rs` grows an MCP client that registers external tools into
 the Phase 4 registry. Because policy keys on tool name plus resolved path/program rather than on
 a tool's implementation, MCP tools inherit the same matrix with no change to `agent/turn.rs`.
+That client is Phase 18 in § 7, not the next thing after Phase 10. The Chef-de-Cabinet primitives
+(workspace convention, memory, skills, handoff) come first — otherwise MCP just gives one
+chatbot more tools.
+
+---
+
+## 7. Horizon — Chef de Cabinet (`COS.md`)
+
+Not a coding phase. This section exists so Phases 5–10 do not close doors that `COS.md` needs
+open, and so post-MVP work has a fixed order instead of a pile of domains.
+
+Verdict: the MVP is the right first slice of a Chef-de-Cabinet harness. It is **not** itself a
+Chef de Cabinet. Compatibility holds if and only if:
+
+- the MVP stays a single-agent, single-provider, approval-gated loop over one workspace;
+- durable facts never become "whatever is still in the chat";
+- tools, policy and audit stay name-keyed and extendable;
+- domain work (inbox, deploy, watch, finance, social, trading, wish list) arrives as
+  **workspaces + skills + MCP servers**, not as new core modules;
+- irreversible actions never auto-fire.
+
+`COS.md` *Bar* is the acceptance test for the mode: until shared workspace files,
+per-agent memory, and a skill runner exist, a "CoS" is a chatbot that recites.
+
+### 7.1 Seams the remaining MVP phases must not close
+
+These are constraints on Phases 5–10, not extra work.
+
+| Seam | MVP may | MVP must not |
+| --- | --- | --- |
+| **Provider** | one OpenAI-compatible impl plus the fake | key the turn loop on a global singleton that cannot become a roster; add a second HTTP dialect "while we are in there" |
+| **Agent identity** | one implicit default assistant per session | persist "the assistant" as a unique identity, or store role prompt only in the transcript |
+| **Transcript** | persist messages as a session log, project them in `transcript.rs` | treat the transcript as the source of truth for decisions, briefs, or status |
+| **Workspace** | one user-picked folder per project | invent a second hidden agent-memory filesystem that bypasses the workspace and the policy matrix |
+| **Tools** | in-process `fs` / `shell` / `screenshot` behind `ToolSpec` | special-case policy or the turn loop on "built-in vs MCP"; delete `mcp/mod.rs` |
+| **Policy** | the § 3 matrix, session-lifetime grants | an "always allow forever", or a mutate path that skips the gate |
+| **Audit** | one jsonl line per tool call | a closed schema that cannot later grow `agent_id`, `skill`, `tokens`, `handoff_id` |
+| **Process** | tray app, hide-on-close, lives while the window is gone | quit-on-last-window-close (kills a future scheduler) |
+| **Settings / keys** | one `{base_url, model, key}` in keyring or env | put keys in the WebView, or freeze the settings payload so a provider list cannot be added |
+| **Project** | `{name, path, sessions}` | assume every project is a git repo of application code — later a "finance" or "watch" workspace is just another folder |
+| **System prompt** | short: policy summary + workspace path | grow it into runbooks. Recurring procedure that lands in the prompt of Phases 5–12 is procedure Phase 13 will have to fight |
+
+Phase 5 in particular: `session_create` / `SessionSummary` may omit `agent_id` today. Do not
+add a dummy field "for later". Do not, either, name columns and events as if the assistant
+were a unique singleton that storage cannot later qualify.
+
+### 7.2 Mapping the CoS primitives onto this tree
+
+What the MVP already is, vs what § 7.3 still has to add.
+
+| CoS primitive | MVP (Phases 0–10) | After MVP |
+| --- | --- | --- |
+| 1. Agent registry (role, tools, skills, ACL) | one implicit assistant | `agents/` store: id, role, provider binding, tool allow-list, skill allow-list, memory path |
+| 2. Handoff bus with a fixed schema | a single session transcript | typed `Handoff` / `HandoffResult` objects (`COS.md` *Handoff*), not "read my thread" |
+| 3. `/workspace` as shared memory | user-picked folder; no convention | convention inside that folder: `briefs/`, `status/`, `artefacts/`, `decisions/` |
+| 4. Memory store per agent | none (transcript only) | CRUD + search + forget, scoped to that agent; CoS sees summaries, not dumps |
+| 5. Skill runner (`SKILL.md`) | none | catalog always cheap; body loaded only on `run skill:…`; see § 7.6 |
+| 6. Scheduler of routines | none; tray process already stays alive | cron/trigger on top of (5); never automate a still-fuzzy workflow |
+| 7. Approval policy | § 3, already the right shape | same matrix; new tools (send, deploy, post, trade) are new rows, default **ask** |
+| 8. Compactor + retrieve-after-compact | none; keep last N turns raw | compact to *state* (goal, decisions, files, blockers), then re-inject retrieved memory — CoS compact a **board**, never other agents' transcripts |
+| 9. Status board owned by the CoS | session list + audit drawer | `/status` files + a UI that shows attention, in-flight, blocked; CoS stays silent when empty |
+| 10. Trace / replay of a run | `audit.jsonl` per tool call | one run id covering CoS + specialists: who, tokens, tools, skill, artefacts, approval, failure reason |
+
+### 7.3 Post-MVP phase order (do not reorder)
+
+Each phase ends in something you can run. No phase depends on a later one. Domain connectors
+are last on purpose.
+
+**Phase 11 — Workspace convention**
+Document and optionally scaffold, inside a user-picked workspace: `briefs/`, `status/`,
+`artefacts/`, `decisions/`. Write path: "this decision goes in `DECISIONS.md`, not the thread."
+Read path: retrieve those files at session start. Exit: a human (or the single MVP agent) can
+file a decision and a status without any new agent type. Cheap, and it makes every later phase
+honest.
+
+**Phase 12 — Agent registry**
+Persist agents as data: role, system prompt, provider id, tool ACL, skill ACL. Sessions bind
+to an `agent_id`. Still **one running agent at a time**. Exit: you can create a "reviewer"
+identity and open a session as that identity; it cannot see tools it was not granted.
+
+**Phase 13 — Skill runner**
+The efficiency layer. Specified in § 7.6: a skill is a versioned `SKILL.md` runbook, not a
+memory and not a tool. Discover global + per-agent + per-workspace skills. Expose a **catalog**
+(name, when-to-use, required tools) in context by default; load the **body** only on
+`run skill:…`. Validate the return against the declared format. Record the skill name on the
+audit line. A skill never widens the agent's tool ACL.
+
+Exit: the catalog is listable; one global skill (e.g. never-send-without-review) and one
+workspace stub (`inbox.triage`: file in, status + artefact out) run end-to-end; the body is
+absent from the system prompt of turns that did not invoke it.
+
+**Phase 14 — Per-agent memory + compaction**
+Memory store with CRUD, search, forget. Compaction writes *state*, then retrieve-after-compact
+re-injects memory, not the novel. Flush facts to files before compact. Exit: after a forced
+compaction, the agent still knows the current goal, the open blockers, and the path to
+`DECISIONS.md`; it does not replay the whole chat.
+
+**Phase 15 — Handoff bus + Chef de Cabinet loop**
+The `COS.md` *Handoff* objects: `goal / owner / priority / inputs / constraints /
+definition_of_done / approval_needed / return_format` out; `status / summary / artefacts /
+evidence / open_questions / next_owner` back. Fan-out, fan-in through a reviewer, bounded timeout + retry, escalate to the
+human after two failures. CoS reads sources of truth + `/status`, updates the attention list,
+routes, pings only on irreversible / ambiguous / deadline, writes status, stops. Exit: one
+brief fans out to two specialists in parallel and the CoS returns a five-line status, not a
+concatenated transcript.
+
+**Phase 16 — Scheduler**
+Routines that fire a skill on a clock or a trigger. Budget per agent and per routine. Pause,
+rewind, "fire" a role, clone a role without cloning its rotten memory. Exit: a watch routine
+runs while the window is hidden, writes `/status`, and does not ping unless the skill says to.
+
+**Phase 17 — Status board + trace/replay**
+UI for the CoS board (attention, in-flight, blocked). One run id over CoS + specialists;
+replay from the audit + artefacts. Token/cost counters. Exit: you can answer "who ran, what
+did it cost, why did it fail" without opening a chat.
+
+**Phase 18 — MCP client for real**
+Fill in `mcp/mod.rs`. External servers register into the Phase 4 `ToolSpec` registry and
+inherit § 3. This is how GitHub/GitLab, Coolify, monitoring, mail, later WhatsApp/SMS, later
+X, enter the picture — as **separate processes**, not as crates in the runtime. Exit: one
+external MCP server (start with git or filesystem-over-MCP, not a social network) is callable
+under the same approval dialog as `fs_write`.
+
+**Phase 19 — Domain packs as skills, not runtime**
+One pack at a time, each a workspace + skills + the MCP servers it needs + a specialist
+identity. Suggested order, because each pack is allowed to fail without blocking the next:
+
+1. **Client delivery** — repo, PRs, Coolify deploy drafts, monitoring/alert drafts. Destructive
+   deploy stays gated.
+2. **Client intake** — mail first (read + draft, never send). SMS / WhatsApp later, same skill
+   shape: triage into a ticket/file.
+3. **Watch** (tech / AI / econ) — scheduled research, artefacts in the watch workspace.
+4. **Budget and portfolio** — read-only connectors, a status file, alerts. Not a broker.
+5. **Social** — find posts worth answering; draft replies and news posts. Publish is
+   irreversible → human gate. X Chat, if it appears, is a face of this runtime, not a second
+   agent.
+6. **Revenue experiments + wish list** — a workspace of goals (pay models, setup, vacation,
+   car) and of *proposals* (a trade thesis, an X monetization draft). Execution of money
+   movement is always human. The CoS's job is to keep the wish list and the funding pipeline
+   visible, not to click "buy".
+
+Never start pack *n+1* because pack *n* is exciting. Never add a domain by growing
+`agent/turn.rs`.
+
+### 7.4 Hard rules that survive every later phase
+
+- Do not expose the runtime on the public internet.
+- Remote access is the same process over a private network, or it does not exist.
+- Send, pay, merge, publish, deploy, trade: human gate. A verifier (agent or CI) can raise
+  confidence; it cannot silently flip the default to auto.
+- The CoS may *see* state. It may not merge to prod or send the client email unless you
+  granted that identity those tools.
+- Two failures → human, not twelve creative retries.
+- A messaging surface is not an agent.
+- Trading, X monetization, and the wish list are **funding goals expressed as files**. They
+  are not a reason to put a broker or a poster in `src-tauri`.
+
+### 7.5 What would make the mode unusable (do not do these)
+
+- Building the CoS graph (Phase 15) before workspace files, memory, and skills (11–14).
+- Putting "the whole codebase + the whole life + three weeks of chats" into one context
+  window and calling that orchestration.
+- One generalist agent with every MCP connector loaded, as a shortcut around specialists.
+- Auto-sending mail, auto-posting, auto-trading, or auto-deploying in order to "finish the
+  demo".
+- A second runtime for X Chat / Tailscale / a phone inbox. Those are faces or connectors.
+- Treating compaction as an LLM vendor problem. It has to be coded as state (Phase 14).
+- Letting domain excitement (a broker API, a WhatsApp bridge) jump the queue ahead of the
+  primitives that make a CoS real.
+- Dumping a procedure into a system prompt or a chat, then scheduling it. That is not a skill.
+  A skill is a file the runner can name, load, validate and audit. Until that file exists,
+  the work stays manual.
+
+### 7.6 Skills — why this is the efficiency layer
+
+A skill is a **frozen how**. That is the whole point, and it is why the CoS is cheap instead
+of chatty.
+
+Without skills, every specialist re-derives "how we triage mail" from a novel in the context
+window. Tokens burn, the process drifts, compaction wipes it, the CoS has to re-explain.
+With skills, the CoS says `run skill:inbox.triage` and points at a file. The specialist
+loads the runbook for that turn, follows it, returns a strict status. The next turn does
+not need the runbook unless it runs the skill again.
+
+This is also the only honest path to automation. A scheduler (Phase 16) fires a skill, never
+a vibe. A workflow that is still fuzzy stays a chat with a human. Promoting it to a skill
+is a deliberate act: write the seven fields, run it under watch, then — and only then —
+put it on a clock.
+
+**Not a skill.** A tool (`fs_read`, later an MCP connector) is a verb on the machine. A
+memory is an exception or a preference ("this client wants French"). An agent is a
+perimeter and an ACL. A skill *sequences* tools toward a done criterion, under that ACL.
+Adding WhatsApp is not "a new skill in `turn.rs`"; it is a connector plus a skill the
+inbox specialist is allowed to run.
+
+**Three scopes**, same format:
+
+| Scope | Lives | Example |
+| --- | --- | --- |
+| Global | harness / user library | never send without review; how to cite `DECISIONS.md` |
+| Per-agent | that identity's allow-list | `inbox.triage`, `watch.digest`, `review.diff` |
+| Per-workspace | the project folder | "how this Rails app is deployed on Coolify" |
+
+**Headings** every skill must declare live in `COS.md` *Skills*. The runner
+enforces them. Approval rows map onto this document's § 3 matrix; a skill
+cannot auto-grant. A missing source returns `blocked`, it does not invent.
+
+**How the harness uses them, or it is not efficiency:**
+
+- **Catalog in, body on demand.** The CoS and every agent see the short catalog. The
+  body is retrieved into *that* turn when the skill is selected. Stuffing every
+  `SKILL.md` into every system prompt is the anti-pattern the catalog exists to prevent.
+- **CoS names, specialist executes.** The CoS does not paste the inbox runbook. The
+  handoff's `inputs` are links/files; `definition_of_done` can be "skill X's return
+  format". Fan-in is cheap because every skill returns the same status object.
+- **Verifier is a skill**, not a taste judgment. The most valuable skill is "check the
+  artefact against the definition of done" (tests, linter, diff, a second agent). The
+  CoS routes to it; it does not re-read the work.
+- **Audit names the skill.** A run without `skill` on the line cannot be budgeted or
+  replayed. Phase 17 depends on this.
+- **No extra rights.** If the skill lists `fs_write` and the agent was not granted it,
+  the run fails closed. Skills are not a back door around policy.
+
+**What this buys on the domains**, without putting those domains in the runtime:
+
+| Recurring job | Skill (later) | Still human |
+| --- | --- | --- |
+| Client mail / SMS / WhatsApp | `inbox.triage` → ticket/file | sending the reply |
+| Deploy / alert | `deploy.draft`, `alert.draft` | the actual deploy, the sent reply |
+| Tech / AI / econ watch | `watch.digest` (scheduler-fired) | acting on a recommendation |
+| Budget / portfolio | `finance.snapshot` (read-only) | any money movement |
+| Find posts, draft news | `social.scan`, `social.draft` | publish |
+| Wish list vs funding | `goals.review` | pay, buy, trade |
+
+Phase 13's stub is supposed to look like those rows (file in, status out), not like a
+chatbot that "knows about inbox". Do not wait for a mail connector to write the skill
+shape: a markdown file in `briefs/` is a valid input. The connector later replaces the
+source, not the procedure.

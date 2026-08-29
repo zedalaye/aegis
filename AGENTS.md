@@ -30,6 +30,10 @@ Local desktop app that:
 
 This repo is the harness (UI + runtime + permissions). It is not a new LLM.
 
+Domains (client delivery, inbox, watch, finance, social, revenue, wish list)
+are workloads that will sit on the harness later. They are not reasons to
+enlarge the MVP runtime. See **North star** and `PLAN.md` § 7.
+
 ## Architecture
 
 ui (React) --invoke/events--&gt; rust runtime  
@@ -64,9 +68,13 @@ Must work on macOS, Windows, Linux (best-effort Linux WebView):
 
 7. Settings: provider placeholder (OpenAI-compatible base URL + model + API key in OS keyring or env), no keys in frontend
 
-Out of scope for MVP:
+Out of scope for MVP (do not start, even as a "head start"):
 
-- real multi-agent graph (supervisor/workers)
+- real multi-agent graph (supervisor / workers / Chef de Cabinet)
+
+- skills, scheduler, per-agent memory, compaction-as-state
+
+- domain connectors (mail, SMS, WhatsApp, GitHub/GitLab, Coolify, monitoring, X, brokers)
 
 - Playwright / browser-use
 
@@ -77,6 +85,49 @@ Out of scope for MVP:
 - auto-update, signing, installers beyond `tauri build` default
 
 - mobile
+
+Until the **Done when** line below is true, ignore the North star for coding.
+`PLAN.md` § 7 exists so remaining MVP work does not paint those later phases
+into a corner.
+
+## North star (after MVP — do not implement now)
+
+Operating-mode brief: `COS.md` (invariants). Sequence: `PLAN.md` § 7.
+This file remains the coding contract. Intended mode: **Chef de Cabinet**
+— three roles (CoS, specialist, human), files as shared memory, skills as
+runbooks, handoffs instead of shared transcripts. Read `COS.md` for those
+rules; do not restate them here. Recurring work that still lives in a chat
+or a system prompt is not a skill — do not schedule it (`PLAN.md` § 7.6).
+
+### What the harness must make possible (later)
+
+| Workload | Harness job | Not a product inside this repo |
+| --- | --- | --- |
+| Client delivery | operate a repo (dev, review), draft deploy / monitor / alert responses | a PaaS or Coolify clone |
+| Client intake | triage inbound work (mail, SMS, WhatsApp) into tickets and files | a messaging server |
+| Tech / AI / econ watch | scheduled research → artefacts in a workspace | a scraping farm |
+| Budget and portfolio | read-only surveillance, alerts, a status file | a bank or broker |
+| Revenue experiments | propose (trading ideas, X drafts); never execute | an autonomous trader or poster |
+| Wish list | prioritized goals; CoS tracks, human decides spend | a shopping agent |
+
+Remote control, if any, is the **same runtime** over a private network
+(e.g. Tailscale). A messaging face (e.g. X Chat) is a UI onto this
+runtime, not a second agent. Do not expose the runtime on the public
+internet.
+
+Multi-LLM: the MVP has one OpenAI-compatible provider. Later, a roster of
+providers and a per-agent binding (CoS on one model, a coding specialist
+on another). Keys stay in the OS keyring / env, never in the WebView.
+
+### After-MVP order (fixed — `PLAN.md` § 7)
+
+1. Shared workspace convention + per-agent memory + skill runner
+2. Then Chef de Cabinet (handoff bus, fan-out / fan-in, status board)
+3. Then scheduler of routines
+4. Then MCP connectors
+5. Then domain packs as skills, not new runtime features
+
+A CoS without (1) recites. Do not build (2) first.
 
 ## Permissions
 
@@ -90,6 +141,10 @@ Out of scope for MVP:
 
 - Capabilities JSON must be least-privilege
 
+- Irreversible actions (send, pay, merge, publish, deploy, trade) stay
+  behind a human gate. Later domain tools inherit this matrix; they do
+  not get a bypass.
+
 ## Code rules
 
 - Rust: no unwrap in library paths; use Result + thiserror; structured tracing
@@ -99,6 +154,11 @@ Out of scope for MVP:
 - IPC: typed commands + events; one module per command domain
 
 - Do not put LLM API keys in localStorage
+
+- Do not treat the chat transcript as durable memory. Facts that must
+  survive compaction belong in workspace files or stores. (MVP still
+  persists the transcript; it is a session log, not the source of truth
+  for decisions.)
 
 - Conventional commits
 
