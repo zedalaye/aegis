@@ -13,10 +13,11 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 2 (persistence and projects).** The app boots, lives in the system tray, hides
-> instead of quitting when the window is closed, and remembers the workspace folders you point it
-> at. Sessions, tools, the approval gate and provider integration land in later phases — see
-> `PLAN.md` § 6.
+> **Status: Phase 3 (path policy).** The app boots, lives in the system tray, hides instead of
+> quitting when the window is closed, and remembers the workspace folders you point it at. The
+> approval gate below is implemented and tested in Rust — path containment, the decision matrix
+> and per-session grants — but nothing calls it yet: the tools it gates land in Phase 4. Sessions,
+> the approval UI and provider integration follow — see `PLAN.md` § 6.
 
 ---
 

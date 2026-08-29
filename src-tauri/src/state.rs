@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::policy::GrantStore;
 use crate::store::Store;
 
 /// Shared state, registered with `Manager::manage` and read from commands via
@@ -19,6 +20,7 @@ pub struct AppState {
     started_at: Instant,
     quitting: AtomicBool,
     store: Store,
+    grants: GrantStore,
 }
 
 impl AppState {
@@ -33,12 +35,23 @@ impl AppState {
             started_at: Instant::now(),
             quitting: AtomicBool::new(false),
             store: Store::load(data_dir),
+            grants: GrantStore::new(),
         }
     }
 
     /// The project store.
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// The live `allow_session` grants, keyed by session.
+    ///
+    /// Deliberately not part of [`Store`]: a grant is a decision about the
+    /// session a user is currently looking at, and it expires with the
+    /// process. Persisting one would quietly turn "allow for this session"
+    /// into "allow forever", which the MVP does not offer (PLAN 3.1).
+    pub fn grants(&self) -> &GrantStore {
+        &self.grants
     }
 
     /// How long this process has been up. Used by logging and, later, by the

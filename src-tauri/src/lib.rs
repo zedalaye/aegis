@@ -3,16 +3,19 @@
 //! The WebView renders UI only. The agent loop, tool execution, secrets and
 //! policy all live here (AGENTS.md). Phase 1 wired logging, managed state, the
 //! IPC command surface, the tray and the window lifecycle; Phase 2 adds the
-//! project store. Later phases add commands and modules without changing this
-//! entry shape.
+//! project store; Phase 3 adds the approval gate every tool call will pass
+//! through. Later phases add commands and modules without changing this entry
+//! shape.
 
 mod commands;
 mod error;
+pub mod policy;
 mod state;
 mod store;
 mod tray;
 
 pub use error::{AppError, AppResult, ErrorCode};
+pub use policy::{Decision, Grant, GrantStore, PolicyCtx, ResolvedCall, ToolCall};
 pub use state::AppState;
 pub use store::{Project, ProjectDetail, SessionState, SessionSummary};
 
