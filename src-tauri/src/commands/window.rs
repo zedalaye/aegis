@@ -34,6 +34,7 @@ pub fn show_main<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     if window.is_minimized().unwrap_or(false) {
         window.unminimize()?;
     }
+    crate::display::place_main(&window);
     window.show()?;
     window.set_focus()?;
 

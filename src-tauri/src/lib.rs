@@ -179,23 +179,33 @@ pub fn run() {
 
             // A missing tray is a degraded app, not a broken one (PLAN 5.3).
             // Linux AppIndicator bindings panic on a missing `.so`; tray::init
-            // catches that. Only a successful install latches `has_tray`, so
-            // close-to-hide cannot trap a process that has no icon.
-            match tray::init(app.handle()) {
-                Ok(()) => {
-                    if let Some(state) = app.try_state::<AppState>() {
-                        state.mark_tray();
+            // catches that. WSL is worse: the .so loads, WSLg maps the
+            // indicator as the Windows taskbar icon, and the real window
+            // never appears — so we do not install a tray there at all.
+            // Only a successful install latches `has_tray`, so close-to-hide
+            // cannot trap a process that has no icon.
+            if display::is_wsl() {
+                tracing::info!("WSL: skipping the tray; the window is the only surface");
+            } else {
+                match tray::init(app.handle()) {
+                    Ok(()) => {
+                        if let Some(state) = app.try_state::<AppState>() {
+                            state.mark_tray();
+                        }
                     }
-                }
-                Err(err) => {
-                    tracing::warn!(%err, "no tray icon; the window remains the only surface");
+                    Err(err) => {
+                        tracing::warn!(%err, "no tray icon; the window remains the only surface");
+                    }
                 }
             }
             // WSLg can register a taskbar icon and still leave the window
-            // unmapped or behind; raising it here is cheap and is the
-            // difference between "Linux penguin in the bar" and a usable UI.
+            // unmapped, off-screen or behind; raising and pinning it here
+            // is cheap and is the difference between an icon and a usable UI.
             if let Err(err) = commands::window::show_main(app.handle()) {
                 tracing::warn!(%err, "could not raise the main window after setup");
+            }
+            if let Ok(window) = commands::window::main_window(app.handle()) {
+                display::describe_main(&window);
             }
             tracing::debug!("setup complete");
             Ok(())

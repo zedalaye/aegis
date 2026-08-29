@@ -11,18 +11,59 @@
 //! Nothing here overrides a variable the user already exported, so a
 //! workaround can still be turned off from the shell.
 
+use tauri::{Runtime, WebviewWindow};
+
 /// Applies the Linux WebView workarounds. No-op on other platforms.
 pub fn prepare() {
     #[cfg(target_os = "linux")]
     linux::prepare();
 }
 
+/// Whether this process is running under WSL / WSLg.
+pub fn is_wsl() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::is_wsl()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Pins the main window onto the WSLg screen. `center: true` plus a
+/// nonsense X11 screen size parks it off-screen; WSLg still puts a
+/// taskbar button on the Windows side, which looks like "the app is
+/// running but has no window".
+pub fn place_main<R: Runtime>(window: &WebviewWindow<R>) {
+    #[cfg(target_os = "linux")]
+    linux::place_main(window);
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
+}
+
+/// Logs what GTK thinks the window is, so a "taskbar icon, no window"
+/// report can tell an off-screen window from a 0×0 one from a hide.
+pub fn describe_main<R: Runtime>(window: &WebviewWindow<R>) {
+    let visible = window.is_visible().ok();
+    let minimized = window.is_minimized().ok();
+    let size = window.inner_size().ok();
+    let pos = window.outer_position().ok();
+    tracing::info!(?visible, ?minimized, ?size, ?pos, "main window");
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
+    use tauri::{LogicalPosition, LogicalSize, Runtime, WebviewWindow};
+
     /// Env vars WebKitGTK / GDK read at init. Set only when unset.
     const DMABUF: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
     const COMPOSITING: &str = "WEBKIT_DISABLE_COMPOSITING_MODE";
     const GDK_BACKEND: &str = "GDK_BACKEND";
+    const LIBGL_SOFTWARE: &str = "LIBGL_ALWAYS_SOFTWARE";
+    const GTK_CSD: &str = "GTK_CSD";
+    const WEBKIT_SANDBOX: &str = "WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS";
+    const WEBKIT_FORCE_SANDBOX: &str = "WEBKIT_FORCE_SANDBOX";
 
     pub(super) fn prepare() {
         // PLAN 5.3: blank window on NVIDIA/Wayland. Harmless elsewhere; the
@@ -34,10 +75,29 @@ mod linux {
             // WSLg advertises Wayland *and* X11. GTK3 prefers Wayland, then
             // WebKit tries GBM against a virtual GPU that ZINK cannot use,
             // and the RAIL window Windows shows in the taskbar never paints.
-            // X11 + software compositing is the path that actually draws.
-            tracing::info!("WSL detected; WebKitGTK will use X11 without compositing");
+            // X11 + llvmpipe, no CSD, no bwrap sandbox: that is the path
+            // that has a chance of drawing. The AppIndicator "tray" is
+            // skipped in `lib.rs` — WSLg maps it as the taskbar icon and
+            // the real window stays invisible.
+            tracing::info!("WSL detected; WebKitGTK will use X11, software GL, no CSD, no sandbox");
             set_if_unset(GDK_BACKEND, "x11");
             set_if_unset(COMPOSITING, "1");
+            set_if_unset(LIBGL_SOFTWARE, "1");
+            set_if_unset(GTK_CSD, "0");
+            set_if_unset(WEBKIT_SANDBOX, "1");
+            set_if_unset(WEBKIT_FORCE_SANDBOX, "0");
+        }
+    }
+
+    pub(super) fn place_main<R: Runtime>(window: &WebviewWindow<R>) {
+        if !is_wsl() {
+            return;
+        }
+        if let Err(err) = window.set_position(LogicalPosition::new(64.0, 64.0)) {
+            tracing::warn!(%err, "could not pin the WSL window on screen");
+        }
+        if let Err(err) = window.set_size(LogicalSize::new(1100.0, 720.0)) {
+            tracing::warn!(%err, "could not size the WSL window");
         }
     }
 

@@ -440,21 +440,17 @@ Read this before pointing Aegis at anything you care about.
 - **`pkg-config` cannot find `libsoup-3.0` or `webkit2gtk-4.1`.** Install the `-dev` packages,
   not only the runtime `.so`. WebKitGTK 4.1 links soup3; `libwebkit2gtk-4.0-dev` / soup2 is the
   Tauri 1 stack and will not satisfy this crate. See the apt block under *Requirements*.
-- **WSL2: a Linux penguin in the Windows taskbar and no window.** WSLg created a RAIL window;
-  WebKitGTK then failed to paint it. The earlier `MESA` / `ZINK: failed to choose pdev` lines
-  are that failure, not noise. Aegis detects WSL and, unless you already exported them, sets
-  `GDK_BACKEND=x11` and `WEBKIT_DISABLE_COMPOSITING_MODE=1` (and the DMA-BUF flag above)
-  *before* GTK starts — rebuild and relaunch; do not set them only in the shell after the
-  binary is running. Click the penguin if the window is behind something. If it is still
-  blank after that:
-
-  ```sh
-  LIBGL_ALWAYS_SOFTWARE=1 pnpm tauri dev
-  ```
-
-  WSL2 is a compile host and a degraded display, not a second-platform walkthrough: no
-  AppIndicator host, no gnome-keyring (use `AEGIS_API_KEY`), and `screen_capture` returns
-  `E_SCREEN_PERMISSION` rather than a picture of the Windows desktop.
+- **WSL2: an Aegis (or penguin) icon in the Windows taskbar and no window.** WSLg created a
+  RAIL surface; that is not the same as a painted GTK window. Two things used to make it
+  worse: AppIndicator loads, WSLg maps the *tray* as the taskbar icon, and `center: true`
+  can park the real window off the X11 screen. `DRI3 error: Could not get DRI3 device` means
+  there is no GPU for WebKit to draw with. Aegis now skips the tray under WSL, pins the
+  window at (64, 64), and — unless you already exported them — sets X11, software GL,
+  `GTK_CSD=0` and disables the WebKit bwrap sandbox *before* GTK starts. Rebuild and
+  relaunch. The log should contain `WSL: skipping the tray` and a `main window` line with
+  `visible`, size and position; if `visible=Some(true)` and you still see nothing, click the
+  taskbar icon (WSLg sometimes leaves it iconic). The Secret Service D-Bus warning is
+  expected; use `AEGIS_API_KEY`. This is still not the Phase 10 walkthrough.
 - **No keyring.** Without a running Secret Service (gnome-keyring, kwallet), use the
   `AEGIS_API_KEY` environment variable. This is normal on headless and minimal window managers.
 
