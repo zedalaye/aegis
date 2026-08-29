@@ -12,8 +12,11 @@
 //! API key and the OpenAI-compatible provider that finally puts a model behind
 //! the loop; and Phase 9 the screen capture tool, the first whose result is a
 //! file rather than text — which is why the `asset:` protocol is turned on and
-//! scoped, below, to the one directory those files go in. Later phases add
-//! commands and modules without changing this entry shape.
+//! scoped, below, to the one directory those files go in. Phase 11 opens the
+//! post-MVP sequence (PLAN 7.3) with the shared-workspace convention: files in
+//! the user's own folder, read into every request and written by the tools that
+//! already exist, rather than a new store. Later phases add commands and
+//! modules without changing this entry shape.
 
 pub mod agent;
 pub mod approval;
@@ -27,6 +30,7 @@ mod state;
 pub mod store;
 pub mod tools;
 mod tray;
+pub mod workspace;
 
 pub use agent::{
     Event, EventSink, FakeProvider, ModelEvent, ModelRequest, OpenAiProvider, Provider,
@@ -46,6 +50,7 @@ pub use store::{
     ToolCallStatus, TurnHandle,
 };
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
+pub use workspace::{ScaffoldReport, WorkspaceEntry, WorkspaceLayout};
 
 use tauri::{Manager, RunEvent, WindowEvent};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -149,6 +154,8 @@ pub fn run() {
             commands::settings::settings_set,
             commands::settings::settings_clear_key,
             commands::settings::settings_probe_provider,
+            commands::workspace::workspace_layout,
+            commands::workspace::workspace_scaffold,
         ])
         .setup(|app| {
             // State is built here rather than on the builder because loading

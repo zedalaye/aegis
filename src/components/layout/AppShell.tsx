@@ -24,6 +24,7 @@ import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachAuditEvents } from "../../state/audit";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 import { attachSettingsEvents, useSettings } from "../../state/settings";
+import { useWorkspace } from "../../state/workspace";
 
 import AuditDrawer from "../audit/AuditDrawer";
 import ChatPane from "../chat/ChatPane";
@@ -65,17 +66,24 @@ function ErrorBanner() {
   const sessionError = useSessions((s) => s.error);
   const approvalError = useApprovals((s) => s.error);
   const settingsError = useSettings((s) => s.error);
+  const workspaceError = useWorkspace((s) => s.error);
   const dismissProject = useProjects((s) => s.dismissError);
   const dismissSession = useSessions((s) => s.dismissError);
   const dismissApproval = useApprovals((s) => s.dismissError);
   const dismissSettings = useSettings((s) => s.dismissError);
+  const dismissWorkspace = useWorkspace((s) => s.dismissError);
 
   // The most recent one wins. Stacking banners pushes the thing the user was
   // looking at off the screen, and the later ones are usually a consequence of
   // the first. Approvals come first because a refused click is the one the user
   // is waiting on an answer to; settings next, because that panel is in front
   // of the user when it fails.
-  const error = approvalError ?? settingsError ?? sessionError ?? projectError;
+  const error =
+    approvalError ??
+    settingsError ??
+    workspaceError ??
+    sessionError ??
+    projectError;
   if (error === null || error === undefined) {
     return null;
   }
@@ -97,6 +105,7 @@ function ErrorBanner() {
         onClick={() => {
           dismissApproval();
           dismissSettings();
+          dismissWorkspace();
           dismissSession();
           dismissProject();
         }}
@@ -112,6 +121,7 @@ export default function AppShell() {
   const load = useProjects((s) => s.load);
   const projectId = useProjects((s) => s.detail?.project.id ?? null);
   const loadSessions = useSessions((s) => s.loadFor);
+  const loadShared = useWorkspace((s) => s.loadFor);
   const resetSessions = useSessions((s) => s.reset);
   const sessionId = useSessions((s) => s.detail?.session.id ?? null);
   const syncApprovals = useApprovals((s) => s.syncFor);
@@ -148,14 +158,17 @@ export default function AppShell() {
     };
   }, []);
 
-  // The session store follows the open project.
+  // The session store follows the open project, and so does the shared-file
+  // panel — the convention is a fact about the folder, measured when the folder
+  // changes rather than kept in step by hand.
   useEffect(() => {
     if (projectId === null) {
       resetSessions();
     } else {
       void loadSessions(projectId);
     }
-  }, [projectId, loadSessions, resetSessions]);
+    void loadShared(projectId);
+  }, [projectId, loadSessions, resetSessions, loadShared]);
 
   // And the approval queue follows the open session. Refetched rather than
   // carried over: a window that was closed while a turn was waiting missed the

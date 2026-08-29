@@ -13,7 +13,8 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 10 (audit drawer, polish) — the MVP is feature-complete.** The app boots,
+> **Status: Phase 11 (shared workspace convention) — the MVP is feature-complete, and the
+> post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
 > time, and stop it mid-sentence. Transcripts are on disk and survive a restart.
@@ -70,6 +71,14 @@ ever sent to it.
 > and *Everything* switch between the conversation in front of you and the whole log, which
 > covers sessions you have since deleted. New lines appear as they are written while the drawer
 > is open. Nothing in the window can append to that file or clear it.
+>
+> **A workspace can now keep shared memory in files.** *Set up shared files* in the sidebar
+> creates `briefs/`, `status/`, `artefacts/` and `decisions/` in the folder you picked — only what
+> is missing, never overwriting anything you already have. Once they exist, every request carries
+> what `STATUS.md` says and the recent end of `DECISIONS.md`, plus the *names* of your briefs and
+> artefacts, capped so a long ledger cannot eat the context window. Asking for a decision to be
+> recorded writes `decisions/DECISIONS.md` through the ordinary approval dialog: no new tool, no
+> privileged path, no hidden store beside your folder. See *Shared workspace files*.
 
 ---
 
@@ -140,6 +149,9 @@ No provider and no key needed — the scripted provider is enough to exercise th
 5. **Close the window.** The app stays in the tray; the tray icon brings it back. *Quit* is the
    only thing that ends it.
 6. **Restart.** The project, the session and the transcript are where you left them.
+7. **File a decision.** Press *Set up shared files* in the sidebar, then ask for a decision to be
+   recorded. It is written to `decisions/DECISIONS.md` through the same approval dialog, and the
+   next reply already knows about it. See [Shared workspace files](#shared-workspace-files).
 
 ## Point it at a model
 
@@ -270,6 +282,49 @@ tool call.
 
 ---
 
+## Shared workspace files
+
+Aegis' own data is above. This is the other half: files that live in **your** workspace folder,
+not in Aegis' application-data directory, and that the agent reads at the start of every reply.
+
+The convention is four directories:
+
+| | Holds |
+| --- | --- |
+| `briefs/` | one file per delegated piece of work — goal, inputs as *paths*, definition of done |
+| `status/` | `STATUS.md`: what is true right now. A board, rewritten in place, not a log |
+| `artefacts/` | what was produced — a draft, a report, an export, a patch |
+| `decisions/` | `DECISIONS.md`: one entry per decision, newest last |
+
+**Set up shared files** in the sidebar creates whatever is missing and seeds each one with a
+short template. It never overwrites: a file that is already there is left byte for byte as it
+was, and the panel says which files it created and which it kept. Nothing is created until you
+press it — a workspace is a folder you already own, usually a repository with its own layout, and
+four directories should not appear in it because you pointed an app at it. You can equally make
+them by hand, or in a terminal; the panel measures the folder rather than remembering what it did
+to it. They are ordinary files: commit them, edit them in your editor, `grep` them.
+
+Once they exist, two things change.
+
+**The agent reads them.** Every request carries the current `STATUS.md`, the recent end of
+`DECISIONS.md`, and the *names* of what is in `briefs/` and `artefacts/`. Names, not contents:
+a brief is referred to by path and read with `fs_read` if it is needed, so a folder full of long
+documents does not quietly consume the context window. The two state files are capped at 2 KB
+each in the prompt, and when a file is longer the agent is told how much it is not seeing and
+where the rest is.
+
+**The agent writes them the same way you do.** Asking for a decision to be recorded produces an
+ordinary `fs_write` — the same approval dialog, the same audit line, the same workspace
+containment as any other change to your files. There is no privileged path that edits
+`DECISIONS.md` behind the gate, and no hidden store beside your folder.
+
+Why bother: a chat is forgotten and a file is not. A decision that lives only in a transcript
+cannot be found later, cannot be corrected, and does not survive the conversation being
+compacted or restarted. `COS.md` is the reasoning in full; `PLAN.md` § 7.3 is where this sits in
+the sequence.
+
+---
+
 ## Layout
 
 ```
@@ -285,6 +340,8 @@ src-tauri/
     store/     projects.json, sessions.json and settings.json, behind one atomic write
     tools/     fs, shell, screenshot — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
+    workspace.rs  the shared-file convention inside a project folder: scaffold, and the
+               capped digest every request carries
     approval.rs  pending approvals: the channel a turn parks on until you answer
     audit.rs   one jsonl line per tool call
     secrets.rs OS credential store, environment fallback, masking
@@ -292,8 +349,9 @@ src-tauri/
 ```
 
 `PLAN.md` is the design of record: IPC surface (§ 2), the tool policy matrix (§ 3), the wire
-protocol (§ 4), platform risks (§ 5) and the phase order (§ 6). `AGENTS.md` fixes the stack and
-the scope.
+protocol (§ 4), platform risks (§ 5), the phase order (§ 6) and what comes after it (§ 7).
+`AGENTS.md` fixes the stack and the scope; `COS.md` is the operating mode the § 7 phases build
+towards.
 
 ## Security posture
 
@@ -331,6 +389,11 @@ Read this before pointing Aegis at anything you care about.
   records those same three things and never the picture. A capture that comes back entirely
   blank — which is how macOS reports a missing Screen Recording permission — is refused as
   `E_SCREEN_PERMISSION` rather than handed to the model as a picture of an empty desktop.
+- **The shared files are sent to your provider.** Once `status/` and `decisions/` exist, every
+  request carries what is in them — that is the point of them, and it is worth knowing before you
+  put something in `STATUS.md` you would not paste into a chat. Only those two files are read,
+  capped at 2 KB each; `briefs/` and `artefacts/` contribute file *names* and never content. A
+  workspace with none of those directories sends nothing extra, and nothing creates them for you.
 - **Keys stay out of the WebView.** The API key lives in the OS credential store (or in
   `AEGIS_API_KEY`) and is read only by the Rust runtime, which attaches it to the request as a
   header marked so it cannot be printed. There is no command that returns a key: the UI can save

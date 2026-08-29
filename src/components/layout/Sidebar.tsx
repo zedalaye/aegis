@@ -6,10 +6,15 @@
  * at the bottom. The project list is the thing a user changes rarely and the
  * session list the thing they change constantly, which is why the sessions sit
  * closer to the conversation they belong to.
+ *
+ * The shared-file panel sits between them, on the project's side of that line:
+ * `briefs/`, `status/`, `artefacts/` and `decisions/` belong to the folder, not
+ * to any one conversation (PLAN 7.3, Phase 11).
  */
 
 import { useProjects } from "../../state/projects";
 import ProjectPicker from "../projects/ProjectPicker";
+import SharedFiles from "../projects/SharedFiles";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
 import SessionList from "../sessions/SessionList";
 
@@ -73,6 +78,8 @@ export default function Sidebar() {
           );
         })}
       </ul>
+
+      <SharedFiles />
 
       <SessionList />
 

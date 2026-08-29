@@ -365,6 +365,85 @@ body {
   flex: 1;
 }
 
+/* --- Shared workspace files ----------------------------------------------- */
+
+/*
+ * The convention in the rail (PLAN 7.3, Phase 11). Sized to disappear once it
+ * is set up: four short rows while something is missing, one sentence after.
+ * A panel about files nobody has to touch should not compete with the session
+ * list underneath it.
+ */
+.shared {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.shared__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.shared__entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.shared__entry--missing {
+  color: var(--muted);
+}
+
+.shared__mark {
+  flex-shrink: 0;
+  width: 0.9em;
+  color: var(--accent);
+}
+
+.shared__entry--missing .shared__mark {
+  color: var(--muted);
+}
+
+.shared__dir {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* The file name yields first: which directory is missing is the useful half. */
+.shared__file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.shared__state {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.shared__note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.shared__note code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
 /* --- Work area ------------------------------------------------------------ */
 
 .work {

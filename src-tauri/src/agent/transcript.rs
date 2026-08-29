@@ -8,7 +8,11 @@
 //! The first is the system message. It is rebuilt on every request rather than
 //! stored with the transcript, because it names the workspace, and the
 //! workspace can change between turns — a stored system message would keep
-//! telling the model about a folder the user has since moved on from.
+//! telling the model about a folder the user has since moved on from. From
+//! Phase 11 it also carries the shared workspace's current state, which changes
+//! faster still: it is read out of the files on every request
+//! ([`workspace::digest`](crate::workspace::digest)) and handed in here as
+//! text, so this module keeps its one direction and never touches a disk.
 //!
 //! The second is repair. The chat-completions API has a structural rule that
 //! the transcript can violate: every tool call in an assistant message must be
@@ -50,12 +54,19 @@ replies short, and say plainly when you are not sure.";
 /// model has nothing new to learn in order to read it.
 const UNANSWERED_ENVELOPE: &str = r#"{"ok":false,"tool":"","content":"","truncated":false,"bytes":0,"meta":{},"error":{"code":"E_CANCELLED","message":"this call never ran: the turn ended before it was executed"}}"#;
 
-/// The system message for a session, given its workspace.
+/// The system message for a session, given its workspace and shared state.
 ///
 /// The workspace is named in full because a model asked to work "in the
 /// project" with no path guesses one, and a guessed absolute path is exactly
 /// the tool call the user then has to read carefully and refuse.
-pub fn system_message(workspace: Option<&Path>) -> String {
+///
+/// `shared` is the shared-workspace digest (PLAN 7.3, Phase 11), or `None` for
+/// a folder that does not use the convention. It goes last, after the standing
+/// instructions and the session's own facts, because it is the part that
+/// differs on every request — and because it is *state*, not procedure. The
+/// prompt stays a policy summary plus what is true right now; runbooks are
+/// skills, and skills are Phase 13 (PLAN 7.1, *System prompt*).
+pub fn system_message(workspace: Option<&Path>, shared: Option<&str>) -> String {
     let mut prompt = String::from(SYSTEM_PROMPT);
 
     match workspace {
@@ -82,6 +93,11 @@ pub fn system_message(workspace: Option<&Path>) -> String {
         READ_MAX_BYTES / 1024
     ));
 
+    if let Some(shared) = shared {
+        prompt.push_str("\n\n");
+        prompt.push_str(shared);
+    }
+
     prompt
 }
 
@@ -94,10 +110,11 @@ pub fn build(
     model: &str,
     history: &[Message],
     workspace: Option<&Path>,
+    shared: Option<&str>,
     tools: Vec<serde_json::Value>,
 ) -> ModelRequest {
     let mut messages = vec![WireMessage::System {
-        content: system_message(workspace),
+        content: system_message(workspace, shared),
     }];
 
     for message in history {
@@ -216,7 +233,7 @@ mod tests {
 
     #[test]
     fn the_system_message_names_the_workspace() {
-        let prompt = system_message(Some(&PathBuf::from("/home/p/work")));
+        let prompt = system_message(Some(&PathBuf::from("/home/p/work")), None);
 
         assert!(prompt.contains("/home/p/work"), "{prompt}");
         assert!(
@@ -228,10 +245,22 @@ mod tests {
 
     #[test]
     fn a_session_without_a_workspace_is_told_so() {
-        let prompt = system_message(None);
+        let prompt = system_message(None, None);
 
         assert!(prompt.contains("no workspace folder"), "{prompt}");
         assert!(!prompt.contains("Reads inside it"), "{prompt}");
+    }
+
+    /// The shared state is appended after the standing instructions, not woven
+    /// into them: the policy contract must read the same whether or not the
+    /// workspace uses the convention (PLAN 7.3, Phase 11).
+    #[test]
+    fn the_shared_state_is_appended_and_changes_nothing_before_it() {
+        let plain = system_message(Some(&PathBuf::from("/w")), None);
+        let shared = system_message(Some(&PathBuf::from("/w")), Some("status/STATUS.md:\nquiet"));
+
+        assert!(shared.starts_with(&plain), "{shared}");
+        assert!(shared.ends_with("status/STATUS.md:\nquiet"), "{shared}");
     }
 
     #[test]
@@ -243,7 +272,7 @@ mod tests {
             Message::assistant("Three files.", Vec::new()),
         ];
 
-        let request = build("m", &history, Some(&PathBuf::from("/w")), Vec::new());
+        let request = build("m", &history, Some(&PathBuf::from("/w")), None, Vec::new());
 
         assert!(matches!(request.messages[0], WireMessage::System { .. }));
         assert!(matches!(request.messages[1], WireMessage::User { .. }));
@@ -287,7 +316,7 @@ mod tests {
             Message::user("never mind, what about this"),
         ];
 
-        let request = build("m", &history, None, Vec::new());
+        let request = build("m", &history, None, None, Vec::new());
 
         let answered: Vec<&str> = request
             .messages
@@ -324,7 +353,7 @@ mod tests {
             Message::tool("call_1", r#"{"ok":true}"#),
         ];
 
-        let request = build("m", &history, None, Vec::new());
+        let request = build("m", &history, None, None, Vec::new());
         let answers = request
             .messages
             .iter()
@@ -344,7 +373,13 @@ mod tests {
             Message::user("hi"),
         ];
 
-        let request = build("m", &history, Some(&PathBuf::from("/new")), Vec::new());
+        let request = build(
+            "m",
+            &history,
+            Some(&PathBuf::from("/new")),
+            None,
+            Vec::new(),
+        );
 
         let systems = request
             .messages
@@ -366,14 +401,14 @@ mod tests {
             ..Message::tool("x", "{}")
         }];
 
-        let request = build("m", &history, None, Vec::new());
+        let request = build("m", &history, None, None, Vec::new());
         assert_eq!(request.messages.len(), 1, "only the system message remains");
     }
 
     #[test]
     fn the_tools_array_is_carried_through_untouched() {
         let tools = vec![json!({ "type": "function", "function": { "name": "fs_list" } })];
-        let request = build("m", &[], None, tools.clone());
+        let request = build("m", &[], None, None, tools.clone());
 
         assert_eq!(request.tools, tools);
         assert_eq!(request.model, "m");

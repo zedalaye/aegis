@@ -410,7 +410,7 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
         .expect("append");
 
     let history = app.sessions.messages(&session.id).expect("messages");
-    let request = transcript::build("m", &history, Some(&app.workspace), Vec::new());
+    let request = transcript::build("m", &history, Some(&app.workspace), None, Vec::new());
 
     let answered = request.messages.iter().any(|message| {
         matches!(

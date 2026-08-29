@@ -207,6 +207,20 @@ impl Store {
         out
     }
 
+    /// One project by id, without touching `last_opened_at`.
+    ///
+    /// Deliberately not [`Store::open`]: a command that only needs to know
+    /// where a project's folder is — where its shared files live, say — is not
+    /// the user opening it, and stamping recency for it would reorder the
+    /// sidebar behind their back.
+    pub fn get(&self, id: &str) -> AppResult<Project> {
+        self.projects()
+            .iter()
+            .find(|p| p.id == id)
+            .map(StoredProject::to_project)
+            .ok_or_else(|| AppError::ProjectNotFound { id: id.to_owned() })
+    }
+
     /// Registers a workspace folder as a project.
     ///
     /// `workspace` must already be canonical (see [`canonical_workspace`]).
@@ -625,14 +639,36 @@ mod tests {
         assert_eq!(listed[0].id, beta.id);
     }
 
+    /// Looking a project up is not the user opening it, so the sidebar's order
+    /// must be exactly where it was afterwards.
+    #[test]
+    fn getting_a_project_does_not_make_it_recent() {
+        let fx = Fixture::new();
+        let alpha = fx.store.create("Alpha", &fx.workspace("alpha")).expect("a");
+        let beta = fx.store.create("Beta", &fx.workspace("beta")).expect("b");
+        fx.store.open(&beta.id).expect("open");
+
+        let got = fx.store.get(&alpha.id).expect("get");
+
+        assert_eq!(got.name, "Alpha");
+        assert_eq!(got.last_opened_at, None);
+        assert_eq!(
+            fx.store.list().first().map(|p| p.id.clone()),
+            Some(beta.id),
+            "the order is untouched"
+        );
+    }
+
     #[test]
     fn unknown_ids_are_rejected_rather_than_ignored() {
         let fx = Fixture::new();
 
         let opened = fx.store.open("nope").expect_err("open must fail");
+        let got = fx.store.get("nope").expect_err("get must fail");
         let deleted = fx.store.delete("nope").expect_err("delete must fail");
 
         assert!(matches!(opened, AppError::ProjectNotFound { .. }));
+        assert!(matches!(got, AppError::ProjectNotFound { .. }));
         assert!(matches!(deleted, AppError::ProjectNotFound { .. }));
     }
 

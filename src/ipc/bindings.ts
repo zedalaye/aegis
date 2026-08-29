@@ -442,6 +442,28 @@ export type Risk = "low" | "medium" | "high";
 export type Role = "user" | "assistant" | "tool" | "system";
 
 /**
+ * What one scaffolding run did.
+ *
+ * Two lists rather than a count: the point of the report is that the user can
+ * see nothing of theirs was overwritten, and only naming what was kept says
+ * that. Paths are relative to the workspace root, in the form the convention
+ * is written in.
+ */
+export type ScaffoldReport = { 
+/**
+ * The workspace root the paths are relative to.
+ */
+root: string, 
+/**
+ * Files created by this run, in convention order.
+ */
+created: Array<string>, 
+/**
+ * Files that were already there and were left exactly as they were.
+ */
+kept: Array<string>, };
+
+/**
  * A session and its transcript.
  */
 export type SessionDetail = { 
@@ -885,3 +907,48 @@ completion_tokens: number,
  * Their sum, as the provider reported it.
  */
 total_tokens: number, };
+
+/**
+ * One directory of the convention, as the UI sees it.
+ *
+ * Both flags are measured on every read and never stored: a user can create
+ * `decisions/` in a terminal, or delete it, and the panel has to be right
+ * about a folder it does not own.
+ */
+export type WorkspaceEntry = { 
+/**
+ * Directory name, relative to the workspace root: `briefs`, `status`, …
+ */
+dir: string, 
+/**
+ * The seed file inside it, relative to the root: `status/STATUS.md`, …
+ */
+file: string, 
+/**
+ * Whether the directory is there right now.
+ */
+dir_exists: boolean, 
+/**
+ * Whether the seed file is there right now.
+ */
+file_exists: boolean, };
+
+/**
+ * The convention's state in one workspace.
+ */
+export type WorkspaceLayout = { 
+/**
+ * The workspace root the entries are relative to.
+ */
+root: string, 
+/**
+ * Every directory of the convention, present or not.
+ */
+entries: Array<WorkspaceEntry>, 
+/**
+ * Whether every directory and seed file is there.
+ *
+ * Derived here rather than in the UI, so that "set up" means the same
+ * thing to the panel, to a test, and to whatever later phase asks.
+ */
+complete: boolean, };

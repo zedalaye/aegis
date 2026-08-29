@@ -10,7 +10,8 @@
  * Commands land with their phases: the window and application lifecycle
  * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects"), sessions and
  * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals"),
- * the audit log and the provider settings (PLAN 2.1, "Settings and audit").
+ * the audit log and the provider settings (PLAN 2.1, "Settings and audit"),
+ * and the shared-workspace convention (PLAN 7.3, Phase 11).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -30,9 +31,11 @@ import type {
   Project,
   ProjectDetail,
   ProviderProbe,
+  ScaffoldReport,
   SessionDetail,
   SessionSummary,
   TurnHandle,
+  WorkspaceLayout,
 } from "./bindings";
 
 async function call<T>(command: string, args?: InvokeArgs): Promise<T> {
@@ -377,4 +380,32 @@ export function settingsClearKey(): Promise<MaskedSettings> {
  */
 export function settingsProbeProvider(): Promise<ProviderProbe> {
   return call<ProviderProbe>("settings_probe_provider");
+}
+
+/**
+ * Which parts of the shared-workspace convention exist in a project's folder.
+ *
+ * Measured at every call rather than cached. The folder belongs to the user,
+ * who may well have made `decisions/` in a terminal a minute ago, and a panel
+ * that is confidently wrong about someone's own directory is worse than no
+ * panel. A project whose folder is missing reports every entry absent, which is
+ * the truth rather than a failure.
+ */
+export function workspaceLayout(projectId: string): Promise<WorkspaceLayout> {
+  return call<WorkspaceLayout>("workspace_layout", { project_id: projectId });
+}
+
+/**
+ * Creates the missing directories and seed files, and nothing else.
+ *
+ * Never overwrites: a file that is already there comes back under `kept`,
+ * byte for byte as it was. Safe to call again — a second run creates nothing
+ * and returns the same report.
+ *
+ * There is deliberately no command for *editing* those files. Writing a
+ * decision or a status is `fs_write`, which goes through the approval dialog
+ * and onto the audit log like every other change to the workspace.
+ */
+export function workspaceScaffold(projectId: string): Promise<ScaffoldReport> {
+  return call<ScaffoldReport>("workspace_scaffold", { project_id: projectId });
 }

@@ -55,6 +55,7 @@ use crate::store::{
     Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
 };
 use crate::tools::{self, NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult};
+use crate::workspace;
 
 use super::event::{
     Event, EventSink, ToolApprovalResolved, ToolFinished, ToolProgress, ToolRequested, ToolStarted,
@@ -218,10 +219,19 @@ impl Turn<'_> {
                 }
             };
 
+            // Read fresh for every round, not once per turn: this *is* the
+            // read path of the workspace convention (PLAN 7.3, Phase 11), and
+            // a round that has just written `DECISIONS.md` should see it in
+            // the next one rather than argue with a stale copy of itself.
+            // `None` for a workspace that does not use the convention, which
+            // leaves the prompt exactly as it was before that phase.
+            let shared = plan.workspace.as_deref().and_then(workspace::digest);
+
             let request = transcript::build(
                 self.provider.model(),
                 &history,
                 plan.workspace.as_deref(),
+                shared.as_deref(),
                 tools::schemas(),
             );
 

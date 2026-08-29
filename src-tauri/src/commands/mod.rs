@@ -5,7 +5,8 @@
 //! so a command stays readable as a permission-and-shape check.
 //!
 //! Domains land with their phases: `window`, `project`, `audit`, `session`,
-//! `approval` and, from Phase 8, `settings`.
+//! `approval`, from Phase 8 `settings`, and from Phase 11 `workspace` — the
+//! shared-file convention inside a project's folder.
 //!
 //! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
 //! accept `camelCase` from JavaScript and rename it, so every command taking
@@ -18,3 +19,4 @@ pub mod project;
 pub mod session;
 pub mod settings;
 pub mod window;
+pub mod workspace;

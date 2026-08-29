@@ -163,6 +163,22 @@ pub enum AppError {
         reason: String,
     },
 
+    /// Part of the shared-workspace convention could not be created
+    /// (PLAN 7.3, Phase 11).
+    ///
+    /// Scaffolding writes into the user's own folder, so its failures are
+    /// theirs to see and to fix: a read-only checkout, a name already taken by
+    /// a file where a directory has to go, a `briefs` symlink pointing off the
+    /// disk. The path is relative to the workspace root, because that is how
+    /// the convention is written down and where the user will go looking.
+    #[error("could not create `{path}` in the workspace: {reason}")]
+    WorkspaceScaffold {
+        /// The convention path, relative to the workspace root.
+        path: String,
+        /// Why it could not be created, in words a user can act on.
+        reason: String,
+    },
+
     /// No project carries that id, so the UI is holding a stale list.
     ///
     /// The right response is to refetch rather than to branch on this: the
@@ -306,6 +322,7 @@ impl AppError {
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
+            | Self::WorkspaceScaffold { .. }
             | Self::ProjectNotFound { .. }
             | Self::SessionNotFound { .. }
             | Self::SessionTitle
