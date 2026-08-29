@@ -280,6 +280,11 @@ type AuditEntry = {
 ### 2.2 Events (`emit` → main window)
 
 Streaming events go to the main window only, never a global broadcast.
+This is a Tauri IPC rule (`emit_to` the main window, not `app.emit`).
+The turn loop already talks to an `EventSink` (`agent/event.rs`) and
+never to an `AppHandle`; `WindowSink` is the MVP subscriber. Do not
+collapse that trait into the window. A later messaging face (§ 7.7) is
+another sink — not a second turn loop, and not a WebView-wide emit.
 
 | Event | Payload |
 | --- | --- |
@@ -369,7 +374,9 @@ a security boundary and must not be described as one in the UI or the README.
 
 The real boundary is narrow and should be stated plainly: the user reads the exact `program`,
 `args` and `cwd` before anything mutating runs. The MVP has no sandbox — tools run as the user,
-inheriting the app's environment and privileges.
+inheriting the app's environment and privileges. A later workspace-scoped executor
+(§ 7.9) does not weaken this prompt; it limits where an approved `shell_exec` can
+land. It is not a reason to auto-allow mutate.
 
 ---
 
@@ -683,6 +690,9 @@ These are constraints on Phases 5–10, not extra work.
 | **Settings / keys** | one `{base_url, model, key}` in keyring or env | put keys in the WebView, or freeze the settings payload so a provider list cannot be added |
 | **Project** | `{name, path, sessions}` | assume every project is a git repo of application code — later a "finance" or "watch" workspace is just another folder |
 | **System prompt** | short: policy summary + workspace path | grow it into runbooks. Recurring procedure that lands in the prompt of Phases 5–12 is procedure Phase 13 will have to fight |
+| **Control surface** | WebView as the only face; `session_send` / `approval_resolve` stay callable as Rust functions, not only as `invoke` wrappers | a second agent loop for Keybase / X Chat / Telegram / Discord; Keybase `TlfName` / X user ids / Discord snowflakes / Telegram chat ids in session storage; an inbound HTTP webhook; treating WhatsApp or a customer-facing X Chat bot as a control face |
+| **Remote bind** | no TCP listen; Tauri IPC to the local WebView only | bind `0.0.0.0`, Tailscale Funnel, embed libtailscale/tsnet, or a second HTTP API with a different command set than § 2 |
+| **Tool executor** | in-process, as the user, after § 3 | hard-wire `Command` / `std::fs` so a later workspace-scoped sandbox cannot sit behind the same `ToolSpec`; treat a denylist or `allow_session` as isolation; give the agent the host desktop (accessibility tree, raw mouse/keyboard) |
 
 Phase 5 in particular: `session_create` / `SessionSummary` may omit `agent_id` today. Do not
 add a dummy field "for later". Do not, either, name columns and events as if the assistant
@@ -808,6 +818,25 @@ Never start pack *n+1* because pack *n* is exciting. Never add a domain by growi
 - Auto-sending mail, auto-posting, auto-trading, or auto-deploying in order to "finish the
   demo".
 - A second runtime for X Chat / Tailscale / a phone inbox. Those are faces or connectors.
+- Building a Keybase / X Chat / Telegram / Discord face before the MVP
+  "Done when" line, or as a second agent loop. `CONTROL.md` is a sketch
+  of § 7.7, not a phase to start. The July 2026 Chat XDK does not jump
+  the queue.
+- Opening an inbound webhook (WhatsApp Cloud API, Telegram webhook, ngrok)
+  so the harness is reachable from the public internet.
+- Embedding Tailscale in `src-tauri`, enabling Funnel, or binding
+  `0.0.0.0`. Remote access is the operator's tailnet, or a later
+  loopback on `127.0.0.1` (§ 7.8).
+- Building a **fleet orchestrator** or a **hypervisor control plane**
+  into `src-tauri`. Neither is "useless work" — they are the wrong
+  layer. Multi-agent is in-process (CoS + specialists + files). Another
+  machine or a VM the operator already runs is a **tool target**
+  (`shell_exec` of `ssh` / `docker` / `sbx`, or a later MCP server),
+  same matrix. See § 7.8 outbound and § 7.9.
+- Giving the agent the host desktop (computer-use, accessibility tree,
+  "it can click anything") as the way to "operate the machine". That is
+  already out of MVP scope — a different product, not a missing
+  executor.
 - Treating compaction as an LLM vendor problem. It has to be coded as state (Phase 14).
 - Letting domain excitement (a broker API, a WhatsApp bridge) jump the queue ahead of the
   primitives that make a CoS real.
@@ -880,3 +909,188 @@ Phase 13's stub is supposed to look like those rows (file in, status out), not l
 chatbot that "knows about inbox". Do not wait for a mail connector to write the skill
 shape: a markdown file in `briefs/` is a valid input. The connector later replaces the
 source, not the procedure.
+
+### 7.7 Messaging faces (control channel) — not a coding phase now
+
+`CONTROL.md` is a sketch, not a schedule. Do not implement it until the MVP
+"Done when" line in `AGENTS.md` is true. It does not reorder § 7.3: a face
+is a UI onto the existing loop, not a CoS primitive and not a domain pack.
+When it is scheduled, it lives at `src-tauri/src/channels/` (same kind of
+named seam as `mcp/`), **not** as a `crates/harness-channels` workspace
+split and **not** as a second runtime.
+
+**Job.** You, away from the desk, talking to the same process the WebView
+talks to: `status`, `approve <id>`, `deny <id>`, `halt`, free text into
+`session_send`. Control verbs hit `approval_resolve` / cancel **before**
+any model sees them. Free text is a turn. The policy matrix, the 5-minute
+approval expiry, and the jsonl audit do not grow a bypass.
+
+**Keybase is the preferred first adapter.** Zoom still runs the product
+(client and managed-bots commits through 2026; Homebrew cask 6.6.x). It is
+not a growth product, and Zoom could still wind it down — treat
+availability as a Zoom-owned risk, not as "dead, so skip it". The
+integration shape in `CONTROL.md` is the right one:
+
+- talk to the `keybase` binary already on PATH, already logged in; do not
+  bundle it, do not parse Avdl/Gregor, do not take the 2021
+  `keybase-bot-api` crate (`async-std`, paperkey);
+- `keybase chat api-listen` (long-lived child) + `keybase chat api -m`
+  (oneshot send), JSON only;
+- `tokio::process::Command`, never `plugin-shell` and never the WebView;
+- sender allowlist **and** the existing approval gate; ignore non-text,
+  ignore the local device's own messages;
+- identity: a private team (you + your devices) on the existing session is
+  the zero-setup path; a dedicated bot account + paper key in the OS
+  keyring is the isolated path. You cannot 1:1-DM yourself.
+
+Windows: resolve `keybase.exe` even when a GUI-launched app has a thin
+PATH; `CREATE_NO_WINDOW` on the child; the Keybase service must already
+be running. Supervise and restart `api-listen` — do not `unwrap` stdout.
+
+**The `ControlChannel` trait stays transport-shaped, not Keybase-shaped.**
+`Dest::TlfName` / Keybase usernames / X snowflakes do not belong on the
+trait. Inbound carries an opaque sender id + conversation id + text;
+each adapter maps its own names. X Chat, Telegram and Discord then plug
+in without a rewrite:
+
+| Face | Listen (outbound only) | Confidentiality of the control plane | Fit |
+| --- | --- | --- | --- |
+| Keybase | local CLI child | E2EE (no opt-out); server sees metadata, not body. Academic analysis of the group-chat box (2024) found no attack; stored history has no forward secrecy, by design. Device/merkle identity is stronger than a hosted PKI. | First adapter for a high-risk control plane. No 500/day cap. |
+| X Chat | `GET /2/activity/stream` (persistent HTTP, app bearer). **Not** `POST /2/webhooks`. | Client-side E2EE via the official Chat XDK ([`xdevplatform/chat-xdk`](https://github.com/xdevplatform/chat-xdk), 30 Jul 2026): XSalsa20-Poly1305 bodies, ECDSA P-256 signatures, ECIES P-256 + AES-128-GCM for conversation keys. X routes ciphertext. Official CRYPTO.md: **no forward secrecy, no post-compromise security**, long-lived conversation keys; rotation does not protect the past. PKI is X's public-key directory, not a merkle/device story. | Same trait. Best Rust-native adapter (core is Rust). Use a **bot account** (`xcbot_…` token, once; `export_keys` blob in the OS keyring — never the WebView, never a user PIN on a server). Coalesce: one message per turn, edits if you stream; the 25/15 min and **500/24 h** send caps make per-token emits impossible. Distinct from Phase 19 social (a customer-facing X bot is an inbox, not you commanding the harness). |
+| Telegram | Bot API **long-poll** (`getUpdates`). Not a webhook. | Cloud chats are **not** E2EE; bots cannot use Secret Chats. Telegram can read `approve` / the shell line. | Same trait; better buttons. Too leaky for high-risk approvals unless the payload is a reference (`approve abc123`) and the detail stays on the desktop. |
+| Discord | Gateway WebSocket (outbound). | No E2EE. Discord stores the body. | Same trait; same redaction rule as Telegram. Fine as a team status face, not as the place you type a passphrase. |
+| WhatsApp | Cloud API **webhook** (public HTTPS). Unofficial clients (Baileys, etc.) violate ToS. | Cloud API is not the consumer E2EE path — Meta sees API traffic. Also a general-purpose assistant is the wrong product for WhatsApp's 2026 bot policy. | **Not a control face.** Phase 19 intake only. |
+
+A face that requires an inbound listener (WhatsApp Cloud API, Telegram
+`setWebhook`, X `POST /2/webhooks`, a tunnel) contradicts `AGENTS.md`:
+do not expose the runtime on the public internet. Long-poll / Gateway /
+activity stream / a local CLI child are the allowed shapes.
+
+**X Chat adapter notes (when scheduled, not now).** `chat-xdk-core` is
+the crypto engine only — it does not call HTTP. Pair it with `reqwest`
+against `/2/chat/*` and `/2/activity/stream`. It is **not on crates.io**
+as of Aug 2026: git dependency plus a `thrift` git patch until 0.24 is
+released; pin a tag. Do not take the WASM/JS binding into the WebView
+(keys would sit in JS). Do not take Juicebox in-process unless we must:
+the bot path is `import_keys` from a keyring blob. OAuth revoke does
+**not** invalidate a leaked key blob — rotate keys and treat history as
+exposed. Default project allowance is one bot. A Grok-passthrough
+skeleton (`xdevplatform/xchat-agent-skeleton`) is a demo of the *wrong*
+product for this repo: the harness is not a second LLM inside X.
+
+**What `CONTROL.md` must not drag in.** A multi-LLM router (`use grok`,
+`use claude`) is the post-MVP provider roster, not a channel command.
+Capabilities JSON does not gain `shell:allow-spawn` for Keybase. The
+harness never speaks as you on a public team or as your personal X
+account (bot account, allowlist of *your* X user id). Approval *detail*
+(paths, shell lines, diffs) is redacted on any face that is not E2EE;
+Keybase and X Chat may carry the same summary the desktop dialog shows.
+
+### 7.8 Remote access (Tailscale) — not a coding phase now
+
+Inbound (you reach **this** process) is not outbound (this process
+talks to **another** machine). Do not mix them. Do not implement
+either as a head start on the MVP.
+
+Tauri IPC is not a TCP server. A browser on the tailnet cannot
+`invoke`. That is why this section exists.
+
+**Inbound — you, away from the desk, driving this harness**
+
+| Layer | What is exposed | Who provides Tailscale |
+| --- | --- | --- |
+| **0 — host (preferred)** | Nothing. The existing window. | Operator: node on the tailnet, then OS remote desktop, Tailscale SSH, or RDP/VNC/Screen Sharing to the real UI. Native dialogs, screenshot, keyring prompts work because you are driving the host. |
+| **1 — loopback (later, optional)** | HTTP + WebSocket on **`127.0.0.1` only**, same commands and events as § 2 (`session_send`, `approval_resolve`, `turn:*`, `tool:approval_required`, …). Same `EventSink`. | Operator: Tailscale Serve (or an SSH tunnel) from that port to the tailnet. **Not** Funnel. **Not** `0.0.0.0`. **Not** a libtailscale/tsnet crate in this repo. Auth is the tailnet; no extra password in the WebView; keys stay masked. |
+
+Layer 1 is another *face* of the same functions, like § 7.7, over a
+private network instead of a messenger. Native-only work (workspace
+picker, screen capture of *this* machine, OS keyring prompt) still
+runs on the host; the remote client only triggers the existing
+commands. If Serve is down, the app is unchanged — the window on the
+machine still works.
+
+**Outbound — this harness operating another machine**
+
+Not remote access. There is **no** planned agent-to-agent wire.
+`COS.md` handoffs are files and a schema, in one process. Phase 12–15
+specialists are identities in that process, not boxes on the tailnet.
+
+A remote host (or a VM the operator already started) is a **tool
+target**, not a second Aegis:
+
+- Today: `shell_exec` of `ssh`, `docker`, `sbx`, … if the binary is on
+  PATH. High-risk **ask**. A path on another machine is outside the
+  workspace by nature.
+- Later: an MCP server that happens to sit on the tailnet or inside
+  that VM (Phase 18) registers into the same `ToolSpec` registry and
+  the same matrix.
+
+A remote Claude or Grok is that shape, not a second harness. Either
+it is a **provider** in this process (OpenAI-compatible HTTP; later a
+roster, CoS on one model, a specialist on another), or it is a
+**CLI** (`claude`, `grok`, …) invoked under `shell_exec` / SSH, stdout
+or a file coming back as a tool result. The payload is a handoff
+(`COS.md`: goal, input paths, definition of done), not the chat
+transcript. "Read my whole thread" stays forbidden.
+
+That is why we do not wire a fleet: the work is already expressible as
+one loop, one gate, tools. A mesh of Aegis processes would be a second
+runtime (distributed approval, network handoffs). Do not build it.
+
+### 7.9 Tool containment — not a coding phase now
+
+Three different asks. Only the third might one day live in this repo,
+and it is still not a product.
+
+| Ask | Verdict | Why |
+| --- | --- | --- |
+| Orchestrate a **fleet** of agent processes (remote Aegis loops, inject across phone/PC/VM) | **Do not build** | Multi-agent is already the CoS: in-process identities, files, handoffs. Extra machines are tool/MCP targets (§ 7.8). A fleet is a second runtime. |
+| **Control VMs** as a harness feature (create/start/stop, virt manager, "the agent has a computer") | **Do not build** | Wrong product (a PaaS / computer-use box). If `docker` / `sbx` / Hyper-V is on PATH, `shell_exec` already runs it under § 3. No hypervisor crate. |
+| Run **our** `fs_*` / `shell_exec` inside a workspace-scoped box so an approved command cannot eat `$HOME` | **Later seam**, optional | Containment for this process's tools. Same `ToolSpec`, same gate. Not a VM UI. |
+
+The approval gate is **who** may run a tool. It is not **where** the
+bytes land. `shell_exec` with cwd in the workspace can still reach the
+rest of the account (the resolved program is the user's `git`, `pnpm`,
+`powershell`). A denylist of `rm -rf` is presentational (§ 3.3). Grok
+Bot–style products that drive a **real desktop** make that blast radius
+the feature. This harness does not — not because a sandbox is useless,
+but because **computer-use of a desktop is not our executor**, and
+**calling `docker`/`sbx` as a program is already the tool**.
+
+Split the process, or do not claim isolation:
+
+| Stays on the host | May later run in a box |
+| --- | --- |
+| Tray, WebView, policy, approvals, audit, OS keyring, `screen_capture` of *this* display | `fs_*` and `shell_exec` against the session workspace |
+
+The box's only host mount is the workspace. Not `$HOME`, not `.ssh`, not
+the host Docker socket, not the keyring. API keys stay on the host;
+the executor does not inherit the app's secret environment. Network
+egress from the box is a later policy row (default ask), not "the VM
+is on the LAN, so Tailscale is inside it".
+
+**Strength, not branding.** A shared-kernel container (Docker process
+isolation, a bind-mounted socket) is a convenience boundary. A
+**microVM / Hyper-V isolated VM** (own kernel: Docker Sandboxes `sbx` on
+Windows Hypervisor Platform, Hyper-V isolation for Windows containers,
+KVM/Firecracker-class on Linux, Hypervisor.framework on macOS) is the
+isolation control. Windows is in scope for the same reason the rest of
+the app is: do not invent a Linux-only executor and call the matrix
+cross-platform. Native Windows toolchains (`cmd`, `.cmd` shims, § 5.1)
+need a Windows guest or they do not run; a Linux microVM is the right
+box for a Unix workspace, not for "the agent is now PowerShell on the
+host".
+
+The human gate does not go away inside the box. Irreversible actions
+(send, pay, merge, publish, deploy, trade) still ask. `allow_session`
+still does not mean forever and still does not mean the host.
+
+**Not a virt product.** Accessibility-tree desktop control, Playwright
+as the agent's hands, a noVNC "computer" of the host, mounting
+`docker.sock`, auto-allowing mutate because "it is sandboxed", or a
+settings panel to create VMs. Those are other products. Do not start
+them. Do not add a hypervisor crate during Phases 0–10.
+
+The MVP executor is the host user, stated honestly. If the operator
+already isolates work in Docker or a microVM, the harness does not
+need to know: it runs `program` + `args` under the gate, like `git`.
