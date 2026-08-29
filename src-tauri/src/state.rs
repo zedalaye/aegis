@@ -108,4 +108,72 @@ mod tests {
         assert!(!state.begin_quit(), "second call is a no-op");
         assert!(state.is_quitting());
     }
+
+    /// The audit log is only useful if the one the runtime hands out is the
+    /// one on disk. Everything else about auditing is tested against a log
+    /// built directly; this is the seam where a wrong directory would send
+    /// every line somewhere nobody looks.
+    #[test]
+    fn the_audit_log_writes_into_the_data_directory() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+
+        let log = state.audit();
+        assert_eq!(log.path().parent(), Some(dir.path()));
+
+        log.append(&crate::audit::AuditRecord {
+            session_id: "s1",
+            turn_id: "t1",
+            call_id: "c1",
+            tool: "fs_list",
+            decision: crate::audit::AuditDecision::Auto,
+            policy_reason: "a read-only listing inside the workspace",
+            args: &serde_json::json!({ "path": "." }),
+            outcome: crate::audit::Outcome::Ok,
+            duration_ms: 1,
+            bytes_in: 0,
+            bytes_out: 4,
+            error_code: None,
+        });
+
+        assert_eq!(log.tail(10, None).expect("tail").len(), 1);
+        assert!(log.path().is_file(), "the line reached the data directory");
+    }
+
+    /// Grants and the audit log are per-process, not per-store: a second
+    /// `AppState` over the same directory must find the lines the first one
+    /// wrote, and none of its grants.
+    #[test]
+    fn a_restart_keeps_the_log_and_drops_the_grants() {
+        let dir = TempDir::new().expect("temp dir");
+
+        let first = AppState::new(dir.path());
+        first.grants().insert("s1", crate::policy::Grant::FsWrite);
+        first.audit().append(&crate::audit::AuditRecord {
+            session_id: "s1",
+            turn_id: "t1",
+            call_id: "c1",
+            tool: "fs_write",
+            decision: crate::audit::AuditDecision::AllowOnce,
+            policy_reason: "this creates a file in the workspace",
+            args: &serde_json::json!({ "path": "a.txt", "content": "x" }),
+            outcome: crate::audit::Outcome::Ok,
+            duration_ms: 1,
+            bytes_in: 1,
+            bytes_out: 0,
+            error_code: None,
+        });
+
+        let second = AppState::new(dir.path());
+
+        assert_eq!(
+            second.audit().tail(10, None).expect("tail").len(),
+            1,
+            "the record of what was done outlives the process"
+        );
+        assert!(
+            !second.grants().holds("s1", &crate::policy::Grant::FsWrite),
+            "an allow-session grant must never survive a restart"
+        );
+    }
 }
