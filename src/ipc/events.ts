@@ -24,6 +24,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ApprovalRequest,
   AuditEntry,
+  MaskedSettings,
   SessionSummary,
   ToolApprovalResolved,
   ToolFinished,
@@ -82,6 +83,12 @@ export type EventPayloads = {
   "session:updated": SessionSummary;
   /** A line was appended to the audit log. */
   "audit:appended": AuditEntry;
+  /**
+   * The provider settings changed — a save, or a key cleared. Carries the same
+   * masked payload `settings_get` returns, so a panel open in one place and a
+   * change made in another cannot disagree.
+   */
+  "settings:changed": MaskedSettings;
   /** The tray brought the window forward. */
   "tray:activate": TrayActivate;
 };

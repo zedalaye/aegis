@@ -29,6 +29,7 @@ export const ERROR_CODES = [
   "E_CANCELLED",
   "E_TOO_MANY_TOOL_ROUNDS",
   "E_SCREEN_PERMISSION",
+  "E_INVALID_SETTING",
   "E_INTERNAL",
 ] as const;
 
@@ -42,6 +43,12 @@ export type IpcErrorPayload = {
   readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
+  /**
+   * The input the failure is about, when it is about one — "base URL",
+   * "model". Absent on every failure that is not about a form field, which is
+   * most of them.
+   */
+  readonly field?: string;
 };
 
 /** A failed `invoke`, normalized. */
@@ -52,12 +59,21 @@ export class IpcError extends Error {
   readonly retryable: boolean;
   /** The command that failed, for logs and bug reports. */
   readonly command: string;
+  /**
+   * The input this failure is about, when the runtime named one.
+   *
+   * Only `E_INVALID_SETTING` carries it today. A form uses it to mark the
+   * field the user has to fix instead of raising a banner over the whole
+   * panel.
+   */
+  readonly field: string | null;
 
   constructor(
     command: string,
     code: ErrorCode | typeof UNKNOWN_ERROR_CODE,
     message: string,
     retryable: boolean,
+    field: string | null = null,
     options?: ErrorOptions,
   ) {
     super(message, options);
@@ -65,6 +81,7 @@ export class IpcError extends Error {
     this.command = command;
     this.code = code;
     this.retryable = retryable;
+    this.field = field;
   }
 }
 
@@ -98,9 +115,18 @@ export function toIpcError(cause: unknown, command: string): IpcError {
 
   if (isIpcErrorPayload(cause)) {
     const code = isErrorCode(cause.code) ? cause.code : UNKNOWN_ERROR_CODE;
-    return new IpcError(command, code, cause.message, cause.retryable, { cause });
+    return new IpcError(
+      command,
+      code,
+      cause.message,
+      cause.retryable,
+      cause.field ?? null,
+      { cause },
+    );
   }
 
   const message = typeof cause === "string" ? cause : String(cause);
-  return new IpcError(command, UNKNOWN_ERROR_CODE, message, false, { cause });
+  return new IpcError(command, UNKNOWN_ERROR_CODE, message, false, null, {
+    cause,
+  });
 }

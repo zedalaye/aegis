@@ -16,12 +16,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::agent::{FakeProvider, Provider, TurnRegistry};
+use crate::agent::provider::openai;
+use crate::agent::{FakeProvider, OpenAiProvider, Provider, ProviderProbe, TurnRegistry};
 use crate::approval::{ApprovalRegistry, ApprovalRequest, Decision, Resolution};
 use crate::audit::AuditLog;
 use crate::error::AppResult;
 use crate::policy::GrantStore;
-use crate::store::{SessionDetail, SessionState, SessionStore, SessionSummary, Store};
+use crate::secrets::{key_hint, SecretStore};
+use crate::store::{
+    MaskedSettings, SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+};
 
 /// Shared state, registered with `Manager::manage` and read from commands via
 /// `tauri::State<'_, AppState>`.
@@ -31,11 +35,16 @@ pub struct AppState {
     quitting: AtomicBool,
     store: Store,
     sessions: SessionStore,
+    settings: SettingsStore,
+    secrets: SecretStore,
     turns: TurnRegistry,
     grants: GrantStore,
     approvals: ApprovalRegistry,
     audit: AuditLog,
-    provider: FakeProvider,
+    /// The connection pool every real request goes through, or `None` when
+    /// this machine would not give us one (see
+    /// [`openai::client`](crate::agent::provider::openai::client)).
+    http: Option<reqwest::Client>,
     self_exe: Option<PathBuf>,
 }
 
@@ -52,11 +61,16 @@ impl AppState {
             quitting: AtomicBool::new(false),
             store: Store::load(data_dir),
             sessions: SessionStore::load(data_dir),
+            settings: SettingsStore::load(data_dir),
+            secrets: SecretStore::new(),
             turns: TurnRegistry::new(),
             grants: GrantStore::new(),
             approvals: ApprovalRegistry::new(),
             audit: AuditLog::new(data_dir),
-            provider: FakeProvider::new(),
+            // Built once and shared. Nothing here reads the credential store:
+            // startup must not prompt for a keychain the user may never use in
+            // this session.
+            http: openai::client(),
             // Only used to refuse `shell_exec` on Aegis itself. A platform
             // that will not name its own executable loses that one check and
             // nothing else, so the failure is logged rather than propagated.
@@ -78,13 +92,83 @@ impl AppState {
         &self.turns
     }
 
-    /// Who answers a turn.
+    /// Who answers a turn, decided fresh for each one.
     ///
-    /// One provider for the process. Phase 8 makes this a `dyn Provider`
-    /// chosen from settings; the return type is already the trait so that
-    /// change does not reach the call sites.
-    pub fn provider(&self) -> &dyn Provider {
-        &self.provider
+    /// Per turn rather than once per process, and that is the point: settings
+    /// can change between two messages in the same session, a key can be added
+    /// or cleared, and a provider captured at startup would keep answering
+    /// from a configuration the user has already moved on from.
+    ///
+    /// Unconfigured settings mean the scripted provider — a fresh install
+    /// still streams a reply and still walks the approval gate, which is the
+    /// documented Phase 5 behaviour rather than a fault. Configured settings
+    /// mean the real one *even with no key*: the user asked for a model, and
+    /// answering them with the fake instead of `E_NO_API_KEY` would be a lie
+    /// they could not see through (see
+    /// [`ProviderSettings::is_configured`](crate::store::ProviderSettings::is_configured)).
+    ///
+    /// A `Box` because the choice is made here and the value has to outlive
+    /// the call; the turn loop still takes `&dyn Provider` and still cannot
+    /// tell which one it was handed. A roster of providers later is a
+    /// different decision inside this one function (PLAN 7.1).
+    pub fn provider(&self) -> Box<dyn Provider> {
+        let settings = self.settings.get();
+
+        if !settings.is_configured() {
+            return Box::new(FakeProvider::new());
+        }
+
+        Box::new(OpenAiProvider::new(
+            self.http.clone(),
+            &settings,
+            self.secrets.inspect().key,
+        ))
+    }
+
+    /// The provider settings, and everything that may be said about the key.
+    ///
+    /// The second composition this module exists for on the settings side: the
+    /// base URL and the model come off disk, the key facts come from the
+    /// platform, and neither store can answer for the other. One credential
+    /// read serves all three key fields (see
+    /// [`SecretStore::inspect`](crate::secrets::SecretStore::inspect)).
+    pub fn masked_settings(&self) -> MaskedSettings {
+        let provider = self.settings.get();
+        let held = self.secrets.inspect();
+
+        MaskedSettings {
+            base_url: provider.base_url,
+            model: provider.model,
+            key_source: held.source,
+            key_hint: held.key.as_ref().map(|key| key_hint(key.expose())),
+            keyring_available: held.keyring_available,
+        }
+    }
+
+    /// Asks the configured server whether it is reachable and the key works.
+    ///
+    /// Lives here rather than in the command because it needs three things no
+    /// one of them owns: the settings, the key, and the shared HTTP client.
+    pub async fn probe_provider(&self) -> ProviderProbe {
+        let settings = self.settings.get();
+        let key = self.secrets.inspect().key;
+
+        openai::probe(self.http.as_ref(), &settings, key.as_ref()).await
+    }
+
+    /// The provider settings on disk.
+    pub fn settings(&self) -> &SettingsStore {
+        &self.settings
+    }
+
+    /// The API key, wherever this machine keeps it.
+    ///
+    /// Deliberately not part of [`Store`]: the key is the one piece of
+    /// configuration Aegis does not persist itself, and routing it through the
+    /// same type as the project list is how it would end up in a JSON file
+    /// next to them.
+    pub fn secrets(&self) -> &SecretStore {
+        &self.secrets
     }
 
     /// This application's own binary, when the platform would name it.
@@ -285,6 +369,52 @@ mod tests {
 
         assert_eq!(log.tail(10, None).expect("tail").len(), 1);
         assert!(log.path().is_file(), "the line reached the data directory");
+    }
+
+    /// Which provider answers is decided from settings, per turn. A fresh
+    /// install streams from the scripted provider — the documented Phase 5
+    /// behaviour — and naming a base URL and a model is what switches it.
+    ///
+    /// Both halves are asserted through `model()`, which is the one thing the
+    /// two providers cannot agree on. The configured half reads the
+    /// credential store once; that is a lookup of an entry these tests never
+    /// write, and nothing here can leave a key behind on the machine.
+    #[test]
+    fn the_provider_follows_the_settings() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+
+        assert_eq!(
+            state.provider().model(),
+            crate::agent::provider::fake::FAKE_MODEL,
+            "an unconfigured install still answers"
+        );
+
+        state
+            .settings()
+            .set("https://api.example.test/v1", "some-model")
+            .expect("accepted");
+
+        assert_eq!(
+            state.provider().model(),
+            "some-model",
+            "a configured provider answers as itself, with or without a key"
+        );
+    }
+
+    /// The panel is shown a source and a hint, never a key — and an
+    /// unconfigured install has nothing to hint at.
+    #[test]
+    fn masked_settings_carry_no_key() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+
+        let masked = state.masked_settings();
+        assert_eq!(masked.base_url, "");
+        assert_eq!(masked.model, "");
+
+        let rendered = serde_json::to_string(&masked).expect("serializes");
+        assert!(!rendered.contains("api_key"), "{rendered}");
     }
 
     /// Grants and the audit log are per-process, not per-store: a second

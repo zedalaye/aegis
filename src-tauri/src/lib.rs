@@ -7,9 +7,11 @@
 //! through; Phase 4 the tool registry, the filesystem tools and the audit log
 //! behind them; Phase 5 the sessions, the provider seam and the turn loop that
 //! drives the two; Phase 6 the approval registry that turn parks on when
-//! policy asks; and Phase 7 the shell tool, which is the first one whose
-//! running the user watches rather than only its result. Later phases add
-//! commands and modules without changing this entry shape.
+//! policy asks; Phase 7 the shell tool, which is the first one whose running
+//! the user watches rather than only its result; and Phase 8 the settings, the
+//! API key and the OpenAI-compatible provider that finally puts a model behind
+//! the loop. Later phases add commands and modules without changing this entry
+//! shape.
 
 pub mod agent;
 pub mod approval;
@@ -17,14 +19,15 @@ pub mod audit;
 mod commands;
 mod error;
 pub mod policy;
+pub mod secrets;
 mod state;
 pub mod store;
 pub mod tools;
 mod tray;
 
 pub use agent::{
-    Event, EventSink, FakeProvider, ModelEvent, ModelRequest, Provider, StopReason, Turn, TurnPlan,
-    TurnRegistry, Usage,
+    Event, EventSink, FakeProvider, ModelEvent, ModelRequest, OpenAiProvider, Provider,
+    ProviderProbe, StopReason, Turn, TurnPlan, TurnRegistry, Usage,
 };
 pub use approval::{
     Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
@@ -32,10 +35,12 @@ pub use approval::{
 pub use audit::{AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 pub use error::{AppError, AppResult, ErrorCode};
 pub use policy::{Decision, Grant, GrantStore, PolicyCtx, ResolvedCall, ToolCall};
+pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use state::AppState;
 pub use store::{
-    Message, Project, ProjectDetail, Role, SessionDetail, SessionState, SessionStore,
-    SessionSummary, Store, ToolCallRecord, ToolCallStatus, TurnHandle,
+    MaskedSettings, Message, Project, ProjectDetail, ProviderSettings, Role, SessionDetail,
+    SessionState, SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord,
+    ToolCallStatus, TurnHandle,
 };
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
 
@@ -129,6 +134,10 @@ pub fn run() {
             commands::approval::approval_revoke_grant,
             commands::audit::audit_tail,
             commands::audit::audit_log_path,
+            commands::settings::settings_get,
+            commands::settings::settings_set,
+            commands::settings::settings_clear_key,
+            commands::settings::settings_probe_provider,
         ])
         .setup(|app| {
             // State is built here rather than on the builder because loading

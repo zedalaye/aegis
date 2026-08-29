@@ -9,8 +9,8 @@
  *
  * Commands land with their phases: the window and application lifecycle
  * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects"), sessions and
- * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals")
- * and the audit log (PLAN 2.1, "Settings and audit").
+ * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals"),
+ * the audit log and the provider settings (PLAN 2.1, "Settings and audit").
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -26,8 +26,10 @@ import type {
   AuditEntry,
   Decision,
   Grant,
+  MaskedSettings,
   Project,
   ProjectDetail,
+  ProviderProbe,
   SessionDetail,
   SessionSummary,
   TurnHandle,
@@ -295,4 +297,69 @@ export function auditTail(
  */
 export function auditLogPath(): Promise<string> {
   return call<string>("audit_log_path");
+}
+
+/**
+ * The provider settings, with the key masked.
+ *
+ * `key_hint` is a few characters for recognition and `key_source` says which
+ * store answered. There is deliberately no command that returns the key
+ * itself: it lives in the OS credential store or in the environment, and the
+ * WebView is never given it (`AGENTS.md`).
+ */
+export function settingsGet(): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_get");
+}
+
+/**
+ * Saves the base URL and the model, and the key when one is passed.
+ *
+ * Omit `apiKey` — or pass an empty string — to leave the stored key alone,
+ * which is the ordinary case: changing a model does not mean retyping a
+ * credential. Removing one is {@link settingsClearKey}.
+ *
+ * Two rejections are worth branching on:
+ *
+ * - `E_INVALID_SETTING` — the value cannot be used. `error.field` names which
+ *   input, and `error.message` says what a working one looks like. Nothing was
+ *   saved, including the key, so the form stays open with the text in it.
+ * - `E_KEYRING_UNAVAILABLE` — this machine has no usable credential store. The
+ *   base URL and the model *were* saved; only the key was not, and the answer
+ *   is to set `AEGIS_API_KEY` in the environment instead.
+ */
+export function settingsSet(
+  baseUrl: string,
+  model: string,
+  apiKey?: string,
+): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_set", {
+    base_url: baseUrl,
+    model,
+    api_key: apiKey ?? null,
+  });
+}
+
+/**
+ * Removes the key from the OS credential store.
+ *
+ * Only that one. A key in `AEGIS_API_KEY` belongs to the environment Aegis was
+ * started in and is not Aegis's to edit, so the settings this returns may
+ * still report `key_source: "env"` — which is the honest answer, and what the
+ * panel says out loud rather than leaving the user to wonder why the key came
+ * back.
+ */
+export function settingsClearKey(): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_clear_key");
+}
+
+/**
+ * Asks the configured server whether it is reachable and the key works.
+ *
+ * Never rejects. Every outcome — unreachable, rejected key, no endpoint,
+ * nothing configured at all — comes back as a {@link ProviderProbe} whose
+ * `message` says what happened, because "the probe failed" is not useful to
+ * someone who pressed a button to find out what is wrong.
+ */
+export function settingsProbeProvider(): Promise<ProviderProbe> {
+  return call<ProviderProbe>("settings_probe_provider");
 }

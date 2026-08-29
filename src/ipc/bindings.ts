@@ -234,6 +234,43 @@ export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "ki
 program: string, } | { "kind": "screen_capture" };
 
 /**
+ * Where the key in use came from (PLAN 2.1, `MaskedSettings`).
+ */
+export type KeySource = "keyring" | "env" | "none";
+
+/**
+ * Everything the WebView is allowed to know about the provider settings.
+ *
+ * The name is the contract. There is no unmasked counterpart and no command
+ * that returns one: a key can be written and cleared, never read back.
+ */
+export type MaskedSettings = { 
+/**
+ * The OpenAI-compatible base URL, normalized. Empty when unset.
+ */
+base_url: string, 
+/**
+ * The model id sent with every request. Empty when unset.
+ */
+model: string, 
+/**
+ * Which store answered when the key was last looked for.
+ */
+key_source: KeySource, 
+/**
+ * A few characters of the key, for recognition. `None` when there is no
+ * key at all.
+ */
+key_hint: string | null, 
+/**
+ * Whether this machine has a credential store that answered.
+ *
+ * `false` on headless Linux and on a locked keychain; the panel then
+ * explains the environment variable instead of offering to save a key.
+ */
+keyring_available: boolean, };
+
+/**
  * One message in a transcript.
  */
 export type Message = { 
@@ -310,6 +347,27 @@ export type ProjectDetail = { project: Project,
  * [`AppState`]: crate::state::AppState
  */
 sessions: Array<SessionSummary>, };
+
+/**
+ * What one attempt to reach the configured server found.
+ */
+export type ProviderProbe = { 
+/**
+ * Whether the server answered as a working OpenAI-compatible endpoint.
+ */
+ok: boolean, 
+/**
+ * The HTTP status, when there was one. `None` means nothing answered.
+ */
+status: number | null, 
+/**
+ * Round trip in milliseconds, when a response arrived.
+ */
+latency_ms: number | null, 
+/**
+ * The diagnosis, written for whoever has to fix it.
+ */
+message: string, };
 
 /**
  * Who or what produced an answer (PLAN 2.2, `tool:approval_resolved`).

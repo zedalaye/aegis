@@ -13,18 +13,26 @@
 //! inside a `select!`, which is exactly what cancellation needs and what a
 //! `Stream` would have to be adapted back into.
 //!
-//! Two implementations are planned. [`fake`] is here now and is what Phase 5
-//! streams from; `openai.rs` (Phase 8) speaks SSE to an OpenAI-compatible
-//! endpoint. Because the boundary is this trait, swapping them changes nothing
-//! in `agent/turn.rs`.
+//! Two implementations. [`fake`] is what Phase 5 streams from and what a
+//! fresh install still answers with; [`openai`] speaks SSE to an
+//! OpenAI-compatible endpoint. Because the boundary is this trait, Phase 8
+//! added the second one without reopening `agent/turn.rs` — which is the whole
+//! claim the trait was introduced to make good on.
+//!
+//! Which of the two answers a turn is decided per turn, from settings, in
+//! [`AppState::provider`](crate::state::AppState::provider). Nothing here is a
+//! singleton: a roster of providers later is a different choice at that one
+//! call site, not a change to this trait (PLAN 7.1).
 
 pub mod fake;
+pub mod openai;
 
 use tokio::sync::mpsc;
 
 use super::wire::{ModelEvent, ModelRequest};
 
 pub use fake::FakeProvider;
+pub use openai::{OpenAiProvider, ProviderProbe};
 
 /// How many events a provider may run ahead of the turn loop.
 ///

@@ -22,8 +22,10 @@ import { useEffect } from "react";
 import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
+import { attachSettingsEvents, useSettings } from "../../state/settings";
 
 import ChatPane from "../chat/ChatPane";
+import SettingsPanel from "../settings/SettingsPanel";
 import Sidebar from "./Sidebar";
 import TitleBar from "./TitleBar";
 
@@ -55,15 +57,18 @@ function ErrorBanner() {
   const projectError = useProjects((s) => s.error);
   const sessionError = useSessions((s) => s.error);
   const approvalError = useApprovals((s) => s.error);
+  const settingsError = useSettings((s) => s.error);
   const dismissProject = useProjects((s) => s.dismissError);
   const dismissSession = useSessions((s) => s.dismissError);
   const dismissApproval = useApprovals((s) => s.dismissError);
+  const dismissSettings = useSettings((s) => s.dismissError);
 
   // The most recent one wins. Stacking banners pushes the thing the user was
   // looking at off the screen, and the later ones are usually a consequence of
   // the first. Approvals come first because a refused click is the one the user
-  // is waiting on an answer to.
-  const error = approvalError ?? sessionError ?? projectError;
+  // is waiting on an answer to; settings next, because that panel is in front
+  // of the user when it fails.
+  const error = approvalError ?? settingsError ?? sessionError ?? projectError;
   if (error === null || error === undefined) {
     return null;
   }
@@ -77,6 +82,7 @@ function ErrorBanner() {
         className="banner__dismiss"
         onClick={() => {
           dismissApproval();
+          dismissSettings();
           dismissSession();
           dismissProject();
         }}
@@ -95,6 +101,8 @@ export default function AppShell() {
   const resetSessions = useSessions((s) => s.reset);
   const sessionId = useSessions((s) => s.detail?.session.id ?? null);
   const syncApprovals = useApprovals((s) => s.syncFor);
+  const loadSettings = useSettings((s) => s.load);
+  const settingsOpen = useSettings((s) => s.open);
 
   // One load on mount. Under StrictMode this runs twice in development: the
   // only write it performs is re-stamping `last_opened_at` on the project it
@@ -102,13 +110,22 @@ export default function AppShell() {
   // no guard is needed — and adding one would mask a real double-render later.
   useEffect(() => {
     void load();
-  }, [load]);
+    // Loaded on mount rather than when the panel is first opened: the title
+    // bar has nothing to say about the provider yet, but a fresh install with
+    // no key is a thing to know before the first message rather than after it
+    // fails.
+    void loadSettings();
+  }, [load, loadSettings]);
 
   // One listener set per store for the app. The attach is asynchronous, so the
   // cleanup has to wait for it rather than assume it has finished —
   // `subscribe` detaches anything that arrives after cancellation.
   useEffect(() => {
-    const attaching = [attachSessionEvents(), attachApprovalEvents()];
+    const attaching = [
+      attachSessionEvents(),
+      attachApprovalEvents(),
+      attachSettingsEvents(),
+    ];
     return () => {
       for (const pending of attaching) {
         void pending.then((detach) => detach());
@@ -140,7 +157,13 @@ export default function AppShell() {
       <div className="shell__body">
         <Sidebar />
         <main className="shell__main">
-          {projectId === null ? <NoProject /> : <ChatPane />}
+          {settingsOpen ? (
+            <SettingsPanel />
+          ) : projectId === null ? (
+            <NoProject />
+          ) : (
+            <ChatPane />
+          )}
         </main>
       </div>
     </div>

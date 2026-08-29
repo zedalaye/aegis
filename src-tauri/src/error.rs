@@ -19,10 +19,18 @@ use serde::{Serialize, Serializer};
 /// `ToolResult` envelopes the model sees (PLAN 4.4).
 ///
 /// The full set is declared here from Phase 1 so later phases add behaviour,
-/// never a new vocabulary the UI has to learn. [`ErrorCode::Internal`] is the
-/// one addition to the PLAN list: it is the catch-all for a runtime failure
-/// that is not part of the agent/tool domain — a missing window, a broken
-/// event channel — and it is never a code the UI should branch on.
+/// never a new vocabulary the UI has to learn. Two codes are additions to the
+/// PLAN list, and both are deliberate:
+///
+/// * [`ErrorCode::Internal`] is the catch-all for a runtime failure that is
+///   not part of the agent/tool domain — a missing window, a broken event
+///   channel — and it is never a code the UI should branch on.
+/// * [`ErrorCode::InvalidSetting`] arrived with the settings panel in Phase 8.
+///   PLAN 4.4 covers the agent, the tools and the provider; it has no code for
+///   "the value you just typed cannot be used", which is a different thing
+///   from a runtime failure and needs a different answer from the UI — mark
+///   the field, keep the form open. No screen written before Phase 8 has to
+///   learn it, because the only screen that can raise it is the new one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// A turn is already running in this session.
@@ -57,6 +65,8 @@ pub enum ErrorCode {
     TooManyToolRounds,
     /// Screen capture is not permitted, or the session type forbids it.
     ScreenPermission,
+    /// A settings value cannot be used, and the user has to change it.
+    InvalidSetting,
     /// Runtime failure outside the agent/tool domain.
     Internal,
 }
@@ -81,6 +91,7 @@ impl ErrorCode {
             Self::Cancelled => "E_CANCELLED",
             Self::TooManyToolRounds => "E_TOO_MANY_TOOL_ROUNDS",
             Self::ScreenPermission => "E_SCREEN_PERMISSION",
+            Self::InvalidSetting => "E_INVALID_SETTING",
             Self::Internal => "E_INTERNAL",
         }
     }
@@ -105,6 +116,7 @@ impl ErrorCode {
             | Self::Cancelled
             | Self::TooManyToolRounds
             | Self::ScreenPermission
+            | Self::InvalidSetting
             | Self::Internal => false,
         }
     }
@@ -216,6 +228,31 @@ pub enum AppError {
         tool: String,
     },
 
+    /// A settings value was refused, with the reason to show beside it.
+    ///
+    /// Carries the field so the panel can mark the input the user has to fix
+    /// rather than raising a banner over the whole form. The reason is written
+    /// for someone correcting a typo, which is why the validators in
+    /// [`store::settings`](crate::store::settings) spell out what a good value
+    /// looks like instead of quoting a parser.
+    #[error("that {field} cannot be used: {reason}")]
+    Settings {
+        /// The field, named as the user sees it — "base URL", "model".
+        field: &'static str,
+        /// What is wrong with the value, and what a working one looks like.
+        reason: String,
+    },
+
+    /// The OS credential store could not be used.
+    ///
+    /// Deliberately carries nothing. Every platform's failure text names
+    /// services, files or bundle identifiers, which is diagnosis for a log and
+    /// noise for a user; the actionable part — that the key has to go in
+    /// `AEGIS_API_KEY` instead — is what the settings panel says on the
+    /// strength of `keyring_available` being false.
+    #[error("your system's credential store could not be used")]
+    Keyring,
+
     /// A runtime invariant broke somewhere outside the agent and tool
     /// domains — a channel that closed, a resource that vanished mid-call.
     ///
@@ -265,6 +302,8 @@ impl AppError {
             Self::TurnBusy { .. } => ErrorCode::TurnBusy,
             Self::ApprovalStale { .. } => ErrorCode::ApprovalStale,
             Self::GrantNotAllowed { .. } => ErrorCode::GrantNotAllowed,
+            Self::Settings { .. } => ErrorCode::InvalidSetting,
+            Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
             | Self::ProjectNotFound { .. }
@@ -281,11 +320,29 @@ impl AppError {
 ///
 /// Kept as a private mirror rather than derived on [`AppError`] directly, so
 /// the wire format stays flat and stable however the Rust enum grows.
+///
+/// `field` is present only where there is one — today, a refused settings
+/// value. It is what lets a form mark the input the user has to fix instead of
+/// raising a banner over the whole panel, and it is omitted rather than null
+/// for every other failure, so nothing that does not have a field has to say
+/// so.
 #[derive(Serialize)]
 struct AppErrorPayload<'a> {
     code: ErrorCode,
     message: &'a str,
     retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<&'a str>,
+}
+
+impl AppError {
+    /// The input this failure is about, when it is about one.
+    const fn field(&self) -> Option<&'static str> {
+        match self {
+            Self::Settings { field, .. } => Some(field),
+            _ => None,
+        }
+    }
 }
 
 impl Serialize for AppError {
@@ -295,6 +352,7 @@ impl Serialize for AppError {
             code,
             message: &self.to_string(),
             retryable: code.retryable(),
+            field: self.field(),
         }
         .serialize(serializer)
     }
@@ -352,9 +410,48 @@ mod tests {
         );
     }
 
+    /// A refused settings value names the input it is about, so the panel can
+    /// mark that field rather than raising a banner over the whole form.
+    #[test]
+    fn a_refused_setting_names_its_field() {
+        let err = AppError::Settings {
+            field: "base URL",
+            reason: "it is not a URL".to_owned(),
+        };
+        let json = serde_json::to_value(&err).expect("AppError serializes");
+
+        assert_eq!(json["code"], "E_INVALID_SETTING");
+        assert_eq!(json["field"], "base URL");
+        assert_eq!(
+            json["message"],
+            "that base URL cannot be used: it is not a URL"
+        );
+        assert_eq!(
+            json["retryable"], false,
+            "retyping the same value fails again"
+        );
+    }
+
+    /// Every other failure omits the key entirely rather than sending a null
+    /// the UI would have to test for.
+    #[test]
+    fn a_failure_about_no_particular_field_carries_none() {
+        let json = serde_json::to_value(AppError::Keyring).expect("AppError serializes");
+
+        assert_eq!(json["code"], "E_KEYRING_UNAVAILABLE");
+        assert!(json.get("field").is_none(), "{json}");
+        assert!(
+            !json["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("keyring"),
+            "the platform's own words belong in the log: {json}"
+        );
+    }
+
     #[test]
     fn codes_are_unique_and_prefixed() {
-        const ALL: [ErrorCode; 17] = [
+        const ALL: [ErrorCode; 18] = [
             ErrorCode::TurnBusy,
             ErrorCode::NoWorkspace,
             ErrorCode::PathOutsideWorkspace,
@@ -371,6 +468,7 @@ mod tests {
             ErrorCode::Cancelled,
             ErrorCode::TooManyToolRounds,
             ErrorCode::ScreenPermission,
+            ErrorCode::InvalidSetting,
             ErrorCode::Internal,
         ];
 

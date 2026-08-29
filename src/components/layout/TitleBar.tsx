@@ -8,14 +8,22 @@
  * Hide and quit are runtime commands rather than WebView calls: the window has
  * no `core:window` permission, so this bar reaches the window through exactly
  * the same path the tray does.
+ *
+ * Settings is here rather than in the sidebar because it is not about a
+ * project: where the model comes from is a fact about the application, and it
+ * has to be reachable on a fresh install where there is no project yet.
  */
 
 import { appQuit, windowHide } from "../../ipc/commands";
 import { useProjects } from "../../state/projects";
+import { useSettings } from "../../state/settings";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
 
 export default function TitleBar() {
   const project = useProjects((s) => s.detail?.project ?? null);
+  const settingsOpen = useSettings((s) => s.open);
+  const openSettings = useSettings((s) => s.openPanel);
+  const closeSettings = useSettings((s) => s.closePanel);
 
   return (
     <header className="titlebar">
@@ -36,6 +44,20 @@ export default function TitleBar() {
       </div>
 
       <div className="titlebar__actions">
+        <button
+          type="button"
+          className="button"
+          aria-pressed={settingsOpen}
+          onClick={() => {
+            if (settingsOpen) {
+              closeSettings();
+            } else {
+              void openSettings();
+            }
+          }}
+        >
+          Settings
+        </button>
         <button
           type="button"
           className="button"

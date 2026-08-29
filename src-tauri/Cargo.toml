@@ -53,6 +53,19 @@ tokio-util = { version = "0.7", default-features = false }
 # without either line quoting what they carried. Phase 9 hashes captured PNGs
 # with the same crate.
 sha2 = "0.10"
+# The real provider speaks HTTP to an OpenAI-compatible endpoint (PLAN 4.1).
+# `reqwest` is already in the tree via Tauri, but with no TLS backend at all —
+# choosing one is this line's whole job. `native-tls` uses what the machine
+# already trusts (schannel on Windows, Security.framework on macOS, OpenSSL on
+# Linux), so a corporate proxy's own certificate works without Aegis being
+# taught about it, and a `cargo build` needs no C toolchain on Windows. The
+# response is consumed with `chunk()`, which is not behind a feature flag, so
+# the SSE loop needs no stream adapters.
+reqwest = { version = "0.13", default-features = false, features = [
+    "native-tls",
+    "json",
+    "system-proxy",
+] }
 # `src/ipc/bindings.ts` is generated from the payload structs rather than
 # written twice (PLAN 1, "Notes on structure"). The export itself runs as a
 # `cargo test`, so nothing generates during a release build; the `TS` impls are
@@ -66,6 +79,23 @@ ts-rs = "12"
 # Tauri. The version is the one already in the tree via Tauri.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Globalization"] }
+# Credential Manager. See the note above the macOS entry for why each platform
+# names its own backend.
+keyring = { version = "3.6", features = ["windows-native"] }
+
+# The API key lives in the OS credential store, never in a file Aegis writes
+# and never in the WebView (AGENTS.md). Each platform names its own backend
+# rather than one feature set covering all three, because they are not
+# equivalent: the Linux backend talks to a Secret Service over D-Bus and wants
+# `libdbus-1-dev` at build time and a running keyring daemon at run time, and
+# that is not a cost a Windows or macOS build should inherit. `crypto-rust`
+# keeps the Linux path off OpenSSL. Version 3 rather than 4: 4 raises the
+# minimum toolchain past this crate's `rust-version`.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -73,7 +103,11 @@ tempfile = "3"
 # five-minute deadline (PLAN 4.2); proving that it fires should not cost five
 # minutes of wall time, and a shorter constant compiled in for tests would be
 # proving something other than what ships.
-tokio = { version = "1", features = ["test-util"] }
+# `net` is for the loopback server `tests/wire.rs` streams SSE from: the
+# provider is proved against real sockets and a real HTTP response rather than
+# against a hand-fed byte slice, which is the half of it that could otherwise
+# be wrong in a way no unit test would notice.
+tokio = { version = "1", features = ["test-util", "net"] }
 
 [profile.release]
 codegen-units = 1

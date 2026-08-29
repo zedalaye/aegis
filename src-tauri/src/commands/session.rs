@@ -173,13 +173,17 @@ async fn run_turn<R: Runtime>(
     };
 
     let sink = WindowSink::new(app.clone());
+    // Chosen now, not at startup: the settings, and the key, are read for this
+    // turn (see `AppState::provider`).
+    let provider = state.provider();
+
     let reason = Turn {
         sessions: state.sessions(),
         turns: state.turns(),
         grants: state.grants(),
         approvals: state.approvals(),
         audit: state.audit(),
-        provider: state.provider(),
+        provider: provider.as_ref(),
         sink: &sink,
         self_exe: state.self_exe(),
     }

@@ -1088,3 +1088,166 @@ body {
   color: var(--muted);
   font-size: 0.75rem;
 }
+
+/* --- Settings ------------------------------------------------------------- */
+
+/*
+ * The panel takes over the work area rather than floating over it, so it is
+ * laid out like the work area: one readable column, scrolling on its own.
+ */
+.settings {
+  max-width: 46rem;
+  padding: 1.5rem 2rem 3rem;
+  overflow-y: auto;
+}
+
+.settings__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.settings__title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.settings__lede {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+}
+
+.settings__section {
+  margin: 2rem 0 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.settings__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* --- Provider form -------------------------------------------------------- */
+
+.provider {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.field__label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.field__input {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+.field__input:disabled {
+  opacity: 0.6;
+}
+
+.field__input--bad {
+  border-color: var(--danger);
+}
+
+.field__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/*
+ * A refusal sits under the input it is about — the runtime says which field it
+ * meant — rather than in the banner at the top of the window, which is where
+ * failures that belong to no particular control go.
+ */
+.field__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.provider__note {
+  margin: -0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.provider__note--warning {
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.provider__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.provider__probe {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.provider__probe--ok {
+  border-color: var(--accent);
+}
+
+.provider__probe--bad {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.provider__latency {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/*
+ * A button that reads as text, for an action that belongs inside a sentence —
+ * "Remove it" after the sentence saying what is stored.
+ */
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

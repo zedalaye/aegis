@@ -19,13 +19,15 @@
 //!   *right now*. They are measured on every read. A stored copy would be
 //!   wrong the moment a drive is unplugged or the process is killed mid-turn.
 //!
-//! The two documents are deliberately separate files with separate schema
+//! The documents are deliberately separate files with separate schema
 //! versions. They change at very different rates — a project list is edited by
-//! a human a few times a week, a transcript grows on every token — and a
-//! migration to one has no business quarantining the other.
+//! a human a few times a week, a transcript grows on every token, provider
+//! settings change a few times a year — and a migration to one has no business
+//! quarantining the others.
 
 pub mod projects;
 pub mod sessions;
+pub mod settings;
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -39,6 +41,7 @@ pub use sessions::{
     Message, Role, SessionDetail, SessionState, SessionStore, SessionSummary, ToolCallRecord,
     ToolCallStatus, TurnHandle,
 };
+pub use settings::{MaskedSettings, ProviderSettings, SettingsStore};
 
 /// Rename attempts before a failed save gives up.
 ///
@@ -72,15 +75,15 @@ fn strip_bom(bytes: &[u8]) -> &[u8] {
 ///
 /// Best effort by design: the caller is already on the "the store is
 /// unusable" path, and failing to rename it must not stop the app from
-/// starting. The original is kept rather than deleted — it is the only copy of
-/// the user's project list, and a human may well be able to repair it.
+/// starting. The original is kept rather than deleted — it may be the only
+/// copy of what it held, and a human may well be able to repair it.
 fn quarantine(path: &Path) {
     let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
     let backup = path.with_extension(format!("corrupt-{stamp}.json"));
 
     match fs::rename(path, &backup) {
-        Ok(()) => tracing::warn!(backup = %backup.display(), "damaged project store moved aside"),
-        Err(err) => tracing::error!(%err, "could not move the damaged project store aside"),
+        Ok(()) => tracing::warn!(backup = %backup.display(), "a damaged document was moved aside"),
+        Err(err) => tracing::error!(%err, "could not move a damaged document aside"),
     }
 }
 

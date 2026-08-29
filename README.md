@@ -13,10 +13,18 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 7 (the shell tool).** The app boots, lives in the system tray, remembers the
+> **Status: Phase 8 (a real provider).** The app boots, lives in the system tray, remembers the
 > workspace folders you point it at, and holds conversations in them: create a session, send a
 > message, watch the reply stream in a token at a time, and stop it mid-sentence. Transcripts are
 > on disk and survive a restart.
+>
+> **There is a model behind it now.** Open **Settings**, give it an OpenAI-compatible base URL, a
+> model id and a key, and replies come from that server — streamed, with the tool calls the model
+> itself decides to make going through the same gate as everything else. The key goes to your
+> operating system's credential store, never to a file Aegis writes and never to the window; the
+> panel shows where it came from and four characters of it, and **Test connection** tells you
+> which of "wrong address", "wrong key" and "server down" you are looking at. Until you configure
+> one, replies come from the scripted provider of Phase 5 — see *Point it at a model*.
 >
 > A tool call that needs your permission asks for it. `fs_list`, `fs_read`, `fs_write` and
 > `shell_exec` run through the decision matrix; anything it will not allow on its own opens a
@@ -31,13 +39,11 @@ ever sent to it.
 > from stdout, capped and scrolled. Stop kills it. So does its deadline — two minutes, or
 > whatever shorter one the caller asked for.
 >
-> **There is no model yet.** Replies come from a scripted provider that tells you what the
-> runtime actually sent it — the workspace it was given, the tools it was offered, what you said.
-> It is deliberately useless as an assistant and deliberately honest as a diagnostic. To see the
-> gate, send a message containing **`/write`** and it asks to write one file in your workspace, or
-> **`/run`** and it asks to list that workspace with a real command. Everything from the prompt to
-> the audit line is real. A real OpenAI-compatible provider (Phase 8) and the screenshot tool
-> (Phase 9) follow — see `PLAN.md` § 6.
+> The scripted provider is still there and still useful: with no base URL configured it answers
+> every message with what the runtime sent it, and **`/write`** and **`/run`** make it ask for a
+> file write and a real command, so the gate can be walked through without spending a token.
+>
+> The screenshot tool (Phase 9) and the audit drawer (Phase 10) follow — see `PLAN.md` § 6.
 
 ---
 
@@ -55,7 +61,9 @@ Plus one platform toolchain:
   the **WebView2 runtime** (see below).
 - **macOS** — Xcode Command Line Tools (`xcode-select --install`).
 - **Linux** — `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf` and the usual
-  build essentials.
+  build essentials, plus `libssl-dev` (the HTTPS client uses the system TLS stack) and
+  `libdbus-1-dev` (the credential store talks to a Secret Service over D-Bus). Neither is needed
+  on Windows or macOS, which have both built in.
 
 ## Run it
 
@@ -66,6 +74,37 @@ pnpm tauri dev
 
 `pnpm tauri dev` starts Vite on port 1420 and builds the Rust binary; the first Rust build takes
 a few minutes, later ones are incremental.
+
+## Point it at a model
+
+Out of the box there is no provider, and replies come from a scripted one that reports what the
+runtime actually sent it. To use a real model, open **Settings** in the title bar and fill in:
+
+| | |
+| --- | --- |
+| **Base URL** | An OpenAI-compatible endpoint, stopping where `/chat/completions` would begin — `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1` for a local server, or whatever your gateway exposes. |
+| **Model** | The model id, spelled the way that server spells it. |
+| **API key** | Saved to the OS credential store. Leave it empty to keep the one already there. |
+
+**Test connection** asks the server for its model list and reports what came back, which is the
+quickest way to tell a wrong address from a wrong key. Clearing the base URL puts you back on the
+scripted provider.
+
+If this machine has no usable credential store — headless Linux, a locked keychain, a dev build
+whose signature keeps changing — set the key in the environment instead and restart:
+
+```sh
+# macOS / Linux
+export AEGIS_API_KEY="sk-..."
+```
+
+```powershell
+# Windows PowerShell
+$env:AEGIS_API_KEY = "sk-..."
+```
+
+Settings then reports the key as coming from `env` and says so in the panel. Aegis reads no other
+variable: a key exported for another tool was not chosen for the endpoint you configured here.
 
 ## Build it
 
@@ -103,8 +142,8 @@ tests before `pnpm typecheck` when you have touched an IPC type.
 
 ## Where your data lives
 
-Projects and sessions are stored as two small JSON documents, `projects.json` and
-`sessions.json`, under the application-data directory:
+Projects, sessions and settings are stored as three small JSON documents — `projects.json`,
+`sessions.json` and `settings.json` — under the application-data directory:
 
 | | Path |
 | --- | --- |
@@ -113,14 +152,21 @@ Projects and sessions are stored as two small JSON documents, `projects.json` an
 | Linux | `~/.local/share/dev.aegis.harness/` |
 
 `projects.json` holds names and workspace paths. `sessions.json` holds your conversations — the
-messages you sent, the replies, and the tool calls each turn made. Neither holds a key, and
-neither records whether anything is *running*: a session interrupted by a crash or a power cut
-comes back idle, because there is no turn left to finish it.
+messages you sent, the replies, and the tool calls each turn made. `settings.json` holds the base
+URL and the model id. **None of them holds a key**, and none records whether anything is
+*running*: a session interrupted by a crash or a power cut comes back idle, because there is no
+turn left to finish it.
 
-Both are meant to be readable and are safe to edit by hand while Aegis is closed. A document
-Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` and the app starts with an
-empty list rather than refusing to open. Deleting a project forgets it and its sessions; the
-workspace folder itself is never touched.
+Your API key is not in this directory at all. It goes to the operating system's own credential
+store, under the service name **Aegis** and the account **provider-api-key** — Credential Manager
+on Windows, Keychain on macOS, a Secret Service on Linux — where you can inspect or delete it
+without Aegis. Set `AEGIS_API_KEY` in the environment instead and Aegis uses that; the credential
+store wins when both are present.
+
+All three documents are meant to be readable and are safe to edit by hand while Aegis is closed.
+A document Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` and the app starts
+with an empty list rather than refusing to open. Deleting a project forgets it and its sessions;
+the workspace folder itself is never touched.
 
 Beside it, `audit.jsonl` records one JSON line per tool call — every call, whether it ran, was
 refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
@@ -142,13 +188,14 @@ src/           React app — presentation and typed IPC glue only
 src-tauri/
   src/
     commands/  one module per IPC command domain
-    agent/     turn loop, wire protocol, providers, event payloads, turn registry
-    store/     projects.json and sessions.json, behind one atomic write
+    agent/     turn loop, wire protocol, providers (scripted, and OpenAI-compatible over SSE),
+               event payloads, turn registry
+    store/     projects.json, sessions.json and settings.json, behind one atomic write
     tools/     fs, shell, screenshot — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
     approval.rs  pending approvals: the channel a turn parks on until you answer
     audit.rs   one jsonl line per tool call
-    secrets.rs OS keyring, environment fallback, masking (Phase 8)
+    secrets.rs OS credential store, environment fallback, masking
   capabilities/  least-privilege Tauri permission sets
 ```
 
@@ -184,9 +231,17 @@ Read this before pointing Aegis at anything you care about.
 - **Screen captures are never auto-allowed.** A capture can contain anything on your display.
   Images are written under the app data directory, never into the workspace; the audit log records
   the path, dimensions and a SHA-256, never the image.
-- **Keys stay out of the WebView.** The API key lives in the OS keyring (or an environment
-  variable) and is read only by the Rust runtime. The UI receives a masked hint — last four
-  characters — and nothing else. Never put a key in `localStorage`.
+- **Keys stay out of the WebView.** The API key lives in the OS credential store (or in
+  `AEGIS_API_KEY`) and is read only by the Rust runtime, which attaches it to the request as a
+  header marked so it cannot be printed. There is no command that returns a key: the UI can save
+  one and clear one, and what it gets back is where the key came from plus four characters of it.
+  It is never written to `settings.json`, never logged, and never in an audit line. Never put a
+  key in `localStorage`.
+- **A base URL is somewhere your key gets sent.** Aegis talks to the server you name and only
+  that one; it never falls back to another endpoint, and it never reads a key exported for a
+  different tool — which is why the environment variable is `AEGIS_API_KEY` and not
+  `OPENAI_API_KEY`. Over `http://` the key crosses the network in clear text. That is allowed so
+  that local servers work, and it is worth reserving for a server on your own machine.
 - **Every tool call is audited**, allowed or denied, one JSON line each, with the policy reason
   and the outcome — see *Where your data lives*. Arguments are recorded as a SHA-256 digest plus
   a redacted copy that keeps paths and replaces file content with its size.
