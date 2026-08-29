@@ -75,12 +75,15 @@ pub fn session_rename(
 
 /// Deletes a session and its transcript.
 ///
-/// A running turn is cancelled first. Deleting the transcript out from under
-/// one would leave it writing messages into a session that no longer exists —
-/// which the turn loop survives, but only by logging a warning per message.
+/// Everything the process knew about the session goes first: the running turn
+/// is cancelled, its open approvals are withdrawn and its grants are dropped.
+/// Deleting the transcript out from under a live turn would leave it writing
+/// messages into a session that no longer exists — which the turn loop
+/// survives, but only by logging a warning per message — and leaving a dialog
+/// answerable would leave a button that approves a call nothing will run.
 #[tauri::command(rename_all = "snake_case")]
 pub fn session_delete(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
-    state.turns().forget(&session_id);
+    state.close_session(&session_id);
     state.sessions().delete(&session_id)
 }
 
@@ -172,7 +175,9 @@ async fn run_turn<R: Runtime>(
     let sink = WindowSink::new(app.clone());
     let reason = Turn {
         sessions: state.sessions(),
+        turns: state.turns(),
         grants: state.grants(),
+        approvals: state.approvals(),
         audit: state.audit(),
         provider: state.provider(),
         sink: &sink,

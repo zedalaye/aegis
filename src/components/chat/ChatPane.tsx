@@ -9,9 +9,12 @@
  */
 
 import { useProjects } from "../../state/projects";
+import { useApprovals } from "../../state/approvals";
 import { useSessions } from "../../state/sessions";
 import { formatTimestamp } from "../../lib/format";
 
+import ApprovalDialog from "../approvals/ApprovalDialog";
+import GrantList from "../approvals/GrantList";
 import Composer from "./Composer";
 import MessageList from "./MessageList";
 
@@ -19,9 +22,19 @@ import MessageList from "./MessageList";
 function StatusLine() {
   const session = useSessions((s) => s.detail?.session ?? null);
   const streaming = useSessions((s) => s.streaming);
+  const waiting = useApprovals((s) => s.pending.length > 0);
 
   if (session === null) {
     return null;
+  }
+  // Waiting for a person outranks streaming: it is the state the user can do
+  // something about, and it is why nothing else is happening.
+  if (waiting) {
+    return (
+      <span className="chat__status chat__status--awaiting">
+        waiting for you
+      </span>
+    );
   }
   if (streaming !== null) {
     return <span className="chat__status chat__status--running">streaming…</span>;
@@ -34,6 +47,24 @@ function StatusLine() {
       {formatTimestamp(session.updated_at)}
     </time>
   );
+}
+
+/**
+ * The approval the user is being asked about, if any.
+ *
+ * One at a time, oldest first. The turn runs its calls sequentially and parks
+ * on each in turn, so a second prompt only exists when a *second session* is
+ * also blocked — and the count on the card says so rather than stacking two
+ * dialogs over each other.
+ */
+function ApprovalQueue() {
+  const pending = useApprovals((s) => s.pending);
+  const first = pending.at(0);
+
+  if (first === undefined) {
+    return null;
+  }
+  return <ApprovalDialog request={first} queued={pending.length - 1} />;
 }
 
 export default function ChatPane() {
@@ -86,6 +117,8 @@ export default function ChatPane() {
       )}
 
       <MessageList />
+      <ApprovalQueue />
+      <GrantList />
       <Composer />
     </section>
   );

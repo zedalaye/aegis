@@ -5,11 +5,13 @@
 //! IPC command surface, the tray and the window lifecycle; Phase 2 adds the
 //! project store; Phase 3 adds the approval gate every tool call will pass
 //! through; Phase 4 the tool registry, the filesystem tools and the audit log
-//! behind them; and Phase 5 the sessions, the provider seam and the turn loop
-//! that drives the two. Later phases add commands and modules without changing
-//! this entry shape.
+//! behind them; Phase 5 the sessions, the provider seam and the turn loop that
+//! drives the two; and Phase 6 the approval registry that turn parks on when
+//! policy asks. Later phases add commands and modules without changing this
+//! entry shape.
 
 pub mod agent;
+pub mod approval;
 pub mod audit;
 mod commands;
 mod error;
@@ -22,6 +24,9 @@ mod tray;
 pub use agent::{
     Event, EventSink, FakeProvider, ModelEvent, ModelRequest, Provider, StopReason, Turn, TurnPlan,
     TurnRegistry, Usage,
+};
+pub use approval::{
+    Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
 };
 pub use audit::{AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 pub use error::{AppError, AppResult, ErrorCode};
@@ -117,6 +122,10 @@ pub fn run() {
             commands::session::session_delete,
             commands::session::session_send,
             commands::session::session_cancel,
+            commands::approval::approval_list_pending,
+            commands::approval::approval_resolve,
+            commands::approval::approval_grants,
+            commands::approval::approval_revoke_grant,
             commands::audit::audit_tail,
             commands::audit::audit_log_path,
         ])

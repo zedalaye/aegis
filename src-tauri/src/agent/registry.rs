@@ -47,6 +47,13 @@ struct Live {
 struct ActiveTurn {
     id: String,
     cancel: CancellationToken,
+    /// Whether the turn is parked on an approval rather than working.
+    ///
+    /// The distinction is the user's, not the runtime's: a session that is
+    /// waiting for *them* has to look different from one that is waiting for a
+    /// model, or the sidebar shows a spinner beside the thing that is blocked
+    /// on a click they have not made.
+    waiting: bool,
 }
 
 impl TurnRegistry {
@@ -87,6 +94,7 @@ impl TurnRegistry {
         live.running = Some(ActiveTurn {
             id: turn_id.to_owned(),
             cancel: cancel.clone(),
+            waiting: false,
         });
         // A new turn is the user trying again, so a stale error badge goes.
         live.resting = SessionState::Idle;
@@ -185,8 +193,27 @@ impl TurnRegistry {
         };
 
         match &live.running {
+            Some(active) if active.waiting => SessionState::AwaitingApproval,
             Some(_) => SessionState::Running,
             None => live.resting,
+        }
+    }
+
+    /// Marks a turn as blocked on an approval, or working again.
+    ///
+    /// Checked against `turn_id` for the same reason [`TurnRegistry::finish`]
+    /// is: a turn that was superseded must not repaint the session its
+    /// successor now owns.
+    pub fn set_waiting(&self, session_id: &str, turn_id: &str, waiting: bool) {
+        let mut sessions = self.sessions();
+        let Some(active) = sessions
+            .get_mut(session_id)
+            .and_then(|live| live.running.as_mut())
+        else {
+            return;
+        };
+        if active.id == turn_id {
+            active.waiting = waiting;
         }
     }
 
@@ -334,5 +361,36 @@ mod tests {
         let lookup = registry.lookup();
         assert_eq!(lookup("s1"), SessionState::Running);
         assert_eq!(lookup("s3"), SessionState::Idle);
+    }
+
+    /// A session waiting on a click is not a session that is working, and the
+    /// sidebar has to be able to tell them apart (PLAN 2.1, `SessionState`).
+    #[test]
+    fn a_turn_parked_on_an_approval_says_so() {
+        let registry = TurnRegistry::new();
+        registry.begin("s1", "t1").expect("free");
+        assert_eq!(registry.state_of("s1"), SessionState::Running);
+
+        registry.set_waiting("s1", "t1", true);
+        assert_eq!(registry.state_of("s1"), SessionState::AwaitingApproval);
+
+        registry.set_waiting("s1", "t1", false);
+        assert_eq!(registry.state_of("s1"), SessionState::Running);
+    }
+
+    #[test]
+    fn a_superseded_turn_cannot_park_the_session_it_no_longer_owns() {
+        let registry = TurnRegistry::new();
+        registry.begin("s1", "t1").expect("free");
+        registry.finish("s1", "t1", SessionState::Idle);
+        registry.begin("s1", "t2").expect("free again");
+
+        registry.set_waiting("s1", "t1", true);
+
+        assert_eq!(
+            registry.state_of("s1"),
+            SessionState::Running,
+            "the finished turn must not repaint its successor"
+        );
     }
 }

@@ -22,8 +22,10 @@ import { listen } from "@tauri-apps/api/event";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  ApprovalRequest,
   AuditEntry,
   SessionSummary,
+  ToolApprovalResolved,
   ToolFinished,
   ToolRequested,
   ToolStarted,
@@ -54,6 +56,16 @@ export type EventPayloads = {
   "turn:error": TurnError;
   /** The model asked for a tool, before policy judged it. */
   "tool:requested": ToolRequested;
+  /** A tool call is blocked on a human. The turn is parked until it is answered. */
+  "tool:approval_required": ApprovalRequest;
+  /**
+   * An approval stopped being pending — by a click, a timeout, or a cancelled
+   * turn. Emitted for every ending, so a card is never left on screen for a
+   * call nothing will run. May arrive twice for one answer (once from the
+   * command, once from the turn waking up); handlers key on `request_id` and
+   * are idempotent.
+   */
+  "tool:approval_resolved": ToolApprovalResolved;
   /** A tool was cleared and is running. */
   "tool:started": ToolStarted;
   /** A tool ended, whatever became of it. */

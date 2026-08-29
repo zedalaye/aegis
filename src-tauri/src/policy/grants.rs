@@ -27,7 +27,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// One `allow_session` grant.
 ///
@@ -35,8 +36,9 @@ use serde::Serialize;
 /// [`Grant::FsReadLarge`] because the only `fs_read` row that offers a grant
 /// is the large-file one, and a grant that covered every read would be a
 /// different, much broader thing than what the user was asked about.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
 pub enum Grant {
     /// Read any contained file over the size threshold without asking again.
     ///

@@ -23,6 +23,7 @@ use serde::Serialize;
 use serde_json::Value;
 use ts_rs::TS;
 
+use crate::approval::{ApprovalRequest, Decision, ResolvedBy};
 use crate::audit::{AuditEntry, Outcome};
 use crate::store::{Message, SessionSummary};
 
@@ -42,6 +43,10 @@ pub mod name {
     pub const TURN_ERROR: &str = "turn:error";
     /// The model asked for a tool.
     pub const TOOL_REQUESTED: &str = "tool:requested";
+    /// A tool call is blocked on a human.
+    pub const TOOL_APPROVAL_REQUIRED: &str = "tool:approval_required";
+    /// An approval was answered, however it was answered.
+    pub const TOOL_APPROVAL_RESOLVED: &str = "tool:approval_resolved";
     /// A tool began running.
     pub const TOOL_STARTED: &str = "tool:started";
     /// A tool finished, whatever became of it.
@@ -147,6 +152,29 @@ pub struct ToolRequested {
     pub args_redacted: String,
 }
 
+/// `tool:approval_resolved` — an approval stopped being pending.
+///
+/// Emitted for every way one can end, not only for a click: a turn that was
+/// cancelled while waiting and a request that expired both produce this, with
+/// `resolved_by` saying which. A UI that only removed a card on the user's own
+/// answer would leave a dialog on screen for a call nothing will ever run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct ToolApprovalResolved {
+    /// The session.
+    pub session_id: String,
+    /// The turn.
+    pub turn_id: String,
+    /// The request that was answered.
+    pub request_id: String,
+    /// The call it was about.
+    pub call_id: String,
+    /// What was decided.
+    pub decision: Decision,
+    /// Who decided it.
+    pub resolved_by: ResolvedBy,
+}
+
 /// `tool:started` — policy cleared it and it is running.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
@@ -201,6 +229,10 @@ pub enum Event {
     TurnError(TurnError),
     /// `tool:requested`.
     ToolRequested(ToolRequested),
+    /// `tool:approval_required`.
+    ToolApprovalRequired(Box<ApprovalRequest>),
+    /// `tool:approval_resolved`.
+    ToolApprovalResolved(ToolApprovalResolved),
     /// `tool:started`.
     ToolStarted(ToolStarted),
     /// `tool:finished`.
@@ -221,6 +253,8 @@ impl Event {
             Self::TurnFinished(_) => name::TURN_FINISHED,
             Self::TurnError(_) => name::TURN_ERROR,
             Self::ToolRequested(_) => name::TOOL_REQUESTED,
+            Self::ToolApprovalRequired(_) => name::TOOL_APPROVAL_REQUIRED,
+            Self::ToolApprovalResolved(_) => name::TOOL_APPROVAL_RESOLVED,
             Self::ToolStarted(_) => name::TOOL_STARTED,
             Self::ToolFinished(_) => name::TOOL_FINISHED,
             Self::SessionUpdated(_) => name::SESSION_UPDATED,
@@ -237,6 +271,8 @@ impl Event {
             Self::TurnFinished(payload) => &payload.session_id,
             Self::TurnError(payload) => &payload.session_id,
             Self::ToolRequested(payload) => &payload.session_id,
+            Self::ToolApprovalRequired(payload) => &payload.session_id,
+            Self::ToolApprovalResolved(payload) => &payload.session_id,
             Self::ToolStarted(payload) => &payload.session_id,
             Self::ToolFinished(payload) => &payload.session_id,
             Self::SessionUpdated(payload) => &payload.id,
@@ -257,6 +293,8 @@ impl Event {
             Self::TurnFinished(payload) => serde_json::to_value(payload),
             Self::TurnError(payload) => serde_json::to_value(payload),
             Self::ToolRequested(payload) => serde_json::to_value(payload),
+            Self::ToolApprovalRequired(payload) => serde_json::to_value(payload),
+            Self::ToolApprovalResolved(payload) => serde_json::to_value(payload),
             Self::ToolStarted(payload) => serde_json::to_value(payload),
             Self::ToolFinished(payload) => serde_json::to_value(payload),
             Self::SessionUpdated(payload) => serde_json::to_value(payload),

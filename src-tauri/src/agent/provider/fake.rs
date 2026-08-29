@@ -15,8 +15,15 @@
 //!   really did carry those things.
 //! * **Scripted** ([`FakeProvider::scripted`]) — exact event sequences, one
 //!   per turn, consumed in order. This is how a test drives a tool call, a
-//!   truncated arguments string or a provider error through the loop, and how
-//!   Phase 6 makes the model ask for an `fs_write` on demand.
+//!   truncated arguments string or a provider error through the loop.
+//!
+//! The improvised mode has one deliberate exception to "never touch the
+//! filesystem", and it is what makes the approval gate usable before there is
+//! a model: a message containing [`WRITE_TRIGGER`] makes it ask for an
+//! `fs_write` (PLAN 6, Phase 6 — "the fake provider is scripted to request an
+//! `fs_write`"). The trigger is a word the user has to type, not a heuristic
+//! over what they said, because a fake model that decided on its own when to
+//! reach for the disk would be exactly the behaviour the gate exists to catch.
 //!
 //! Tokens are emitted with a small delay so streaming is visibly streaming and
 //! a cancel has something to interrupt. Tests use [`FakeProvider::instant`],
@@ -34,6 +41,21 @@ use super::{Provider, STREAM_BUFFER};
 
 /// The model id this provider reports.
 pub const FAKE_MODEL: &str = "aegis-fake-1";
+
+/// The word that makes the improvising provider ask for a file write.
+///
+/// Typing it is the Phase 6 walkthrough: the model asks, the approval dialog
+/// opens, and allow-once / allow-session / deny can each be seen to do what
+/// they say. Matched case-insensitively anywhere in the user's message.
+pub const WRITE_TRIGGER: &str = "/write";
+
+/// The file the triggered write targets, relative to the workspace.
+///
+/// Inside the workspace and named after what it is, so the prompt a user reads
+/// is about a file they would not mind existing. The write is still a write:
+/// it goes through the same policy row, the same dialog and the same audit
+/// line as any other.
+pub const WRITE_TARGET: &str = "aegis-approval-demo.txt";
 
 /// Delay between tokens in the improvised reply.
 ///
@@ -109,6 +131,7 @@ impl Provider for FakeProvider {
             Some(scripted) => scripted,
             None => improvise(&request),
         };
+
         let delay = self.delay;
 
         tokio::spawn(async move {
@@ -138,6 +161,13 @@ impl Provider for FakeProvider {
 /// a debugger.
 fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
     let said = last_user_text(request);
+
+    // The one thing this provider will reach for the disk over, and only
+    // because the user asked for it by name.
+    if said.to_lowercase().contains(WRITE_TRIGGER) && !already_answered(request) {
+        return ask_to_write(&said);
+    }
+
     let workspace = workspace_line(request);
     let tools = request.tools.len();
 
@@ -149,9 +179,10 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
          exercised end to end. Phase 8 replaces it with an OpenAI-compatible \
          client and nothing above this line changes.\n\n\
          {workspace}\n\
-         I was offered {tools} tool{plural}, and I am not going to call any of \
-         them — a fake model choosing to touch your filesystem would be a poor \
-         joke.",
+         I was offered {tools} tool{plural}, and I will not call one unless you \
+         ask: send a message containing `{WRITE_TRIGGER}` and I will request a \
+         file write, so you can see the approval gate refuse it, allow it once, \
+         or allow it for the session.",
         plural = if tools == 1 { "" } else { "s" },
     );
 
@@ -175,6 +206,62 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         }),
     });
     events
+}
+
+/// A turn that asks to write a file, and nothing else.
+///
+/// The arguments are streamed as one fragment rather than assembled from
+/// several, because what is being exercised downstream is the approval gate,
+/// not the tool-call assembler — [`wire`](crate::agent::wire) has its own
+/// tests for the fragmented case.
+fn ask_to_write(said: &str) -> Vec<ModelEvent> {
+    let content = format!(
+        "Written by the fake provider in `agent/provider/fake.rs`, because a \
+         message containing `{WRITE_TRIGGER}` asked it to.\n\nWhat was said: \
+         {said}\n"
+    );
+    let arguments = serde_json::json!({
+        "path": WRITE_TARGET,
+        "content": content,
+    })
+    .to_string();
+
+    vec![
+        ModelEvent::TextDelta {
+            text: format!("Writing `{WRITE_TARGET}` — this needs your approval.\n"),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::FS_WRITE.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// Whether the write this turn asked for has already been answered.
+///
+/// Scoped to the messages after the most recent user message, which is what
+/// makes it "this turn" rather than "this conversation". Without the scope the
+/// second round of a turn would ask again and burn all eight rounds on one
+/// file; with the wrong scope — anywhere in the transcript — a session that
+/// ever ran a tool could never trigger a write again.
+fn already_answered(request: &ModelRequest) -> bool {
+    let Some(latest) = request
+        .messages
+        .iter()
+        .rposition(|message| matches!(message, WireMessage::User { .. }))
+    else {
+        return false;
+    };
+
+    request.messages[latest..]
+        .iter()
+        .any(|message| matches!(message, WireMessage::Tool { .. }))
 }
 
 /// The last thing the user said, or a stand-in when they said nothing.
@@ -379,6 +466,76 @@ mod tests {
         // task returns. Yielding gives it the chance to do so under the test
         // runtime.
         tokio::task::yield_now().await;
+    }
+
+    /// PLAN 6, Phase 6: the fake provider asks for an `fs_write` on demand, so
+    /// the approval gate can be walked through without a model.
+    #[tokio::test]
+    async fn the_write_trigger_produces_a_real_fs_write_call() {
+        let asked = drain(
+            &FakeProvider::instant(),
+            request_saying("please /write something"),
+        )
+        .await;
+
+        let call = asked
+            .iter()
+            .find_map(|event| match event {
+                ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                } => Some((name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .expect("a tool call");
+
+        assert_eq!(call.0.as_deref(), Some(crate::policy::tool::FS_WRITE));
+
+        // The arguments have to be one valid JSON object, or the turn answers
+        // the call with a parse error instead of asking anyone about it.
+        let args: serde_json::Value = serde_json::from_str(&call.1).expect("valid arguments");
+        assert_eq!(args["path"], WRITE_TARGET);
+        assert!(args["content"].as_str().is_some_and(|c| !c.is_empty()));
+
+        assert!(matches!(
+            asked.last(),
+            Some(ModelEvent::Finish {
+                reason: StopReason::ToolCalls,
+                ..
+            })
+        ));
+    }
+
+    /// The trigger fires once per turn, not once per round. A provider that
+    /// asked again after the tool answered would burn all eight rounds on the
+    /// same file and look exactly like a gate that is not holding.
+    #[tokio::test]
+    async fn the_trigger_does_not_fire_again_once_the_call_is_answered() {
+        let mut request = request_saying("please /write something");
+        request.messages.push(WireMessage::Tool {
+            tool_call_id: "call_1".to_owned(),
+            content: r#"{"ok":true}"#.to_owned(),
+        });
+
+        let events = drain(&FakeProvider::instant(), request).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelEvent::ToolCallDelta { .. })),
+            "the second round explains itself instead of asking again"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_message_never_reaches_for_a_tool() {
+        let events = drain(&FakeProvider::instant(), request_saying("hello there")).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelEvent::ToolCallDelta { .. })),
+            "the fake model only touches the disk when asked to by name"
+        );
     }
 
     #[tokio::test]

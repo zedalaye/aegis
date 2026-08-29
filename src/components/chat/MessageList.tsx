@@ -76,7 +76,9 @@ export default function MessageList() {
         <p className="messages__empty">
           Nothing here yet. Ask for something — there is no model behind this
           build, so the reply comes from the scripted provider and tells you
-          what the runtime actually sent.
+          what the runtime actually sent. Include <code>/write</code> in a
+          message to make it ask for permission to write a file, which is how
+          you see the approval gate work.
         </p>
       ) : null}
 

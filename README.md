@@ -13,19 +13,25 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 5 (sessions and the streaming loop).** The app boots, lives in the system tray,
-> remembers the workspace folders you point it at, and now holds conversations in them: create a
+> **Status: Phase 6 (the approval gate, end to end).** The app boots, lives in the system tray,
+> remembers the workspace folders you point it at, and holds conversations in them: create a
 > session, send a message, watch the reply stream in a token at a time, and stop it mid-sentence.
-> Transcripts are on disk and survive a restart. Behind them, `fs_list`, `fs_read` and `fs_write`
-> run through the approval gate — path containment, the decision matrix, per-session grants — and
-> every call leaves a line in the audit log described below.
+> Transcripts are on disk and survive a restart.
+>
+> A tool call that needs your permission now asks for it. `fs_list`, `fs_read` and `fs_write` run
+> through the decision matrix; anything it will not allow on its own opens a prompt showing the
+> exact path, size and content that would be written, and you answer **deny**, **allow once** or
+> **allow for this session**. A denial is an ordinary result — the model is told, and the turn
+> carries on. Session grants are listed under the transcript while they are in force, with a
+> Revoke button beside each; they never touch disk and die with the session. Every call is
+> audited whichever way you answer.
 >
 > **There is no model yet.** Replies come from a scripted provider that tells you what the
 > runtime actually sent it — the workspace it was given, the tools it was offered, what you said.
-> It is deliberately useless as an assistant and deliberately honest as a diagnostic. The
-> approval dialog (Phase 6), the shell tool (Phase 7) and a real OpenAI-compatible provider
-> (Phase 8) follow — see `PLAN.md` § 6. Until Phase 6 exists, a tool call that *would* need your
-> approval is refused rather than granted, because there is nothing yet that could ask you.
+> It is deliberately useless as an assistant and deliberately honest as a diagnostic. To see the
+> gate, send a message containing **`/write`**: the fake provider asks to write one file in your
+> workspace, and everything from the prompt to the audit line is real. The shell tool (Phase 7)
+> and a real OpenAI-compatible provider (Phase 8) follow — see `PLAN.md` § 6.
 
 ---
 
@@ -134,6 +140,7 @@ src-tauri/
     store/     projects.json and sessions.json, behind one atomic write
     tools/     fs, shell, screenshot — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
+    approval.rs  pending approvals: the channel a turn parks on until you answer
     audit.rs   one jsonl line per tool call
     secrets.rs OS keyring, environment fallback, masking (Phase 8)
   capabilities/  least-privilege Tauri permission sets
@@ -152,7 +159,12 @@ Read this before pointing Aegis at anything you care about.
   single time and can never be granted for a session.
 - **"Allow for this session" is narrow and temporary.** A grant is keyed to a scope — a directory
   subtree, or one shell program by name — never to a tool as a whole. Grants are never written to
-  disk, and they die with the session. There is no "allow forever".
+  disk, and they die with the session. There is no "allow forever". While one is in force it is
+  listed under the transcript of the session that created it, with a Revoke button; revoking
+  restores the prompt from the next call onwards.
+- **An unanswered prompt is a refusal.** An approval nobody answers within five minutes is
+  refused, as is one whose turn you stop. Neither ends the conversation: the model is told the
+  call was refused and carries on.
 - **`shell_exec` does not use a shell.** It takes a program and an argument vector and spawns them
   directly, so there is no metacharacter or quoting layer to defeat. The risk badges on commands
   like `rm` or `curl` are *presentational* — they change the wording of the prompt, not what is

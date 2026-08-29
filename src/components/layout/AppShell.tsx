@@ -20,6 +20,7 @@
 import { useEffect } from "react";
 
 import { useProjects } from "../../state/projects";
+import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 
 import ChatPane from "../chat/ChatPane";
@@ -49,17 +50,20 @@ function NoProject() {
   );
 }
 
-/** The last failure from either store, dismissible, above the panes. */
+/** The last failure from any store, dismissible, above the panes. */
 function ErrorBanner() {
   const projectError = useProjects((s) => s.error);
   const sessionError = useSessions((s) => s.error);
+  const approvalError = useApprovals((s) => s.error);
   const dismissProject = useProjects((s) => s.dismissError);
   const dismissSession = useSessions((s) => s.dismissError);
+  const dismissApproval = useApprovals((s) => s.dismissError);
 
-  // The most recent one wins. Stacking two banners pushes the thing the user
-  // was looking at off the screen, and the second is usually a consequence of
-  // the first.
-  const error = sessionError ?? projectError;
+  // The most recent one wins. Stacking banners pushes the thing the user was
+  // looking at off the screen, and the later ones are usually a consequence of
+  // the first. Approvals come first because a refused click is the one the user
+  // is waiting on an answer to.
+  const error = approvalError ?? sessionError ?? projectError;
   if (error === null || error === undefined) {
     return null;
   }
@@ -72,6 +76,7 @@ function ErrorBanner() {
         type="button"
         className="banner__dismiss"
         onClick={() => {
+          dismissApproval();
           dismissSession();
           dismissProject();
         }}
@@ -88,6 +93,8 @@ export default function AppShell() {
   const projectId = useProjects((s) => s.detail?.project.id ?? null);
   const loadSessions = useSessions((s) => s.loadFor);
   const resetSessions = useSessions((s) => s.reset);
+  const sessionId = useSessions((s) => s.detail?.session.id ?? null);
+  const syncApprovals = useApprovals((s) => s.syncFor);
 
   // One load on mount. Under StrictMode this runs twice in development: the
   // only write it performs is re-stamping `last_opened_at` on the project it
@@ -97,13 +104,15 @@ export default function AppShell() {
     void load();
   }, [load]);
 
-  // One listener set for the app. The attach is asynchronous, so the cleanup
-  // has to wait for it rather than assume it has finished — `subscribe`
-  // detaches anything that arrives after cancellation.
+  // One listener set per store for the app. The attach is asynchronous, so the
+  // cleanup has to wait for it rather than assume it has finished —
+  // `subscribe` detaches anything that arrives after cancellation.
   useEffect(() => {
-    const pending = attachSessionEvents();
+    const attaching = [attachSessionEvents(), attachApprovalEvents()];
     return () => {
-      void pending.then((detach) => detach());
+      for (const pending of attaching) {
+        void pending.then((detach) => detach());
+      }
     };
   }, []);
 
@@ -115,6 +124,14 @@ export default function AppShell() {
       void loadSessions(projectId);
     }
   }, [projectId, loadSessions, resetSessions]);
+
+  // And the approval queue follows the open session. Refetched rather than
+  // carried over: a window that was closed while a turn was waiting missed the
+  // event that raised the dialog, and the runtime is the only thing that knows
+  // what is still answerable.
+  useEffect(() => {
+    void syncApprovals(sessionId);
+  }, [sessionId, syncApprovals]);
 
   return (
     <div className="shell">

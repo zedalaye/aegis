@@ -27,6 +27,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
+use crate::approval::ApprovalRequest;
+
 use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 
@@ -227,19 +229,13 @@ pub struct SessionDetail {
     pub messages: Vec<Message>,
     /// Approvals this session is blocked on.
     ///
-    /// Always empty in this build. Phase 6 gives it the `ApprovalRequest`
-    /// element type; it is declared now so `session_open` has its documented
-    /// shape from the first command that returns it.
-    pub pending_approvals: Vec<PendingApproval>,
+    /// Filled by [`AppState::session_detail`](crate::AppState::session_detail)
+    /// rather than here: the transcript is on disk, and what a session is
+    /// waiting for is a fact about this process. It is on the detail at all so
+    /// that a window reopened mid-turn re-draws the dialog it missed, instead
+    /// of leaving a turn blocked on a prompt nobody can see.
+    pub pending_approvals: Vec<ApprovalRequest>,
 }
-
-/// Placeholder element type of [`SessionDetail::pending_approvals`].
-///
-/// An empty struct rather than a `serde_json::Value`, so the generated
-/// TypeScript names a type the UI can widen in Phase 6 instead of `any`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, export_to = "bindings.ts")]
-pub struct PendingApproval {}
 
 /// What `session_send` hands back (PLAN 2.1).
 ///
@@ -433,7 +429,7 @@ impl SessionStore {
         Ok(SessionDetail {
             session: session.to_summary(state),
             messages: session.messages.clone(),
-            // Phase 6 fills this in.
+            // Composed in by `AppState`, which can see the approval registry.
             pending_approvals: Vec::new(),
         })
     }

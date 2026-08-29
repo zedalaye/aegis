@@ -58,6 +58,11 @@ ts-rs = "12"
 
 [dev-dependencies]
 tempfile = "3"
+# `test-util` gives the tests a pausable clock. The approval gate has a
+# five-minute deadline (PLAN 4.2); proving that it fires should not cost five
+# minutes of wall time, and a shorter constant compiled in for tests would be
+# proving something other than what ships.
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 codegen-units = 1

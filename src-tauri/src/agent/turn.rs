@@ -27,11 +27,18 @@
 //! the first token and closed by a timer, so a slow trickle still arrives
 //! promptly rather than waiting for a token that never comes.
 //!
-//! **A denial is a result.** Policy refusing a call, a user refusing one
-//! (Phase 6), arguments that never parsed, the round cap — all of them become
-//! an ordinary `tool` message with `ok: false`, and the turn continues. The
-//! model reads it, explains itself and tries something else (PLAN 4.3). The
-//! only things that end a turn early are cancellation and a provider failure.
+//! **A denial is a result.** Policy refusing a call, a user refusing one, an
+//! approval nobody answered, arguments that never parsed, the round cap — all
+//! of them become an ordinary `tool` message with `ok: false`, and the turn
+//! continues. The model reads it, explains itself and tries something else
+//! (PLAN 4.3). The only things that end a turn early are cancellation and a
+//! provider failure.
+//!
+//! **Waiting for a person is a state, not a stall.** When policy asks, the
+//! turn registers the request, marks the session `awaiting_approval` and parks
+//! on a `oneshot`. The wait is inside the same `select!` as the cancel token
+//! and under a five-minute deadline, so neither a user who walks away nor one
+//! who presses stop leaves a turn holding a call forever.
 
 use std::path::{Path, PathBuf};
 
@@ -39,19 +46,21 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+use crate::approval::{Answer, ApprovalRegistry, Decision as Answered, ResolvedBy, APPROVAL_TTL};
 use crate::audit::{AuditDecision, AuditLog, Outcome};
 use crate::error::ErrorCode;
-use crate::policy::{self, Decision, GrantStore, PolicyCtx};
+use crate::policy::{self, AskRequest, Decision, GrantStore, PolicyCtx};
 use crate::store::{
     Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
 };
 use crate::tools::{self, ToolCtx, ToolOutcome, ToolResult};
 
 use super::event::{
-    Event, EventSink, ToolFinished, ToolRequested, ToolStarted, TurnDelta, TurnError, TurnFinished,
-    TurnMessage, TurnStarted,
+    Event, EventSink, ToolApprovalResolved, ToolFinished, ToolRequested, ToolStarted, TurnDelta,
+    TurnError, TurnFinished, TurnMessage, TurnStarted,
 };
 use super::provider::Provider;
+use super::registry::TurnRegistry;
 use super::transcript;
 use super::wire::{AssembledCall, ModelEvent, StopReason, Usage};
 
@@ -88,8 +97,17 @@ pub struct TurnPlan {
 pub struct Turn<'a> {
     /// Where messages are read from and written to.
     pub sessions: &'a SessionStore,
+    /// Which sessions are running, and how a blocked one is marked.
+    ///
+    /// The turn writes to this rather than only reading it: parking on an
+    /// approval is a fact about the session that `session_open` and the
+    /// sidebar both have to see, and the registry is where that fact already
+    /// lives.
+    pub turns: &'a TurnRegistry,
     /// Live `allow_session` grants.
     pub grants: &'a GrantStore,
+    /// Where an approval waits for its answer.
+    pub approvals: &'a ApprovalRegistry,
     /// Where tool calls are recorded.
     pub audit: &'a AuditLog,
     /// Who answers.
@@ -204,7 +222,7 @@ impl Turn<'_> {
                         break StopReason::Stop;
                     }
 
-                    self.execute(plan, &calls, cancel);
+                    self.execute(plan, &calls, cancel).await;
                     rounds += 1;
 
                     if cancel.is_cancelled() {
@@ -369,15 +387,16 @@ impl Turn<'_> {
 
     /// Runs one round of tool calls, in the order the model made them.
     ///
-    /// Sequential rather than concurrent: the calls mutate a filesystem, the
-    /// user approves them one at a time from Phase 6, and two writes to the
-    /// same path racing each other is not a behaviour worth having.
+    /// Sequential rather than concurrent, and now for a reason stronger than
+    /// filesystem races: the user approves these one at a time. Two dialogs
+    /// competing for the same person's attention is not a queue, and a second
+    /// call that ran while the first was still being read would have been
+    /// approved by nobody.
     ///
-    /// Synchronous, because everything it can currently run is. The filesystem
-    /// tools are short and local, so blocking the worker for one is cheaper
-    /// than moving it to another thread. Phase 7's `shell_exec` is the first
-    /// call that genuinely waits, and it is what makes this `async` again.
-    fn execute(&self, plan: &TurnPlan, calls: &[AssembledCall], cancel: &CancellationToken) {
+    /// The filesystem tools themselves are short and local, so they still run
+    /// inline rather than on a blocking thread. What makes this `async` is the
+    /// waiting: [`Turn::ask`] parks here until a person answers.
+    async fn execute(&self, plan: &TurnPlan, calls: &[AssembledCall], cancel: &CancellationToken) {
         for call in calls {
             if cancel.is_cancelled() {
                 self.abandon(plan, call);
@@ -418,49 +437,171 @@ impl Turn<'_> {
                 PolicyCtx::new(&plan.session_id, plan.workspace.as_deref(), self.grants)
                     .with_self_exe(self.self_exe);
 
-            let outcome = match policy::decide(&policy_ctx, &call.name, args.clone()) {
+            let judged = match policy::decide(&policy_ctx, &call.name, args.clone()) {
                 Decision::Auto {
                     call: resolved,
                     reason,
                 } => {
-                    self.sink.emit(Event::ToolStarted(ToolStarted {
-                        session_id: plan.session_id.clone(),
-                        turn_id: plan.turn_id.clone(),
-                        call_id: call.call_id.clone(),
-                        tool: call.name.clone(),
-                    }));
-                    // Filesystem work is short and local, so it runs inline
-                    // rather than on a blocking thread. Phase 7's `shell_exec`
-                    // is the one that genuinely waits, and it spawns.
-                    tools::run(&ctx, AuditDecision::Auto, reason, &resolved)
+                    self.starting(plan, call);
+                    Some(tools::run(&ctx, AuditDecision::Auto, reason, &resolved))
                 }
-                Decision::Deny { code, reason } => {
-                    tools::refuse(&ctx, &call.name, AuditDecision::Deny, code, &reason)
-                }
-                // Phase 6 replaces this arm with the approval registry: it
-                // emits `tool:approval_required`, parks the turn on a oneshot
-                // and resumes on the user's answer. Until then the honest
-                // answer is that nothing can approve it, said in terms the
-                // model can act on rather than a silent hang.
-                Decision::Ask { request, .. } => tools::refuse(
+
+                // A hard denial (PLAN 3.2). Never offered to the user, because
+                // approving it could not mean anything.
+                Decision::Deny { code, reason } => Some(tools::refuse(
                     &ctx,
                     &call.name,
                     AuditDecision::Deny,
-                    ErrorCode::Denied,
-                    &format!(
-                        "this call needs approval ({}), and the approval gate is not wired up in \
-                         this build",
-                        request.reason
-                    ),
-                ),
+                    code,
+                    &reason,
+                )),
+
+                Decision::Ask {
+                    call: resolved,
+                    request,
+                } => match self.ask(plan, call, &request, cancel).await {
+                    // Cancelled while the dialog was open. Recorded as an
+                    // abandoned call rather than a refusal: nobody said no.
+                    None => {
+                        self.abandon(plan, call);
+                        continue;
+                    }
+                    Some(answer) if answer.decision.allows() => {
+                        self.starting(plan, call);
+                        Some(tools::run(
+                            &ctx,
+                            answer.decision.audit(),
+                            &request.reason,
+                            &resolved,
+                        ))
+                    }
+                    Some(answer) => Some(tools::refuse(
+                        &ctx,
+                        &call.name,
+                        AuditDecision::Deny,
+                        ErrorCode::Denied,
+                        &refusal(answer),
+                    )),
+                },
             };
 
-            let status = if outcome.result.ok {
-                ToolCallStatus::Ok
-            } else {
-                ToolCallStatus::Error
+            let Some(outcome) = judged else {
+                continue;
+            };
+
+            // Keyed on what was audited rather than on `ok` alone, so a call
+            // that was refused reads as refused in the transcript instead of
+            // as one that ran and failed.
+            let status = match outcome.audit.outcome {
+                Outcome::Denied => ToolCallStatus::Denied,
+                _ if outcome.result.ok => ToolCallStatus::Ok,
+                _ => ToolCallStatus::Error,
             };
             self.finish_call(plan, call, &outcome, status);
+        }
+    }
+
+    /// Parks the turn until a person answers, and reports what they said.
+    ///
+    /// `None` means the turn was cancelled while the dialog was open. That is
+    /// deliberately not a denial: "you said no" and "you stopped the turn" are
+    /// different things to write into a transcript, and only one of them is a
+    /// decision about the call.
+    ///
+    /// Three things are true on every exit from this function, however it
+    /// exits: the request is no longer answerable, the session is no longer
+    /// marked as waiting, and `tool:approval_resolved` has been emitted. A
+    /// dialog left on screen for a call nothing will ever run is the failure
+    /// this shape exists to prevent.
+    async fn ask(
+        &self,
+        plan: &TurnPlan,
+        call: &AssembledCall,
+        request: &AskRequest,
+        cancel: &CancellationToken,
+    ) -> Option<Answer> {
+        let ticket =
+            self.approvals
+                .register(&plan.session_id, &plan.turn_id, &call.call_id, request);
+        let request_id = ticket.request.request_id.clone();
+
+        self.turns
+            .set_waiting(&plan.session_id, &plan.turn_id, true);
+        self.session_changed(plan);
+        self.sink
+            .emit(Event::ToolApprovalRequired(Box::new(ticket.request)));
+
+        // `biased` so a cancel that arrives alongside an answer wins: the user
+        // pressed stop, and a call that ran anyway would be one they stopped.
+        let answer = tokio::select! {
+            biased;
+            () = cancel.cancelled() => None,
+            answered = tokio::time::timeout(APPROVAL_TTL, ticket.answer) => match answered {
+                Ok(Ok(answer)) => Some(answer),
+                // The sender was dropped without an answer: the session was
+                // deleted, or the registry was cleared under us.
+                Ok(Err(_)) => Some(Answer {
+                    decision: Answered::Deny,
+                    resolved_by: ResolvedBy::Policy,
+                }),
+                Err(_elapsed) => {
+                    tracing::info!(
+                        session_id = %plan.session_id,
+                        request_id = %request_id,
+                        "an approval expired unanswered"
+                    );
+                    Some(Answer {
+                        decision: Answered::Deny,
+                        resolved_by: ResolvedBy::Timeout,
+                    })
+                }
+            },
+        };
+
+        // Idempotent: an answered request was already removed by `resolve`.
+        // This covers the other exits, and closes the window in which a click
+        // could land on a request nothing is waiting for.
+        self.approvals.withdraw(&request_id);
+        self.turns
+            .set_waiting(&plan.session_id, &plan.turn_id, false);
+
+        let reported = answer.unwrap_or(Answer {
+            decision: Answered::Deny,
+            resolved_by: ResolvedBy::Policy,
+        });
+        self.sink
+            .emit(Event::ToolApprovalResolved(ToolApprovalResolved {
+                session_id: plan.session_id.clone(),
+                turn_id: plan.turn_id.clone(),
+                request_id,
+                call_id: call.call_id.clone(),
+                decision: reported.decision,
+                resolved_by: reported.resolved_by,
+            }));
+        self.session_changed(plan);
+
+        answer
+    }
+
+    /// Emits `tool:started` for a call that policy — or the user — cleared.
+    fn starting(&self, plan: &TurnPlan, call: &AssembledCall) {
+        self.sink.emit(Event::ToolStarted(ToolStarted {
+            session_id: plan.session_id.clone(),
+            turn_id: plan.turn_id.clone(),
+            call_id: call.call_id.clone(),
+            tool: call.name.clone(),
+        }));
+    }
+
+    /// Re-sends the session's row at whatever state the registry now reports.
+    ///
+    /// Read back from the registry rather than passed in, so the badge in the
+    /// sidebar and the `state` a `session_open` returns cannot disagree about
+    /// whether a session is working or waiting for the person looking at it.
+    fn session_changed(&self, plan: &TurnPlan) {
+        let state = self.turns.state_of(&plan.session_id);
+        if let Some(summary) = summarize(self.sessions, &plan.session_id, state) {
+            self.sink.emit(Event::SessionUpdated(summary));
         }
     }
 
@@ -620,6 +761,26 @@ impl Turn<'_> {
     }
 }
 
+/// What the model is told about a call that was not allowed to run.
+///
+/// Written for the model rather than for a log: it says what happened, and
+/// what to do next. A refusal the model reads as a transport failure is a
+/// refusal it retries.
+fn refusal(answer: Answer) -> String {
+    match answer.resolved_by {
+        ResolvedBy::User => "the user refused this call. Do not repeat it. Say what you were \
+                             trying to do and let them decide, or carry on with what you can do \
+                             without it"
+            .to_owned(),
+        ResolvedBy::Timeout => "nobody answered the approval for this call, so it was refused \
+                                after five minutes. The user is probably away from the machine"
+            .to_owned(),
+        ResolvedBy::Policy => {
+            "the approval for this call was withdrawn before anyone answered it".to_owned()
+        }
+    }
+}
+
 /// The transcript record for a call the model just made.
 ///
 /// Status starts at `Pending`: policy has not seen it yet, and the UI draws
@@ -673,7 +834,12 @@ mod tests {
 
     use crate::agent::provider::FakeProvider;
     use crate::agent::wire::ModelEvent;
+    use crate::approval::{ApprovalRequest, Decision as Answered};
     use crate::policy::tool;
+    use crate::policy::Grant;
+
+    /// The turn every fixture registers, so `plan()` and the registry agree.
+    const TURN_ID: &str = "t1";
 
     /// An [`EventSink`] that keeps everything, for assertions.
     #[derive(Debug, Default)]
@@ -726,7 +892,9 @@ mod tests {
         _dir: TempDir,
         workspace: PathBuf,
         sessions: SessionStore,
+        turns: TurnRegistry,
         grants: GrantStore,
+        approvals: ApprovalRegistry,
         audit: AuditLog,
         sink: Recorder,
         session_id: String,
@@ -743,11 +911,19 @@ mod tests {
             let sessions = SessionStore::load(&data);
             let session_id = sessions.create("p1", None).expect("session").id;
 
+            // Registered the way `session_send` registers it, because the
+            // session's state — running, or waiting for a person — is read
+            // back out of this registry and asserted on.
+            let turns = TurnRegistry::new();
+            turns.begin(&session_id, TURN_ID).expect("a free session");
+
             Self {
                 workspace: dunce::canonicalize(&workspace).expect("canonical workspace"),
                 _dir: dir,
                 sessions,
+                turns,
                 grants: GrantStore::new(),
+                approvals: ApprovalRegistry::new(),
                 audit: AuditLog::new(&data),
                 sink: Recorder::default(),
                 session_id,
@@ -757,7 +933,7 @@ mod tests {
         fn plan(&self) -> TurnPlan {
             TurnPlan {
                 session_id: self.session_id.clone(),
-                turn_id: "t1".to_owned(),
+                turn_id: TURN_ID.to_owned(),
                 workspace: Some(self.workspace.clone()),
             }
         }
@@ -765,12 +941,42 @@ mod tests {
         fn turn<'a>(&'a self, provider: &'a dyn Provider) -> Turn<'a> {
             Turn {
                 sessions: &self.sessions,
+                turns: &self.turns,
                 grants: &self.grants,
+                approvals: &self.approvals,
                 audit: &self.audit,
                 provider,
                 sink: &self.sink,
                 self_exe: None,
             }
+        }
+
+        /// The approval the turn is currently blocked on.
+        ///
+        /// Polled rather than awaited on a channel: the turn is a task in the
+        /// same runtime, and this is the shape a test uses to answer a dialog
+        /// the way a click would.
+        async fn pending(&self) -> ApprovalRequest {
+            for _ in 0..200 {
+                if let Some(request) = self
+                    .approvals
+                    .list(Some(&self.session_id))
+                    .into_iter()
+                    .next()
+                {
+                    return request;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            panic!("no approval was raised");
+        }
+
+        /// Answers whatever the turn is waiting on, the way the command does.
+        async fn answer(&self, decision: Answered) {
+            let request = self.pending().await;
+            self.approvals
+                .resolve(&request.request_id, decision, &self.grants)
+                .expect("the request is open");
         }
 
         fn say(&self, text: &str) {
@@ -964,11 +1170,207 @@ mod tests {
         assert_eq!(fx.audit.tail(10, None).expect("tail").len(), 1);
     }
 
-    /// A read inside the workspace is auto-allowed; a write is not, and until
-    /// Phase 6 there is nothing that can approve it. The turn must survive
-    /// that as an ordinary refusal rather than hanging.
+    /// A write inside the workspace is asked about. Allowing it once runs it,
+    /// and leaves nothing behind that would skip the next prompt.
     #[tokio::test]
-    async fn a_call_needing_approval_is_refused_rather_than_hanging() {
+    async fn an_allowed_call_runs_and_grants_nothing() {
+        let fx = Fixture::new();
+        fx.say("write a file");
+
+        let provider = FakeProvider::scripted(vec![tool_call_script(
+            "call_1",
+            tool::FS_WRITE,
+            r#"{"path":"new.txt","content":"x"}"#,
+        )]);
+
+        let answering = async {
+            fx.answer(Answered::AllowOnce).await;
+        };
+        let turn = fx.turn(&provider);
+        let plan = fx.plan();
+        let cancel = CancellationToken::new();
+        let (reason, ()) = tokio::join!(turn.run(&plan, &cancel), answering);
+
+        assert_eq!(reason, StopReason::Stop);
+        assert_eq!(
+            std::fs::read_to_string(fx.workspace.join("new.txt")).expect("the file"),
+            "x"
+        );
+
+        let names = fx.sink.names();
+        assert!(names.contains(&"tool:approval_required"), "{names:?}");
+        assert!(names.contains(&"tool:approval_resolved"), "{names:?}");
+        assert!(names.contains(&"tool:started"), "{names:?}");
+
+        let transcript = fx.transcript();
+        assert_eq!(transcript[1].tool_calls[0].status, ToolCallStatus::Ok);
+
+        let audit = fx.audit.tail(10, None).expect("tail");
+        assert_eq!(audit[0].decision, AuditDecision::AllowOnce);
+        assert_eq!(audit[0].outcome, Outcome::Ok);
+
+        assert!(
+            fx.grants.list(&fx.session_id).is_empty(),
+            "allow-once must not quietly become allow-session"
+        );
+        assert!(fx.approvals.is_empty(), "the request was consumed");
+    }
+
+    /// PLAN 6, Phase 6 exit: a denial lands in the transcript as `E_DENIED`
+    /// without aborting the turn.
+    #[tokio::test]
+    async fn a_denial_is_a_result_and_the_turn_carries_on() {
+        let fx = Fixture::new();
+        fx.say("write a file");
+
+        let provider = FakeProvider::scripted(vec![tool_call_script(
+            "call_1",
+            tool::FS_WRITE,
+            r#"{"path":"new.txt","content":"x"}"#,
+        )]);
+
+        let answering = async {
+            fx.answer(Answered::Deny).await;
+        };
+        let turn = fx.turn(&provider);
+        let plan = fx.plan();
+        let cancel = CancellationToken::new();
+        let (reason, ()) = tokio::join!(turn.run(&plan, &cancel), answering);
+
+        assert_eq!(reason, StopReason::Stop, "a denial does not end the turn");
+        assert!(
+            !fx.workspace.join("new.txt").exists(),
+            "a denied write must not touch the disk"
+        );
+        assert!(
+            !fx.sink.names().contains(&"tool:started"),
+            "nothing was started"
+        );
+
+        let transcript = fx.transcript();
+        assert_eq!(transcript[1].tool_calls[0].status, ToolCallStatus::Denied);
+
+        let envelope: serde_json::Value =
+            serde_json::from_str(&transcript[2].text).expect("an envelope");
+        assert_eq!(envelope["ok"], json!(false));
+        assert_eq!(envelope["error"]["code"], "E_DENIED");
+
+        // The model is told it was the user, and told not to repeat it.
+        let message = envelope["error"]["message"]
+            .as_str()
+            .expect("a message")
+            .to_owned();
+        assert!(message.contains("user refused"), "{message}");
+
+        let audit = fx.audit.tail(10, None).expect("tail");
+        assert_eq!(audit[0].decision, AuditDecision::Deny);
+        assert_eq!(audit[0].outcome, Outcome::Denied);
+    }
+
+    /// The second half of `allow_session`: the grant is recorded, and the call
+    /// behind it is not asked about again.
+    #[tokio::test]
+    async fn allowing_for_the_session_stops_the_next_prompt() {
+        let fx = Fixture::new();
+        fx.say("write two files");
+
+        let provider = FakeProvider::scripted(vec![
+            tool_call_script(
+                "call_1",
+                tool::FS_WRITE,
+                r#"{"path":"one.txt","content":"1"}"#,
+            ),
+            tool_call_script(
+                "call_2",
+                tool::FS_WRITE,
+                r#"{"path":"two.txt","content":"2"}"#,
+            ),
+        ]);
+
+        let answering = async {
+            fx.answer(Answered::AllowSession).await;
+        };
+        let turn = fx.turn(&provider);
+        let plan = fx.plan();
+        let cancel = CancellationToken::new();
+        let (_reason, ()) = tokio::join!(turn.run(&plan, &cancel), answering);
+
+        assert_eq!(fx.grants.list(&fx.session_id), vec![Grant::FsWrite]);
+        assert!(fx.workspace.join("one.txt").is_file());
+        assert!(
+            fx.workspace.join("two.txt").is_file(),
+            "the second write was covered by the grant"
+        );
+
+        let asked = fx
+            .sink
+            .names()
+            .iter()
+            .filter(|name| **name == "tool:approval_required")
+            .count();
+        assert_eq!(asked, 1, "the user was asked once, not twice");
+
+        let audit = fx.audit.tail(10, None).expect("tail");
+        assert_eq!(audit.len(), 2);
+        // Newest first: the covered call, then the one that was approved.
+        assert_eq!(audit[0].decision, AuditDecision::Auto);
+        assert_eq!(audit[1].decision, AuditDecision::AllowSession);
+    }
+
+    /// Stopping a turn while its dialog is open must not leave the call
+    /// unanswered, and must not record it as a refusal — nobody said no.
+    #[tokio::test]
+    async fn cancelling_while_waiting_abandons_the_call() {
+        let fx = Fixture::new();
+        fx.say("write a file");
+
+        let provider = FakeProvider::scripted(vec![tool_call_script(
+            "call_1",
+            tool::FS_WRITE,
+            r#"{"path":"new.txt","content":"x"}"#,
+        )]);
+
+        let cancel = CancellationToken::new();
+        let stopping = async {
+            fx.pending().await;
+            cancel.cancel();
+        };
+        let turn = fx.turn(&provider);
+        let plan = fx.plan();
+        let (reason, ()) = tokio::join!(turn.run(&plan, &cancel), stopping);
+
+        assert_eq!(reason, StopReason::Cancelled);
+        assert!(!fx.workspace.join("new.txt").exists());
+        assert!(
+            fx.approvals.is_empty(),
+            "a cancelled turn leaves no dialog behind"
+        );
+
+        let transcript = fx.transcript();
+        assert_eq!(
+            transcript[1].tool_calls[0].status,
+            ToolCallStatus::Cancelled
+        );
+        let envelope: serde_json::Value =
+            serde_json::from_str(&transcript[2].text).expect("an envelope");
+        assert_eq!(envelope["error"]["code"], "E_CANCELLED");
+
+        let resolved = fx.sink.events().into_iter().find_map(|event| match event {
+            Event::ToolApprovalResolved(resolved) => Some(resolved),
+            _ => None,
+        });
+        assert_eq!(
+            resolved.expect("the dialog was closed").resolved_by,
+            ResolvedBy::Policy
+        );
+    }
+
+    /// An approval nobody answers is refused after [`APPROVAL_TTL`], and the
+    /// turn carries on. Run on a paused clock, so the five minutes cost
+    /// nothing: with every task idle, the runtime advances straight to the
+    /// deadline the turn is waiting on.
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswered_approval_expires_and_the_turn_carries_on() {
         let fx = Fixture::new();
         fx.say("write a file");
 
@@ -983,31 +1385,84 @@ mod tests {
             .run(&fx.plan(), &CancellationToken::new())
             .await;
 
-        assert_eq!(reason, StopReason::Stop);
+        assert_eq!(reason, StopReason::Stop, "the turn ends cleanly");
         assert!(
             !fx.workspace.join("new.txt").exists(),
-            "an unapproved write must not touch the disk"
+            "an expired approval must not run the call"
         );
+        assert!(fx.approvals.is_empty(), "the request was withdrawn");
 
         let transcript = fx.transcript();
+        assert_eq!(transcript[1].tool_calls[0].status, ToolCallStatus::Denied);
         let envelope: serde_json::Value =
             serde_json::from_str(&transcript[2].text).expect("an envelope");
-        assert_eq!(envelope["ok"], json!(false));
         assert_eq!(envelope["error"]["code"], "E_DENIED");
+
+        let resolved = fx.sink.events().into_iter().find_map(|event| match event {
+            Event::ToolApprovalResolved(resolved) => Some(resolved),
+            _ => None,
+        });
+        assert_eq!(
+            resolved.expect("the dialog was closed").resolved_by,
+            ResolvedBy::Timeout
+        );
     }
 
+    /// While a dialog is open the session is not "working" — it is waiting for
+    /// the person looking at it, and the sidebar has to say so.
+    #[tokio::test]
+    async fn the_session_reads_as_awaiting_approval_while_a_dialog_is_open() {
+        let fx = Fixture::new();
+        fx.say("write a file");
+
+        let provider = FakeProvider::scripted(vec![tool_call_script(
+            "call_1",
+            tool::FS_WRITE,
+            r#"{"path":"new.txt","content":"x"}"#,
+        )]);
+
+        let watching = async {
+            fx.pending().await;
+            let state = fx.turns.state_of(&fx.session_id);
+            fx.answer(Answered::Deny).await;
+            state
+        };
+        let turn = fx.turn(&provider);
+        let plan = fx.plan();
+        let cancel = CancellationToken::new();
+        let (_reason, state) = tokio::join!(turn.run(&plan, &cancel), watching);
+
+        assert_eq!(state, SessionState::AwaitingApproval);
+        assert_eq!(
+            fx.turns.state_of(&fx.session_id),
+            SessionState::Running,
+            "the turn goes back to working once it is answered"
+        );
+
+        let awaiting = fx.sink.events().into_iter().any(|event| match event {
+            Event::SessionUpdated(summary) => summary.state == SessionState::AwaitingApproval,
+            _ => false,
+        });
+        assert!(awaiting, "the sidebar was told the session is blocked");
+    }
+
+    /// PLAN 3.2: a path that will not resolve is refused outright, with no
+    /// approval offered — approving it could not mean anything, because the
+    /// dialog would have nothing true to show the user.
+    ///
+    /// A path *outside* the workspace is deliberately not the example here.
+    /// That is an ask, not a denial, on every platform, and using it would
+    /// leave this test waiting five minutes for an answer nobody gives.
     #[tokio::test]
     async fn a_hard_denial_is_a_result_and_the_turn_continues() {
         let fx = Fixture::new();
-        fx.say("read the password file");
+        fx.say("read a file whose name never resolves");
 
-        let outside = if cfg!(windows) {
-            r#"{"path":"C:\\Windows\\win.ini"}"#
-        } else {
-            r#"{"path":"/etc/passwd"}"#
-        };
-        let provider =
-            FakeProvider::scripted(vec![tool_call_script("call_1", tool::FS_READ, outside)]);
+        let provider = FakeProvider::scripted(vec![tool_call_script(
+            "call_1",
+            tool::FS_READ,
+            r#"{"path":"   "}"#,
+        )]);
 
         let reason = fx
             .turn(&provider)
@@ -1015,9 +1470,17 @@ mod tests {
             .await;
 
         assert_eq!(reason, StopReason::Stop, "a denial does not end the turn");
+        assert!(
+            !fx.sink.names().contains(&"tool:approval_required"),
+            "a hard denial is never offered to the user"
+        );
 
         let transcript = fx.transcript();
-        assert_eq!(transcript[1].tool_calls[0].status, ToolCallStatus::Error);
+        assert_eq!(
+            transcript[1].tool_calls[0].status,
+            ToolCallStatus::Denied,
+            "a refusal reads as refused, not as a call that ran and failed"
+        );
         let envelope: serde_json::Value =
             serde_json::from_str(&transcript[2].text).expect("an envelope");
         assert_eq!(envelope["ok"], json!(false));

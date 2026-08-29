@@ -9,8 +9,8 @@
  *
  * Commands land with their phases: the window and application lifecycle
  * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects"), sessions and
- * turns (PLAN 2.1, "Sessions and turns") and the audit log (PLAN 2.1,
- * "Settings and audit").
+ * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals")
+ * and the audit log (PLAN 2.1, "Settings and audit").
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -22,7 +22,10 @@ import type { InvokeArgs } from "@tauri-apps/api/core";
 
 import { toIpcError } from "../lib/errors";
 import type {
+  ApprovalRequest,
   AuditEntry,
+  Decision,
+  Grant,
   Project,
   ProjectDetail,
   SessionDetail,
@@ -184,6 +187,80 @@ export function sessionCancel(
   return call<void>("session_cancel", {
     session_id: sessionId,
     turn_id: turnId,
+  });
+}
+
+/**
+ * What a session is currently blocked on, oldest first.
+ *
+ * A re-sync, not the primary path: approvals normally arrive as
+ * `tool:approval_required` events. This is what a window calls after a reload,
+ * or when switching to a session whose turn was already waiting — the runtime
+ * is authoritative, and a card the runtime does not list here can no longer be
+ * answered whatever is still on screen.
+ *
+ * Omitting `sessionId` returns every session's queue.
+ */
+export function approvalListPending(
+  sessionId?: string,
+): Promise<ApprovalRequest[]> {
+  return call<ApprovalRequest[]>("approval_list_pending", {
+    session_id: sessionId ?? null,
+  });
+}
+
+/**
+ * Answers one approval, releasing the turn that is parked on it.
+ *
+ * Resolving is all this does. Whether the call then runs is the turn loop's
+ * business, and the result arrives as `tool:started` / `tool:finished` — there
+ * is deliberately no command that executes a tool, because that would be a
+ * second way into the machine that policy does not gate.
+ *
+ * Two rejections are worth branching on:
+ *
+ * - `E_APPROVAL_STALE` — the request expired, was already answered, or its
+ *   turn was cancelled. Re-sync with {@link approvalListPending}; the click did
+ *   nothing, and telling the user it succeeded would be a lie.
+ * - `E_GRANT_NOT_ALLOWED` — `allow_session` on a row that offers no grant. The
+ *   UI does not draw that button when `session_grant_allowed` is false, so this
+ *   is the runtime refusing to trust the WebView rather than a path a user
+ *   reaches by clicking. The request stays open.
+ */
+export function approvalResolve(
+  requestId: string,
+  decision: Decision,
+): Promise<void> {
+  return call<void>("approval_resolve", {
+    request_id: requestId,
+    decision,
+  });
+}
+
+/**
+ * The `allow_session` grants a session currently holds.
+ *
+ * Empty for a session that has only ever answered "allow once" — which is the
+ * point of that answer. Grants never outlive the process (PLAN 3.1), so this
+ * is always empty for a session opened after a restart.
+ */
+export function approvalGrants(sessionId: string): Promise<Grant[]> {
+  return call<Grant[]>("approval_grants", { session_id: sessionId });
+}
+
+/**
+ * Withdraws one grant, so the tool it covered is asked about again.
+ *
+ * Idempotent: revoking something already revoked resolves to `false` rather
+ * than rejecting. The user's intent is satisfied either way.
+ */
+export function approvalRevokeGrant(
+  sessionId: string,
+  grant: Grant,
+): Promise<boolean> {
+  return call<boolean>("approval_revoke_grant", {
+    session_id: sessionId,
+    grant,
   });
 }
 

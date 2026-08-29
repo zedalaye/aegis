@@ -1,0 +1,241 @@
+/**
+ * The pending approval queue, and the grants answering one can create.
+ *
+ * The runtime owns both. This store is a cache with one job beyond mirroring:
+ * making sure the card on screen and the request the runtime is parked on are
+ * the same thing, or that the card goes away.
+ *
+ * Three rules follow from that, and they are the whole design.
+ *
+ * **Events add and remove; the command list reconciles.** A
+ * `tool:approval_required` queues a card, a `tool:approval_resolved` removes
+ * one. Neither is trusted to be complete — a window that was closed, reloaded
+ * or switched between sessions missed events it can never get back — so
+ * {@link ApprovalsState.syncFor} refetches the authoritative queue whenever the
+ * open session changes.
+ *
+ * **A stale answer is a failure, not a no-op.** `E_APPROVAL_STALE` means the
+ * click did nothing: the request expired, was already answered, or its turn was
+ * cancelled. The card is dropped and the queue re-synced rather than closed
+ * on the belief that something was approved.
+ *
+ * **`allow_session` is offered only where the request says it may be.** The
+ * button is not drawn when `session_grant_allowed` is false, and the runtime
+ * refuses the decision anyway (PLAN 3.1) — this is the display half of a rule
+ * enforced in Rust, never the rule itself.
+ */
+
+import { create } from "zustand";
+
+import type { ApprovalRequest, Decision, Grant } from "../ipc/bindings";
+import {
+  approvalGrants,
+  approvalListPending,
+  approvalResolve,
+  approvalRevokeGrant,
+} from "../ipc/commands";
+import { subscribe } from "../ipc/events";
+import { toIpcError } from "../lib/errors";
+import type { IpcError } from "../lib/errors";
+
+export type ApprovalsState = {
+  /** What the open session is blocked on, oldest first. */
+  readonly pending: readonly ApprovalRequest[];
+  /** The `allow_session` grants the open session holds. */
+  readonly grants: readonly Grant[];
+  /** The session these belong to, or `null` when none is open. */
+  readonly sessionId: string | null;
+  /** Request ids currently being answered, so a button cannot be double-clicked. */
+  readonly resolving: readonly string[];
+  /** The last failure, or `null`. */
+  readonly error: IpcError | null;
+
+  /** Points the store at a session and refetches both lists. */
+  syncFor: (sessionId: string | null) => Promise<void>;
+  /** Answers one approval. */
+  resolve: (requestId: string, decision: Decision) => Promise<void>;
+  /** Withdraws one grant, so its tool is asked about again. */
+  revoke: (grant: Grant) => Promise<void>;
+  /** Clears the last error. */
+  dismissError: () => void;
+};
+
+/** Whether two grants name the same thing. */
+function sameGrant(a: Grant, b: Grant): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  return a.kind === "shell" && b.kind === "shell"
+    ? a.program === b.program
+    : true;
+}
+
+export const useApprovals = create<ApprovalsState>((set, get) => {
+  /** Refetches both lists for whichever session is open. */
+  const reload = async (sessionId: string): Promise<void> => {
+    const [pending, grants] = await Promise.all([
+      approvalListPending(sessionId),
+      approvalGrants(sessionId),
+    ]);
+    // The user may have switched sessions while this was in flight; applying
+    // it then would show one session's dialogs above another's transcript.
+    if (get().sessionId === sessionId) {
+      set({ pending, grants });
+    }
+  };
+
+  return {
+    pending: [],
+    grants: [],
+    sessionId: null,
+    resolving: [],
+    error: null,
+
+    syncFor: async (sessionId) => {
+      if (sessionId === null) {
+        set({ sessionId: null, pending: [], grants: [], resolving: [] });
+        return;
+      }
+
+      set({ sessionId, pending: [], grants: [], resolving: [] });
+      try {
+        await reload(sessionId);
+      } catch (cause) {
+        set({ error: toIpcError(cause, "approval_list_pending") });
+      }
+    },
+
+    resolve: async (requestId, decision) => {
+      const { sessionId, resolving } = get();
+      if (sessionId === null || resolving.includes(requestId)) {
+        return;
+      }
+
+      set({ resolving: [...resolving, requestId], error: null });
+      try {
+        await approvalResolve(requestId, decision);
+
+        // Removed here as well as on the event: the turn's own
+        // `tool:approval_resolved` is authoritative but arrives when its task
+        // is next scheduled, and a card that lingers after a click reads as a
+        // click that did not register.
+        set((state) => ({
+          pending: state.pending.filter(
+            (request) => request.request_id !== requestId,
+          ),
+        }));
+
+        // An `allow_session` answer created a grant; nothing else did.
+        if (decision === "allow_session") {
+          await reload(sessionId);
+        }
+      } catch (cause) {
+        const error = toIpcError(cause, "approval_resolve");
+        set({ error });
+
+        // The click did nothing. Drop the card and re-sync rather than leave
+        // one the runtime does not know about — except for a refused
+        // `allow_session`, where the request is deliberately still open and
+        // the user can answer it another way.
+        if (error.code !== "E_GRANT_NOT_ALLOWED") {
+          set((state) => ({
+            pending: state.pending.filter(
+              (request) => request.request_id !== requestId,
+            ),
+          }));
+          await reload(sessionId).catch(() => {
+            // Nothing to reconcile against; the session is gone.
+          });
+        }
+      } finally {
+        set((state) => ({
+          resolving: state.resolving.filter((id) => id !== requestId),
+        }));
+      }
+    },
+
+    revoke: async (grant) => {
+      const sessionId = get().sessionId;
+      if (sessionId === null) {
+        return;
+      }
+
+      set({ error: null });
+      try {
+        await approvalRevokeGrant(sessionId, grant);
+        set((state) => ({
+          grants: state.grants.filter((held) => !sameGrant(held, grant)),
+        }));
+      } catch (cause) {
+        set({ error: toIpcError(cause, "approval_revoke_grant") });
+      }
+    },
+
+    dismissError: () => set({ error: null }),
+  };
+});
+
+/**
+ * Attaches the store to the runtime's event stream.
+ *
+ * Called once, from the shell, beside the session subscription. Returns the
+ * detach function.
+ */
+export function attachApprovalEvents(): Promise<() => void> {
+  const { getState, setState } = useApprovals;
+
+  /** Whether an event belongs to the session currently on screen. */
+  const isOpen = (sessionId: string) => getState().sessionId === sessionId;
+
+  return subscribe({
+    "tool:approval_required": (request) => {
+      if (!isOpen(request.session_id)) {
+        return;
+      }
+      setState((state) => {
+        // A re-sync may have queued this already; the runtime is the only
+        // source of request ids, so the id is enough to tell.
+        const known = state.pending.some(
+          (queued) => queued.request_id === request.request_id,
+        );
+        return known ? state : { pending: [...state.pending, request] };
+      });
+    },
+
+    // Fires for every ending, including the ones nobody clicked: a timeout, a
+    // cancelled turn, a deleted session. Idempotent, because the click that
+    // caused it has usually already removed the card.
+    "tool:approval_resolved": ({ session_id, request_id }) => {
+      if (!isOpen(session_id)) {
+        return;
+      }
+      setState((state) => ({
+        pending: state.pending.filter(
+          (request) => request.request_id !== request_id,
+        ),
+      }));
+    },
+
+    // A grant created by an `allow_session` in *this* window is applied by the
+    // command; one created while a turn was running still shows up here,
+    // because the turn re-reads the session row when it resumes.
+    "session:updated": ({ id, state }) => {
+      if (!isOpen(id) || state !== "idle") {
+        return;
+      }
+      const sessionId = getState().sessionId;
+      if (sessionId === null) {
+        return;
+      }
+      void approvalGrants(sessionId)
+        .then((grants) => {
+          if (getState().sessionId === sessionId) {
+            setState({ grants });
+          }
+        })
+        .catch(() => {
+          // The session was deleted; its grants went with it.
+        });
+    },
+  });
+}

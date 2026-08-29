@@ -3,8 +3,9 @@
 //! Anything a command needs and cannot derive from its arguments lives here,
 //! behind `&self` so commands never take a lock they do not need. Each concern
 //! owns its own synchronization rather than sharing one coarse mutex: the
-//! project store, the session store, per-session grants, the audit log and the
-//! turn registry are five independent locks, and no command holds two.
+//! project store, the session store, per-session grants, the pending
+//! approvals, the audit log and the turn registry are six independent locks,
+//! and no command holds two.
 //!
 //! This is also the composition point for the one fact no single store can
 //! answer on its own. A [`SessionSummary`] needs both the transcript (from the
@@ -16,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::agent::{FakeProvider, Provider, TurnRegistry};
+use crate::approval::{ApprovalRegistry, ApprovalRequest, Decision, Resolution};
 use crate::audit::AuditLog;
 use crate::error::AppResult;
 use crate::policy::GrantStore;
@@ -31,6 +33,7 @@ pub struct AppState {
     sessions: SessionStore,
     turns: TurnRegistry,
     grants: GrantStore,
+    approvals: ApprovalRegistry,
     audit: AuditLog,
     provider: FakeProvider,
     self_exe: Option<PathBuf>,
@@ -51,6 +54,7 @@ impl AppState {
             sessions: SessionStore::load(data_dir),
             turns: TurnRegistry::new(),
             grants: GrantStore::new(),
+            approvals: ApprovalRegistry::new(),
             audit: AuditLog::new(data_dir),
             provider: FakeProvider::new(),
             // Only used to refuse `shell_exec` on Aegis itself. A platform
@@ -102,10 +106,43 @@ impl AppState {
             .summary(session_id, self.turns.state_of(session_id))
     }
 
-    /// One session with its transcript, at its live state.
+    /// One session with its transcript, at its live state, plus whatever it
+    /// is blocked on.
+    ///
+    /// The second composition this module exists for. The transcript comes off
+    /// disk, the state comes from the turn registry, and the pending approvals
+    /// come from the approval registry — which is what lets a window reopened
+    /// mid-turn redraw a dialog it never saw raised, instead of leaving a turn
+    /// waiting on a prompt nobody can answer.
     pub fn session_detail(&self, session_id: &str) -> AppResult<SessionDetail> {
-        self.sessions
-            .open(session_id, self.turns.state_of(session_id))
+        let mut detail = self
+            .sessions
+            .open(session_id, self.turns.state_of(session_id))?;
+        detail.pending_approvals = self.approvals.list(Some(session_id));
+        Ok(detail)
+    }
+
+    /// Everything a session is blocked on, oldest first.
+    pub fn pending_approvals(&self, session_id: Option<&str>) -> Vec<ApprovalRequest> {
+        self.approvals.list(session_id)
+    }
+
+    /// Answers one approval, recording any grant it creates.
+    pub fn resolve_approval(&self, request_id: &str, decision: Decision) -> AppResult<Resolution> {
+        self.approvals.resolve(request_id, decision, &self.grants)
+    }
+
+    /// Forgets a session entirely: its turn, its grants and its approvals.
+    ///
+    /// Ordered deliberately. The turn is cancelled first so it stops making
+    /// new calls; then its approvals go, which releases it if it was parked on
+    /// one; then its grants, which nothing can consult once there is no turn.
+    /// Doing it the other way round leaves a window in which a running turn
+    /// re-creates what was just cleared.
+    pub fn close_session(&self, session_id: &str) {
+        self.turns.forget(session_id);
+        self.approvals.withdraw_session(session_id);
+        self.grants.clear(session_id);
     }
 
     /// The workspace a session's tools may touch.
@@ -145,6 +182,17 @@ impl AppState {
     /// into "allow forever", which the MVP does not offer (PLAN 3.1).
     pub fn grants(&self) -> &GrantStore {
         &self.grants
+    }
+
+    /// The approvals open right now, keyed by request id.
+    ///
+    /// Not persisted, for the same reason grants are not, and one step
+    /// stronger: a pending approval is a turn parked on a channel. Nothing
+    /// survives the process that could be released by answering it after a
+    /// restart, so offering the answer would be offering to approve a call
+    /// that will never run.
+    pub fn approvals(&self) -> &ApprovalRegistry {
+        &self.approvals
     }
 
     /// The audit log every tool call writes to.

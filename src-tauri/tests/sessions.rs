@@ -20,8 +20,8 @@ use tempfile::TempDir;
 use aegis_lib::agent::event::EventSink;
 use aegis_lib::agent::turn::{self, TurnPlan};
 use aegis_lib::{
-    AuditLog, Event, FakeProvider, GrantStore, Message, Role, SessionState, SessionStore,
-    StopReason, Turn, TurnRegistry,
+    ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore, Message, Role, SessionState,
+    SessionStore, StopReason, Turn, TurnRegistry,
 };
 
 /// Collects every event a turn emits.
@@ -71,6 +71,7 @@ struct App {
     sessions: SessionStore,
     turns: TurnRegistry,
     grants: GrantStore,
+    approvals: ApprovalRegistry,
     audit: AuditLog,
 }
 
@@ -90,6 +91,7 @@ impl App {
             _dir: dir,
             turns: TurnRegistry::new(),
             grants: GrantStore::new(),
+            approvals: ApprovalRegistry::new(),
         }
     }
 
@@ -128,7 +130,9 @@ impl App {
 
         let reason = Turn {
             sessions: &self.sessions,
+            turns: &self.turns,
             grants: &self.grants,
+            approvals: &self.approvals,
             audit: &self.audit,
             provider,
             sink,

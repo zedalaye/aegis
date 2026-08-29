@@ -31,6 +31,7 @@ pub mod path;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::error::ErrorCode;
 
@@ -56,8 +57,9 @@ pub mod tool {
 ///
 /// Advisory only: the risk badge changes the wording and the colour, never
 /// whether something is asked about. Nothing downstream branches on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "bindings.ts")]
 pub enum Risk {
     /// Reversible, and bounded by the workspace.
     Low,
@@ -72,8 +74,9 @@ pub enum Risk {
 /// One variant per tool, so the dialog renders a file path with a size or a
 /// command line with its working directory, rather than a JSON blob the user
 /// has to parse (PLAN 2.1, `ApprovalDetail`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
 pub enum ApprovalDetail {
     /// Listing a directory.
     FsList {
@@ -85,13 +88,20 @@ pub enum ApprovalDetail {
         /// The resolved file.
         path: String,
         /// Its size, or `None` when it does not exist yet.
+        ///
+        /// Exported as a `number` rather than a `bigint`: this crosses the IPC
+        /// boundary as JSON, where it is already a double, and a `bigint` in
+        /// the binding would be a type the value never has at runtime.
+        #[ts(type = "number | null")]
         bytes: Option<u64>,
     },
     /// Writing a file.
     FsWrite {
         /// The resolved target.
         path: String,
-        /// How much would be written.
+        /// How much would be written. A `number` on the wire — see
+        /// [`ApprovalDetail::FsRead::bytes`].
+        #[ts(type = "number")]
         bytes: u64,
         /// Whether this overwrites something.
         exists: bool,

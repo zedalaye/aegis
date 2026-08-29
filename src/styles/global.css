@@ -95,6 +95,16 @@ body {
   color: var(--accent-fg);
 }
 
+/*
+ * Deny, and nothing else so far. Outlined rather than filled: the destructive
+ * answer on an approval should be easy to find and hard to hit by reflex, and
+ * a solid red button beside a solid blue one is a colour-matching exercise.
+ */
+.button--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 /* One focus treatment for every interactive element in the app. */
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -604,6 +614,10 @@ body {
   color: var(--accent);
 }
 
+.chat__status--awaiting {
+  color: var(--warning);
+}
+
 .chat__status--error {
   color: var(--danger);
 }
@@ -714,10 +728,55 @@ body {
 
 .toolcall {
   display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.toolcall__head {
+  display: flex;
   align-items: baseline;
   flex-wrap: wrap;
   gap: 0.5rem;
-  font-size: 0.8rem;
+}
+
+/* The call a dialog is currently asking about, so the prompt and the line in
+   the transcript can be seen to be the same thing. */
+.toolcall--awaiting {
+  border-left: 2px solid var(--warning);
+  padding-left: 0.5rem;
+  margin-left: -0.5rem;
+}
+
+.toolcall__toggle {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.7rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.toolcall__toggle:hover {
+  color: var(--fg);
+}
+
+.toolcall__args {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
 }
 
 .toolcall__tool {
@@ -736,15 +795,232 @@ body {
   color: var(--accent);
 }
 
+.toolcall--awaiting .toolcall__status {
+  color: var(--warning);
+}
+
 .toolcall--denied .toolcall__status,
 .toolcall--error .toolcall__status {
   color: var(--danger);
 }
 
 .toolcall__summary {
+  margin: 0;
   color: var(--muted);
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* --- Approvals ------------------------------------------------------------ */
+
+/*
+ * The prompt sits in the flow above the composer rather than over the window.
+ * A turn waiting for an answer is not a blocked application: the user may want
+ * to scroll the transcript or read what the model said before deciding, and a
+ * modal would take that away to prevent a mistake it does not prevent.
+ */
+.approval {
+  margin: 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--warning);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.approval--high {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.approval__header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.approval__title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.approval__queue {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.approval__summary {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.approval__reason,
+.approval__scope {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.approval__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.risk {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  cursor: help;
+}
+
+.risk--medium {
+  color: var(--warning);
+}
+
+.risk--high {
+  color: var(--danger);
+}
+
+/* --- What an approval would actually do ----------------------------------- */
+
+.detail {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+}
+
+.detail__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.detail__label {
+  flex: 0 0 8rem;
+  color: var(--muted);
+}
+
+.detail__value {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 12rem;
+  overflow-wrap: anywhere;
+}
+
+.detail__value--mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.preview {
+  margin: 0;
+}
+
+.preview__caption {
+  color: var(--muted);
+  font-size: 0.7rem;
+  padding-bottom: 0.2rem;
+}
+
+/* Plain text, never markup: this is the model's output. */
+.preview__body {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.args {
+  margin: 0;
+  padding-left: 1.4rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.75rem;
+}
+
+.args__item {
+  overflow-wrap: anywhere;
+}
+
+/* --- Session grants ------------------------------------------------------- */
+
+.grants {
+  margin: 0.5rem 1rem 0;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.grants__title {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.grants__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.grant {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.grant__scope {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.grant__revoke {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--danger);
+  font: inherit;
+  font-size: 0.75rem;
+  text-decoration: underline;
+  cursor: pointer;
+  flex: none;
+}
+
+.grants__note {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
 }
 
 /* --- Composer ------------------------------------------------------------- */

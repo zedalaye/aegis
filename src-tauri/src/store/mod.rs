@@ -36,8 +36,8 @@ use chrono::{SecondsFormat, Utc};
 
 pub use projects::{canonical_workspace, Project, ProjectDetail, Store};
 pub use sessions::{
-    Message, PendingApproval, Role, SessionDetail, SessionState, SessionStore, SessionSummary,
-    ToolCallRecord, ToolCallStatus, TurnHandle,
+    Message, Role, SessionDetail, SessionState, SessionStore, SessionSummary, ToolCallRecord,
+    ToolCallStatus, TurnHandle,
 };
 
 /// Rename attempts before a failed save gives up.

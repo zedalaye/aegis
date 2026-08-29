@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 
+import { useApprovals } from "../../state/approvals";
 import { useSessions } from "../../state/sessions";
 
 /** Tallest the box grows before it scrolls instead, in pixels. */
@@ -26,6 +27,7 @@ export default function Composer() {
   const busy = useSessions((s) => s.busy);
   const send = useSessions((s) => s.send);
   const cancel = useSessions((s) => s.cancel);
+  const waiting = useApprovals((s) => s.pending.length > 0);
 
   const [text, setText] = useState("");
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
@@ -85,7 +87,17 @@ export default function Composer() {
 
       <div className="composer__actions">
         <span className="composer__hint">
-          {running ? "Streaming…" : "Enter to send, Shift+Enter for a new line"}
+          {/*
+            Waiting for an answer is not streaming, and saying so would tell
+            the user to wait for something that is waiting for them. Stop stays
+            available either way: cancelling a turn parked on an approval is a
+            supported way out of it.
+          */}
+          {waiting
+            ? "Waiting for your answer above"
+            : running
+              ? "Streaming…"
+              : "Enter to send, Shift+Enter for a new line"}
         </span>
         {running ? (
           <button

@@ -191,6 +191,31 @@ pub enum AppError {
         turn_id: String,
     },
 
+    /// The approval being answered is unknown, already resolved, or expired.
+    ///
+    /// The one failure `approval_resolve` has, and it is deliberately not
+    /// silent (PLAN 2.1): a dialog answering a request the runtime has already
+    /// timed out must be told so it can re-sync through
+    /// `approval_list_pending`, rather than closing on the belief that it
+    /// allowed something.
+    #[error("that approval request is no longer open")]
+    ApprovalStale {
+        /// The id that was answered. Logged, not shown.
+        request_id: String,
+    },
+
+    /// `allow_session` was answered on a row that offers no session grant.
+    ///
+    /// Checked in Rust rather than trusted to the UI (PLAN 3.1). The request
+    /// carries `session_grant_allowed: false` so the button is not drawn, but
+    /// a WebView is not a place to enforce a policy rule, and this is the
+    /// enforcement.
+    #[error("`{tool}` cannot be allowed for a whole session")]
+    GrantNotAllowed {
+        /// The tool that was asked about.
+        tool: String,
+    },
+
     /// A runtime invariant broke somewhere outside the agent and tool
     /// domains — a channel that closed, a resource that vanished mid-call.
     ///
@@ -238,6 +263,8 @@ impl AppError {
         match self {
             Self::WorkspacePath { .. } => ErrorCode::PathInvalid,
             Self::TurnBusy { .. } => ErrorCode::TurnBusy,
+            Self::ApprovalStale { .. } => ErrorCode::ApprovalStale,
+            Self::GrantNotAllowed { .. } => ErrorCode::GrantNotAllowed,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
             | Self::ProjectNotFound { .. }

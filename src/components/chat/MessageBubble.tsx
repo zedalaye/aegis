@@ -8,8 +8,11 @@
  * renderer is a Phase 10 question, and it will need a sanitizer with it.
  */
 
-import type { Message, ToolCallRecord } from "../../ipc/bindings";
+import type { Message } from "../../ipc/bindings";
 import { formatTimestamp } from "../../lib/format";
+import { useApprovals } from "../../state/approvals";
+
+import ToolCallCard from "./ToolCallCard";
 
 /** How a role is named to the reader. */
 const SPEAKER: Record<Message["role"], string> = {
@@ -18,26 +21,6 @@ const SPEAKER: Record<Message["role"], string> = {
   tool: "Tool",
   system: "System",
 };
-
-/**
- * One tool call, in the compact form the transcript shows.
- *
- * The full card — arguments, diff preview, the approval controls — arrives
- * with the approval gate in Phase 6. What matters here is that a call is
- * visible at all: a reply that quietly touched the filesystem and left no
- * trace in the transcript would be the worst possible default.
- */
-function ToolCallLine({ call }: { readonly call: ToolCallRecord }) {
-  return (
-    <li className={`toolcall toolcall--${call.status}`}>
-      <span className="toolcall__tool">{call.tool}</span>
-      <span className="toolcall__status">{call.status}</span>
-      {call.summary === null ? null : (
-        <span className="toolcall__summary">{call.summary}</span>
-      )}
-    </li>
-  );
-}
 
 export default function MessageBubble({
   message,
@@ -48,6 +31,15 @@ export default function MessageBubble({
   readonly pending?: boolean;
 }) {
   const hasCalls = message.tool_calls.length > 0;
+
+  // Which of this message's calls, if any, the open approval is about. The
+  // card and the dialog then name the same call, so a user reading the prompt
+  // can see which line of the transcript it belongs to.
+  //
+  // The array itself is selected rather than a derived list: a selector that
+  // built a new array on every read would never compare equal, and the bubble
+  // would re-render on every store change in the application.
+  const waiting = useApprovals((s) => s.pending);
 
   return (
     <article className={`bubble bubble--${message.role}`}>
@@ -68,7 +60,13 @@ export default function MessageBubble({
       {hasCalls ? (
         <ul className="bubble__tools" aria-label="Tool calls">
           {message.tool_calls.map((call) => (
-            <ToolCallLine key={call.call_id} call={call} />
+            <ToolCallCard
+              key={call.call_id}
+              call={call}
+              awaiting={waiting.some(
+                (request) => request.call_id === call.call_id,
+              )}
+            />
           ))}
         </ul>
       ) : null}
