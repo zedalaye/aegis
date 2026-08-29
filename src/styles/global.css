@@ -604,10 +604,50 @@ body {
   white-space: nowrap;
 }
 
+/* The right-hand side of the header: what is answering, and what it is doing. */
+.chat__meta {
+  display: flex;
+  align-items: baseline;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
 .chat__status {
   flex-shrink: 0;
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+/*
+ * Which model answers this session. Monospace because it is an identifier the
+ * user typed and may need to compare character by character against what their
+ * provider calls it.
+ */
+.model {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+/*
+ * No model behind the reply. Marked in the warning colour rather than left to
+ * read as an ordinary provider name: a scripted answer that looked like a real
+ * one would be the single most misleading thing this window could show.
+ */
+.model--fake {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 
 .chat__status--running {

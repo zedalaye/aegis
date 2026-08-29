@@ -2,10 +2,11 @@
  * The work area when a project is open: a session header, the transcript, and
  * the composer.
  *
- * The header shows what the turn is doing rather than only what the session is
- * called, because that is the question a user has while a reply streams. When
- * no session is open it explains the two states worth telling apart — no
- * sessions yet, or one not chosen — since the fix differs.
+ * The header shows what the turn is doing, and what is answering it, rather
+ * than only what the session is called — those are the two questions a user
+ * has while a reply streams. When no session is open it explains the two
+ * states worth telling apart — no sessions yet, or one not chosen — since the
+ * fix differs.
  */
 
 import { useProjects } from "../../state/projects";
@@ -17,6 +18,7 @@ import ApprovalDialog from "../approvals/ApprovalDialog";
 import GrantList from "../approvals/GrantList";
 import Composer from "./Composer";
 import MessageList from "./MessageList";
+import ModelBadge from "./ModelBadge";
 
 /** What the session header says on its right-hand side. */
 function StatusLine() {
@@ -105,7 +107,10 @@ export default function ChatPane() {
     <section className="chat">
       <header className="chat__header">
         <h1 className="chat__title">{detail.session.title}</h1>
-        <StatusLine />
+        <div className="chat__meta">
+          <ModelBadge />
+          <StatusLine />
+        </div>
       </header>
 
       {project.workspace_exists ? null : (

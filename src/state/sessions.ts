@@ -54,6 +54,14 @@ import type { IpcError } from "../lib/errors";
 export type Streaming = {
   /** The turn, for cancelling it. */
   readonly turnId: string;
+  /**
+   * The model the runtime started this turn with.
+   *
+   * Reported rather than assumed: the provider is chosen per turn from
+   * settings, so this is the only thing that knows what is actually writing
+   * the text arriving on screen. `aegis-fake-1` when that is the truth.
+   */
+  readonly model: string;
   /** Text accumulated from `turn:delta` since the last finalized message. */
   readonly text: string;
   /** Highest `seq` applied. Frames at or below it are duplicates. */
@@ -390,9 +398,9 @@ export function attachSessionEvents(): Promise<() => void> {
     getState().detail?.session.id === sessionId;
 
   return subscribe({
-    "turn:started": ({ session_id, turn_id }) => {
+    "turn:started": ({ session_id, turn_id, model }) => {
       if (isOpen(session_id)) {
-        setState({ streaming: { turnId: turn_id, text: "", seq: -1 } });
+        setState({ streaming: { turnId: turn_id, model, text: "", seq: -1 } });
       }
     },
 

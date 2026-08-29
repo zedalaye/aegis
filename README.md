@@ -26,6 +26,11 @@ ever sent to it.
 > which of "wrong address", "wrong key" and "server down" you are looking at. Until you configure
 > one, replies come from the scripted provider of Phase 5 — see *Point it at a model*.
 >
+> The session header names what is answering: the model the runtime started the running turn
+> with, or the one settings say will answer the next message. With no provider configured it
+> reads `scripted provider`, marked, so a reply with no model behind it can never be mistaken
+> for one that has.
+>
 > A tool call that needs your permission asks for it. `fs_list`, `fs_read`, `fs_write` and
 > `shell_exec` run through the decision matrix; anything it will not allow on its own opens a
 > prompt showing the exact path and content that would be written, or the exact program,
