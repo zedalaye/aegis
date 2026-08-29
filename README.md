@@ -452,7 +452,9 @@ Read this before pointing Aegis at anything you care about.
   size and a position that is not `(0, 0)`. If `visible=Some(true)` and you still see
   nothing, Alt+Tab or click the taskbar icon. Confirm WSLg itself with `xeyes` from
   `x11-apps`. The Secret Service D-Bus warning is expected; use `AEGIS_API_KEY`. This is
-  still not the Phase 10 walkthrough.
+  still not the Phase 10 walkthrough. *Hide to tray* is omitted: there is no
+  AppIndicator host on the Windows taskbar, and hide would leave a process with
+  no window and no way back. Close the window or *Quit*.
 - **No keyring.** Without a running Secret Service (gnome-keyring, kwallet), use the
   `AEGIS_API_KEY` environment variable. This is normal on headless and minimal window managers.
 

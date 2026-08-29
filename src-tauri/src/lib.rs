@@ -125,6 +125,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::window::window_toggle,
             commands::window::window_hide,
+            commands::window::window_has_tray,
             commands::window::app_quit,
             commands::project::project_pick_workspace,
             commands::project::project_create,

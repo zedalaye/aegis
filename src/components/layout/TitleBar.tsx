@@ -3,7 +3,7 @@
  *
  * Not OS window chrome — the window keeps its native decorations. This is the
  * in-app bar that names the app, shows which workspace is in scope, and offers
- * the two lifecycle actions.
+ * Hide (when a tray exists) and Quit.
  *
  * Hide and quit are runtime commands rather than WebView calls: the window has
  * no `core:window` permission, so this bar reaches the window through exactly
@@ -16,7 +16,9 @@
  * session including deleted ones, so it does not belong under any of them.
  */
 
-import { appQuit, windowHide } from "../../ipc/commands";
+import { useEffect, useState } from "react";
+
+import { appQuit, windowHasTray, windowHide } from "../../ipc/commands";
 import { useAudit } from "../../state/audit";
 import { useProjects } from "../../state/projects";
 import { useSettings } from "../../state/settings";
@@ -29,6 +31,15 @@ export default function TitleBar() {
   const closeSettings = useSettings((s) => s.closePanel);
   const auditOpen = useAudit((s) => s.open);
   const toggleAudit = useAudit((s) => s.toggleDrawer);
+  const [hasTray, setHasTray] = useState(true);
+
+  useEffect(() => {
+    void windowHasTray()
+      .then(setHasTray)
+      .catch(() => {
+        setHasTray(false);
+      });
+  }, []);
 
   return (
     <header className="titlebar">
@@ -71,15 +82,17 @@ export default function TitleBar() {
         >
           Settings
         </button>
-        <button
-          type="button"
-          className="button"
-          // A rejection here means the window is already gone, which is what
-          // was being asked for; there is nothing useful to report.
-          onClick={() => void windowHide().catch(() => {})}
-        >
-          Hide to tray
-        </button>
+        {hasTray ? (
+          <button
+            type="button"
+            className="button"
+            // A rejection here means the window is already gone, which is what
+            // was being asked for; there is nothing useful to report.
+            onClick={() => void windowHide().catch(() => {})}
+          >
+            Hide to tray
+          </button>
+        ) : null}
         <button
           type="button"
           className="button"

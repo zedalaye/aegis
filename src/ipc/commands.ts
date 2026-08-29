@@ -59,6 +59,14 @@ export function windowHide(): Promise<void> {
 }
 
 /**
+ * Whether the runtime installed a tray icon. False under WSL, or when
+ * AppIndicator is missing: *Hide to tray* would then leave no way back.
+ */
+export function windowHasTray(): Promise<boolean> {
+  return call<boolean>("window_has_tray");
+}
+
+/**
  * Quits Aegis.
  *
  * Resolves only if the runtime rejects the request; a successful quit tears

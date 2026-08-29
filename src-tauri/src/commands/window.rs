@@ -43,11 +43,24 @@ pub fn show_main<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
 }
 
 /// Hides the main window. The process keeps running; the tray brings it back.
+///
+/// Refuses when there is no tray (WSL, missing AppIndicator): hide would
+/// leave a process with no surface and no way back (PLAN 5.3).
 pub fn hide_main<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
+    if !has_tray(app) {
+        return Err(AppError::Internal {
+            what: "there is no tray to hide to",
+        });
+    }
     main_window(app)?.hide()?;
 
     tracing::debug!(window = MAIN_WINDOW, "hidden");
     Ok(())
+}
+
+fn has_tray<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<AppState>()
+        .is_some_and(|state| state.has_tray())
 }
 
 /// Toggles the main window, returning `true` if it is now visible.
@@ -80,6 +93,13 @@ pub fn window_toggle(app: AppHandle) -> AppResult<()> {
 #[tauri::command]
 pub fn window_hide(app: AppHandle) -> AppResult<()> {
     hide_main(&app)
+}
+
+/// Whether the tray icon is actually installed. The title bar uses this to
+/// omit *Hide to tray* when hide would strand the process (WSL).
+#[tauri::command]
+pub fn window_has_tray(app: AppHandle) -> bool {
+    has_tray(&app)
 }
 
 /// Quits Aegis for real. The one shutdown path, shared by the tray menu and
