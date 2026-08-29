@@ -13,11 +13,14 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 3 (path policy).** The app boots, lives in the system tray, hides instead of
-> quitting when the window is closed, and remembers the workspace folders you point it at. The
-> approval gate below is implemented and tested in Rust — path containment, the decision matrix
-> and per-session grants — but nothing calls it yet: the tools it gates land in Phase 4. Sessions,
-> the approval UI and provider integration follow — see `PLAN.md` § 6.
+> **Status: Phase 4 (tool registry and the filesystem tools).** The app boots, lives in the
+> system tray, hides instead of quitting when the window is closed, and remembers the workspace
+> folders you point it at. Behind the UI, `fs_list`, `fs_read` and `fs_write` now run through the
+> approval gate — path containment, the decision matrix, per-session grants — and every call
+> leaves a line in the audit log described below. What is still missing is the part you can see:
+> there is no chat yet, so nothing calls a tool but the Rust tests. Sessions and the streaming
+> loop (Phase 5), the approval dialog (Phase 6), the shell tool (Phase 7) and provider
+> integration (Phase 8) follow — see `PLAN.md` § 6.
 
 ---
 
@@ -83,6 +86,14 @@ renamed to `projects.corrupt-<timestamp>.json` and the app starts with an empty 
 refusing to open. Deleting a project forgets it here; the workspace folder itself is never
 touched.
 
+Beside it, `audit.jsonl` records one JSON line per tool call — every call, whether it ran, was
+refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
+running to read it. Each line names the session, the tool, why policy decided what it did, and
+what came of it. It records the *paths* a call touched but never the contents of a file: a log
+that quoted every `fs_write` would become the one place on your machine where everything the
+agent ever wrote is collected in plain text. Aegis never rotates or trims this file; deleting it
+is yours to do, and a new one starts on the next tool call.
+
 ---
 
 ## Layout
@@ -131,7 +142,8 @@ Read this before pointing Aegis at anything you care about.
   variable) and is read only by the Rust runtime. The UI receives a masked hint — last four
   characters — and nothing else. Never put a key in `localStorage`.
 - **Every tool call is audited**, allowed or denied, one JSON line each, with the policy reason
-  and the outcome.
+  and the outcome — see *Where your data lives*. Arguments are recorded as a SHA-256 digest plus
+  a redacted copy that keeps paths and replaces file content with its size.
 
 ## Troubleshooting
 

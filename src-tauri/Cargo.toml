@@ -40,6 +40,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 uuid = { version = "1", features = ["v4"] }
 dunce = "1"
 tokio = { version = "1", default-features = false, features = ["sync"] }
+# The audit log digests a tool call's arguments so two calls can be compared
+# without either line quoting what they carried. Phase 9 hashes captured PNGs
+# with the same crate.
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

@@ -171,6 +171,22 @@ pub enum AppError {
         what: &'static str,
     },
 
+    /// Reading the audit log failed.
+    ///
+    /// Distinct from [`AppError::Store`] because the two are different
+    /// reassurances to give: a project list that will not load is an
+    /// inconvenience, while an audit log that will not read means the record
+    /// of what the agent did is not available, and the user should be told
+    /// which one they are looking at.
+    #[error("could not {action} the audit log")]
+    Audit {
+        /// What was being attempted, for the message.
+        action: &'static str,
+        /// The underlying failure. Never rendered into the message.
+        #[source]
+        source: std::io::Error,
+    },
+
     /// Reading or writing the on-disk store failed.
     ///
     /// The message stays deliberately vague: the underlying `io::Error` and
@@ -195,6 +211,7 @@ impl AppError {
             | Self::Runtime(_)
             | Self::ProjectNotFound { .. }
             | Self::Internal { .. }
+            | Self::Audit { .. }
             | Self::Store { .. } => ErrorCode::Internal,
         }
     }

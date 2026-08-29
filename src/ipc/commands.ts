@@ -8,7 +8,8 @@
  * them rather than restating them.
  *
  * Commands land with their phases: the window and application lifecycle
- * (PLAN 2.1, "Window / tray") and projects (PLAN 2.1, "Projects").
+ * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects") and the audit
+ * log (PLAN 2.1, "Settings and audit").
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -19,7 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 
 import { toIpcError } from "../lib/errors";
-import type { Project, ProjectDetail } from "./bindings";
+import type { AuditEntry, Project, ProjectDetail } from "./bindings";
 
 async function call<T>(command: string, args?: InvokeArgs): Promise<T> {
   try {
@@ -99,4 +100,36 @@ export function projectOpen(projectId: string): Promise<ProjectDetail> {
 /** Forgets a project. The workspace folder on disk is never touched. */
 export function projectDelete(projectId: string): Promise<void> {
   return call<void>("project_delete", { project_id: projectId });
+}
+/**
+ * The most recent audit entries, newest first.
+ *
+ * One entry per tool call — allowed, refused or failed. `sessionId` narrows it
+ * to one session's calls; `limit` defaults to 100 in Rust and is clamped to
+ * 1000 there, so asking for more is not an error, it simply returns 1000.
+ *
+ * There is no counterpart that writes or clears the log. Entries are produced
+ * by the runtime as a side effect of running a tool, and a UI that could
+ * append to the log — or empty it — would be a UI that could forge or erase
+ * the record of what the agent did.
+ */
+export function auditTail(
+  limit?: number,
+  sessionId?: string,
+): Promise<AuditEntry[]> {
+  return call<AuditEntry[]>("audit_tail", {
+    limit: limit ?? null,
+    session_id: sessionId ?? null,
+  });
+}
+
+/**
+ * Where the audit log lives on disk.
+ *
+ * Returned even before anything has been written: the first tool call creates
+ * the file, and telling the user where it will be is more useful than an
+ * error. The file is plain JSONL and is meant to be readable without Aegis.
+ */
+export function auditLogPath(): Promise<string> {
+  return call<string>("audit_log_path");
 }

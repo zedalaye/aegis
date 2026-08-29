@@ -4,20 +4,25 @@
 //! policy all live here (AGENTS.md). Phase 1 wired logging, managed state, the
 //! IPC command surface, the tray and the window lifecycle; Phase 2 adds the
 //! project store; Phase 3 adds the approval gate every tool call will pass
-//! through. Later phases add commands and modules without changing this entry
-//! shape.
+//! through, and Phase 4 the tool registry, the filesystem tools and the audit
+//! log behind them. Later phases add commands and modules without changing
+//! this entry shape.
 
+pub mod audit;
 mod commands;
 mod error;
 pub mod policy;
 mod state;
 mod store;
+pub mod tools;
 mod tray;
 
+pub use audit::{AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 pub use error::{AppError, AppResult, ErrorCode};
 pub use policy::{Decision, Grant, GrantStore, PolicyCtx, ResolvedCall, ToolCall};
 pub use state::AppState;
 pub use store::{Project, ProjectDetail, SessionState, SessionSummary};
+pub use tools::{ToolCtx, ToolOutcome, ToolResult, ToolSpec};
 
 use tauri::{Manager, RunEvent, WindowEvent};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -96,6 +101,8 @@ pub fn run() {
             commands::project::project_list,
             commands::project::project_open,
             commands::project::project_delete,
+            commands::audit::audit_tail,
+            commands::audit::audit_log_path,
         ])
         .setup(|app| {
             // State is built here rather than on the builder because loading

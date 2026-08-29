@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::audit::AuditLog;
 use crate::policy::GrantStore;
 use crate::store::Store;
 
@@ -21,6 +22,7 @@ pub struct AppState {
     quitting: AtomicBool,
     store: Store,
     grants: GrantStore,
+    audit: AuditLog,
 }
 
 impl AppState {
@@ -36,6 +38,7 @@ impl AppState {
             quitting: AtomicBool::new(false),
             store: Store::load(data_dir),
             grants: GrantStore::new(),
+            audit: AuditLog::new(data_dir),
         }
     }
 
@@ -52,6 +55,17 @@ impl AppState {
     /// into "allow forever", which the MVP does not offer (PLAN 3.1).
     pub fn grants(&self) -> &GrantStore {
         &self.grants
+    }
+
+    /// The audit log every tool call writes to.
+    ///
+    /// One log for the whole process rather than one per session: the file is
+    /// append-only and every line carries its `session_id`, so filtering is a
+    /// read-time concern, and a single file is what a user can open, tail or
+    /// ship to someone without first working out which of twenty files holds
+    /// the call they are looking for.
+    pub fn audit(&self) -> &AuditLog {
+        &self.audit
     }
 
     /// How long this process has been up. Used by logging and, later, by the

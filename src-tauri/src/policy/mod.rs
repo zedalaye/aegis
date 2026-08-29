@@ -249,6 +249,22 @@ pub enum ResolvedCall {
     },
 }
 
+impl ResolvedCall {
+    /// The tool this call belongs to.
+    ///
+    /// Read by dispatch and by the audit line, so a call cannot be executed
+    /// under one name and logged under another.
+    pub const fn tool(&self) -> &'static str {
+        match self {
+            Self::FsList { .. } => tool::FS_LIST,
+            Self::FsRead { .. } => tool::FS_READ,
+            Self::FsWrite { .. } => tool::FS_WRITE,
+            Self::ShellExec { .. } => tool::SHELL_EXEC,
+            Self::ScreenCapture { .. } => tool::SCREEN_CAPTURE,
+        }
+    }
+}
+
 /// A tool call as the model sent it, parsed but not yet resolved.
 ///
 /// Public because it is the shape a caller can build directly in a test; in
