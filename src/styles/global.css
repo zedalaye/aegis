@@ -120,7 +120,12 @@ body {
 .shell__main {
   flex: 1;
   min-width: 0;
-  overflow: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* The chat pane scrolls its transcript and pins its composer, so the frame
+     must not scroll on its behalf; panes that do scroll say so themselves. */
+  overflow: hidden;
 }
 
 /* --- Title bar ------------------------------------------------------------ */
@@ -193,8 +198,9 @@ body {
 }
 
 .sidebar__list {
-  flex: 1;
-  min-height: 0;
+  /* Capped rather than flexible: the project list is the thing a user changes
+     rarely, so it yields its space to the sessions below it. */
+  max-height: 32vh;
   overflow: auto;
   margin: 0;
   padding: 0;
@@ -343,6 +349,7 @@ body {
 .work {
   max-width: 46rem;
   padding: 1.5rem;
+  overflow: auto;
 }
 
 .work--empty {
@@ -355,17 +362,6 @@ body {
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--fg);
-}
-
-.work__subtitle {
-  margin: 2rem 0 0.5rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
 }
 
 .work__body {
@@ -442,4 +438,350 @@ body {
   font: inherit;
   line-height: 1;
   cursor: pointer;
+}
+
+/* --- Sessions ------------------------------------------------------------- */
+
+.sessions {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.sessions__list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session {
+  display: flex;
+  align-items: stretch;
+  gap: 0.2rem;
+}
+
+.session__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session__open:hover {
+  background: var(--bg);
+}
+
+.session--open .session__open {
+  background: var(--selected);
+  border-color: var(--border);
+}
+
+.session__title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.session__badge {
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+}
+
+.session__badge--running,
+.session__badge--awaiting_approval {
+  color: var(--accent);
+}
+
+.session__badge--error {
+  color: var(--danger);
+}
+
+.session__action {
+  flex-shrink: 0;
+  width: 1.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session__action:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.session__action:last-child:hover {
+  color: var(--danger);
+}
+
+.session--editing {
+  padding: 0.1rem 0;
+}
+
+.session__input {
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+/* --- Chat pane ------------------------------------------------------------ */
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat--empty {
+  padding: 1.5rem;
+  max-width: 46rem;
+  gap: 1rem;
+  align-items: flex-start;
+  overflow: auto;
+}
+
+.chat__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat__status {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.chat__status--running {
+  color: var(--accent);
+}
+
+.chat__status--error {
+  color: var(--danger);
+}
+
+.chat .work__warning {
+  margin: 0.75rem 1rem 0;
+}
+
+/* --- Transcript ----------------------------------------------------------- */
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.messages__empty {
+  margin: auto;
+  max-width: 30rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.messages__thinking {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.bubble {
+  max-width: 46rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.bubble--user {
+  align-self: flex-end;
+  background: var(--selected);
+}
+
+.bubble--assistant {
+  align-self: flex-start;
+}
+
+.bubble__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.bubble__speaker {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bubble__text {
+  margin: 0;
+  /* Model output is untrusted text, never markup. `pre-wrap` is what keeps its
+     paragraphs and indentation readable without rendering any of it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The caret marks text that is still arriving. */
+.bubble__caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 0.1em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret 1s steps(2, start) infinite;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble__caret {
+    animation: none;
+  }
+}
+
+/* --- Tool calls in the transcript ----------------------------------------- */
+
+.bubble__tools {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.toolcall {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.toolcall__tool {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.toolcall__status {
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.toolcall--ok .toolcall__status {
+  color: var(--accent);
+}
+
+.toolcall--denied .toolcall__status,
+.toolcall--error .toolcall__status {
+  color: var(--danger);
+}
+
+.toolcall__summary {
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --- Composer ------------------------------------------------------------- */
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.composer__box {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  resize: none;
+  overflow-y: auto;
+}
+
+.composer__box:disabled {
+  opacity: 0.6;
+}
+
+.composer__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.composer__hint {
+  color: var(--muted);
+  font-size: 0.75rem;
 }

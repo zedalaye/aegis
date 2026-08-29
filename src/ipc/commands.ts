@@ -3,13 +3,14 @@
  *
  * Components never call `invoke` directly: the command name and the argument
  * shape are spelled out exactly once, here, and every rejection is normalized
- * to an {@link IpcError}. Payload *types* move the other way — from Phase 5
- * they are generated into `./bindings.ts` by `ts-rs`, so this file imports
- * them rather than restating them.
+ * to an {@link IpcError}. Payload *types* move the other way — they are
+ * generated into `./bindings.ts` from the Rust structs by `ts-rs`, so this
+ * file imports them rather than restating them.
  *
  * Commands land with their phases: the window and application lifecycle
- * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects") and the audit
- * log (PLAN 2.1, "Settings and audit").
+ * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects"), sessions and
+ * turns (PLAN 2.1, "Sessions and turns") and the audit log (PLAN 2.1,
+ * "Settings and audit").
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -20,7 +21,14 @@ import { invoke } from "@tauri-apps/api/core";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 
 import { toIpcError } from "../lib/errors";
-import type { AuditEntry, Project, ProjectDetail } from "./bindings";
+import type {
+  AuditEntry,
+  Project,
+  ProjectDetail,
+  SessionDetail,
+  SessionSummary,
+  TurnHandle,
+} from "./bindings";
 
 async function call<T>(command: string, args?: InvokeArgs): Promise<T> {
   try {
@@ -101,6 +109,84 @@ export function projectOpen(projectId: string): Promise<ProjectDetail> {
 export function projectDelete(projectId: string): Promise<void> {
   return call<void>("project_delete", { project_id: projectId });
 }
+/**
+ * Creates a session in a project.
+ *
+ * An omitted title becomes "New session", which the first message the user
+ * sends then replaces with its own opening words.
+ */
+export function sessionCreate(
+  projectId: string,
+  title?: string,
+): Promise<SessionSummary> {
+  return call<SessionSummary>("session_create", {
+    project_id: projectId,
+    title: title ?? null,
+  });
+}
+
+/** A project's sessions, most recently active first. */
+export function sessionList(projectId: string): Promise<SessionSummary[]> {
+  return call<SessionSummary[]>("session_list", { project_id: projectId });
+}
+
+/**
+ * Opens a session and returns its transcript.
+ *
+ * `session.state` is live rather than stored: a session is `running` only if a
+ * turn is in flight in this process right now, so a restart never reports one
+ * that nothing is left to finish.
+ */
+export function sessionOpen(sessionId: string): Promise<SessionDetail> {
+  return call<SessionDetail>("session_open", { session_id: sessionId });
+}
+
+/** Renames a session. An empty title is rejected by the runtime. */
+export function sessionRename(sessionId: string, title: string): Promise<void> {
+  return call<void>("session_rename", { session_id: sessionId, title });
+}
+
+/** Deletes a session and its transcript. A running turn is cancelled first. */
+export function sessionDelete(sessionId: string): Promise<void> {
+  return call<void>("session_delete", { session_id: sessionId });
+}
+
+/**
+ * Sends a message and starts a turn.
+ *
+ * Resolves as soon as the turn is registered — not when the reply is done.
+ * Everything after that arrives as `turn:*` and `tool:*` events; the returned
+ * handle is what {@link sessionCancel} needs.
+ *
+ * Rejects with `E_TURN_BUSY` when the session is already running one. That is
+ * worth branching on: the right response is to keep the text in the composer
+ * and try again when the running turn finishes, not to report a failure.
+ */
+export function sessionSend(
+  sessionId: string,
+  text: string,
+): Promise<TurnHandle> {
+  return call<TurnHandle>("session_send", { session_id: sessionId, text });
+}
+
+/**
+ * Cancels a running turn.
+ *
+ * Whatever the model had already streamed is kept in the transcript: the user
+ * saw it, and a transcript that disagrees with what was on screen is worse
+ * than a short one. Rejects when the handle is from a turn that has already
+ * finished, which is the UI's cue to refetch.
+ */
+export function sessionCancel(
+  sessionId: string,
+  turnId: string,
+): Promise<void> {
+  return call<void>("session_cancel", {
+    session_id: sessionId,
+    turn_id: turnId,
+  });
+}
+
 /**
  * The most recent audit entries, newest first.
  *

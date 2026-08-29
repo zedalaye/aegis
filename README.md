@@ -13,14 +13,19 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 4 (tool registry and the filesystem tools).** The app boots, lives in the
-> system tray, hides instead of quitting when the window is closed, and remembers the workspace
-> folders you point it at. Behind the UI, `fs_list`, `fs_read` and `fs_write` now run through the
-> approval gate — path containment, the decision matrix, per-session grants — and every call
-> leaves a line in the audit log described below. What is still missing is the part you can see:
-> there is no chat yet, so nothing calls a tool but the Rust tests. Sessions and the streaming
-> loop (Phase 5), the approval dialog (Phase 6), the shell tool (Phase 7) and provider
-> integration (Phase 8) follow — see `PLAN.md` § 6.
+> **Status: Phase 5 (sessions and the streaming loop).** The app boots, lives in the system tray,
+> remembers the workspace folders you point it at, and now holds conversations in them: create a
+> session, send a message, watch the reply stream in a token at a time, and stop it mid-sentence.
+> Transcripts are on disk and survive a restart. Behind them, `fs_list`, `fs_read` and `fs_write`
+> run through the approval gate — path containment, the decision matrix, per-session grants — and
+> every call leaves a line in the audit log described below.
+>
+> **There is no model yet.** Replies come from a scripted provider that tells you what the
+> runtime actually sent it — the workspace it was given, the tools it was offered, what you said.
+> It is deliberately useless as an assistant and deliberately honest as a diagnostic. The
+> approval dialog (Phase 6), the shell tool (Phase 7) and a real OpenAI-compatible provider
+> (Phase 8) follow — see `PLAN.md` § 6. Until Phase 6 exists, a tool call that *would* need your
+> approval is refused rather than granted, because there is nothing yet that could ask you.
 
 ---
 
@@ -62,17 +67,32 @@ see *Troubleshooting*.
 ## Tests
 
 ```sh
-cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol
+cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol, turns
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 pnpm typecheck                 # TypeScript, strict
 ```
+
+### Generated bindings
+
+`src/ipc/bindings.ts` is generated from the Rust payload structs by
+[`ts-rs`](https://github.com/Aleph-Alpha/ts-rs) — **do not edit it by hand.** The export runs as
+part of `cargo test`, so regenerating is:
+
+```sh
+cd src-tauri && cargo test
+```
+
+The destination is set once in `src-tauri/.cargo/config.toml`; each payload type carries
+`#[ts(export, export_to = "bindings.ts")]`. Changing a payload in Rust and forgetting to
+regenerate shows up as a TypeScript error rather than as `undefined` in the UI, so run the Rust
+tests before `pnpm typecheck` when you have touched an IPC type.
 
 ---
 
 ## Where your data lives
 
-Projects are stored as one small JSON document, `projects.json`, under the application-data
-directory:
+Projects and sessions are stored as two small JSON documents, `projects.json` and
+`sessions.json`, under the application-data directory:
 
 | | Path |
 | --- | --- |
@@ -80,11 +100,15 @@ directory:
 | macOS | `~/Library/Application Support/dev.aegis.harness/` |
 | Linux | `~/.local/share/dev.aegis.harness/` |
 
-It holds names and workspace paths — no file contents, and never a key. It is meant to be
-readable and is safe to edit by hand while Aegis is closed; a document Aegis cannot parse is
-renamed to `projects.corrupt-<timestamp>.json` and the app starts with an empty list rather than
-refusing to open. Deleting a project forgets it here; the workspace folder itself is never
-touched.
+`projects.json` holds names and workspace paths. `sessions.json` holds your conversations — the
+messages you sent, the replies, and the tool calls each turn made. Neither holds a key, and
+neither records whether anything is *running*: a session interrupted by a crash or a power cut
+comes back idle, because there is no turn left to finish it.
+
+Both are meant to be readable and are safe to edit by hand while Aegis is closed. A document
+Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` and the app starts with an
+empty list rather than refusing to open. Deleting a project forgets it and its sessions; the
+workspace folder itself is never touched.
 
 Beside it, `audit.jsonl` records one JSON line per tool call — every call, whether it ran, was
 refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
@@ -100,17 +124,18 @@ is yours to do, and a new one starts on the next tool call.
 
 ```
 src/           React app — presentation and typed IPC glue only
-  ipc/         invoke() / listen() wrappers; bindings.ts mirrors the Rust payload structs
+  ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
   components/  layout, chat, sessions, approvals, projects, settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
-    agent/     turn loop, wire protocol, providers
+    agent/     turn loop, wire protocol, providers, event payloads, turn registry
+    store/     projects.json and sessions.json, behind one atomic write
     tools/     fs, shell, screenshot — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
     audit.rs   one jsonl line per tool call
-    secrets.rs OS keyring, environment fallback, masking
+    secrets.rs OS keyring, environment fallback, masking (Phase 8)
   capabilities/  least-privilege Tauri permission sets
 ```
 

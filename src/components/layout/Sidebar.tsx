@@ -1,13 +1,17 @@
 /**
- * The project rail: every project, most recent first, plus the way to add one.
+ * The rail: every project, most recent first, and the open project's sessions
+ * beneath them.
  *
- * Sessions will live under the open project here from Phase 5; the pane is
- * laid out for two lists so that addition does not move anything.
+ * Two lists in one scrolling column, with the "add a workspace" control pinned
+ * at the bottom. The project list is the thing a user changes rarely and the
+ * session list the thing they change constantly, which is why the sessions sit
+ * closer to the conversation they belong to.
  */
 
 import { useProjects } from "../../state/projects";
 import ProjectPicker from "../projects/ProjectPicker";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
+import SessionList from "../sessions/SessionList";
 
 export default function Sidebar() {
   const projects = useProjects((s) => s.projects);
@@ -20,7 +24,7 @@ export default function Sidebar() {
   const openId = detail?.project.id ?? null;
 
   return (
-    <nav className="sidebar" aria-label="Projects">
+    <nav className="sidebar" aria-label="Projects and sessions">
       <h2 className="sidebar__heading">Projects</h2>
 
       {status === "loading" && projects.length === 0 ? (
@@ -69,6 +73,8 @@ export default function Sidebar() {
           );
         })}
       </ul>
+
+      <SessionList />
 
       <div className="sidebar__footer">
         <ProjectPicker />

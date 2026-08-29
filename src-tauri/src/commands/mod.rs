@@ -4,8 +4,8 @@
 //! glue around them. Real behaviour belongs to the runtime modules they call,
 //! so a command stays readable as a permission-and-shape check.
 //!
-//! Domains land with their phases: `window`, `project` and `audit` now, then
-//! `session`, `approval` and `settings`.
+//! Domains land with their phases: `window`, `project`, `audit` and `session`
+//! now, then `approval` and `settings`.
 //!
 //! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
 //! accept `camelCase` from JavaScript and rename it, so every command taking
@@ -14,4 +14,5 @@
 
 pub mod audit;
 pub mod project;
+pub mod session;
 pub mod window;

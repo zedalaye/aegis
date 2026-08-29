@@ -161,6 +161,36 @@ pub enum AppError {
         id: String,
     },
 
+    /// No session carries that id, so the UI is holding a stale list.
+    ///
+    /// Same shape and same reasoning as [`AppError::ProjectNotFound`]: the
+    /// right response is to refetch, not to branch on the code.
+    #[error("that session no longer exists")]
+    SessionNotFound {
+        /// The id that was looked up. Logged, not shown.
+        id: String,
+    },
+
+    /// A rename arrived with nothing in it.
+    ///
+    /// The composer disables its own save button on an empty field, so this is
+    /// the defensive half of that check rather than a path a user reaches by
+    /// typing — which is why it carries no dedicated code. A session with a
+    /// blank title is a row in the sidebar that cannot be clicked on by name.
+    #[error("a session needs a title")]
+    SessionTitle,
+
+    /// A turn is already running in this session.
+    ///
+    /// The one place a caller genuinely should branch: the UI keeps the text
+    /// in the composer and re-enables it when the running turn finishes,
+    /// rather than reporting a failure the user can do nothing about.
+    #[error("this session is already working on something")]
+    TurnBusy {
+        /// The turn that holds the session. Logged, not shown.
+        turn_id: String,
+    },
+
     /// A runtime invariant broke somewhere outside the agent and tool
     /// domains — a channel that closed, a resource that vanished mid-call.
     ///
@@ -207,9 +237,12 @@ impl AppError {
     pub const fn code(&self) -> ErrorCode {
         match self {
             Self::WorkspacePath { .. } => ErrorCode::PathInvalid,
+            Self::TurnBusy { .. } => ErrorCode::TurnBusy,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
             | Self::ProjectNotFound { .. }
+            | Self::SessionNotFound { .. }
+            | Self::SessionTitle
             | Self::Internal { .. }
             | Self::Audit { .. }
             | Self::Store { .. } => ErrorCode::Internal,

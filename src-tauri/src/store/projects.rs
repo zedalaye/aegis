@@ -1,36 +1,25 @@
-//! On-disk persistence.
+//! The project document: `projects.json`.
 //!
-//! One JSON document, `projects.json`, under the OS application-data
-//! directory. It is small, human-readable and hand-editable on purpose: a
-//! project is a name plus a workspace path, and a user who has to recover
-//! from a bad state should be able to open the file and see why.
+//! A project is a workspace folder plus a name. From Phase 3 it is also the
+//! root every path check is measured against, which is why the path is
+//! canonicalized on the way in and stored canonical — everything downstream
+//! compares against a resolved path rather than against whatever string the UI
+//! happened to hold.
 //!
-//! Three properties matter more than the format:
-//!
-//! * **Writes are atomic.** The document is written to a sibling temporary
-//!   file, flushed, then renamed over the target. A crash or a power cut
-//!   leaves either the old document or the new one, never a half-written one.
-//! * **A damaged document never blocks the app.** Unparseable content is
-//!   moved aside with a timestamped name and the app starts with an empty
-//!   list, because a tray app that refuses to boot has no way to tell anyone
-//!   why.
-//! * **`workspace_exists` is never persisted.** Whether a folder is still
-//!   there is a fact about the disk right now, so it is measured on every
-//!   read. A stored copy would be wrong the moment a drive is unplugged.
-//!
-//! Phase 5 adds sessions here, beside the projects, behind the same atomic
-//! write.
+//! The atomic write, the quarantine and the timestamp format all live in the
+//! parent module, shared with [`sessions`](super::sessions).
 
 use std::fs;
-use std::io::{self, Write as _};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
 
-use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 
+use super::sessions::SessionSummary;
+use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 
 /// Name of the document under the application-data directory.
@@ -43,21 +32,13 @@ const PROJECTS_FILE: &str = "projects.json";
 /// announces itself.
 const SCHEMA_VERSION: u32 = 1;
 
-/// Rename attempts before a failed save gives up.
-///
-/// The replace step is a single `MoveFileEx` on Windows, which an antivirus or
-/// an indexer holding the old file open can make fail for a few milliseconds
-/// (see the README's Windows notes). Retrying briefly turns a transient
-/// scanner collision back into a successful save.
-const RENAME_ATTEMPTS: u32 = 3;
-const RENAME_BACKOFF: Duration = Duration::from_millis(20);
-
 // ---------------------------------------------------------------------------
 // IPC payloads (PLAN 2.1, "Projects")
 // ---------------------------------------------------------------------------
 
 /// A project as the UI sees it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
 pub struct Project {
     /// UUID v4, stable for the life of the project.
     pub id: String,
@@ -73,37 +54,18 @@ pub struct Project {
     pub workspace_exists: bool,
 }
 
-/// Lifecycle of a session (PLAN 2.1, "Sessions and turns").
-///
-/// Declared with [`SessionSummary`] so [`ProjectDetail`] has its documented
-/// shape from the first command that returns it; Phase 5 is what starts
-/// producing values other than the empty list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    Idle,
-    Running,
-    AwaitingApproval,
-    Error,
-}
-
-/// One row of a project's session list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct SessionSummary {
-    pub id: String,
-    pub project_id: String,
-    pub title: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub message_count: u32,
-    pub state: SessionState,
-}
-
 /// What opening a project yields: the project plus its sessions, newest first.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
 pub struct ProjectDetail {
     pub project: Project,
-    /// Always empty until Phase 5 introduces sessions.
+    /// The project's sessions, newest first.
+    ///
+    /// Filled by the command layer rather than by [`Store::open`]: a summary
+    /// carries the session's *live* state, and only [`AppState`] can see both
+    /// the session document and the turns currently running.
+    ///
+    /// [`AppState`]: crate::state::AppState
     pub sessions: Vec<SessionSummary>,
 }
 
@@ -304,7 +266,9 @@ impl Store {
         tracing::debug!(id, exists = opened.workspace_exists, "project opened");
         Ok(ProjectDetail {
             project: opened,
-            // Phase 5 fills this in.
+            // Left empty here and filled by the command, which can see the
+            // session document and the running turns at the same time. The
+            // project store has no business knowing either.
             sessions: Vec::new(),
         })
     }
@@ -422,84 +386,13 @@ fn default_name(workspace: &Path) -> String {
         .unwrap_or_else(|| workspace.to_string_lossy().into_owned())
 }
 
-/// Now, as fixed-width UTC RFC3339 (`2026-08-28T09:41:07.412Z`).
-///
-/// Fixed width and a fixed offset are what let timestamps be compared as
-/// strings, both here and in the UI.
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-/// Drops a leading UTF-8 byte-order mark.
-///
-/// JSON has no BOM, and `serde_json` rejects one outright. Windows editors —
-/// Notepad, and PowerShell's `Set-Content -Encoding utf8` — write one anyway,
-/// so a user who takes up the invitation to edit `projects.json` by hand would
-/// otherwise watch their project list get quarantined for a change they cannot
-/// see. Aegis never writes a BOM; it only tolerates one.
-fn strip_bom(bytes: &[u8]) -> &[u8] {
-    bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
-}
-
-/// Moves a document aside so a fresh one can be written.
-///
-/// Best effort by design: the caller is already on the "the store is
-/// unusable" path, and failing to rename it must not stop the app from
-/// starting. The original is kept rather than deleted — it is the only copy of
-/// the user's project list, and a human may well be able to repair it.
-fn quarantine(path: &Path) {
-    let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
-    let backup = path.with_extension(format!("corrupt-{stamp}.json"));
-
-    match fs::rename(path, &backup) {
-        Ok(()) => tracing::warn!(backup = %backup.display(), "damaged project store moved aside"),
-        Err(err) => tracing::error!(%err, "could not move the damaged project store aside"),
-    }
-}
-
-/// Writes `bytes` to `path` so that readers see either the old file or the
-/// whole new one.
-///
-/// Temporary file in the same directory (a rename across filesystems is not
-/// atomic), `sync_all` before the rename (a rename can otherwise outrun the
-/// data and survive a crash pointing at empty content), then a replacing
-/// rename. The temporary file is removed if the rename never succeeds, so a
-/// failing store does not leave litter behind.
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::other("the store path has no parent directory"))?;
-    fs::create_dir_all(dir)?;
-
-    let tmp = path.with_extension("json.tmp");
-    {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-
-    let mut last = None;
-    for attempt in 0..RENAME_ATTEMPTS {
-        match fs::rename(&tmp, path) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                last = Some(err);
-                if attempt + 1 < RENAME_ATTEMPTS {
-                    std::thread::sleep(RENAME_BACKOFF);
-                }
-            }
-        }
-    }
-
-    let _ = fs::remove_file(&tmp);
-    Err(last.unwrap_or_else(|| io::Error::other("the store could not be replaced")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use tempfile::TempDir;
+
+    use crate::store::sessions::SessionState;
 
     /// A store plus the directories it and its workspaces live in.
     struct Fixture {
@@ -537,9 +430,11 @@ mod tests {
         }
     }
 
-    /// The field names in `src/ipc/bindings.ts` are hand-written until Phase 5
-    /// generates them. This is what makes that safe: renaming a field in Rust
-    /// without renaming it there fails here rather than in the UI.
+    /// `src/ipc/bindings.ts` is generated from these structs, so a renamed
+    /// field reaches TypeScript on its own. What generation cannot check is
+    /// that the names still match the contract in `PLAN.md` § 2.1 — a rename
+    /// would regenerate happily and silently change the wire format. This test
+    /// is that check, and it is why it lists the names literally.
     #[test]
     fn payloads_carry_the_documented_field_names() {
         let detail = ProjectDetail {

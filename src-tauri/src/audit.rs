@@ -37,6 +37,7 @@ use std::sync::{Mutex, MutexGuard};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
+use ts_rs::TS;
 
 use crate::error::ErrorCode;
 
@@ -72,8 +73,9 @@ const KEPT_WHOLE: &[&str] = &["path", "cwd", "program", "display"];
 const SIZED_NOT_QUOTED: &[&str] = &["content"];
 
 /// How a tool call came to run, or not (PLAN 2.1, `AuditEntry.decision`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
 pub enum AuditDecision {
     /// Policy allowed it with no prompt.
     Auto,
@@ -86,8 +88,9 @@ pub enum AuditDecision {
 }
 
 /// How a tool call ended (PLAN 2.1, `AuditEntry.outcome`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
 pub enum Outcome {
     /// The tool ran and succeeded.
     Ok,
@@ -104,7 +107,8 @@ pub enum Outcome {
 /// Serialized and deserialized with the same struct on purpose: the file *is*
 /// the wire format for `audit_tail`, so a field the writer adds is a field the
 /// reader sees, and there is no second shape to keep in step.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
 pub struct AuditEntry {
     /// RFC3339, UTC, millisecond precision — fixed width, so the file sorts
     /// lexicographically in the order it was written.
@@ -132,10 +136,13 @@ pub struct AuditEntry {
     /// How it ended.
     pub outcome: Outcome,
     /// Wall-clock duration of the execution itself.
+    #[ts(type = "number")]
     pub duration_ms: u64,
     /// Bytes the call carried in — the content of a write, nothing for a read.
+    #[ts(type = "number")]
     pub bytes_in: u64,
     /// Bytes the call produced, before any truncation for the model.
+    #[ts(type = "number")]
     pub bytes_out: u64,
     /// The stable code when this failed, `null` otherwise.
     pub error_code: Option<String>,
@@ -383,7 +390,7 @@ fn digest(args: &serde_json::Value) -> String {
 /// there — so the line reads as the call that was made. What changes is that a
 /// value which could be arbitrarily long, or could be a secret, is replaced by
 /// a description of itself.
-fn redact(args: &serde_json::Value) -> String {
+pub(crate) fn redact(args: &serde_json::Value) -> String {
     let redacted = redact_value(None, args);
     serde_json::to_string(&redacted).unwrap_or_else(|_| "\"<unrenderable>\"".to_owned())
 }

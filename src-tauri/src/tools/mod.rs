@@ -115,6 +115,9 @@ impl ToolResult {
     /// A failure. `content` stays empty: there is nothing to report but the
     /// error, and a model given both tends to read the content and ignore the
     /// code.
+    ///
+    /// [`ToolResult::refusal`] is the same thing, reachable from outside this
+    /// module.
     fn failure(tool: &str, code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             ok: false,
@@ -128,6 +131,16 @@ impl ToolResult {
                 message: message.into(),
             }),
         }
+    }
+
+    /// An envelope for a call that never ran.
+    ///
+    /// The turn loop needs this for the refusals it makes on its own account —
+    /// arguments that never parsed, a call abandoned by a cancel — which are
+    /// answered without ever reaching [`run`] and so have no audit line of
+    /// their own to carry the message.
+    pub fn refusal(tool: &str, code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::failure(tool, code, message)
     }
 
     /// The envelope as the JSON string that goes into a `tool` message.

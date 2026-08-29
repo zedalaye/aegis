@@ -22,6 +22,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Runtime,
 };
+use ts_rs::TS;
 
 use crate::commands::window::{self, MAIN_WINDOW};
 use crate::error::AppResult;
@@ -37,11 +38,15 @@ const EVENT_TRAY_ACTIVATE: &str = "tray:activate";
 
 /// Payload of [`EVENT_TRAY_ACTIVATE`].
 ///
-/// `action` is `"show"` today; Phase 5 adds `"new_session"` once there are
-/// sessions for the tray to create.
-#[derive(Debug, Clone, Serialize)]
-struct TrayActivate {
-    action: &'static str,
+/// `action` is `"show"` today. PLAN 2.2 also lists `"new_session"`, for a tray
+/// item that starts a session directly; the menu has no such item yet, so the
+/// variant is not invented here — a payload the runtime never sends is a
+/// branch the UI would carry for nothing.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct TrayActivate {
+    /// Why the window came forward.
+    pub action: String,
 }
 
 /// Installs the tray icon.
@@ -112,7 +117,9 @@ fn toggle_and_announce<R: Runtime>(app: &AppHandle<R>) {
             if let Err(err) = app.emit_to(
                 MAIN_WINDOW,
                 EVENT_TRAY_ACTIVATE,
-                TrayActivate { action: "show" },
+                TrayActivate {
+                    action: "show".to_owned(),
+                },
             ) {
                 tracing::warn!(%err, "could not emit {EVENT_TRAY_ACTIVATE}");
             }

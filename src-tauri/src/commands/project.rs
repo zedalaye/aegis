@@ -98,11 +98,34 @@ pub fn project_list(state: State<'_, AppState>) -> AppResult<Vec<Project>> {
 /// pretending the project is gone.
 #[tauri::command(rename_all = "snake_case")]
 pub fn project_open(state: State<'_, AppState>, project_id: String) -> AppResult<ProjectDetail> {
-    state.store().open(&project_id)
+    let mut detail = state.store().open(&project_id)?;
+
+    // The store cannot fill this itself: a session's `state` is a fact about
+    // the turn registry, which only `AppState` can see (PLAN 2.1).
+    detail.sessions = state.session_list(&project_id);
+    Ok(detail)
 }
 
-/// Forgets a project. The workspace folder on disk is never touched.
+/// Forgets a project, and its sessions with it.
+///
+/// The workspace folder on disk is never touched. The sessions are, because a
+/// transcript belonging to a project that no longer exists is unreachable —
+/// nothing can open it, and leaving it behind grows the session document
+/// forever. Any turn still running in one is cancelled first.
+///
+/// The project is deleted before its sessions: if the second step fails, the
+/// user gets the outcome they asked for and some orphaned rows, rather than a
+/// project whose sessions are gone but which is still in the sidebar.
 #[tauri::command(rename_all = "snake_case")]
 pub fn project_delete(state: State<'_, AppState>, project_id: String) -> AppResult<()> {
-    state.store().delete(&project_id)
+    for session in state.session_list(&project_id) {
+        state.turns().forget(&session.id);
+    }
+
+    state.store().delete(&project_id)?;
+
+    if let Err(err) = state.sessions().delete_for_project(&project_id) {
+        tracing::warn!(%err, project_id, "the project is gone but its sessions remain");
+    }
+    Ok(())
 }

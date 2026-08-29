@@ -1,0 +1,13 @@
+# Where `ts-rs` writes the generated TypeScript.
+#
+# Every payload type carries `#[ts(export, export_to = "bindings.ts")]`, and
+# `ts-rs` resolves that name against `TS_RS_EXPORT_DIR`. Setting it once here
+# keeps the destination out of fifteen attributes: without it the default is
+# `src-tauri/bindings/`, and each type would have to spell a `../../` path back
+# out of the crate to reach the React app.
+#
+# `relative = true` resolves the value against the directory holding `.cargo`,
+# which is the crate root — so this is `src/ipc/`, whatever directory `cargo`
+# was invoked from.
+[env]
+TS_RS_EXPORT_DIR = { value = "../src/ipc", relative = true }

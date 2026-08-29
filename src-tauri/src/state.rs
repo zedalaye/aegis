@@ -2,17 +2,24 @@
 //!
 //! Anything a command needs and cannot derive from its arguments lives here,
 //! behind `&self` so commands never take a lock they do not need. Each concern
-//! owns its own synchronization rather than sharing one coarse mutex: Phase 2
-//! adds the project store, and the policy engine, per-session grants and the
-//! per-turn cancellation registry land the same way.
+//! owns its own synchronization rather than sharing one coarse mutex: the
+//! project store, the session store, per-session grants, the audit log and the
+//! turn registry are five independent locks, and no command holds two.
+//!
+//! This is also the composition point for the one fact no single store can
+//! answer on its own. A [`SessionSummary`] needs both the transcript (from the
+//! session document) and whether a turn is running (from the registry), so the
+//! methods that produce one live here rather than in either.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::agent::{FakeProvider, Provider, TurnRegistry};
 use crate::audit::AuditLog;
+use crate::error::AppResult;
 use crate::policy::GrantStore;
-use crate::store::Store;
+use crate::store::{SessionDetail, SessionState, SessionStore, SessionSummary, Store};
 
 /// Shared state, registered with `Manager::manage` and read from commands via
 /// `tauri::State<'_, AppState>`.
@@ -21,8 +28,12 @@ pub struct AppState {
     started_at: Instant,
     quitting: AtomicBool,
     store: Store,
+    sessions: SessionStore,
+    turns: TurnRegistry,
     grants: GrantStore,
     audit: AuditLog,
+    provider: FakeProvider,
+    self_exe: Option<PathBuf>,
 }
 
 impl AppState {
@@ -37,9 +48,88 @@ impl AppState {
             started_at: Instant::now(),
             quitting: AtomicBool::new(false),
             store: Store::load(data_dir),
+            sessions: SessionStore::load(data_dir),
+            turns: TurnRegistry::new(),
             grants: GrantStore::new(),
             audit: AuditLog::new(data_dir),
+            provider: FakeProvider::new(),
+            // Only used to refuse `shell_exec` on Aegis itself. A platform
+            // that will not name its own executable loses that one check and
+            // nothing else, so the failure is logged rather than propagated.
+            self_exe: std::env::current_exe()
+                .inspect_err(|err| {
+                    tracing::warn!(%err, "could not resolve this executable's path");
+                })
+                .ok(),
         }
+    }
+
+    /// The session store: transcripts and titles.
+    pub fn sessions(&self) -> &SessionStore {
+        &self.sessions
+    }
+
+    /// Which sessions are running, and how to cancel them.
+    pub fn turns(&self) -> &TurnRegistry {
+        &self.turns
+    }
+
+    /// Who answers a turn.
+    ///
+    /// One provider for the process. Phase 8 makes this a `dyn Provider`
+    /// chosen from settings; the return type is already the trait so that
+    /// change does not reach the call sites.
+    pub fn provider(&self) -> &dyn Provider {
+        &self.provider
+    }
+
+    /// This application's own binary, when the platform would name it.
+    pub fn self_exe(&self) -> Option<&Path> {
+        self.self_exe.as_deref()
+    }
+
+    /// A project's sessions, most recently active first, at their live states.
+    ///
+    /// The composition this module exists for: the rows come from the session
+    /// document, the `state` on each comes from the turn registry.
+    pub fn session_list(&self, project_id: &str) -> Vec<SessionSummary> {
+        self.sessions.list(project_id, &self.turns.lookup())
+    }
+
+    /// One session's row, at its live state.
+    pub fn session_summary(&self, session_id: &str) -> AppResult<SessionSummary> {
+        self.sessions
+            .summary(session_id, self.turns.state_of(session_id))
+    }
+
+    /// One session with its transcript, at its live state.
+    pub fn session_detail(&self, session_id: &str) -> AppResult<SessionDetail> {
+        self.sessions
+            .open(session_id, self.turns.state_of(session_id))
+    }
+
+    /// The workspace a session's tools may touch.
+    ///
+    /// `Ok(None)` is a real answer, not a failure: the project exists but its
+    /// folder is gone — unmounted, moved, renamed. Policy turns that into a
+    /// hard `E_NO_WORKSPACE` denial for every call (PLAN 3.2), and the system
+    /// message tells the model plainly rather than letting it discover the
+    /// state one refusal at a time.
+    pub fn workspace_of(&self, session_id: &str) -> AppResult<Option<PathBuf>> {
+        let project_id = self.sessions.project_of(session_id)?;
+
+        Ok(self
+            .store
+            .list()
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .filter(|project| project.workspace_exists)
+            .map(|project| PathBuf::from(project.workspace_path)))
+    }
+
+    /// The state to leave a session at, given how its turn ended.
+    pub fn retire_turn(&self, session_id: &str, turn_id: &str, resting: SessionState) {
+        self.turns.finish(session_id, turn_id, resting);
     }
 
     /// The project store.
@@ -87,8 +177,17 @@ impl AppState {
 
     /// Marks shutdown as started; returns `true` if this call is the one that
     /// started it, so a double-quit does not run teardown twice.
+    ///
+    /// Running turns are cancelled on the way out. A task killed mid-write
+    /// would leave a transcript with an assistant message whose tool calls are
+    /// never answered; cancelling gives the loop the chance to answer them
+    /// itself (see [`agent::turn`](crate::agent::turn)).
     pub fn begin_quit(&self) -> bool {
-        !self.quitting.swap(true, Ordering::SeqCst)
+        let first = !self.quitting.swap(true, Ordering::SeqCst);
+        if first {
+            self.turns.cancel_all();
+        }
+        first
     }
 }
 

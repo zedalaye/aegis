@@ -1,91 +1,66 @@
 /**
  * The window's frame: header, project rail, and the work area beside it.
  *
- * The work area holds the open project's detail for now and the chat panel
- * from Phase 5. Errors surface here, once, above everything — a failure in the
- * project store is not local to the control that triggered it, and the shell
- * is the only place both the sidebar and the work area can be seen to be
- * affected by it.
+ * Two responsibilities beyond layout.
+ *
+ * It owns the subscription to the runtime's event stream — one listener set
+ * for the whole app, attached on mount and detached on unmount. Attaching per
+ * component would mean a delta applied once per mounted listener.
+ *
+ * And it keeps the session store following the open project. The two stores
+ * are deliberately separate — a project is a folder, a session is a
+ * conversation — so something has to notice when one changes and reload the
+ * other. That something is here, where both are already in scope.
+ *
+ * Errors surface once, above everything. A failure in either store is not
+ * local to the control that triggered it, and this is the only place both the
+ * sidebar and the work area can be seen to be affected by it.
  */
 
 import { useEffect } from "react";
 
 import { useProjects } from "../../state/projects";
-import { formatOptionalTimestamp, formatTimestamp } from "../../lib/format";
+import { attachSessionEvents, useSessions } from "../../state/sessions";
 
+import ChatPane from "../chat/ChatPane";
 import Sidebar from "./Sidebar";
 import TitleBar from "./TitleBar";
 
-/** The open project, or the reason there is nothing to show. */
-function WorkArea() {
-  const detail = useProjects((s) => s.detail);
+/**
+ * What fills the work area before there is a project to chat in.
+ *
+ * Once one is open the pane belongs to the conversation; the project's own
+ * facts are the workspace path and the name, and both are already in the title
+ * bar where they stay visible while the transcript scrolls.
+ */
+function NoProject() {
   const status = useProjects((s) => s.status);
 
-  if (detail === null) {
-    return (
-      <section className="work work--empty">
-        <h1 className="work__title">
-          {status === "loading" ? "Loading projects…" : "No project open"}
-        </h1>
-        <p className="work__body">
-          A project is a workspace folder Aegis is allowed to work in. Add one
-          from the sidebar to get started.
-        </p>
-      </section>
-    );
-  }
-
-  const { project, sessions } = detail;
-
   return (
-    <section className="work">
-      <h1 className="work__title">{project.name}</h1>
-
-      <dl className="facts">
-        <dt>Workspace</dt>
-        <dd className="facts__path" title={project.workspace_path}>
-          {project.workspace_path}
-        </dd>
-
-        <dt>Added</dt>
-        <dd>{formatTimestamp(project.created_at)}</dd>
-
-        <dt>Last opened</dt>
-        <dd>{formatOptionalTimestamp(project.last_opened_at)}</dd>
-      </dl>
-
-      {project.workspace_exists ? null : (
-        <p className="work__warning" role="status">
-          This folder is not there any more. It may be on a drive that is not
-          mounted, or it may have been moved or renamed. The project is kept so
-          you can find it again; nothing can run inside it until the folder is
-          back.
-        </p>
-      )}
-
-      <h2 className="work__subtitle">Sessions</h2>
-      {sessions.length === 0 ? (
-        <p className="work__body">
-          No sessions yet. Chat, the agent loop and the approval gate arrive in
-          later phases — see <code>PLAN.md</code> § 6.
-        </p>
-      ) : (
-        <ul>
-          {sessions.map((session) => (
-            <li key={session.id}>{session.title}</li>
-          ))}
-        </ul>
-      )}
+    <section className="work work--empty">
+      <h1 className="work__title">
+        {status === "loading" ? "Loading projects…" : "No project open"}
+      </h1>
+      <p className="work__body">
+        A project is a workspace folder Aegis is allowed to work in. Add one
+        from the sidebar to get started.
+      </p>
     </section>
   );
 }
 
-/** The last failure, dismissible, above the panes it affected. */
+/** The last failure from either store, dismissible, above the panes. */
 function ErrorBanner() {
-  const error = useProjects((s) => s.error);
-  const dismissError = useProjects((s) => s.dismissError);
+  const projectError = useProjects((s) => s.error);
+  const sessionError = useSessions((s) => s.error);
+  const dismissProject = useProjects((s) => s.dismissError);
+  const dismissSession = useSessions((s) => s.dismissError);
 
-  if (error === null) {
+  // The most recent one wins. Stacking two banners pushes the thing the user
+  // was looking at off the screen, and the second is usually a consequence of
+  // the first.
+  const error = sessionError ?? projectError;
+  if (error === null || error === undefined) {
     return null;
   }
 
@@ -96,7 +71,10 @@ function ErrorBanner() {
       <button
         type="button"
         className="banner__dismiss"
-        onClick={dismissError}
+        onClick={() => {
+          dismissSession();
+          dismissProject();
+        }}
         aria-label="Dismiss this error"
       >
         ×
@@ -107,6 +85,9 @@ function ErrorBanner() {
 
 export default function AppShell() {
   const load = useProjects((s) => s.load);
+  const projectId = useProjects((s) => s.detail?.project.id ?? null);
+  const loadSessions = useSessions((s) => s.loadFor);
+  const resetSessions = useSessions((s) => s.reset);
 
   // One load on mount. Under StrictMode this runs twice in development: the
   // only write it performs is re-stamping `last_opened_at` on the project it
@@ -116,6 +97,25 @@ export default function AppShell() {
     void load();
   }, [load]);
 
+  // One listener set for the app. The attach is asynchronous, so the cleanup
+  // has to wait for it rather than assume it has finished — `subscribe`
+  // detaches anything that arrives after cancellation.
+  useEffect(() => {
+    const pending = attachSessionEvents();
+    return () => {
+      void pending.then((detach) => detach());
+    };
+  }, []);
+
+  // The session store follows the open project.
+  useEffect(() => {
+    if (projectId === null) {
+      resetSessions();
+    } else {
+      void loadSessions(projectId);
+    }
+  }, [projectId, loadSessions, resetSessions]);
+
   return (
     <div className="shell">
       <TitleBar />
@@ -123,7 +123,7 @@ export default function AppShell() {
       <div className="shell__body">
         <Sidebar />
         <main className="shell__main">
-          <WorkArea />
+          {projectId === null ? <NoProject /> : <ChatPane />}
         </main>
       </div>
     </div>

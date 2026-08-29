@@ -39,11 +39,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 uuid = { version = "1", features = ["v4"] }
 dunce = "1"
-tokio = { version = "1", default-features = false, features = ["sync"] }
+# `tokio` is already in the tree via Tauri. Phase 5 widens the feature set the
+# turn loop needs: `rt` and `macros` for `select!` and for the runtime the
+# tests spin up, `time` for the delta-coalescing window and the fake provider's
+# pacing. `tokio-util` is here for `CancellationToken` alone — one token per
+# turn, held by the session registry and awaited by the loop (PLAN 4.2).
+tokio = { version = "1", default-features = false, features = ["sync", "rt", "time", "macros"] }
+tokio-util = { version = "0.7", default-features = false }
 # The audit log digests a tool call's arguments so two calls can be compared
 # without either line quoting what they carried. Phase 9 hashes captured PNGs
 # with the same crate.
 sha2 = "0.10"
+# `src/ipc/bindings.ts` is generated from the payload structs rather than
+# written twice (PLAN 1, "Notes on structure"). The export itself runs as a
+# `cargo test`, so nothing generates during a release build; the `TS` impls are
+# all that reach the binary. See `.cargo/config.toml` for where the file lands.
+ts-rs = "12"
 
 [dev-dependencies]
 tempfile = "3"
