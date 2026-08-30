@@ -24,7 +24,10 @@ Local desktop app that:
 
 - can operate the machine (fs, shell, git) under an approval gate
 
-- manages projects (workspace folder + session + task list)
+- manages projects (workspace folder + session + task list). The folder's
+  convention files are git-backed by default when they are laid down
+  (`PLAN.md` § 7.11); picking a folder does not `git init`, and the
+  harness is not a git host
 
 - stays in the system tray
 
@@ -155,6 +158,12 @@ on another). Keys stay in the OS keyring / env, never in the WebView.
 5. Then domain packs as skills, not new runtime features
 
 A CoS without (1) recites. Do not build (2) first.
+
+Chrome polish is `PLAN.md` § 7.10. Workspace versioning (`git init` on scaffold,
+never an auto-commit) is § 7.11. Neither is a step in this list, and neither is
+a reason to delay (1)–(3). There is no in-app editor. A skill is a file: the
+operator's editor, or `fs_write` under the gate. Granting it to an identity is a
+separate act.
 
 ## Permissions
 

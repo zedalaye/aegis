@@ -727,7 +727,7 @@ These are constraints on Phases 5–10, not extra work.
 | **Audit** | one jsonl line per tool call | a closed schema that cannot later grow `agent_id`, `skill`, `tokens`, `handoff_id` |
 | **Process** | tray app, hide-on-close, lives while the window is gone | quit-on-last-window-close (kills a future scheduler) |
 | **Settings / keys** | one `{base_url, model, key}` in keyring or env | put keys in the WebView, or freeze the settings payload so a provider list cannot be added |
-| **Project** | `{name, path, sessions}` | assume every project is a git repo of application code — later a "finance" or "watch" workspace is just another folder |
+| **Project** | `{name, path, sessions}` | assume every project is a **software** repo (language layout, GitHub, `node_modules`). A finance or watch workspace is still just a folder. That is not a reason to skip versioning: the convention's files are git-backed by default (§ 7.11), which is not the same as being a codebase |
 | **System prompt** | short: policy summary + workspace path | grow it into runbooks. Recurring procedure that lands in the prompt of Phases 5–12 is procedure Phase 13 will have to fight |
 | **Control surface** | WebView as the only face; `session_send` / `approval_resolve` stay callable as Rust functions, not only as `invoke` wrappers | a second agent loop for Keybase / X Chat / Telegram / Discord; Keybase `TlfName` / X user ids / Discord snowflakes / Telegram chat ids in session storage; an inbound HTTP webhook; treating WhatsApp or a customer-facing X Chat bot as a control face |
 | **Remote bind** | no TCP listen; Tauri IPC to the local WebView only | bind `0.0.0.0`, Tailscale Funnel, embed libtailscale/tsnet, or a second HTTP API with a different command set than § 2 |
@@ -745,9 +745,9 @@ What the MVP already is, vs what § 7.3 still has to add.
 | --- | --- | --- |
 | 1. Agent registry (role, tools, skills, ACL) | one implicit assistant | `agents/` store: id, role, provider binding, tool allow-list, skill allow-list, memory path |
 | 2. Handoff bus with a fixed schema | a single session transcript | typed `Handoff` / `HandoffResult` objects (`COS.md` *Handoff*), not "read my thread" |
-| 3. `/workspace` as shared memory | user-picked folder; no convention | convention inside that folder: `briefs/`, `status/`, `artefacts/`, `decisions/` |
+| 3. `/workspace` as shared memory | user-picked folder; no convention | convention inside that folder: `briefs/`, `status/`, `artefacts/`, `decisions/`. The WebView does not grow a file tree or an editor — files stay ordinary files. § 7.11 versions the folder with git when the convention is laid down. § 7.10 reveals it in the OS file manager. Phase 17 is the structured read of `/status` |
 | 4. Memory store per agent | none (transcript only) | CRUD + search + forget, scoped to that agent; CoS sees summaries, not dumps |
-| 5. Skill runner (`SKILL.md`) | none | catalog always cheap; body loaded only on `run skill:…`; see § 7.6 |
+| 5. Skill runner (`SKILL.md`) | none | catalog always cheap; body loaded only on `run skill:…`; authoring is a file write, not a `skill_create` command; see § 7.6 |
 | 6. Scheduler of routines | none; tray process already stays alive | cron/trigger on top of (5); never automate a still-fuzzy workflow |
 | 7. Approval policy | § 3, already the right shape | same matrix; new tools (send, deploy, post, trade) are new rows, default **ask** |
 | 8. Compactor + retrieve-after-compact | none; keep last N turns raw | compact to *state* (goal, decisions, files, blockers), then re-inject retrieved memory — CoS compact a **board**, never other agents' transcripts |
@@ -759,12 +759,23 @@ What the MVP already is, vs what § 7.3 still has to add.
 Each phase ends in something you can run. No phase depends on a later one. Domain connectors
 are last on purpose.
 
+Two slices are **not** steps in this list, and must not delay Phases 14–16:
+
+- **§ 7.10** chrome (title-bar icons, a button that reveals the folder in the OS file manager)
+- **§ 7.11** workspace versioning (`git init` when the convention is laid down, never an
+  auto-commit)
+
+Both may start once Phase 13 has landed.
+
 **Phase 11 — Workspace convention**
 Document and optionally scaffold, inside a user-picked workspace: `briefs/`, `status/`,
 `artefacts/`, `decisions/`. Write path: "this decision goes in `DECISIONS.md`, not the thread."
 Read path: retrieve those files at session start. Exit: a human (or the single MVP agent) can
 file a decision and a status without any new agent type. Cheap, and it makes every later phase
 honest.
+
+The files are meant to be committed. `git init` on scaffold, and the rule that a write is
+not a commit, are § 7.11 — the missed half of this phase, not a new number in this list.
 
 **Phase 12 — Agent registry**
 Persist agents as data: role, system prompt, provider id, tool ACL, skill ACL. Sessions bind
@@ -793,6 +804,11 @@ audit line. A skill never widens the agent's tool ACL.
 Exit: the catalog is listable; one global skill (e.g. never-send-without-review) and one
 workspace stub (`inbox.triage`: file in, status + artefact out) run end-to-end; the body is
 absent from the system prompt of turns that did not invoke it.
+
+There is no `skill_create` and no in-app editor. A runbook is a file: written in the
+operator's editor, or by an ordinary `fs_write` under the gate. Granting it to an identity
+is a separate act (§ 7.6 *Authoring*). Title-bar chrome and "open this folder" are § 7.10,
+not this phase.
 
 **Phase 14 — Per-agent memory + compaction**
 Memory store with CRUD, search, forget. Compaction writes *state*, then retrieve-after-compact
@@ -847,6 +863,9 @@ identity. Suggested order, because each pack is allowed to fail without blocking
 Never start pack *n+1* because pack *n* is exciting. Never add a domain by growing
 `agent/turn.rs`.
 
+§ 7.10 (chrome) and § 7.11 (versioning) may run at any time after Phase 13. They do not
+insert here, and they are not Phases 20 and 21.
+
 ### 7.4 Hard rules that survive every later phase
 
 - Do not expose the runtime on the public internet.
@@ -859,6 +878,10 @@ Never start pack *n+1* because pack *n* is exciting. Never add a domain by growi
 - A messaging surface is not an agent.
 - Trading, X monetization, and the wish list are **funding goals expressed as files**. They
   are not a reason to put a broker or a poster in `src-tauri`.
+- Files stay ordinary files. The WebView does not grow a file tree or an editor. A session
+  writes a runbook the same way it writes a decision: `fs_write`, under the gate, on the
+  audit log. A workspace laid down by the convention is a git work tree (§ 7.11); a
+  commit is still a gated `shell_exec`.
 
 ### 7.5 What would make the mode unusable (do not do these)
 
@@ -894,6 +917,24 @@ Never start pack *n+1* because pack *n* is exciting. Never add a domain by growi
 - Dumping a procedure into a system prompt or a chat, then scheduling it. That is not a skill.
   A skill is a file the runner can name, load, validate and audit. Until that file exists,
   the work stays manual.
+- Building an in-app file tree or a markdown editor "so you can see the project". Aegis is
+  not an IDE. The folder is the operator's; § 7.10 reveals it in the file manager. Phase 17
+  is the structured read of `/status`. Listing `node_modules/` in the rail is the wrong tree.
+- A `skill_create` command, or a WebView write into the skill library, around the gate and
+  off the audit log. That is a second way to change what the agent will do.
+- A session that grants itself a skill it just wrote. Writing the file is not an allow-list
+  change; `agent_update` stays a Settings act, in force on the next turn.
+- Inserting chrome polish or `git init` into § 7.3 as Phase 13.5 / 14, or delaying
+  memory, handoff, or the scheduler for icons or a repository. Those slices are § 7.10
+  and § 7.11.
+- `git init` on `project_create`, or a nested repository inside a folder that is already a
+  work tree. Picking a workspace is not consent to mutate it; scaffold is. Nested `.git`
+  directories split history in half and are how people lose the parent repo.
+- Auto-committing every `fs_write`, or treating "allow this write" as "allow this commit".
+  A commit has an author, a message, and a place on a branch; it stays a `git` invocation
+  the human sees.
+- A GitHub (or GitLab) product in the runtime so the folder can be "a real repo". A remote
+  is the operator's. Phase 18 is an MCP connector, not `gh` baked into `src-tauri`.
 
 ### 7.6 Skills — why this is the efficiency layer
 
@@ -944,6 +985,27 @@ cannot auto-grant. A missing source returns `blocked`, it does not invent.
   replayed. Phase 17 depends on this.
 - **No extra rights.** If the skill lists `fs_write` and the agent was not granted it,
   the run fails closed. Skills are not a back door around policy.
+
+**Authoring.** A skill is a file, so writing one is a file write. There is no in-app
+editor and no `skill_create`.
+
+- In the operator's editor, then **Re-read** (or the next catalog call — the list is
+  measured, never cached).
+- Or in a session: an ordinary `fs_write` to `skills/<name>/SKILL.md` **inside the
+  workspace**, through the approval dialog. The DiffPreview of that write is the moment
+  the human signs the seven headings. Same matrix, same audit line as a decision.
+
+The **library** (`skills/` beside application data) is outside the workspace. A write
+there is the outside-WS row: ask every time, no session grant, risk high. A session may
+do it; it is not how "how you work" should be invented. Session-authored runbooks belong
+in the project folder, where they travel with the repo.
+
+**Writing is not granting.** `skill_run` still requires the name on the identity's
+allow-list, edited in Settings, in force on the next turn. A session cannot call
+`agent_update`. The built-in Assistant holds every tool and no skills: it can draft a
+runbook; it cannot run it until a human ticks the name on an identity that should. A
+file that will not parse is listed with the reason and never offered. Promoting a
+still-fuzzy chat onto a clock remains forbidden (Phase 16).
 
 **What this buys on the domains**, without putting those domains in the runtime:
 
@@ -1145,3 +1207,153 @@ them. Do not add a hypervisor crate during Phases 0–10.
 The MVP executor is the host user, stated honestly. If the operator
 already isolates work in Docker or a microVM, the harness does not
 need to know: it runs `program` + `args` under the gate, like `git`.
+
+### 7.10 Chrome polish — not a CoS phase
+
+Not a step in § 7.3. Not Phase 20. Not an IDE.
+
+Phase 10 already polished the MVP (audit drawer, empty states, README).
+This slice is the chrome that started to hurt once a workspace path, four
+title-bar labels, and the shared-file convention had to share one window.
+It may start once Phase 13 has landed. It must not delay Phases 14–16
+(memory, handoff, scheduler). Phase 17 remains the structured read of
+`/status`; this slice does not pre-build that board.
+
+**In scope**
+
+- **Title bar, less prose.** Audit log, Settings, Hide to tray, and Quit
+  become icon buttons. Every icon keeps an `aria-label` and a tooltip —
+  never an icon alone. Settings and Audit stay *modes* (`aria-pressed`);
+  Hide and Quit stay actions. Inline SVG (or the same kind of sign as the
+  workspace badge's `▣`). No icon font, no Lucide, no Blink-only CSS:
+  Linux is WebKitGTK (§ 5.3).
+- **Reveal the folder.** A **button** at the end of the title-bar path
+  (not a link on the badge, not nested in the rail's project row — that
+  click already means "open this project"). Disabled when the folder is
+  missing. Opens the workspace in the OS file manager (Explorer / Finder /
+  the desktop's folder handler). Not VS Code: a workspace is not assumed
+  to be a git repo of application code (§ 7.1 *Project*), and `code` is
+  often absent from the PATH of a GUI-launched app.
+- **Same command, later, for a file.** A skill row, an approval path, an
+  artefact named by `skill_return` may grow the same button: reveal *that*
+  path, selected in the file manager when the OS can. Still the file
+  manager, not an editor hardcoded by name.
+
+**The command.** One Rust command, `workspace_reveal`. The WebView never
+opens `file://`, never gains `fs:` / `shell:` / opener plugin permissions
+(capabilities stay a review flag, § 5.4). The argument is the open
+project's canonical workspace, or — when revealing a file — a path the
+runtime has already checked is contained in it. Arbitrary paths from the
+WebView are refused.
+
+**Out of this slice**
+
+- A file tree of the repo (`src/`, `node_modules/`, `.git/`). If the
+  workspace is a code repo, the operator already has an editor. If it is
+  a CoS folder, the convention directories *are* the tree, and Shared
+  files already says whether they exist.
+- An in-app editor, Monaco, or a save path from the WebView. Writing
+  `DECISIONS.md` or a `SKILL.md` that way would be a second write path
+  around the gate (Phase 11 / § 7.6 *Authoring*).
+- Listing the contents of `briefs/` / `artefacts/` / `skills/`, or a
+  read-only markdown preview. Those are the next honest steps after
+  "I cannot even see where the project is", not this slice. They still
+  are not an editor: preview in, save out.
+- "Open in VS Code" / `cursor .` as the default. A later optional
+  "open with" command in Settings is allowed; it is not the first click.
+- The Phase 17 status board.
+
+**Exit:** the title bar is icon-only for those four actions, each named
+to a screen reader; the open project has an Open button next to its
+path; pressing it shows that folder in the file manager on Windows and
+macOS (best-effort Linux). No new plugin permission. No file tree. No
+editor.
+
+### 7.11 Workspace versioning — not a CoS phase
+
+Not a step in § 7.3. Not Phase 21. Not a GitHub product.
+
+The missed half of Phase 11. Shared memory is files; `STATUS.md` is a
+board rewritten in place. Without history, yesterday is gone, and the
+transcript is once again the only log — the thing the convention exists
+to stop being. The files were always meant to be committed (`git log`,
+not the chat). Phase 11 laid down the directories and never created the
+repository.
+
+This slice may start once Phase 13 has landed. It must not delay
+Phases 14–16. It is not § 7.10 (that reveals the folder). It is not
+Phase 18 (that is an MCP connector, which is how `gh` would enter, if
+it does).
+
+**Default.** A workspace whose convention is laid down is a git work
+tree. Versioning the files is not the same as being a software project
+(§ 7.1 *Project*): a finance or watch folder gets a repository too.
+
+**When.** Picking a folder is not consent to mutate it — same rule as
+the five directories — so `project_create` never inits. **`workspace_scaffold` does**, when the button is pressed:
+
+| State | What scaffold does |
+| --- | --- |
+| Already a work tree (this directory or an ancestor) | leave it, report that it is versioned |
+| Not a work tree | `git init` here, name it in the report, do not commit |
+| `git` missing from PATH | the rest of the scaffold still runs; the report says the folder is not versioned |
+
+**How.** `git` on PATH, spawned by the runtime, not the agent's
+`shell_exec` and not a libgit2 crate. A GUI-launched app may have a
+thin PATH (same class of problem as Keybase on Windows, § 7.7): resolve
+`git` / `git.exe` the way a later face resolves `keybase`. Failure to
+init is a line in the report, not a failed scaffold.
+
+**Never**
+
+- a nested repository (an inner `.git` splits history and hides the
+  parent);
+- a remote, a GitHub/GitLab product, a language `.gitignore`;
+- `user.name` / `user.email` written for them;
+- an auto-commit of `fs_write`. A commit is `shell_exec` of `git`,
+  under the gate. Approving a write is not approving a commit;
+- Aegis' own documents (`projects.json`, sessions, the skill library)
+  in this repository. They stay in application data.
+
+**How you commit.** When a snapshot is needed — a decision filed, a
+board rewritten, a skill run that produced artefacts — someone asks
+for a commit. There is no third path.
+
+1. **You, outside Aegis.** The files are ordinary. Terminal, Git GUI,
+   the editor. § 7.10's button is how you get to the folder. This is
+   the default for a human who just approved a write and wants it on
+   the branch.
+2. **You, in the session.** "Commit the status update." The identity
+   needs `shell_exec`. It runs `git add` / `git commit` as ordinary
+   calls: cwd in the workspace, program `git`, args in the approval
+   dialog. `allow_session` is keyed on the basename `git` (§ 3.1), so
+   a later `git push` or `git reset` in that session still shows the
+   exact line. Constructing a commit by `fs_write` into `.git/` is the
+   high-risk row (ask every time, no grant) and is the wrong shape.
+
+A later skill (e.g. `workspace.checkpoint`) may sequence status + add +
+commit with a strict message. It still does not auto-fire from
+`fs_write`. Phase 16 may put *that skill* on a clock, once it has been
+run under watch — never `git commit` on a timer of its own.
+
+There is no Commit button in the WebView. A privileged `git commit`
+from the runtime would be a second write path around the dialog the
+agent already has, and a git client (log, stage, push) is out of
+scope: the panel reports whether it is a work tree, nothing else.
+
+The first commit needs a git identity. This slice does not write
+`user.name` / `user.email`. If `git commit` fails because they are
+unset, the error reaches the dialog or the tool result; the human
+fixes git (usually already global on a machine that has `git`), or
+the session is told to set a *local* identity under the same gate.
+Do not invent an email.
+
+**The panel.** Shared files may say whether the open folder is a work
+tree (here / ancestor / not). That is a fact about the convention, like
+the four ticks. It is not a git client: no log view, no stage, no push.
+
+**Exit:** pressing *Set up shared files* on a folder that is not in a
+work tree leaves a `.git` there and says so; pressing it on a folder
+that already is one does not create a nested repo; a later `fs_write`
+still does not commit. `git` absent from PATH does not block the
+directories.
