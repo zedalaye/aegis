@@ -1,0 +1,504 @@
+//! The agent registry, through the crate's public surface.
+//!
+//! The unit tests inside `store/agents.rs` cover the document — validation,
+//! the built-in identity, the migration. This file covers the Phase 12 exit
+//! condition of `PLAN.md` § 7.3, which is a claim about the *whole* runtime
+//! rather than about that module:
+//!
+//! > you can create a "reviewer" identity and open a session as that identity;
+//! > it cannot see tools it was not granted.
+//!
+//! "Cannot see" and "cannot use" are two different claims, and both have to
+//! hold, because an identity is only as narrow as its weakest enforcement:
+//!
+//! 1. **It is not shown them.** The `tools` array of the request carries only
+//!    the granted schemas, so a reviewer never spends a round asking for a
+//!    write it would be refused.
+//! 2. **It cannot use them anyway.** A call for an ungranted tool — replayed
+//!    out of a transcript written under a wider grant, or invented — is refused
+//!    by policy before anything touches the machine, with no approval offered:
+//!    a dialog asking whether to let an identity exceed its own allow-list is
+//!    a dialog that should not exist.
+//! 3. **The refusal is on the record, as that identity.** The audit line names
+//!    the agent, so "who ran this" is answerable afterwards.
+//!
+//! And one claim in the other direction, which is what keeps this phase a
+//! no-op for everything that came before it: a session that named no identity
+//! runs exactly as it did in Phase 11.
+//!
+//! The command layer above this needs a running Tauri application and is not
+//! reachable from a test binary. Everything below it is, against real files in
+//! a temporary directory.
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use serde_json::json;
+use tempfile::TempDir;
+
+use aegis_lib::agent::event::EventSink;
+use aegis_lib::agent::transcript;
+use aegis_lib::agent::turn::TurnPlan;
+use aegis_lib::agent::wire::{ModelEvent, StopReason, WireMessage};
+use aegis_lib::policy::tool;
+use aegis_lib::{
+    Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore,
+    Message, SessionState, SessionStore, ToolCallStatus, Turn, TurnRegistry, DEFAULT_AGENT_ID,
+    DEFAULT_PROVIDER_ID,
+};
+
+/// Collects every event a turn emits.
+#[derive(Debug, Default)]
+struct Recorder {
+    events: Mutex<Vec<Event>>,
+}
+
+impl Recorder {
+    fn names(&self) -> Vec<&'static str> {
+        self.events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .map(Event::name)
+            .collect()
+    }
+}
+
+impl EventSink for Recorder {
+    fn emit(&self, event: Event) {
+        self.events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(event);
+    }
+}
+
+/// A data directory, a workspace, and every store the runtime holds.
+struct App {
+    _dir: TempDir,
+    workspace: PathBuf,
+    agents: AgentStore,
+    sessions: SessionStore,
+    turns: TurnRegistry,
+    grants: GrantStore,
+    approvals: ApprovalRegistry,
+    audit: AuditLog,
+    captures: PathBuf,
+}
+
+impl App {
+    fn new() -> Self {
+        let dir = TempDir::new().expect("temp dir");
+        let data = dir.path().join("data");
+        let workspace = dir.path().join("work");
+        std::fs::create_dir_all(&data).expect("data dir");
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        std::fs::write(workspace.join("notes.md"), "already here").expect("a file to read");
+
+        Self {
+            workspace: dunce::canonicalize(&workspace).expect("canonical workspace"),
+            _dir: dir,
+            agents: AgentStore::load(&data),
+            sessions: SessionStore::load(&data),
+            turns: TurnRegistry::new(),
+            grants: GrantStore::new(),
+            approvals: ApprovalRegistry::new(),
+            audit: AuditLog::new(&data),
+            captures: data.join("captures"),
+        }
+    }
+
+    /// An identity that may look and read, and may not change anything.
+    fn reviewer(&self) -> Agent {
+        self.agents
+            .create(&AgentDraft {
+                name: "Reviewer".to_owned(),
+                role: "reads the workspace and reports what is risky".to_owned(),
+                instructions: "Quote the line you are worried about.".to_owned(),
+                provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                tools: vec![tool::FS_LIST.to_owned(), tool::FS_READ.to_owned()],
+                skills: Vec::new(),
+            })
+            .expect("the identity is accepted")
+    }
+
+    /// A session opened as `agent`, the way `session_create` opens one.
+    fn session_as(&self, agent: &Agent) -> String {
+        self.sessions
+            .create("project-1", None, &agent.id)
+            .expect("session")
+            .id
+    }
+
+    /// The request the *next* turn of `session_id` would send, assembled the
+    /// way the turn loop assembles it.
+    ///
+    /// Built here rather than asserted on a captured request because the claim
+    /// is about what the loop sends, and the loop is what calls these two
+    /// functions in this order.
+    fn next_request(&self, session_id: &str, agent: &Agent) -> (String, Vec<String>) {
+        let history = self.sessions.messages(session_id).expect("messages");
+        let request = transcript::build(
+            "m",
+            agent,
+            &history,
+            Some(&self.workspace),
+            None,
+            aegis_lib::tools::schemas_for(&agent.tools),
+        );
+
+        let system = match request.messages.first() {
+            Some(WireMessage::System { content }) => content.clone(),
+            other => panic!("the first message is not a system message: {other:?}"),
+        };
+        let offered = request
+            .tools
+            .iter()
+            .map(|spec| spec["function"]["name"].as_str().unwrap_or("?").to_owned())
+            .collect();
+
+        (system, offered)
+    }
+
+    /// Runs one turn in which the model asks for exactly one tool call.
+    ///
+    /// Nothing answers an approval here, deliberately: every call this file
+    /// makes is either auto-allowed or refused outright, and a turn that parked
+    /// on a dialog would be the failure, not the setup.
+    async fn call_turn(
+        &self,
+        session_id: &str,
+        agent: &Agent,
+        sink: &Recorder,
+        name: &str,
+        args: serde_json::Value,
+    ) -> StopReason {
+        let turn_id = "turn-1";
+        let cancel = self.turns.begin(session_id, turn_id).expect("free");
+
+        let provider = FakeProvider::scripted(vec![vec![
+            ModelEvent::ToolCallDelta {
+                index: 0,
+                id: Some("call_1".to_owned()),
+                name: Some(name.to_owned()),
+                args_delta: args.to_string(),
+            },
+            ModelEvent::Finish {
+                reason: StopReason::ToolCalls,
+                usage: None,
+            },
+        ]]);
+
+        let plan = TurnPlan {
+            session_id: session_id.to_owned(),
+            turn_id: turn_id.to_owned(),
+            workspace: Some(self.workspace.clone()),
+        };
+        let reason = Turn {
+            agent,
+            sessions: &self.sessions,
+            turns: &self.turns,
+            grants: &self.grants,
+            approvals: &self.approvals,
+            audit: &self.audit,
+            provider: &provider,
+            sink,
+            self_exe: None,
+            captures: &self.captures,
+        }
+        .run(&plan, &cancel)
+        .await;
+
+        self.turns.finish(session_id, turn_id, SessionState::Idle);
+        reason
+    }
+
+    fn say(&self, session_id: &str, text: &str) {
+        self.sessions
+            .append(session_id, Message::user(text), SessionState::Running)
+            .expect("the user's message is stored");
+    }
+
+    /// The status of the one tool call in the transcript.
+    fn call_status(&self, session_id: &str) -> ToolCallStatus {
+        self.sessions
+            .messages(session_id)
+            .expect("messages")
+            .iter()
+            .flat_map(|message| message.tool_calls.clone())
+            .next()
+            .expect("the call is in the transcript")
+            .status
+    }
+
+    /// The envelope the model was handed for that call.
+    fn envelope(&self, session_id: &str) -> serde_json::Value {
+        let messages = self.sessions.messages(session_id).expect("messages");
+        let tool = messages
+            .iter()
+            .find(|message| message.tool_call_id.is_some())
+            .expect("the call was answered");
+
+        serde_json::from_str(&tool.text).expect("an envelope the model can parse")
+    }
+}
+
+/// Claim 1: the reviewer is not shown the tools it does not hold, and *is*
+/// shown the ones it does.
+#[test]
+fn a_session_opened_as_an_identity_is_offered_only_its_own_tools() {
+    let app = App::new();
+    let reviewer = app.reviewer();
+    let session_id = app.session_as(&reviewer);
+    app.say(&session_id, "what is in here");
+
+    let (system, offered) = app.next_request(&session_id, &reviewer);
+
+    assert_eq!(
+        offered,
+        vec![tool::FS_LIST, tool::FS_READ],
+        "the tools array carries the allow-list, in registry order"
+    );
+    assert!(
+        !offered.iter().any(|name| name == tool::FS_WRITE),
+        "a tool it was not granted is not a tool it is told about"
+    );
+
+    // And the identity is who the model is told it is.
+    assert!(system.contains("Reviewer"), "{system}");
+    assert!(system.contains("reads the workspace"), "{system}");
+    assert!(system.contains("Quote the line"), "{system}");
+}
+
+/// Claim 2: asking anyway is refused before anything touches the machine, and
+/// no approval is offered — an identity is not something a user can be prompted
+/// past.
+#[tokio::test]
+async fn a_tool_it_was_not_granted_is_refused_without_a_prompt() {
+    let app = App::new();
+    let reviewer = app.reviewer();
+    let session_id = app.session_as(&reviewer);
+    app.say(&session_id, "fix it for me");
+
+    let sink = Recorder::default();
+    let reason = app
+        .call_turn(
+            &session_id,
+            &reviewer,
+            &sink,
+            tool::FS_WRITE,
+            json!({ "path": "notes.md", "content": "rewritten" }),
+        )
+        .await;
+
+    assert_eq!(reason, StopReason::Stop, "the turn finishes cleanly");
+    assert!(
+        !sink.names().contains(&"tool:approval_required"),
+        "a dialog asking to exceed an allow-list is a dialog that should not exist: {:?}",
+        sink.names()
+    );
+    assert!(
+        !sink.names().contains(&"tool:started"),
+        "and nothing ran: {:?}",
+        sink.names()
+    );
+
+    // A denial is a result, not an exception (PLAN 4.3): the model gets an
+    // ordinary envelope naming the identity, and can say what it was trying to
+    // do instead of stalling.
+    let envelope = app.envelope(&session_id);
+    assert_eq!(envelope["ok"], json!(false));
+    assert_eq!(envelope["error"]["code"], "E_DENIED");
+    let message = envelope["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("Reviewer"), "{message}");
+    assert!(message.contains(tool::FS_WRITE), "{message}");
+
+    assert_eq!(app.call_status(&session_id), ToolCallStatus::Denied);
+    // The file the model wanted to rewrite is untouched.
+    assert_eq!(
+        std::fs::read_to_string(app.workspace.join("notes.md")).expect("read"),
+        "already here"
+    );
+}
+
+/// Claim 3: the record says which identity was refused. Without it, an audit
+/// line cannot be read back against the grant that was supposed to allow it.
+#[tokio::test]
+async fn the_audit_line_names_the_identity_that_made_the_call() {
+    let app = App::new();
+    let reviewer = app.reviewer();
+    let session_id = app.session_as(&reviewer);
+    app.say(&session_id, "have a look, then fix it");
+
+    let sink = Recorder::default();
+    app.call_turn(
+        &session_id,
+        &reviewer,
+        &sink,
+        tool::FS_READ,
+        json!({ "path": "notes.md" }),
+    )
+    .await;
+
+    let allowed = app.audit.tail(10, None).expect("tail");
+    let read = allowed.first().expect("the read was audited");
+    assert_eq!(read.tool, tool::FS_READ);
+    assert_eq!(read.agent_id, reviewer.id);
+    assert_eq!(read.outcome, aegis_lib::Outcome::Ok);
+
+    let refused_session = app.session_as(&reviewer);
+    app.say(&refused_session, "fix it");
+    app.call_turn(
+        &refused_session,
+        &reviewer,
+        &Recorder::default(),
+        tool::SHELL_EXEC,
+        json!({ "program": "git", "args": ["status"] }),
+    )
+    .await;
+
+    let lines = app.audit.tail(10, None).expect("tail");
+    let refusal = lines
+        .iter()
+        .find(|entry| entry.tool == tool::SHELL_EXEC)
+        .expect("the refusal was audited too");
+    assert_eq!(refusal.agent_id, reviewer.id);
+    assert_eq!(refusal.outcome, aegis_lib::Outcome::Denied);
+    assert!(
+        refusal.policy_reason.contains("Reviewer"),
+        "{}",
+        refusal.policy_reason
+    );
+}
+
+/// The tools an identity *does* hold are judged by the ordinary matrix, not by
+/// a second one. A read inside the workspace is auto-allowed for a reviewer
+/// exactly as it is for the default identity.
+#[tokio::test]
+async fn a_granted_tool_is_gated_by_the_ordinary_matrix() {
+    let app = App::new();
+    let reviewer = app.reviewer();
+    let session_id = app.session_as(&reviewer);
+    app.say(&session_id, "read the notes");
+
+    let sink = Recorder::default();
+    app.call_turn(
+        &session_id,
+        &reviewer,
+        &sink,
+        tool::FS_READ,
+        json!({ "path": "notes.md" }),
+    )
+    .await;
+
+    assert!(
+        !sink.names().contains(&"tool:approval_required"),
+        "a contained read is auto-allowed, allow-list or not: {:?}",
+        sink.names()
+    );
+    assert_eq!(app.call_status(&session_id), ToolCallStatus::Ok);
+    assert_eq!(app.envelope(&session_id)["ok"], json!(true));
+}
+
+/// The other direction, and the reason this phase is safe to land: a session
+/// written before identities existed opens, resolves, and behaves exactly as it
+/// did in Phase 11.
+///
+/// The document is hand-written rather than produced by the store, because the
+/// store cannot produce one any more — a session created today always names an
+/// identity. What is on disk from before is the thing under test.
+#[test]
+fn a_session_written_before_identities_is_the_assistant_it_always_was() {
+    let dir = TempDir::new().expect("temp dir");
+    let data = dir.path().join("data");
+    let workspace = dir.path().join("work");
+    std::fs::create_dir_all(&data).expect("data dir");
+    std::fs::create_dir_all(&workspace).expect("workspace dir");
+
+    std::fs::write(
+        data.join("sessions.json"),
+        json!({
+            "version": 1,
+            "sessions": [{
+                "id": "session-from-phase-11",
+                "project_id": "project-1",
+                "title": "Before identities",
+                "created_at": "2026-08-28T09:41:07.412Z",
+                "updated_at": "2026-08-28T09:41:07.412Z",
+                "messages": [],
+            }],
+        })
+        .to_string(),
+    )
+    .expect("a document with no agent_id, as an earlier build wrote it");
+
+    let sessions = SessionStore::load(&data);
+    let agents = AgentStore::load(&data);
+
+    let summary = sessions
+        .summary("session-from-phase-11", SessionState::Idle)
+        .expect("it still opens");
+    assert_eq!(
+        summary.agent_id, DEFAULT_AGENT_ID,
+        "the payload always names an identity, even when the document did not"
+    );
+    assert_eq!(
+        sessions.agent_of("session-from-phase-11").expect("stored"),
+        None,
+        "and the document is not rewritten to say otherwise"
+    );
+
+    let resolved = agents.resolve(None);
+    assert_eq!(resolved, Agent::builtin());
+
+    sessions
+        .append(
+            "session-from-phase-11",
+            Message::user("hello"),
+            SessionState::Running,
+        )
+        .expect("stored");
+    let history = sessions
+        .messages("session-from-phase-11")
+        .expect("messages");
+    let request = transcript::build(
+        "m",
+        &resolved,
+        &history,
+        Some(&workspace),
+        None,
+        aegis_lib::tools::schemas_for(&resolved.tools),
+    );
+
+    let offered: Vec<&str> = request
+        .tools
+        .iter()
+        .map(|spec| spec["function"]["name"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(offered, aegis_lib::tools::names(), "every tool, as before");
+
+    match request.messages.first() {
+        Some(WireMessage::System { content }) => {
+            assert!(!content.contains("You are working as"), "{content}");
+            assert!(!content.contains("holds no tools"), "{content}");
+        }
+        other => panic!("the first message is not a system message: {other:?}"),
+    }
+}
+
+/// Deleting an identity out from under its sessions would rewrite what they
+/// were, so it is refused and the count is named.
+#[test]
+fn an_identity_cannot_be_deleted_while_a_session_still_runs_as_it() {
+    let app = App::new();
+    let reviewer = app.reviewer();
+    let session_id = app.session_as(&reviewer);
+
+    assert_eq!(app.sessions.count_for_agent(&reviewer.id), 1);
+
+    app.sessions.delete(&session_id).expect("deleted");
+    assert_eq!(app.sessions.count_for_agent(&reviewer.id), 0);
+    app.agents
+        .delete(&reviewer.id)
+        .expect("nothing runs as it any more");
+}

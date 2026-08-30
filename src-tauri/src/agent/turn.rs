@@ -50,9 +50,9 @@ use tokio_util::sync::CancellationToken;
 use crate::approval::{Answer, ApprovalRegistry, Decision as Answered, ResolvedBy, APPROVAL_TTL};
 use crate::audit::{AuditDecision, AuditLog, Outcome};
 use crate::error::ErrorCode;
-use crate::policy::{self, AskRequest, Decision, GrantStore, PolicyCtx};
+use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
 use crate::store::{
-    Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
+    Agent, Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
 };
 use crate::tools::{self, NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult};
 use crate::workspace;
@@ -97,6 +97,17 @@ pub struct TurnPlan {
 /// once from [`AppState`](crate::state::AppState), and adding a dependency in
 /// a later phase does not re-thread every signature.
 pub struct Turn<'a> {
+    /// The identity this turn runs as (PLAN 7.3, Phase 12).
+    ///
+    /// Resolved once per turn by the caller rather than read here, for the same
+    /// reason the provider is: an identity can be edited between two messages
+    /// in the same session, and a turn that re-read it mid-round could show the
+    /// model one set of tools and then judge its calls against another.
+    ///
+    /// It reaches three places, and only three: the system message (who this
+    /// is), the tool schemas (what it may ask for), and the policy context
+    /// (what it may actually do). Nothing else in the loop branches on it.
+    pub agent: &'a Agent,
     /// Where messages are read from and written to.
     pub sessions: &'a SessionStore,
     /// Which sessions are running, and how a blocked one is marked.
@@ -229,10 +240,17 @@ impl Turn<'_> {
 
             let request = transcript::build(
                 self.provider.model(),
+                self.agent,
                 &history,
                 plan.workspace.as_deref(),
                 shared.as_deref(),
-                tools::schemas(),
+                // Half of the tool ACL, and the half the model can see: an
+                // identity that was not granted `shell_exec` is not offered
+                // one, so it never spends a round asking for it. The other half
+                // is the refusal in `policy::decide_call`, which is what catches
+                // a call replayed out of a transcript written under a wider
+                // grant.
+                tools::schemas_for(&self.agent.tools),
             );
 
             let stream = self.provider.stream(request);
@@ -505,6 +523,7 @@ impl Turn<'_> {
             };
             let ctx = ToolCtx {
                 session_id: &plan.session_id,
+                agent_id: &self.agent.id,
                 turn_id: &plan.turn_id,
                 call_id: &call.call_id,
                 audit: self.audit,
@@ -526,7 +545,11 @@ impl Turn<'_> {
             let policy_ctx =
                 PolicyCtx::new(&plan.session_id, plan.workspace.as_deref(), self.grants)
                     .with_self_exe(self.self_exe)
-                    .with_screen(screen.as_ref());
+                    .with_screen(screen.as_ref())
+                    .with_identity(Identity {
+                        name: &self.agent.name,
+                        tools: &self.agent.tools,
+                    });
 
             let judged = match policy::decide(&policy_ctx, &call.name, args.clone()) {
                 Decision::Auto {
@@ -712,6 +735,7 @@ impl Turn<'_> {
             );
             let ctx = ToolCtx {
                 session_id: &plan.session_id,
+                agent_id: &self.agent.id,
                 turn_id: &plan.turn_id,
                 call_id: &call.call_id,
                 audit: self.audit,
@@ -1005,6 +1029,10 @@ mod tests {
         sink: Recorder,
         session_id: String,
         captures: PathBuf,
+        /// The identity every fixture turn runs as: the built-in one, which
+        /// holds every tool, so these tests are about the loop and not about
+        /// an allow-list.
+        agent: Agent,
     }
 
     impl Fixture {
@@ -1017,7 +1045,10 @@ mod tests {
 
             let captures = data.join("captures");
             let sessions = SessionStore::load(&data);
-            let session_id = sessions.create("p1", None).expect("session").id;
+            let session_id = sessions
+                .create("p1", None, crate::store::DEFAULT_AGENT_ID)
+                .expect("session")
+                .id;
 
             // Registered the way `session_send` registers it, because the
             // session's state — running, or waiting for a person — is read
@@ -1036,6 +1067,7 @@ mod tests {
                 sink: Recorder::default(),
                 session_id,
                 captures,
+                agent: Agent::builtin(),
             }
         }
 
@@ -1049,6 +1081,7 @@ mod tests {
 
         fn turn<'a>(&'a self, provider: &'a dyn Provider) -> Turn<'a> {
             Turn {
+                agent: &self.agent,
                 sessions: &self.sessions,
                 turns: &self.turns,
                 grants: &self.grants,

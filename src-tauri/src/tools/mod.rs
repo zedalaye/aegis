@@ -410,6 +410,36 @@ pub fn schemas() -> Vec<Value> {
     registry().iter().map(ToolSpec::to_schema).collect()
 }
 
+/// The `tools` array for a model request, narrowed to one identity's
+/// allow-list (PLAN 7.3, Phase 12).
+///
+/// Filtering the *schemas* is half of what a tool ACL is. A model cannot ask
+/// for a function it was never shown, so an identity that was not granted
+/// `shell_exec` does not spend a turn discovering that it may not run one — it
+/// simply has no such tool. The other half is policy refusing the call anyway
+/// ([`decide_call`](crate::policy::decide_call)), because a transcript carries
+/// the tools of the turn that wrote it and an identity's grants can be edited
+/// between two turns.
+///
+/// Registry order is preserved rather than the allow-list's, so the order the
+/// model reads them in is the registry's regardless of how the list was typed.
+pub fn schemas_for(allowed: &[String]) -> Vec<Value> {
+    registry()
+        .iter()
+        .filter(|spec| allowed.iter().any(|name| name == spec.name))
+        .map(ToolSpec::to_schema)
+        .collect()
+}
+
+/// Every tool name this build can run, in registry order.
+///
+/// The vocabulary an identity's allow-list is validated against
+/// ([`store::agents`](crate::store::agents)), so a grant of a tool that does
+/// not exist is not a thing that can be stored.
+pub fn names() -> Vec<&'static str> {
+    registry().iter().map(|spec| spec.name).collect()
+}
+
 /// Looks a tool up by name.
 pub fn spec(name: &str) -> Option<&'static ToolSpec> {
     registry().iter().find(|spec| spec.name == name)
@@ -428,6 +458,13 @@ pub fn spec(name: &str) -> Option<&'static ToolSpec> {
 pub struct ToolCtx<'a> {
     /// Which session made the call. Every audit line carries it.
     pub session_id: &'a str,
+    /// Which identity it was made as (PLAN 7.3, Phase 12).
+    ///
+    /// Carried for the log rather than for the call: whether the identity may
+    /// use this tool was settled by policy before anything got here, and a tool
+    /// that re-checked would be a second copy of a rule that can then disagree
+    /// with the first.
+    pub agent_id: &'a str,
     /// Which turn within the session.
     pub turn_id: &'a str,
     /// The model's own id for this call.
@@ -462,6 +499,7 @@ impl fmt::Debug for ToolCtx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ToolCtx")
             .field("session_id", &self.session_id)
+            .field("agent_id", &self.agent_id)
             .field("turn_id", &self.turn_id)
             .field("call_id", &self.call_id)
             .field("captures", &self.captures)
@@ -539,6 +577,7 @@ pub async fn run(
 
     let audit = ctx.audit.append(&AuditRecord {
         session_id: ctx.session_id,
+        agent_id: ctx.agent_id,
         turn_id: ctx.turn_id,
         call_id: ctx.call_id,
         tool: name,
@@ -591,6 +630,7 @@ pub fn refuse(
 ) -> ToolOutcome {
     let audit = ctx.audit.append(&AuditRecord {
         session_id: ctx.session_id,
+        agent_id: ctx.agent_id,
         turn_id: ctx.turn_id,
         call_id: ctx.call_id,
         tool: tool_name,

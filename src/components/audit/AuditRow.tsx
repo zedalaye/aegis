@@ -3,9 +3,9 @@
  *
  * The row answers, in order, the four questions someone opening the drawer
  * has: *when*, *what tool*, *did it run*, and *how did it end*. Everything
- * else — the ids, the digest, the file a capture left behind — is behind a
- * disclosure, because a drawer that made every row six lines tall would be a
- * drawer nobody scrolls.
+ * else — the ids, the identity it ran as, the digest, the file a capture left
+ * behind — is behind a disclosure, because a drawer that made every row six
+ * lines tall would be a drawer nobody scrolls.
  *
  * Two things this deliberately does not do.
  *
@@ -140,6 +140,16 @@ export default function AuditRow({
                 <dd className="facts__path">{entry.session_id}</dd>
               </>
             ) : null}
+            {/* Empty on a line written before identities existed. Drawn as
+                nothing rather than as "default", because a line from an
+                earlier build did not record one and saying it did would be
+                inventing the record. */}
+            {entry.agent_id === "" ? null : (
+              <>
+                <dt>Identity</dt>
+                <dd className="facts__path">{entry.agent_id}</dd>
+              </>
+            )}
             <dt>Turn</dt>
             <dd className="facts__path">{entry.turn_id}</dd>
             <dt>Call</dt>

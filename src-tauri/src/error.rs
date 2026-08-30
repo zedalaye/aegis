@@ -30,7 +30,10 @@ use serde::{Serialize, Serializer};
 ///   "the value you just typed cannot be used", which is a different thing
 ///   from a runtime failure and needs a different answer from the UI — mark
 ///   the field, keep the form open. No screen written before Phase 8 has to
-///   learn it, because the only screen that can raise it is the new one.
+///   learn it, because the only screen that can raise it is the new one. The
+///   agent form of Phase 12 raises the same code for the same reason: a second
+///   vocabulary for "this field is wrong" would be a second thing every form
+///   has to learn in order to behave the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// A turn is already running in this session.
@@ -259,6 +262,58 @@ pub enum AppError {
         reason: String,
     },
 
+    /// A value on the identity form cannot be used (PLAN 7.3, Phase 12).
+    ///
+    /// Same shape and same code as [`AppError::Settings`], deliberately: both
+    /// are a form saying "this field is wrong, here is what a working value
+    /// looks like", and the panel answers both the same way — mark the input,
+    /// keep the text. A separate variant rather than a shared one only so the
+    /// log says which form it was.
+    #[error("that {field} cannot be used: {reason}")]
+    Agent {
+        /// The field, named as the user sees it — "name", "role", "tools".
+        field: &'static str,
+        /// What is wrong with the value, and what a working one looks like.
+        reason: String,
+    },
+
+    /// No agent carries that id, so the UI is holding a stale list.
+    ///
+    /// Same shape and same reasoning as [`AppError::ProjectNotFound`]: refetch
+    /// rather than branch on the code.
+    #[error("that identity no longer exists")]
+    AgentNotFound {
+        /// The id that was looked up. Logged, not shown.
+        id: String,
+    },
+
+    /// The built-in identity was asked to change.
+    ///
+    /// It is the single implicit assistant of Phases 5–11 written down, and it
+    /// is what every session that named no identity resolves to. An editable
+    /// default is one whose meaning drifts under the sessions already using it;
+    /// a deletable one strands them. Carries no dedicated code for the reason
+    /// [`AppError::SessionTitle`] does not: the UI does not draw the controls
+    /// that reach it, and this is the enforcement behind that.
+    #[error("the built-in identity cannot be {action}")]
+    AgentBuiltin {
+        /// What was attempted, for the message: "edited", "deleted".
+        action: &'static str,
+    },
+
+    /// An identity was deleted while sessions still run as it.
+    ///
+    /// Refused rather than cascaded. Reassigning those sessions to another
+    /// identity would rewrite what they were: a transcript full of `fs_write`
+    /// calls made as a "scribe" is not a transcript a "reviewer" produced.
+    /// Deleting them is the user's decision to take, so the count is named and
+    /// the identity is kept.
+    #[error("this identity cannot be deleted while sessions still run as it ({count} do)")]
+    AgentInUse {
+        /// How many sessions are bound to it.
+        count: usize,
+    },
+
     /// The OS credential store could not be used.
     ///
     /// Deliberately carries nothing. Every platform's failure text names
@@ -318,7 +373,7 @@ impl AppError {
             Self::TurnBusy { .. } => ErrorCode::TurnBusy,
             Self::ApprovalStale { .. } => ErrorCode::ApprovalStale,
             Self::GrantNotAllowed { .. } => ErrorCode::GrantNotAllowed,
-            Self::Settings { .. } => ErrorCode::InvalidSetting,
+            Self::Settings { .. } | Self::Agent { .. } => ErrorCode::InvalidSetting,
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
@@ -326,6 +381,9 @@ impl AppError {
             | Self::ProjectNotFound { .. }
             | Self::SessionNotFound { .. }
             | Self::SessionTitle
+            | Self::AgentNotFound { .. }
+            | Self::AgentBuiltin { .. }
+            | Self::AgentInUse { .. }
             | Self::Internal { .. }
             | Self::Audit { .. }
             | Self::Store { .. } => ErrorCode::Internal,
@@ -338,11 +396,11 @@ impl AppError {
 /// Kept as a private mirror rather than derived on [`AppError`] directly, so
 /// the wire format stays flat and stable however the Rust enum grows.
 ///
-/// `field` is present only where there is one — today, a refused settings
-/// value. It is what lets a form mark the input the user has to fix instead of
-/// raising a banner over the whole panel, and it is omitted rather than null
-/// for every other failure, so nothing that does not have a field has to say
-/// so.
+/// `field` is present only where there is one — a refused settings value, or a
+/// refused value on the identity form. It is what lets a form mark the input
+/// the user has to fix instead of raising a banner over the whole panel, and it
+/// is omitted rather than null for every other failure, so nothing that does
+/// not have a field has to say so.
 #[derive(Serialize)]
 struct AppErrorPayload<'a> {
     code: ErrorCode,
@@ -356,7 +414,7 @@ impl AppError {
     /// The input this failure is about, when it is about one.
     const fn field(&self) -> Option<&'static str> {
         match self {
-            Self::Settings { field, .. } => Some(field),
+            Self::Settings { field, .. } | Self::Agent { field, .. } => Some(field),
             _ => None,
         }
     }

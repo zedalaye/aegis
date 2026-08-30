@@ -20,6 +20,14 @@
 //! path, program, arguments and working directory before anything mutating
 //! runs — and that every call, approved or not, leaves an audit line.
 //!
+//! From Phase 12 one question is asked before the table is read: may this
+//! session's *identity* use this tool at all (PLAN 7.3)? That is not a
+//! judgement about a path, it does not depend on a workspace, and it cannot be
+//! approved past — so it is a check in [`decide_call`] rather than a row in the
+//! matrix. A tool the identity does hold is then judged exactly as before: an
+//! allow-list narrows what an identity could ever do, and never auto-allows a
+//! call.
+//!
 //! Layout: [`path`] resolves and contains, [`matrix`] holds the decision table
 //! of PLAN 3, [`grants`] remembers what a session already approved, and this
 //! module is the entry point that puts the three together.
@@ -470,6 +478,30 @@ pub struct ScreenGeometry {
     pub logical_height: u32,
 }
 
+/// The identity a call is made under, as policy needs to see it
+/// (PLAN 7.3, Phase 12).
+///
+/// Two fields rather than the whole [`Agent`](crate::store::Agent): policy has
+/// no business with an identity's instructions or its provider binding, and
+/// keeping the borrow this narrow is what lets [`PolicyCtx`] stay `Copy`. The
+/// name is here because it goes in the refusal — "the Reviewer identity is not
+/// allowed to use `fs_write`" is an answer the model can act on, and "denied"
+/// is not.
+#[derive(Debug, Clone, Copy)]
+pub struct Identity<'a> {
+    /// How the identity is named to the user and to the model.
+    pub name: &'a str,
+    /// The tools it may call.
+    pub tools: &'a [String],
+}
+
+impl Identity<'_> {
+    /// Whether this identity may call `tool`.
+    fn allows(&self, tool: &str) -> bool {
+        self.tools.iter().any(|granted| granted == tool)
+    }
+}
+
 /// What a decision needs to know beyond the call itself.
 #[derive(Debug, Clone, Copy)]
 pub struct PolicyCtx<'a> {
@@ -490,6 +522,14 @@ pub struct PolicyCtx<'a> {
     pub self_exe: Option<&'a Path>,
     /// The display geometry a capture would use, when it is known.
     pub screen: Option<&'a ScreenGeometry>,
+    /// The identity the call is made under, and the tools it holds.
+    ///
+    /// `None` is "no identity is bound to this decision", which means every
+    /// registered tool — the behaviour of Phases 4–11, and what a test that has
+    /// no opinion about identities gets. The turn loop always names one: it
+    /// resolves the session's identity before the first round and passes it
+    /// here, so the runtime never takes this branch.
+    pub identity: Option<Identity<'a>>,
 }
 
 impl<'a> PolicyCtx<'a> {
@@ -501,6 +541,7 @@ impl<'a> PolicyCtx<'a> {
             grants,
             self_exe: None,
             screen: None,
+            identity: None,
         }
     }
 
@@ -515,6 +556,13 @@ impl<'a> PolicyCtx<'a> {
     #[must_use]
     pub const fn with_screen(mut self, screen: Option<&'a ScreenGeometry>) -> Self {
         self.screen = screen;
+        self
+    }
+
+    /// Names the identity the call is made under, and the tools it holds.
+    #[must_use]
+    pub const fn with_identity(mut self, identity: Identity<'a>) -> Self {
+        self.identity = Some(identity);
         self
     }
 }
@@ -540,6 +588,33 @@ pub fn decide(ctx: &PolicyCtx<'_>, tool_name: &str, args: serde_json::Value) -> 
 /// [`decide`], for a call that is already parsed.
 pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
     let tool_name = call.tool();
+
+    // Before the workspace, because it does not depend on one: an identity that
+    // holds no `fs_write` holds none whether or not a folder is mounted, and
+    // "you may not do this" is a truer answer than "there is nowhere to do it".
+    //
+    // The model was never shown this tool's schema
+    // ([`schemas_for`](crate::tools::schemas_for)), so reaching here means the
+    // call came from a transcript written under a wider grant, or the model
+    // invented the name. Both are refused the same way, and both are refused
+    // *here* rather than in the registry: a second enforcement point is a
+    // second rule to keep in step with this one.
+    if let Some(identity) = ctx.identity {
+        if !identity.allows(tool_name) {
+            tracing::info!(
+                tool = tool_name,
+                identity = identity.name,
+                "a tool call outside the identity's allow-list"
+            );
+            return Decision::deny(
+                ErrorCode::Denied,
+                format!(
+                    "the {} identity is not allowed to use `{tool_name}`",
+                    identity.name
+                ),
+            );
+        }
+    }
 
     let Some(workspace) = ctx.workspace else {
         return Decision::deny(
@@ -608,6 +683,76 @@ mod tests {
     fn a_stray_argument_does_not_stall_the_turn() {
         let call = ToolCall::parse(tool::FS_LIST, json!({ "path": ".", "depth": 3 }));
         assert!(call.is_ok(), "unknown keys are ignored, not refused");
+    }
+
+    /// The Phase 12 exit condition at the gate: an identity cannot use a tool
+    /// it was not granted, even when it asks for one directly.
+    #[test]
+    fn a_tool_outside_the_identitys_allow_list_is_refused_by_name() {
+        let grants = GrantStore::new();
+        let workspace = std::env::current_dir().expect("a workspace to measure against");
+        let allowed = vec![tool::FS_READ.to_owned(), tool::FS_LIST.to_owned()];
+        let ctx = PolicyCtx::new("s1", Some(&workspace), &grants).with_identity(Identity {
+            name: "Reviewer",
+            tools: &allowed,
+        });
+
+        match decide(
+            &ctx,
+            tool::FS_WRITE,
+            json!({ "path": "a.txt", "content": "x" }),
+        ) {
+            Decision::Deny { code, reason } => {
+                // `E_DENIED` rather than a code of its own: the system message
+                // already tells the model what to do with a denial, and a
+                // second vocabulary for "policy said no" is one more thing for
+                // it to get wrong.
+                assert_eq!(code, ErrorCode::Denied);
+                assert!(reason.contains("Reviewer"), "{reason}");
+                assert!(reason.contains(tool::FS_WRITE), "{reason}");
+            }
+            other => panic!("expected a denial, got {other:?}"),
+        }
+
+        // And the tools it does hold are judged exactly as before.
+        assert!(matches!(
+            decide(&ctx, tool::FS_LIST, json!({ "path": "." })),
+            Decision::Auto { .. }
+        ));
+    }
+
+    /// The refusal is about the identity, not about the workspace: it holds
+    /// when there is no folder to act in either, and it is the answer given.
+    #[test]
+    fn the_allow_list_is_checked_before_the_workspace_is() {
+        let grants = GrantStore::new();
+        let ctx = PolicyCtx::new("s1", None, &grants).with_identity(Identity {
+            name: "Scribe",
+            tools: &[],
+        });
+
+        match decide(&ctx, tool::FS_READ, json!({ "path": "a.txt" })) {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::Denied);
+                assert!(reason.contains("Scribe"), "{reason}");
+            }
+            other => panic!("expected a denial, got {other:?}"),
+        }
+    }
+
+    /// A decision with no identity behind it is the pre-Phase-12 one. Every
+    /// policy test written before identities existed relies on this.
+    #[test]
+    fn a_decision_with_no_identity_gates_on_the_matrix_alone() {
+        let grants = GrantStore::new();
+        let workspace = std::env::current_dir().expect("a workspace to measure against");
+        let ctx = PolicyCtx::new("s1", Some(&workspace), &grants);
+
+        assert!(ctx.identity.is_none());
+        assert!(matches!(
+            decide(&ctx, tool::FS_LIST, json!({ "path": "." })),
+            Decision::Auto { .. }
+        ));
     }
 
     #[test]

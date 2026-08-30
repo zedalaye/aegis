@@ -27,9 +27,9 @@ use aegis_lib::agent::provider::openai;
 use aegis_lib::agent::turn::TurnPlan;
 use aegis_lib::agent::wire::{ToolCallAssembler, WireMessage};
 use aegis_lib::{
-    ApiKey, ApprovalRegistry, AuditDecision, AuditLog, Event, GrantStore, Message, ModelEvent,
-    ModelRequest, OpenAiProvider, Provider, ProviderSettings, Role, SessionState, SessionStore,
-    StopReason, Turn, TurnRegistry,
+    Agent, ApiKey, ApprovalRegistry, AuditDecision, AuditLog, Event, GrantStore, Message,
+    ModelEvent, ModelRequest, OpenAiProvider, Provider, ProviderSettings, Role, SessionState,
+    SessionStore, StopReason, Turn, TurnRegistry, DEFAULT_AGENT_ID,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -661,7 +661,9 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
     let audit = AuditLog::new(&data);
     let sink = Recorder::default();
 
-    let session = sessions.create("project-1", None).expect("a session");
+    let session = sessions
+        .create("project-1", None, DEFAULT_AGENT_ID)
+        .expect("a session");
     sessions
         .append(
             &session.id,
@@ -681,6 +683,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
     };
 
     let reason = Turn {
+        agent: &Agent::builtin(),
         sessions: &sessions,
         turns: &turns,
         grants: &GrantStore::new(),

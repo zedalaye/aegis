@@ -15,7 +15,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 
 use aegis_lib::audit::{AuditDecision, AuditLog, AuditRecord, Outcome};
-use aegis_lib::ErrorCode;
+use aegis_lib::{ErrorCode, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -37,6 +37,7 @@ impl Fixture {
     fn append(&self, session: &str, tool: &str, args: &Value) {
         self.log.append(&AuditRecord {
             session_id: session,
+            agent_id: DEFAULT_AGENT_ID,
             turn_id: "turn-1",
             call_id: "call-1",
             tool,
@@ -124,6 +125,7 @@ fn the_decision_vocabulary_is_the_one_the_ui_branches_on() {
     ] {
         fixture.log.append(&AuditRecord {
             session_id: "s1",
+            agent_id: DEFAULT_AGENT_ID,
             turn_id: "t1",
             call_id: "c1",
             tool: "fs_write",
@@ -157,6 +159,7 @@ fn every_outcome_has_a_stable_spelling() {
     ] {
         fixture.log.append(&AuditRecord {
             session_id: "s1",
+            agent_id: DEFAULT_AGENT_ID,
             turn_id: "t1",
             call_id: "c1",
             tool: "fs_read",
@@ -342,6 +345,7 @@ fn a_log_in_a_directory_that_does_not_exist_yet_is_created_with_it() {
 
     log.append(&AuditRecord {
         session_id: "s1",
+        agent_id: DEFAULT_AGENT_ID,
         turn_id: "t1",
         call_id: "c1",
         tool: "fs_list",

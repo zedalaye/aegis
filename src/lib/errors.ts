@@ -45,8 +45,8 @@ export type IpcErrorPayload = {
   readonly retryable: boolean;
   /**
    * The input the failure is about, when it is about one — "base URL",
-   * "model". Absent on every failure that is not about a form field, which is
-   * most of them.
+   * "model", "tools". Absent on every failure that is not about a form field,
+   * which is most of them.
    */
   readonly field?: string;
 };
@@ -62,9 +62,9 @@ export class IpcError extends Error {
   /**
    * The input this failure is about, when the runtime named one.
    *
-   * Only `E_INVALID_SETTING` carries it today. A form uses it to mark the
-   * field the user has to fix instead of raising a banner over the whole
-   * panel.
+   * Only `E_INVALID_SETTING` carries it today — from the provider form and,
+   * since Phase 12, the identity form. A form uses it to mark the field the
+   * user has to fix instead of raising a banner over the whole panel.
    */
   readonly field: string | null;
 

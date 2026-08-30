@@ -473,6 +473,7 @@ mod tests {
     fn request_saying(text: &str) -> ModelRequest {
         transcript::build(
             FAKE_MODEL,
+            &crate::store::Agent::builtin(),
             &[crate::store::Message::user(text)],
             Some(&PathBuf::from("/home/p/work")),
             None,
@@ -511,7 +512,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_without_a_workspace_is_reported_as_such() {
-        let request = transcript::build(FAKE_MODEL, &[], None, None, Vec::new());
+        let request = transcript::build(
+            FAKE_MODEL,
+            &crate::store::Agent::builtin(),
+            &[],
+            None,
+            None,
+            Vec::new(),
+        );
         let text = text_of(&drain(&FakeProvider::instant(), request).await);
 
         assert!(text.contains("no workspace"), "{text}");

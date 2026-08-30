@@ -12,7 +12,10 @@
 //! Phase 11 it also carries the shared workspace's current state, which changes
 //! faster still: it is read out of the files on every request
 //! ([`workspace::digest`](crate::workspace::digest)) and handed in here as
-//! text, so this module keeps its one direction and never touches a disk.
+//! text, so this module keeps its one direction and never touches a disk. From
+//! Phase 12 it opens with the session's identity — who this is and what it is
+//! for — which is rebuilt for the same reason: an identity can be edited
+//! between two turns, and the next request should carry the edit.
 //!
 //! The second is repair. The chat-completions API has a structural rule that
 //! the transcript can violate: every tool call in an assistant message must be
@@ -25,7 +28,7 @@
 
 use std::path::Path;
 
-use crate::store::{Message, Role, ToolCallRecord, ToolCallStatus};
+use crate::store::{Agent, Message, Role, ToolCallRecord, ToolCallStatus};
 use crate::tools::READ_MAX_BYTES;
 
 use super::wire::{ModelRequest, WireMessage, WireToolCall};
@@ -54,20 +57,54 @@ replies short, and say plainly when you are not sure.";
 /// model has nothing new to learn in order to read it.
 const UNANSWERED_ENVELOPE: &str = r#"{"ok":false,"tool":"","content":"","truncated":false,"bytes":0,"meta":{},"error":{"code":"E_CANCELLED","message":"this call never ran: the turn ended before it was executed"}}"#;
 
-/// The system message for a session, given its workspace and shared state.
+/// The system message for a session: its identity, its workspace, its shared
+/// state.
+///
+/// The order is the order of how slowly the parts change. The standing
+/// instructions never change. The identity changes when someone edits it. The
+/// workspace changes when the project does. The shared digest changes on every
+/// request. Reading top to bottom is therefore reading from "what is always
+/// true" to "what is true right now", which is also the order that survives a
+/// model skimming it.
+///
+/// `agent` is the identity the session is bound to (PLAN 7.3, Phase 12). The
+/// built-in one carries no role and no instructions, so a default session's
+/// message is byte for byte the one Phase 11 produced.
 ///
 /// The workspace is named in full because a model asked to work "in the
 /// project" with no path guesses one, and a guessed absolute path is exactly
 /// the tool call the user then has to read carefully and refuse.
 ///
 /// `shared` is the shared-workspace digest (PLAN 7.3, Phase 11), or `None` for
-/// a folder that does not use the convention. It goes last, after the standing
-/// instructions and the session's own facts, because it is the part that
-/// differs on every request — and because it is *state*, not procedure. The
-/// prompt stays a policy summary plus what is true right now; runbooks are
-/// skills, and skills are Phase 13 (PLAN 7.1, *System prompt*).
-pub fn system_message(workspace: Option<&Path>, shared: Option<&str>) -> String {
+/// a folder that does not use the convention. It goes last because it is
+/// *state*, not procedure. The prompt stays a policy summary plus what is true
+/// right now; runbooks are skills, and skills are Phase 13 (PLAN 7.1, *System
+/// prompt*) — which is also why an identity's instructions are capped in the
+/// store rather than trimmed here.
+pub fn system_message(agent: &Agent, workspace: Option<&Path>, shared: Option<&str>) -> String {
     let mut prompt = String::from(SYSTEM_PROMPT);
+
+    if !agent.role.is_empty() {
+        prompt.push_str(&format!(
+            "\n\nYou are working as `{}`: {}.",
+            agent.name,
+            agent.role.trim_end_matches('.')
+        ));
+    }
+    if !agent.instructions.is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(&agent.instructions);
+    }
+    // Said out loud only when it is the whole answer. Listing the granted tools
+    // would be restating the schemas the model already has, and inviting it to
+    // argue with them; having *none* is the one case the schemas cannot state,
+    // because an absence is not something a `tools` array can carry.
+    if agent.tools.is_empty() {
+        prompt.push_str(
+            "\n\nThis identity holds no tools, so nothing you say can touch the \
+             machine. Say so if the user asks for anything that would need one.",
+        );
+    }
 
     match workspace {
         Some(path) => {
@@ -108,13 +145,14 @@ pub fn system_message(workspace: Option<&Path>, shared: Option<&str>) -> String 
 /// one, and two system messages is not a shape the API defines.
 pub fn build(
     model: &str,
+    agent: &Agent,
     history: &[Message],
     workspace: Option<&Path>,
     shared: Option<&str>,
     tools: Vec<serde_json::Value>,
 ) -> ModelRequest {
     let mut messages = vec![WireMessage::System {
-        content: system_message(workspace, shared),
+        content: system_message(agent, workspace, shared),
     }];
 
     for message in history {
@@ -220,6 +258,24 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::store::Agent;
+
+    /// The default identity: what every session before Phase 12 resolves to.
+    fn assistant() -> Agent {
+        Agent::builtin()
+    }
+
+    /// A narrow identity, for the parts of the message that are about one.
+    fn reviewer() -> Agent {
+        Agent {
+            name: "Reviewer".to_owned(),
+            role: "reviews changes and reports what is risky".to_owned(),
+            instructions: "File what you find in decisions/DECISIONS.md.".to_owned(),
+            tools: vec![crate::policy::tool::FS_READ.to_owned()],
+            ..Agent::builtin()
+        }
+    }
+
     fn call(id: &str) -> ToolCallRecord {
         ToolCallRecord {
             call_id: id.to_owned(),
@@ -233,7 +289,7 @@ mod tests {
 
     #[test]
     fn the_system_message_names_the_workspace() {
-        let prompt = system_message(Some(&PathBuf::from("/home/p/work")), None);
+        let prompt = system_message(&assistant(), Some(&PathBuf::from("/home/p/work")), None);
 
         assert!(prompt.contains("/home/p/work"), "{prompt}");
         assert!(
@@ -245,10 +301,60 @@ mod tests {
 
     #[test]
     fn a_session_without_a_workspace_is_told_so() {
-        let prompt = system_message(None, None);
+        let prompt = system_message(&assistant(), None, None);
 
         assert!(prompt.contains("no workspace folder"), "{prompt}");
         assert!(!prompt.contains("Reads inside it"), "{prompt}");
+    }
+
+    /// The built-in identity is the assistant of Phases 5–11, named. If it
+    /// changed the message, every session written before Phase 12 would start
+    /// behaving differently for a migration nobody asked for.
+    #[test]
+    fn the_default_identity_leaves_the_message_exactly_as_it_was() {
+        let prompt = system_message(&assistant(), Some(&PathBuf::from("/w")), None);
+
+        assert!(!prompt.contains("You are working as"), "{prompt}");
+        assert!(!prompt.contains("holds no tools"), "{prompt}");
+        assert!(prompt.starts_with(SYSTEM_PROMPT), "{prompt}");
+    }
+
+    /// An identity is who the model is, so it comes before the facts of the
+    /// session — and before anything that changes between two turns.
+    #[test]
+    fn an_identity_names_itself_before_the_session_facts() {
+        let prompt = system_message(&reviewer(), Some(&PathBuf::from("/w")), None);
+
+        let identity = prompt.find("Reviewer").expect("the identity is named");
+        let workspace = prompt.find("The workspace is").expect("and the folder");
+        assert!(identity < workspace, "{prompt}");
+
+        assert!(prompt.contains("reviews changes"), "the role is stated");
+        assert!(
+            prompt.contains("decisions/DECISIONS.md"),
+            "and its instructions are carried"
+        );
+    }
+
+    /// The tools an identity holds are the schemas it is shown; restating them
+    /// invites argument. Holding *none* is the one thing a `tools` array cannot
+    /// express, so it is the one thing said in words.
+    #[test]
+    fn an_identity_with_no_tools_is_told_so_and_one_with_tools_is_not() {
+        let none = Agent {
+            tools: Vec::new(),
+            ..reviewer()
+        };
+        assert!(
+            system_message(&none, Some(&PathBuf::from("/w")), None).contains("holds no tools"),
+            "an identity that cannot act should not discover it one refusal at a time"
+        );
+
+        let some = system_message(&reviewer(), Some(&PathBuf::from("/w")), None);
+        assert!(
+            !some.contains("holds no tools"),
+            "an identity with tools has nothing to say about them: {some}"
+        );
     }
 
     /// The shared state is appended after the standing instructions, not woven
@@ -256,8 +362,12 @@ mod tests {
     /// workspace uses the convention (PLAN 7.3, Phase 11).
     #[test]
     fn the_shared_state_is_appended_and_changes_nothing_before_it() {
-        let plain = system_message(Some(&PathBuf::from("/w")), None);
-        let shared = system_message(Some(&PathBuf::from("/w")), Some("status/STATUS.md:\nquiet"));
+        let plain = system_message(&assistant(), Some(&PathBuf::from("/w")), None);
+        let shared = system_message(
+            &assistant(),
+            Some(&PathBuf::from("/w")),
+            Some("status/STATUS.md:\nquiet"),
+        );
 
         assert!(shared.starts_with(&plain), "{shared}");
         assert!(shared.ends_with("status/STATUS.md:\nquiet"), "{shared}");
@@ -272,7 +382,14 @@ mod tests {
             Message::assistant("Three files.", Vec::new()),
         ];
 
-        let request = build("m", &history, Some(&PathBuf::from("/w")), None, Vec::new());
+        let request = build(
+            "m",
+            &assistant(),
+            &history,
+            Some(&PathBuf::from("/w")),
+            None,
+            Vec::new(),
+        );
 
         assert!(matches!(request.messages[0], WireMessage::System { .. }));
         assert!(matches!(request.messages[1], WireMessage::User { .. }));
@@ -316,7 +433,7 @@ mod tests {
             Message::user("never mind, what about this"),
         ];
 
-        let request = build("m", &history, None, None, Vec::new());
+        let request = build("m", &assistant(), &history, None, None, Vec::new());
 
         let answered: Vec<&str> = request
             .messages
@@ -353,7 +470,7 @@ mod tests {
             Message::tool("call_1", r#"{"ok":true}"#),
         ];
 
-        let request = build("m", &history, None, None, Vec::new());
+        let request = build("m", &assistant(), &history, None, None, Vec::new());
         let answers = request
             .messages
             .iter()
@@ -375,6 +492,7 @@ mod tests {
 
         let request = build(
             "m",
+            &assistant(),
             &history,
             Some(&PathBuf::from("/new")),
             None,
@@ -401,14 +519,14 @@ mod tests {
             ..Message::tool("x", "{}")
         }];
 
-        let request = build("m", &history, None, None, Vec::new());
+        let request = build("m", &assistant(), &history, None, None, Vec::new());
         assert_eq!(request.messages.len(), 1, "only the system message remains");
     }
 
     #[test]
     fn the_tools_array_is_carried_through_untouched() {
         let tools = vec![json!({ "type": "function", "function": { "name": "fs_list" } })];
-        let request = build("m", &[], None, None, tools.clone());
+        let request = build("m", &assistant(), &[], None, None, tools.clone());
 
         assert_eq!(request.tools, tools);
         assert_eq!(request.model, "m");

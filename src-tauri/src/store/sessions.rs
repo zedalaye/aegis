@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use crate::approval::ApprovalRequest;
 
+use super::agents::DEFAULT_AGENT_ID;
 use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 
@@ -218,6 +219,15 @@ pub struct SessionSummary {
     pub id: String,
     /// The project this session belongs to.
     pub project_id: String,
+    /// The identity this session runs as (PLAN 7.3, Phase 12).
+    ///
+    /// Always a concrete id, never absent: a session written before identities
+    /// existed stored nothing, and resolves to
+    /// [`DEFAULT_AGENT_ID`](super::agents::DEFAULT_AGENT_ID) here. The store
+    /// keeps the distinction — "chose nothing" and "chose the default" are
+    /// different facts about a document — and the payload does not, because a
+    /// UI that had to handle both would draw the same badge twice.
+    pub agent_id: String,
     /// Display title. Taken from the first user message when not given.
     pub title: String,
     /// RFC3339, UTC.
@@ -281,6 +291,14 @@ struct SessionsFile {
 struct StoredSession {
     id: String,
     project_id: String,
+    /// The identity this session is bound to.
+    ///
+    /// `#[serde(default)]` and `Option` together are the migration: every
+    /// session written before Phase 12 has no such key, reads back as `None`,
+    /// and resolves to the built-in identity — which is the assistant it was
+    /// already running as. Nothing is rewritten on load.
+    #[serde(default)]
+    agent_id: Option<String>,
     title: String,
     created_at: String,
     updated_at: String,
@@ -294,6 +312,10 @@ impl StoredSession {
         SessionSummary {
             id: self.id.clone(),
             project_id: self.project_id.clone(),
+            agent_id: self
+                .agent_id
+                .clone()
+                .unwrap_or_else(|| DEFAULT_AGENT_ID.to_owned()),
             title: self.title.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
@@ -380,15 +402,31 @@ impl SessionStore {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Creates a session in `project_id`.
+    /// Creates a session in `project_id`, bound to `agent_id`.
     ///
     /// An empty title becomes [`DEFAULT_TITLE`], which the first user message
     /// then replaces — see [`SessionStore::append`].
-    pub fn create(&self, project_id: &str, title: Option<&str>) -> AppResult<SessionSummary> {
+    ///
+    /// The identity is fixed here and never changed afterwards. There is
+    /// deliberately no way to rebind one: a transcript is a record of what an
+    /// identity did, and moving it under a different one would leave `fs_write`
+    /// calls in the history of an identity that was never allowed to make any.
+    /// Working as someone else is a new session, which costs a click.
+    ///
+    /// Whether the identity exists is checked by the caller — this store cannot
+    /// see the agent document, and
+    /// [`AppState::create_session`](crate::AppState::create_session) can.
+    pub fn create(
+        &self,
+        project_id: &str,
+        title: Option<&str>,
+        agent_id: &str,
+    ) -> AppResult<SessionSummary> {
         let stamp = now();
         let session = StoredSession {
             id: Uuid::new_v4().to_string(),
             project_id: project_id.to_owned(),
+            agent_id: Some(agent_id.to_owned()),
             title: match title.map(str::trim) {
                 Some("") | None => DEFAULT_TITLE.to_owned(),
                 Some(given) => given.to_owned(),
@@ -403,7 +441,7 @@ impl SessionStore {
         sessions.push(session);
         self.save(&sessions)?;
 
-        tracing::info!(id = %created.id, project_id, "session created");
+        tracing::info!(id = %created.id, project_id, agent_id, "session created");
         Ok(created)
     }
 
@@ -461,6 +499,30 @@ impl SessionStore {
     pub fn project_of(&self, id: &str) -> AppResult<String> {
         let sessions = self.sessions();
         Ok(Self::find(&sessions, id)?.project_id.clone())
+    }
+
+    /// Which identity a session is bound to, as it was stored.
+    ///
+    /// `None` is a session written before identities existed, which is not the
+    /// same fact as one that chose the default and is deliberately not
+    /// flattened into it here — resolving that is
+    /// [`AgentStore::resolve`](super::agents::AgentStore::resolve)'s job.
+    pub fn agent_of(&self, id: &str) -> AppResult<Option<String>> {
+        let sessions = self.sessions();
+        Ok(Self::find(&sessions, id)?.agent_id.clone())
+    }
+
+    /// How many sessions run as `agent_id`.
+    ///
+    /// Asked before an identity is deleted. Sessions that named nothing are not
+    /// counted against the built-in identity, and do not need to be: the
+    /// built-in one cannot be deleted at all.
+    pub fn count_for_agent(&self, agent_id: &str) -> usize {
+        let sessions = self.sessions();
+        sessions
+            .iter()
+            .filter(|session| session.agent_id.as_deref() == Some(agent_id))
+            .count()
     }
 
     /// Renames a session. An empty title is refused rather than stored.
@@ -710,7 +772,10 @@ mod tests {
     #[test]
     fn a_session_survives_a_restart() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", Some("Refactor")).expect("create");
+        let created = fx
+            .store
+            .create("p1", Some("Refactor"), DEFAULT_AGENT_ID)
+            .expect("create");
         fx.store
             .append(&created.id, Message::user("hello"), SessionState::Idle)
             .expect("append");
@@ -731,7 +796,10 @@ mod tests {
     #[test]
     fn a_restart_never_reports_a_session_as_running() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", None).expect("create");
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
         fx.store
             .append(&created.id, Message::user("go"), SessionState::Running)
             .expect("append");
@@ -751,7 +819,10 @@ mod tests {
     #[test]
     fn the_first_user_message_names_an_unnamed_session() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", None).expect("create");
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
         assert_eq!(created.title, DEFAULT_TITLE);
 
         let updated = fx
@@ -769,7 +840,10 @@ mod tests {
     #[test]
     fn a_session_the_user_named_keeps_its_name() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", Some("Mine")).expect("create");
+        let created = fx
+            .store
+            .create("p1", Some("Mine"), DEFAULT_AGENT_ID)
+            .expect("create");
 
         let updated = fx
             .store
@@ -810,9 +884,18 @@ mod tests {
     #[test]
     fn sessions_list_most_recently_active_first() {
         let fx = Fixture::new();
-        let first = fx.store.create("p1", Some("First")).expect("create");
-        let second = fx.store.create("p1", Some("Second")).expect("create");
-        let other = fx.store.create("p2", Some("Elsewhere")).expect("create");
+        let first = fx
+            .store
+            .create("p1", Some("First"), DEFAULT_AGENT_ID)
+            .expect("create");
+        let second = fx
+            .store
+            .create("p1", Some("Second"), DEFAULT_AGENT_ID)
+            .expect("create");
+        let other = fx
+            .store
+            .create("p2", Some("Elsewhere"), DEFAULT_AGENT_ID)
+            .expect("create");
 
         // Touching the older session moves it to the top.
         fx.store
@@ -834,7 +917,10 @@ mod tests {
     #[test]
     fn the_live_state_comes_from_the_caller() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", None).expect("create");
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
         let id = created.id.clone();
 
         let running = |candidate: &str| {
@@ -854,7 +940,10 @@ mod tests {
     #[test]
     fn renaming_refuses_an_empty_title() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", Some("Keep")).expect("create");
+        let created = fx
+            .store
+            .create("p1", Some("Keep"), DEFAULT_AGENT_ID)
+            .expect("create");
 
         let err = fx
             .store
@@ -872,7 +961,10 @@ mod tests {
     #[test]
     fn a_tool_call_status_can_be_advanced_without_losing_its_summary() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", None).expect("create");
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
 
         fx.store
             .append(
@@ -921,7 +1013,10 @@ mod tests {
     #[test]
     fn updating_an_unknown_call_reports_it_rather_than_failing() {
         let fx = Fixture::new();
-        let created = fx.store.create("p1", None).expect("create");
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
 
         let found = fx
             .store
@@ -933,9 +1028,16 @@ mod tests {
     #[test]
     fn deleting_a_project_takes_its_sessions_with_it() {
         let fx = Fixture::new();
-        fx.store.create("p1", None).expect("create");
-        fx.store.create("p1", None).expect("create");
-        let kept = fx.store.create("p2", None).expect("create");
+        fx.store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
+        fx.store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
+        let kept = fx
+            .store
+            .create("p2", None, DEFAULT_AGENT_ID)
+            .expect("create");
 
         assert_eq!(fx.store.delete_for_project("p1").expect("delete"), 2);
         assert!(fx.store.list("p1", &idle).is_empty());
@@ -961,7 +1063,9 @@ mod tests {
     #[test]
     fn a_damaged_document_is_moved_aside_rather_than_blocking_the_app() {
         let fx = Fixture::new();
-        fx.store.create("p1", Some("Gone")).expect("create");
+        fx.store
+            .create("p1", Some("Gone"), DEFAULT_AGENT_ID)
+            .expect("create");
 
         fs::write(fx.document(), b"{ not json").expect("damage the document");
         let reopened = fx.reopen();
@@ -997,6 +1101,7 @@ mod tests {
             session: SessionSummary {
                 id: "s".to_owned(),
                 project_id: "p".to_owned(),
+                agent_id: DEFAULT_AGENT_ID.to_owned(),
                 title: "First".to_owned(),
                 created_at: "2026-08-28T09:41:07.412Z".to_owned(),
                 updated_at: "2026-08-28T09:41:07.412Z".to_owned(),
@@ -1044,6 +1149,7 @@ mod tests {
             sorted(&[
                 "id",
                 "project_id",
+                "agent_id",
                 "title",
                 "created_at",
                 "updated_at",

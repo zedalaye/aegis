@@ -5,7 +5,9 @@
  *
  * It owns the subscription to the runtime's event stream — one listener set
  * for the whole app, attached on mount and detached on unmount. Attaching per
- * component would mean a delta applied once per mounted listener.
+ * component would mean a delta applied once per mounted listener. It also does
+ * the one-off loads that several panes depend on: the projects, the provider
+ * settings, and the identities.
  *
  * And it keeps the session store following the open project. The two stores
  * are deliberately separate — a project is a folder, a session is a
@@ -19,6 +21,7 @@
 
 import { useEffect } from "react";
 
+import { useAgents } from "../../state/agents";
 import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachAuditEvents } from "../../state/audit";
@@ -67,11 +70,13 @@ function ErrorBanner() {
   const approvalError = useApprovals((s) => s.error);
   const settingsError = useSettings((s) => s.error);
   const workspaceError = useWorkspace((s) => s.error);
+  const agentError = useAgents((s) => s.error);
   const dismissProject = useProjects((s) => s.dismissError);
   const dismissSession = useSessions((s) => s.dismissError);
   const dismissApproval = useApprovals((s) => s.dismissError);
   const dismissSettings = useSettings((s) => s.dismissError);
   const dismissWorkspace = useWorkspace((s) => s.dismissError);
+  const dismissAgents = useAgents((s) => s.dismissError);
 
   // The most recent one wins. Stacking banners pushes the thing the user was
   // looking at off the screen, and the later ones are usually a consequence of
@@ -81,6 +86,7 @@ function ErrorBanner() {
   const error =
     approvalError ??
     settingsError ??
+    agentError ??
     workspaceError ??
     sessionError ??
     projectError;
@@ -105,6 +111,7 @@ function ErrorBanner() {
         onClick={() => {
           dismissApproval();
           dismissSettings();
+          dismissAgents();
           dismissWorkspace();
           dismissSession();
           dismissProject();
@@ -127,6 +134,7 @@ export default function AppShell() {
   const syncApprovals = useApprovals((s) => s.syncFor);
   const loadSettings = useSettings((s) => s.load);
   const settingsOpen = useSettings((s) => s.open);
+  const loadAgents = useAgents((s) => s.load);
 
   // One load on mount. Under StrictMode this runs twice in development: the
   // only write it performs is re-stamping `last_opened_at` on the project it
@@ -139,7 +147,12 @@ export default function AppShell() {
     // no key is a thing to know before the first message rather than after it
     // fails.
     void loadSettings();
-  }, [load, loadSettings]);
+    // Identities are loaded on mount too, and for a stronger reason than the
+    // provider: the session picker in the rail and the badge in the chat header
+    // both need them before anything is opened, and a session created without
+    // the list would silently be created as the built-in identity.
+    void loadAgents();
+  }, [load, loadSettings, loadAgents]);
 
   // One listener set per store for the app. The attach is asynchronous, so the
   // cleanup has to wait for it rather than assume it has finished —

@@ -36,8 +36,8 @@ use aegis_lib::agent::turn::{self, TurnPlan};
 use aegis_lib::agent::wire::{ModelEvent, StopReason, WireMessage};
 use aegis_lib::workspace::{self, DECISIONS_FILE, STATUS_FILE};
 use aegis_lib::{
-    ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditLog, Event, FakeProvider, GrantStore,
-    Message, SessionState, SessionStore, Turn, TurnRegistry,
+    Agent, ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditLog, Event, FakeProvider,
+    GrantStore, Message, SessionState, SessionStore, Turn, TurnRegistry, DEFAULT_AGENT_ID,
 };
 
 /// Collects every event a turn emits.
@@ -88,7 +88,10 @@ impl App {
         std::fs::create_dir_all(&workspace).expect("workspace dir");
 
         let sessions = SessionStore::load(&data);
-        let session_id = sessions.create("project-1", None).expect("session").id;
+        let session_id = sessions
+            .create("project-1", None, DEFAULT_AGENT_ID)
+            .expect("session")
+            .id;
 
         Self {
             workspace: dunce::canonicalize(&workspace).expect("canonical workspace"),
@@ -113,6 +116,7 @@ impl App {
         let shared = workspace::digest(&self.workspace);
         let request = transcript::build(
             "m",
+            &Agent::builtin(),
             &history,
             Some(&self.workspace),
             shared.as_deref(),
@@ -150,6 +154,7 @@ impl App {
             workspace: Some(self.workspace.clone()),
         };
         let turn = Turn {
+            agent: &Agent::builtin(),
             sessions: &self.sessions,
             turns: &self.turns,
             grants: &self.grants,

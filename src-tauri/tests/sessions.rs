@@ -20,8 +20,8 @@ use tempfile::TempDir;
 use aegis_lib::agent::event::EventSink;
 use aegis_lib::agent::turn::{self, TurnPlan};
 use aegis_lib::{
-    ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore, Message, Role, SessionState,
-    SessionStore, StopReason, Turn, TurnRegistry,
+    Agent, ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore, Message, Role,
+    SessionState, SessionStore, StopReason, Turn, TurnRegistry, DEFAULT_AGENT_ID,
 };
 
 /// Collects every event a turn emits.
@@ -129,6 +129,7 @@ impl App {
         };
 
         let reason = Turn {
+            agent: &Agent::builtin(),
             sessions: &self.sessions,
             turns: &self.turns,
             grants: &self.grants,
@@ -155,7 +156,7 @@ async fn a_conversation_streams_and_survives_a_restart() {
     let app = App::new();
     let session = app
         .sessions
-        .create("project-1", None)
+        .create("project-1", None, DEFAULT_AGENT_ID)
         .expect("session created");
 
     assert_eq!(session.title, "New session");
@@ -220,7 +221,10 @@ async fn a_conversation_streams_and_survives_a_restart() {
 #[tokio::test]
 async fn cancelling_a_turn_leaves_the_session_ready_for_another() {
     let app = App::new();
-    let session = app.sessions.create("project-1", None).expect("session");
+    let session = app
+        .sessions
+        .create("project-1", None, DEFAULT_AGENT_ID)
+        .expect("session");
 
     app.sessions
         .append(&session.id, Message::user("go"), SessionState::Running)
@@ -267,7 +271,10 @@ async fn cancelling_a_turn_leaves_the_session_ready_for_another() {
 #[tokio::test]
 async fn a_session_refuses_a_second_concurrent_turn() {
     let app = App::new();
-    let session = app.sessions.create("project-1", None).expect("session");
+    let session = app
+        .sessions
+        .create("project-1", None, DEFAULT_AGENT_ID)
+        .expect("session");
 
     let cancel = app.turns.begin(&session.id, "t1").expect("the first turn");
 
@@ -278,7 +285,10 @@ async fn a_session_refuses_a_second_concurrent_turn() {
     assert_eq!(err.code(), aegis_lib::ErrorCode::TurnBusy);
 
     // The refusal is per session, not global.
-    let other = app.sessions.create("project-1", None).expect("session");
+    let other = app
+        .sessions
+        .create("project-1", None, DEFAULT_AGENT_ID)
+        .expect("session");
     assert!(app.turns.begin(&other.id, "t3").is_ok());
 
     cancel.cancel();
@@ -293,7 +303,10 @@ async fn a_tool_call_runs_under_policy_and_is_audited() {
     let app = App::new();
     std::fs::write(app.workspace.join("notes.txt"), "two lines\nof text").expect("write");
 
-    let session = app.sessions.create("project-1", None).expect("session");
+    let session = app
+        .sessions
+        .create("project-1", None, DEFAULT_AGENT_ID)
+        .expect("session");
     app.sessions
         .append(
             &session.id,
@@ -355,11 +368,15 @@ async fn a_tool_call_runs_under_policy_and_is_audited() {
 #[tokio::test]
 async fn deleting_a_project_removes_only_its_sessions() {
     let app = App::new();
-    app.sessions.create("gone", Some("one")).expect("session");
-    app.sessions.create("gone", Some("two")).expect("session");
+    app.sessions
+        .create("gone", Some("one"), DEFAULT_AGENT_ID)
+        .expect("session");
+    app.sessions
+        .create("gone", Some("two"), DEFAULT_AGENT_ID)
+        .expect("session");
     let kept = app
         .sessions
-        .create("stays", Some("three"))
+        .create("stays", Some("three"), DEFAULT_AGENT_ID)
         .expect("session");
 
     assert_eq!(
@@ -386,7 +403,10 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
     use aegis_lib::{ToolCallRecord, ToolCallStatus};
 
     let app = App::new();
-    let session = app.sessions.create("project-1", None).expect("session");
+    let session = app
+        .sessions
+        .create("project-1", None, DEFAULT_AGENT_ID)
+        .expect("session");
 
     app.sessions
         .append(&session.id, Message::user("read it"), SessionState::Running)
@@ -410,7 +430,14 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
         .expect("append");
 
     let history = app.sessions.messages(&session.id).expect("messages");
-    let request = transcript::build("m", &history, Some(&app.workspace), None, Vec::new());
+    let request = transcript::build(
+        "m",
+        &Agent::builtin(),
+        &history,
+        Some(&app.workspace),
+        None,
+        Vec::new(),
+    );
 
     let answered = request.messages.iter().any(|message| {
         matches!(

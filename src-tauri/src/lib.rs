@@ -16,7 +16,9 @@
 //! post-MVP sequence (PLAN 7.3) with the shared-workspace convention: files in
 //! the user's own folder, read into every request and written by the tools that
 //! already exist, rather than a new store. Later phases add commands and
-//! modules without changing this entry shape.
+//! modules without changing this entry shape. Phase 12 adds the agent
+//! registry: identities as data, a session bound to one, and a tool allow-list
+//! the model is filtered by and policy refuses against.
 
 pub mod agent;
 pub mod approval;
@@ -41,13 +43,14 @@ pub use approval::{
 };
 pub use audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 pub use error::{AppError, AppResult, ErrorCode};
-pub use policy::{Decision, Grant, GrantStore, PolicyCtx, ResolvedCall, ToolCall};
+pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
 pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use state::AppState;
 pub use store::{
-    MaskedSettings, Message, Project, ProjectDetail, ProviderSettings, Role, SessionDetail,
-    SessionState, SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord,
-    ToolCallStatus, TurnHandle,
+    Agent, AgentDraft, AgentStore, MaskedSettings, Message, Project, ProjectDetail,
+    ProviderSettings, Role, SessionDetail, SessionState, SessionStore, SessionSummary,
+    SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnHandle, DEFAULT_AGENT_ID,
+    DEFAULT_PROVIDER_ID,
 };
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
 pub use workspace::{ScaffoldReport, WorkspaceEntry, WorkspaceLayout};
@@ -137,6 +140,10 @@ pub fn run() {
             commands::project::project_list,
             commands::project::project_open,
             commands::project::project_delete,
+            commands::agent::agent_list,
+            commands::agent::agent_create,
+            commands::agent::agent_update,
+            commands::agent::agent_delete,
             commands::session::session_create,
             commands::session::session_list,
             commands::session::session_open,

@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 11 (shared workspace convention) — the MVP is feature-complete, and the
+> **Status: Phase 12 (agent registry) — the MVP is feature-complete, and the
 > post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -27,8 +27,9 @@ ever sent to it.
 > which of "wrong address", "wrong key" and "server down" you are looking at. Until you configure
 > one, replies come from the scripted provider of Phase 5 — see *Point it at a model*.
 >
-> The session header names what is answering: the model the runtime started the running turn
-> with, or the one settings say will answer the next message. With no provider configured it
+> The session header names who is working and what is answering: the identity the session was
+> opened as, and the model the runtime started the running turn with — or the one settings say
+> will answer the next message. With no provider configured it
 > reads `scripted provider`, marked, so a reply with no model behind it can never be mistaken
 > for one that has.
 >
@@ -79,6 +80,16 @@ ever sent to it.
 > artefacts, capped so a long ledger cannot eat the context window. Asking for a decision to be
 > recorded writes `decisions/DECISIONS.md` through the ordinary approval dialog: no new tool, no
 > privileged path, no hidden store beside your folder. See *Shared workspace files*.
+>
+> **A session now runs as an identity.** *Settings → Identities* creates one: a name, a line
+> saying what it is for, instructions it carries into every request, and — the part that matters
+> — a tick-list of the tools it may use. Open a session as it from the picker beside **New
+> session**, and that session is bound to it for good. An identity is not shown the tools it was
+> not granted, so a "reviewer" with only `fs_list` and `fs_read` never asks to write a file; and
+> if it asks anyway, policy refuses before anything runs, with no dialog offering to let it
+> through. The audit line names the identity, so *who ran this* is answerable afterwards. Leaving
+> the picker alone gets the built-in **Assistant**, which holds every tool — the assistant Aegis
+> had before identities existed, now with a name. See *Identities*.
 
 ---
 
@@ -152,6 +163,11 @@ No provider and no key needed — the scripted provider is enough to exercise th
 7. **File a decision.** Press *Set up shared files* in the sidebar, then ask for a decision to be
    recorded. It is written to `decisions/DECISIONS.md` through the same approval dialog, and the
    next reply already knows about it. See [Shared workspace files](#shared-workspace-files).
+8. **Open a session as someone narrower.** In *Settings → Identities*, make a **Reviewer** with
+   only `fs_list` and `fs_read` ticked. Back in the sidebar, pick it in the **as** control and
+   press *New session*, then send `/write`. No prompt appears: the write is refused outright
+   because that identity does not hold `fs_write`, and the audit line records the refusal against
+   it. See [Identities](#identities).
 
 ## Point it at a model
 
@@ -233,8 +249,9 @@ tests before `pnpm typecheck` when you have touched an IPC type.
 
 ## Where your data lives
 
-Projects, sessions and settings are stored as three small JSON documents — `projects.json`,
-`sessions.json` and `settings.json` — under the application-data directory:
+Projects, sessions, identities and settings are stored as four small JSON documents —
+`projects.json`, `sessions.json`, `agents.json` and `settings.json` — under the application-data
+directory:
 
 | | Path |
 | --- | --- |
@@ -243,8 +260,10 @@ Projects, sessions and settings are stored as three small JSON documents — `pr
 | Linux | `~/.local/share/dev.aegis.harness/` |
 
 `projects.json` holds names and workspace paths. `sessions.json` holds your conversations — the
-messages you sent, the replies, and the tool calls each turn made. `settings.json` holds the base
-URL and the model id. **None of them holds a key**, and none records whether anything is
+messages you sent, the replies, the tool calls each turn made, and which identity the session
+runs as. `agents.json` holds the identities you have made; the built-in one is not in it, because
+it is a constant in the runtime rather than a record you could delete. `settings.json` holds the
+base URL and the model id. **None of them holds a key**, and none records whether anything is
 *running*: a session interrupted by a crash or a power cut comes back idle, because there is no
 turn left to finish it.
 
@@ -254,7 +273,7 @@ on Windows, Keychain on macOS, a Secret Service on Linux — where you can inspe
 without Aegis. Set `AEGIS_API_KEY` in the environment instead and Aegis uses that; the credential
 store wins when both are present.
 
-All three documents are meant to be readable and are safe to edit by hand while Aegis is closed.
+All four documents are meant to be readable and are safe to edit by hand while Aegis is closed.
 A document Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` and the app starts
 with an empty list rather than refusing to open. Deleting a project forgets it and its sessions;
 the workspace folder itself is never touched.
@@ -269,8 +288,8 @@ scoped to it at startup — the WebView has no filesystem permission of any kind
 
 Beside it, `audit.jsonl` records one JSON line per tool call — every call, whether it ran, was
 refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
-running to read it. Each line names the session, the tool, why policy decided what it did, and
-what came of it. It records the *paths* a call touched but never the contents of a file: a log
+running to read it. Each line names the session, the identity it ran as, the tool, why policy
+decided what it did, and what came of it. It records the *paths* a call touched but never the contents of a file: a log
 that quoted every `fs_write` would become the one place on your machine where everything the
 agent ever wrote is collected in plain text. A line for a capture carries the file's path, its
 pixel size and a SHA-256 of the bytes on disk — enough to say later which capture a call
@@ -325,19 +344,68 @@ the sequence.
 
 ---
 
+## Identities
+
+A session runs as an identity: a name, what it is for, the instructions it carries, and the tools
+it may use. **Settings → Identities** is where they are made.
+
+| | |
+| --- | --- |
+| **Name** | what the session picker shows. Unique, case-insensitively |
+| **Role** | one line saying what this identity is for. It is what the picker shows beside the name, and the first thing the model is told about itself |
+| **Instructions** | carried into the system message of every request this identity makes. Capped at 2000 characters on purpose — see below |
+| **Tools** | a tick-list of `fs_list`, `fs_read`, `fs_write`, `shell_exec`, `screen_capture`. Everything unticked is refused |
+| **Skills** | recorded, not yet runnable. Nothing in this build executes a skill; the runner is the next phase |
+
+Pick one from the **as** control beside *New session* and the session is bound to it. That
+binding is permanent: there is no way to move a session to a different identity, because a
+transcript is the record of what one identity did, and rewriting whose record it is would leave
+`fs_write` calls in the history of something that was never allowed to make one. Working as
+someone else is a new session, which costs a click.
+
+**The tool list is enforced twice, and both matter.** The model is only ever *shown* the schemas
+for the tools its identity holds, so a reviewer with `fs_list` and `fs_read` does not spend a
+round asking for a write it would be refused. And if a call for an ungranted tool arrives anyway
+— replayed out of an older transcript, or invented — policy refuses it before anything touches
+the machine, with no approval dialog: a prompt offering to let an identity exceed its own
+allow-list is a prompt that should not exist. The refusal reaches the model as an ordinary
+`E_DENIED` result naming the identity and the tool, so it can say what it was trying to do and
+try something else.
+
+**Granting a tool is not the same as auto-allowing it.** An identity with `fs_write` still puts
+every write to you through the usual dialog. The allow-list narrows *what an identity could ever
+do*; the approval matrix decides *what happens on this call*. They compose — a call has to pass
+both.
+
+**The built-in Assistant cannot be edited or removed.** It holds every tool, carries no
+instructions, and is what a session gets when you do not choose. It is the assistant Aegis had
+before identities existed, written down rather than reinvented, which is why every conversation
+from before this phase still opens and still behaves exactly as it did. Removing an identity that
+sessions still run as is refused, and the message says how many — delete those sessions first, or
+keep it. Editing one reaches its sessions on their next turn.
+
+**Instructions are capped, and the cap is deliberate.** The system message stays a policy summary
+plus what is true right now. An identity may say what it is; it may not carry a runbook. Recurring
+procedure belongs in a skill — a versioned `SKILL.md` loaded only when it is invoked — which is
+`PLAN.md` § 7.6 and the next phase. An identity whose instructions had grown into a runbook would
+be exactly the procedure that phase has to take back.
+
+---
+
 ## Layout
 
 ```
 src/           React app — presentation and typed IPC glue only
   ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
-  components/  layout, chat, sessions, approvals, projects, settings, audit
+  components/  layout, chat, sessions, approvals, projects, agents, settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
     agent/     turn loop, wire protocol, providers (scripted, and OpenAI-compatible over SSE),
                event payloads, turn registry
-    store/     projects.json, sessions.json and settings.json, behind one atomic write
+    store/     projects.json, sessions.json, agents.json and settings.json, behind one
+               atomic write
     tools/     fs, shell, screenshot — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
     workspace.rs  the shared-file convention inside a project folder: scaffold, and the
@@ -375,6 +443,11 @@ Read this before pointing Aegis at anything you care about.
 - **A command is bounded, not contained.** It is killed at its deadline (two minutes at most) and
   when you press Stop, its output is capped at 64 KB in what the model sees, and every call is
   audited. None of that is a sandbox — see the next point.
+- **An identity's tool list narrows what it could ever do; it does not auto-allow anything.** A
+  session opened as an identity is never shown the schemas for tools it was not granted, and a
+  call for one is refused with no prompt offered — you cannot be asked to let an identity exceed
+  its own list. What it is *not* is a second approval layer with a bypass: ticking `fs_write` for
+  an identity still puts every write to you through the ordinary dialog. A call has to pass both.
 - **There is no sandbox.** Approved tools run as you, with your privileges and environment. The
   real boundary is that you read the exact path, program, arguments and working directory before
   approving. Treat every approval as if you were typing the command yourself.
@@ -405,8 +478,8 @@ Read this before pointing Aegis at anything you care about.
   different tool — which is why the environment variable is `AEGIS_API_KEY` and not
   `OPENAI_API_KEY`. Over `http://` the key crosses the network in clear text. That is allowed so
   that local servers work, and it is worth reserving for a server on your own machine.
-- **Every tool call is audited**, allowed or denied, one JSON line each, with the policy reason
-  and the outcome — see *Where your data lives*. Arguments are recorded as a SHA-256 digest plus
+- **Every tool call is audited**, allowed or denied, one JSON line each, with the identity that
+  made it, the policy reason and the outcome — see *Where your data lives*. Arguments are recorded as a SHA-256 digest plus
   a redacted copy that keeps paths and replaces file content with its size.
 
 ## Troubleshooting

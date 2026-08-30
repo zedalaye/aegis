@@ -11,7 +11,8 @@
  * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects"), sessions and
  * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals"),
  * the audit log and the provider settings (PLAN 2.1, "Settings and audit"),
- * and the shared-workspace convention (PLAN 7.3, Phase 11).
+ * the shared-workspace convention (PLAN 7.3, Phase 11), and the identities a
+ * session can be opened as (PLAN 7.3, Phase 12).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -23,6 +24,8 @@ import type { InvokeArgs } from "@tauri-apps/api/core";
 
 import { toIpcError } from "../lib/errors";
 import type {
+  Agent,
+  AgentDraft,
   ApprovalRequest,
   AuditEntry,
   Decision,
@@ -126,18 +129,71 @@ export function projectDelete(projectId: string): Promise<void> {
   return call<void>("project_delete", { project_id: projectId });
 }
 /**
- * Creates a session in a project.
+ * Every identity: the built-in one first, then the rest by name.
+ *
+ * The built-in one carries `builtin: true`, no role and no instructions. It is
+ * what a session gets when none is chosen, and it cannot be edited or deleted —
+ * it is the assistant Aegis had before identities existed, written down.
+ */
+export function agentList(): Promise<Agent[]> {
+  return call<Agent[]>("agent_list");
+}
+
+/**
+ * Creates an identity.
+ *
+ * Rejects with `E_INVALID_SETTING` when a value cannot be used. `error.field`
+ * names which input — "name", "role", "instructions", "provider", "tools",
+ * "skills" — and `error.message` says what a working value looks like, so the
+ * form marks the input rather than raising a banner over itself.
+ */
+export function agentCreate(draft: AgentDraft): Promise<Agent> {
+  return call<Agent>("agent_create", { draft });
+}
+
+/**
+ * Replaces an identity's fields, keeping its id.
+ *
+ * The sessions already bound to it stay bound and pick the change up on their
+ * next turn: correcting what a "reviewer" is should reach the reviewers.
+ * Rejects for the built-in identity.
+ */
+export function agentUpdate(agentId: string, draft: AgentDraft): Promise<Agent> {
+  return call<Agent>("agent_update", { agent_id: agentId, draft });
+}
+
+/**
+ * Deletes an identity.
+ *
+ * Rejects while any session still runs as it — the message says how many —
+ * rather than moving those sessions to another identity, which would rewrite
+ * what they were. Delete the sessions first, or keep it.
+ */
+export function agentDelete(agentId: string): Promise<void> {
+  return call<void>("agent_delete", { agent_id: agentId });
+}
+
+/**
+ * Creates a session in a project, as an identity.
  *
  * An omitted title becomes "New session", which the first message the user
- * sends then replaces with its own opening words.
+ * sends then replaces with its own opening words. An omitted `agentId` is the
+ * built-in identity.
+ *
+ * The identity is fixed here. There is deliberately no command that rebinds a
+ * session: a transcript is the record of what one identity did, and moving it
+ * under another would leave calls in the history of an identity that was never
+ * allowed to make them. Working as someone else is a new session.
  */
 export function sessionCreate(
   projectId: string,
   title?: string,
+  agentId?: string,
 ): Promise<SessionSummary> {
   return call<SessionSummary>("session_create", {
     project_id: projectId,
     title: title ?? null,
+    agent_id: agentId ?? null,
   });
 }
 

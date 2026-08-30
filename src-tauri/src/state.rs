@@ -20,11 +20,12 @@ use crate::agent::provider::openai;
 use crate::agent::{FakeProvider, OpenAiProvider, Provider, ProviderProbe, TurnRegistry};
 use crate::approval::{ApprovalRegistry, ApprovalRequest, Decision, Resolution};
 use crate::audit::AuditLog;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::policy::GrantStore;
 use crate::secrets::{key_hint, SecretStore};
 use crate::store::{
-    MaskedSettings, SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+    Agent, AgentStore, MaskedSettings, SessionDetail, SessionState, SessionStore, SessionSummary,
+    SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
 /// Shared state, registered with `Manager::manage` and read from commands via
@@ -39,6 +40,7 @@ pub struct AppState {
     tray: AtomicBool,
     store: Store,
     sessions: SessionStore,
+    agents: AgentStore,
     settings: SettingsStore,
     secrets: SecretStore,
     turns: TurnRegistry,
@@ -67,6 +69,7 @@ impl AppState {
             tray: AtomicBool::new(false),
             store: Store::load(data_dir),
             sessions: SessionStore::load(data_dir),
+            agents: AgentStore::load(data_dir),
             settings: SettingsStore::load(data_dir),
             secrets: SecretStore::new(),
             turns: TurnRegistry::new(),
@@ -136,6 +139,31 @@ impl AppState {
         ))
     }
 
+    /// Who answers for one identity (PLAN 7.3, Phase 12).
+    ///
+    /// This build resolves exactly one binding — [`DEFAULT_PROVIDER_ID`], the
+    /// provider named in Settings — and the store refuses to save an identity
+    /// bound to anything else, so the fallback below is reachable only by hand
+    /// editing `agents.json`. It falls back rather than failing because a
+    /// session that cannot be talked to at all is a worse answer than one
+    /// answered by the provider the user configured, and the warning says which
+    /// happened.
+    ///
+    /// This function is the roster's seam. A second provider later is a second
+    /// arm here plus a settings row — not a change to the turn loop, which
+    /// still takes a `&dyn Provider` and still cannot tell which it was handed.
+    pub fn provider_for(&self, agent: &Agent) -> Box<dyn Provider> {
+        if agent.provider_id != DEFAULT_PROVIDER_ID {
+            tracing::warn!(
+                agent = %agent.name,
+                provider_id = %agent.provider_id,
+                "this build has one provider; answering from the configured one"
+            );
+        }
+
+        self.provider()
+    }
+
     /// The provider settings, and everything that may be said about the key.
     ///
     /// The second composition this module exists for on the settings side: the
@@ -180,6 +208,68 @@ impl AppState {
     /// next to them.
     pub fn secrets(&self) -> &SecretStore {
         &self.secrets
+    }
+
+    /// The identities on disk, and the built-in one that is not.
+    pub fn agents(&self) -> &AgentStore {
+        &self.agents
+    }
+
+    /// Every identity, for the picker.
+    pub fn agent_list(&self) -> Vec<Agent> {
+        self.agents.list()
+    }
+
+    /// The identity a session runs as.
+    ///
+    /// The third composition this module exists for: which identity a session
+    /// named is in the session document, and what that identity *is* is in the
+    /// agent document. Infallible for the reason
+    /// [`AgentStore::resolve`](crate::store::AgentStore::resolve) is — this is
+    /// called on the way into a turn, and a turn that would not start because
+    /// a lookup failed is a session that can no longer be talked to. A session
+    /// that has itself gone resolves to the built-in identity, and the turn
+    /// fails a moment later on the transcript it cannot read, which is the
+    /// failure worth reporting.
+    pub fn agent_of(&self, session_id: &str) -> Agent {
+        let named = self.sessions.agent_of(session_id).unwrap_or_else(|err| {
+            tracing::warn!(%err, session_id, "no session to resolve an identity for");
+            None
+        });
+
+        self.agents.resolve(named.as_deref())
+    }
+
+    /// Creates a session bound to an identity.
+    ///
+    /// The identity is checked here rather than in the session store, which
+    /// cannot see the agent document. Checked at all because a session bound to
+    /// an identity that does not exist is one that can talk and never act, and
+    /// finding that out on the first tool call is finding it out too late.
+    pub fn create_session(
+        &self,
+        project_id: &str,
+        title: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> AppResult<SessionSummary> {
+        let agent_id = agent_id.unwrap_or(DEFAULT_AGENT_ID);
+        let agent = self.agents.get(agent_id)?;
+
+        self.sessions.create(project_id, title, &agent.id)
+    }
+
+    /// Deletes an identity, unless sessions still run as it.
+    ///
+    /// The check is here for the same reason the one above is: the agent store
+    /// cannot see the session document. Refused rather than cascaded — see
+    /// [`AppError::AgentInUse`](crate::AppError::AgentInUse).
+    pub fn delete_agent(&self, agent_id: &str) -> AppResult<()> {
+        let bound = self.sessions.count_for_agent(agent_id);
+        if bound > 0 {
+            return Err(AppError::AgentInUse { count: bound });
+        }
+
+        self.agents.delete(agent_id)
     }
 
     /// This application's own binary, when the platform would name it.
@@ -443,6 +533,7 @@ mod tests {
 
         log.append(&crate::audit::AuditRecord {
             session_id: "s1",
+            agent_id: DEFAULT_AGENT_ID,
             turn_id: "t1",
             call_id: "c1",
             tool: "fs_list",
@@ -518,6 +609,7 @@ mod tests {
         first.grants().insert("s1", crate::policy::Grant::FsWrite);
         first.audit().append(&crate::audit::AuditRecord {
             session_id: "s1",
+            agent_id: DEFAULT_AGENT_ID,
             turn_id: "t1",
             call_id: "c1",
             tool: "fs_write",

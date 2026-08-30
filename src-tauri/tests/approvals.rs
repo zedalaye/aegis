@@ -32,9 +32,9 @@ use aegis_lib::agent::event::EventSink;
 use aegis_lib::agent::provider::fake::{RUN_TRIGGER, WRITE_TARGET, WRITE_TRIGGER};
 use aegis_lib::agent::turn::{self, TurnPlan};
 use aegis_lib::{
-    ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditDecision, AuditLog, Event,
+    Agent, ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditDecision, AuditLog, Event,
     FakeProvider, Grant, GrantStore, Message, Outcome, ResolvedBy, SessionState, SessionStore,
-    StopReason, ToolCallStatus, Turn, TurnRegistry,
+    StopReason, ToolCallStatus, Turn, TurnRegistry, DEFAULT_AGENT_ID,
 };
 
 /// Collects every event a turn emits.
@@ -137,6 +137,9 @@ struct App {
     audit: AuditLog,
     session_id: String,
     captures: PathBuf,
+    /// The identity these turns run as: the built-in one, which holds every
+    /// tool. What an allow-list does to a call is `tests/agents.rs`.
+    agent: Agent,
 }
 
 impl App {
@@ -148,7 +151,10 @@ impl App {
         std::fs::create_dir_all(&workspace).expect("workspace dir");
 
         let sessions = SessionStore::load(&data);
-        let session_id = sessions.create("project-1", None).expect("session").id;
+        let session_id = sessions
+            .create("project-1", None, DEFAULT_AGENT_ID)
+            .expect("session")
+            .id;
 
         Self {
             workspace: dunce::canonicalize(&workspace).expect("canonical workspace"),
@@ -160,12 +166,14 @@ impl App {
             audit: AuditLog::new(&data),
             session_id,
             captures: data.join("captures"),
+            agent: Agent::builtin(),
         }
     }
 
     /// The runtime, assembled the way `session_send` assembles it.
     fn runtime<'a>(&'a self, provider: &'a FakeProvider, sink: &'a Recorder) -> Turn<'a> {
         Turn {
+            agent: &self.agent,
             sessions: &self.sessions,
             turns: &self.turns,
             grants: &self.grants,
@@ -424,7 +432,7 @@ async fn a_grant_does_not_leak_into_another_session() {
 
     let other = app
         .sessions
-        .create("project-1", Some("another conversation"))
+        .create("project-1", Some("another conversation"), DEFAULT_AGENT_ID)
         .expect("a second session");
 
     assert!(app.grants.holds(&app.session_id, &Grant::FsWrite));

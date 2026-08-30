@@ -110,8 +110,13 @@ export type SessionsState = {
   loadFor: (projectId: string) => Promise<void>;
   /** Opens a session by id. */
   open: (sessionId: string) => Promise<void>;
-  /** Creates a session in a project and opens it. */
-  create: (projectId: string) => Promise<void>;
+  /**
+   * Creates a session in a project and opens it.
+   *
+   * `agentId` is the identity it runs as, fixed for the life of the session.
+   * Omitted is the built-in one.
+   */
+  create: (projectId: string, agentId?: string) => Promise<void>;
   /** Renames a session. */
   rename: (sessionId: string, title: string) => Promise<void>;
   /** Deletes a session. */
@@ -274,9 +279,9 @@ export const useSessions = create<SessionsState>((set, get) => {
       }
     },
 
-    create: async (projectId) => {
+    create: async (projectId, agentId) => {
       const outcome = await guard("session_create", async () => {
-        const created = await sessionCreate(projectId);
+        const created = await sessionCreate(projectId, undefined, agentId);
         return {
           created,
           sessions: await sessionList(projectId),

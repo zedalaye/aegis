@@ -1,0 +1,142 @@
+/**
+ * The identities a session can be opened as (PLAN 7.3, Phase 12).
+ *
+ * A section of the settings panel rather than a surface of its own: an identity
+ * is a fact about the application, like the provider, and not about any project
+ * — the same reason Settings is reachable with nothing open.
+ *
+ * Each row says the two things that decide whether you would pick it: what it
+ * is for, and what it can touch. The tools are spelled out rather than counted,
+ * because "3 tools" is not an answer to "may this thing write to my repo".
+ */
+
+import type { Agent } from "../../ipc/bindings";
+import { useAgents } from "../../state/agents";
+
+import AgentForm from "./AgentForm";
+
+/** What an identity may touch, in the words the row can afford. */
+function Tools({ agent }: { readonly agent: Agent }) {
+  if (agent.tools.length === 0) {
+    return (
+      <p className="agent__tools agent__tools--none">
+        No tools. It can read the conversation and answer; it cannot touch the
+        machine.
+      </p>
+    );
+  }
+
+  return (
+    <p className="agent__tools">
+      {agent.tools.map((tool) => (
+        <code key={tool}>{tool}</code>
+      ))}
+    </p>
+  );
+}
+
+/** One identity. */
+function Row({ agent }: { readonly agent: Agent }) {
+  const busy = useAgents((s) => s.busy);
+  const startEdit = useAgents((s) => s.startEdit);
+  const remove = useAgents((s) => s.remove);
+
+  return (
+    <li className="agent">
+      <div className="agent__head">
+        <span className="agent__name">{agent.name}</span>
+        {agent.builtin ? (
+          <span
+            className="agent__badge"
+            title="The identity a session gets when none is chosen. It holds every tool, and it is what Aegis was before identities existed — which is why it cannot be edited or removed."
+          >
+            built in
+          </span>
+        ) : (
+          <span className="agent__actions">
+            <button
+              type="button"
+              className="link"
+              onClick={() => startEdit(agent.id)}
+              disabled={busy}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="link"
+              // Said on the control: the refusal that follows when sessions are
+              // still bound is a real one, and knowing the rule before pressing
+              // is better than reading it in a banner afterwards.
+              title="Removes the identity. Refused while any session still runs as it."
+              onClick={() => void remove(agent.id)}
+              disabled={busy}
+            >
+              Remove
+            </button>
+          </span>
+        )}
+      </div>
+
+      {agent.role.length === 0 ? null : (
+        <p className="agent__role">{agent.role}</p>
+      )}
+      <Tools agent={agent} />
+      {agent.skills.length === 0 ? null : (
+        <p className="agent__skills">
+          Skills, for later:{" "}
+          {agent.skills.map((skill) => (
+            <code key={skill}>{skill}</code>
+          ))}
+        </p>
+      )}
+    </li>
+  );
+}
+
+export default function AgentList() {
+  const agents = useAgents((s) => s.agents);
+  const status = useAgents((s) => s.status);
+  const busy = useAgents((s) => s.busy);
+  const editing = useAgents((s) => s.editing);
+  const startNew = useAgents((s) => s.startNew);
+
+  if (status === "loading" && agents.length === 0) {
+    return <p className="settings__note">Loading identities…</p>;
+  }
+
+  const open =
+    editing === null
+      ? null
+      : (agents.find((agent) => agent.id === editing) ?? null);
+
+  return (
+    <>
+      <p className="settings__note">
+        An identity is a name, what it is for, and the tools it may use. A
+        session is opened as one and stays as one — the transcript is the record
+        of what that identity did. Editing an identity reaches its sessions on
+        their next turn.
+      </p>
+
+      <ul className="agent__list">
+        {agents.map((agent) => (
+          <Row key={agent.id} agent={agent} />
+        ))}
+      </ul>
+
+      {editing === null ? (
+        <button
+          type="button"
+          className="button"
+          onClick={startNew}
+          disabled={busy}
+        >
+          New identity
+        </button>
+      ) : (
+        <AgentForm key={editing} editing={open} />
+      )}
+    </>
+  );
+}

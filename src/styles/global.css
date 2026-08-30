@@ -573,6 +573,42 @@ body {
   gap: 0.2rem;
 }
 
+/*
+ * The new-session control and the identity it would use. Two rows rather than
+ * one line, because the button is the thing pressed every day and the picker is
+ * the thing touched occasionally — and because the picker disappears entirely
+ * when there is only one identity to pick.
+ */
+.sessions__new {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.sessions__identity {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.sessions__identitylabel {
+  flex-shrink: 0;
+}
+
+.sessions__identityselect {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
 .session__open {
   flex: 1;
   min-width: 0;
@@ -741,6 +777,38 @@ body {
  * one would be the single most misleading thing this window could show.
  */
 .model--fake {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+/*
+ * Which identity a session runs as. Beside the model badge, and deliberately
+ * quieter than it: the model is the thing that changes between two messages,
+ * the identity is fixed for the life of the session. Not monospace, because
+ * unlike a model id it is a name someone chose, not an identifier to compare
+ * character by character.
+ */
+.agentbadge {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--selected);
+  color: var(--fg);
+  font-size: 0.72rem;
+}
+
+/*
+ * A session bound to an identity that is no longer on file. It holds no tools
+ * at all, so this is marked like the scripted provider is: something the user
+ * has to be able to notice without reading a tooltip.
+ */
+.agentbadge--unknown {
   border-color: var(--warning);
   background: var(--warning-bg);
   color: var(--warning);
@@ -1361,6 +1429,13 @@ body {
   opacity: 0.6;
 }
 
+/* An instruction block is prose, so it wraps and does not stretch sideways. */
+.field__input--area {
+  resize: vertical;
+  min-height: 4.5rem;
+  line-height: 1.45;
+}
+
 .field__input--bad {
   border-color: var(--danger);
 }
@@ -1443,6 +1518,144 @@ body {
 .link:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* --- Identities ----------------------------------------------------------- */
+
+/*
+ * The identity list and its form, inside the settings panel. Each row states
+ * what the identity is for and what it may touch, because those are the two
+ * facts that decide whether you would open a session as it — and the tools are
+ * spelled out rather than counted, since "3 tools" does not answer "may this
+ * write to my repo".
+ */
+.agent__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.agent__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.agent__name {
+  font-weight: 600;
+}
+
+.agent__badge {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.agent__actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
+.agent__role {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.agent__tools,
+.agent__skills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.agent__tools code,
+.agent__skills code {
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+/*
+ * An identity that holds nothing. Not marked as a warning: it is a perfectly
+ * reasonable thing to want, and the sentence already says what it means.
+ */
+.agent__tools--none {
+  font-style: italic;
+}
+
+.agentform {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.agentform__tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agentform__toollist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agentform__tool {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.agentform__tool code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.78rem;
+}
+
+.agentform__toolnote {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.agentform__actions {
+  display: flex;
+  gap: 0.5rem;
 }
 
 /* --- Audit drawer --------------------------------------------------------- */

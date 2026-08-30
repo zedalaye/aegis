@@ -461,6 +461,7 @@ mod tests {
                 workspace_exists: true,
             },
             sessions: vec![SessionSummary {
+                agent_id: crate::store::DEFAULT_AGENT_ID.to_owned(),
                 id: "s".to_owned(),
                 project_id: "p".to_owned(),
                 title: "First".to_owned(),
@@ -508,6 +509,7 @@ mod tests {
             sorted(&[
                 "id",
                 "project_id",
+                "agent_id",
                 "title",
                 "created_at",
                 "updated_at",

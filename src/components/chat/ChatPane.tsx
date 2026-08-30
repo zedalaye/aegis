@@ -2,9 +2,9 @@
  * The work area when a project is open: a session header, the transcript, and
  * the composer.
  *
- * The header shows what the turn is doing, and what is answering it, rather
- * than only what the session is called — those are the two questions a user
- * has while a reply streams. When no session is open it explains the two
+ * The header shows what the turn is doing, who is doing it and what is
+ * answering, rather than only what the session is called — those are the
+ * questions a user has while a reply streams. When no session is open it explains the two
  * states worth telling apart — no sessions yet, or one not chosen — since the
  * fix differs.
  */
@@ -14,6 +14,7 @@ import { useApprovals } from "../../state/approvals";
 import { useSessions } from "../../state/sessions";
 import { formatTimestamp } from "../../lib/format";
 
+import AgentBadge from "../agents/AgentBadge";
 import ApprovalDialog from "../approvals/ApprovalDialog";
 import GrantList from "../approvals/GrantList";
 import Composer from "./Composer";
@@ -108,6 +109,7 @@ export default function ChatPane() {
       <header className="chat__header">
         <h1 className="chat__title">{detail.session.title}</h1>
         <div className="chat__meta">
+          <AgentBadge agentId={detail.session.agent_id} />
           <ModelBadge />
           <StatusLine />
         </div>

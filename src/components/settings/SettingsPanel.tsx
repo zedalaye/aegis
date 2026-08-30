@@ -7,11 +7,14 @@
  * not actually prevent is worth less than a page the user can leave.
  *
  * Reachable with no project open, deliberately: configuring where the model
- * comes from is not something that should require picking a folder first.
+ * comes from is not something that should require picking a folder first. The
+ * identities of Phase 12 sit here for the same reason — an identity is a fact
+ * about the application, not about any one project.
  */
 
 import { useSettings } from "../../state/settings";
 
+import AgentList from "../agents/AgentList";
 import ProviderForm from "./ProviderForm";
 
 /**
@@ -71,10 +74,15 @@ export default function SettingsPanel() {
       <h2 className="settings__section">Provider</h2>
       <ProviderForm />
 
+      <h2 className="settings__section">Identities</h2>
+      <AgentList />
+
       <h2 className="settings__section">Where things are kept</h2>
       <p className="settings__note">
         The base URL and the model are written to <code>settings.json</code>{" "}
-        beside your projects. The key is not: it goes to this machine's own
+        beside your projects. Identities go in <code>agents.json</code> next to
+        them, which is a file you can read and edit by hand. The key is not: it
+        goes to this machine's own
         credential store — Credential Manager, Keychain, or a Secret Service —
         and Aegis has no command that can read one back out. Nothing in this
         window is ever given the key; it is attached to the request in the

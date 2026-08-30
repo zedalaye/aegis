@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome, READ_MAX_BYTES};
+use aegis_lib::DEFAULT_AGENT_ID;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -91,6 +92,7 @@ impl Fixture {
         let cancel = tokio_util::sync::CancellationToken::new();
         let tools_ctx = ToolCtx {
             session_id: "session-1",
+            agent_id: DEFAULT_AGENT_ID,
             turn_id: "turn-1",
             call_id: "call-1",
             audit: &self.audit,

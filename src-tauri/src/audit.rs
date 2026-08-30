@@ -140,6 +140,19 @@ pub struct AuditEntry {
     pub ts: String,
     /// Which session made the call.
     pub session_id: String,
+    /// Which identity it was made as (PLAN 7.3, Phase 12).
+    ///
+    /// The first half of "who ran, what did it cost, why did it fail" (PLAN
+    /// 7.2, row 10). A tool call is gated on the identity's allow-list, so a
+    /// record of the call that does not name the identity cannot be read back
+    /// against the grant that let it through.
+    ///
+    /// `#[serde(default)]` for the lines written before identities existed: the
+    /// file is its own wire format, and a reader that refused those lines would
+    /// lose the history the log is kept for. Those lines carry an empty string,
+    /// which is not an identity and is drawn as none.
+    #[serde(default)]
+    pub agent_id: String,
     /// Which turn within it.
     pub turn_id: String,
     /// The model's own id for the call.
@@ -189,6 +202,8 @@ pub struct AuditEntry {
 pub struct AuditRecord<'a> {
     /// Which session made the call.
     pub session_id: &'a str,
+    /// Which identity it was made as.
+    pub agent_id: &'a str,
     /// Which turn within it.
     pub turn_id: &'a str,
     /// The model's own id for the call.
@@ -222,6 +237,7 @@ impl AuditRecord<'_> {
         AuditEntry {
             ts: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             session_id: self.session_id.to_owned(),
+            agent_id: self.agent_id.to_owned(),
             turn_id: self.turn_id.to_owned(),
             call_id: self.call_id.to_owned(),
             tool: self.tool.to_owned(),
@@ -481,6 +497,7 @@ mod tests {
 
     fn record<'a>(args: &'a serde_json::Value, session: &'a str) -> AuditRecord<'a> {
         AuditRecord {
+            agent_id: "default",
             session_id: session,
             turn_id: "t1",
             call_id: "call_1",

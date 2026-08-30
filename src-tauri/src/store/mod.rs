@@ -1,9 +1,11 @@
 //! On-disk persistence.
 //!
-//! Two JSON documents under the OS application-data directory: `projects.json`
-//! ([`projects`]) and `sessions.json` ([`sessions`]). Both are small,
-//! human-readable and hand-editable on purpose — a user who has to recover
-//! from a bad state should be able to open the file and see why.
+//! Four JSON documents under the OS application-data directory:
+//! `projects.json` ([`projects`]), `sessions.json` ([`sessions`]),
+//! `settings.json` ([`settings`]) and, from Phase 12, `agents.json`
+//! ([`agents`]). All of them are small, human-readable and hand-editable on
+//! purpose — a user who has to recover from a bad state should be able to open
+//! the file and see why.
 //!
 //! Three properties matter more than the format, and this module is where they
 //! are implemented once for both documents:
@@ -22,9 +24,10 @@
 //! The documents are deliberately separate files with separate schema
 //! versions. They change at very different rates — a project list is edited by
 //! a human a few times a week, a transcript grows on every token, provider
-//! settings change a few times a year — and a migration to one has no business
-//! quarantining the others.
+//! settings change a few times a year, identities barely at all — and a
+//! migration to one has no business quarantining the others.
 
+pub mod agents;
 pub mod projects;
 pub mod sessions;
 pub mod settings;
@@ -36,6 +39,7 @@ use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
 
+pub use agents::{Agent, AgentDraft, AgentStore, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID};
 pub use projects::{canonical_workspace, Project, ProjectDetail, Store};
 pub use sessions::{
     Message, Role, SessionDetail, SessionState, SessionStore, SessionSummary, ToolCallRecord,

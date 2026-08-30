@@ -31,14 +31,20 @@ use crate::error::AppResult;
 
 use super::window::MAIN_WINDOW;
 
-/// Creates a session in a project.
+/// Creates a session in a project, as an identity.
+///
+/// An omitted `agent_id` is the built-in identity — the assistant every session
+/// before Phase 12 ran as. The binding is fixed at creation and there is no
+/// command that changes it; see
+/// [`SessionStore::create`](crate::store::SessionStore::create) for why.
 #[tauri::command(rename_all = "snake_case")]
 pub fn session_create(
     state: State<'_, AppState>,
     project_id: String,
     title: Option<String>,
+    agent_id: Option<String>,
 ) -> AppResult<SessionSummary> {
-    state.sessions().create(&project_id, title.as_deref())
+    state.create_session(&project_id, title.as_deref(), agent_id.as_deref())
 }
 
 /// A project's sessions, most recently active first.
@@ -173,11 +179,15 @@ async fn run_turn<R: Runtime>(
     };
 
     let sink = WindowSink::new(app.clone());
-    // Chosen now, not at startup: the settings, and the key, are read for this
-    // turn (see `AppState::provider`).
-    let provider = state.provider();
+    // Both resolved now, not at startup and not per round: the settings and the
+    // key are read for this turn (see `AppState::provider_for`), and so is the
+    // identity — an identity edited between two messages should reach the next
+    // turn whole, rather than halfway through one.
+    let agent = state.agent_of(&plan.session_id);
+    let provider = state.provider_for(&agent);
 
     let reason = Turn {
+        agent: &agent,
         sessions: state.sessions(),
         turns: state.turns(),
         grants: state.grants(),

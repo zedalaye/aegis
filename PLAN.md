@@ -164,7 +164,7 @@ type ProjectDetail = { project: Project; sessions: SessionSummary[] }; // sessio
 
 | Command | Args | Returns |
 | --- | --- | --- |
-| `session_create` | `{ project_id, title? }` | `SessionSummary` |
+| `session_create` | `{ project_id, title?, agent_id? }` | `SessionSummary` — `agent_id` from Phase 12 (§ 7.3) |
 | `session_list` | `{ project_id }` | `SessionSummary[]` |
 | `session_open` | `{ session_id }` | `SessionDetail` |
 | `session_rename` | `{ session_id, title }` | `void` |
@@ -174,7 +174,8 @@ type ProjectDetail = { project: Project; sessions: SessionSummary[] }; // sessio
 
 ```ts
 type SessionSummary = {
-  id: string; project_id: string; title: string;
+  id: string; project_id: string; agent_id: string; // agent_id: Phase 12, see 7.3
+  title: string;
   created_at: string; updated_at: string;
   message_count: number;
   state: "idle" | "running" | "awaiting_approval" | "error";
@@ -237,6 +238,32 @@ type ApprovalDetail =
 `approval_resolve` on an unknown or expired `request_id` returns `E_APPROVAL_STALE` rather than
 failing silently — the UI then re-syncs via `approval_list_pending`.
 
+**Identities** (Phase 12, § 7.3 — not MVP)
+
+| Command | Args | Returns |
+| --- | --- | --- |
+| `agent_list` | — | `Agent[]` (built-in first, then by name) |
+| `agent_create` | `{ draft }` | `Agent` |
+| `agent_update` | `{ agent_id, draft }` | `Agent` |
+| `agent_delete` | `{ agent_id }` | `void` |
+
+```ts
+type Agent = {
+  id: string;                 // uuid v4, or "default" for the built-in one
+  name: string; role: string; instructions: string;
+  provider_id: string;        // "default" — the provider named in Settings
+  tools: string[];            // allow-list, in registry order
+  skills: string[];           // recorded now, read in Phase 13
+  builtin: boolean;           // derived; the built-in one cannot be edited or deleted
+};
+type AgentDraft = Omit<Agent, "id" | "builtin">;
+```
+
+A refused field comes back as `E_INVALID_SETTING` with `error.field` — the same shape the
+provider form already uses, deliberately, so no screen learns a second vocabulary for "this
+input is wrong". `agent_delete` on an identity that sessions still run as is refused rather than
+cascaded; there is no command that rebinds a session's identity.
+
 **Settings and audit**
 
 | Command | Args | Returns |
@@ -258,6 +285,8 @@ type MaskedSettings = {
 type ProviderProbe = { ok: boolean; status: number | null; latency_ms: number | null; message: string };
 type AuditEntry = {
   ts: string; session_id: string; turn_id: string; call_id: string;
+  agent_id: string;                 // Phase 12; "" on lines written before identities
+
   tool: string;
   decision: Decision | "auto";
   policy_reason: string;
@@ -334,6 +363,13 @@ descendant.
 | `shell_exec` | cwd contained in WS | **ask** | yes, keyed on `program` | high | yes |
 | `shell_exec` | cwd outside WS | **ask** (every time) | no | high | yes |
 | `screen_capture` | primary monitor | **ask** | yes | medium | yes |
+
+From Phase 12 (§ 7.3) one check precedes this table: a call for a tool the session's identity
+does not hold is denied with `E_DENIED` before the matrix is read. It is not a row here because
+it is not a judgement about a path — it is about whether that tool exists for that identity at
+all — and because it holds with or without a workspace. A tool the identity *does* hold is judged
+by this table unchanged: an allow-list narrows what an identity could ever do, it never
+auto-allows a call.
 
 Sensitive-name predicate (case-insensitive, tested against the file name and every path
 segment): `.env*`, `*.pem`, `*.key`, `*.p12`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`,
@@ -734,6 +770,18 @@ honest.
 Persist agents as data: role, system prompt, provider id, tool ACL, skill ACL. Sessions bind
 to an `agent_id`. Still **one running agent at a time**. Exit: you can create a "reviewer"
 identity and open a session as that identity; it cannot see tools it was not granted.
+
+*Landed as:* `agents.json` beside the other documents; `Agent { id, name, role, instructions,
+provider_id, tools[], skills[], builtin }`; commands `agent_list` / `agent_create` /
+`agent_update` / `agent_delete`; `session_create` takes an `agent_id`, fixed at creation and
+never rebindable. The default identity is a **constant in the runtime, not a row** — so a session
+written before this phase resolves to it, and it cannot be deleted out from under one. The ACL is
+enforced twice: `tools::schemas_for` filters what the model is shown, and `policy::decide_call`
+refuses an ungranted name with `E_DENIED` before the matrix is consulted — no new error code, and
+no approval offered, because a prompt to exceed an allow-list is not a question to ask. The audit
+line carries `agent_id`. `provider_id` resolves through `AppState::provider_for`, which is where
+a roster lands; today it validates to one id. `skills[]` is stored and validated for shape only —
+Phase 13 is what reads it, and it never widens `tools[]`.
 
 **Phase 13 — Skill runner**
 The efficiency layer. Specified in § 7.6: a skill is a versioned `SKILL.md` runbook, not a
