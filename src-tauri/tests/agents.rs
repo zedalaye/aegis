@@ -490,17 +490,63 @@ fn a_session_written_before_identities_is_the_assistant_it_always_was() {
 /// were, so it is refused and the count is named.
 #[test]
 fn an_identity_cannot_be_deleted_while_a_session_still_runs_as_it() {
-    let app = App::new();
-    let reviewer = app.reviewer();
-    let session_id = app.session_as(&reviewer);
+    let dir = TempDir::new().expect("temp dir");
+    let state = aegis_lib::AppState::new(dir.path());
 
-    assert_eq!(app.sessions.count_for_agent(&reviewer.id), 1);
+    let reviewer = state
+        .agents()
+        .create(&AgentDraft {
+            name: "Reviewer".to_owned(),
+            role: "reads and reports".to_owned(),
+            instructions: String::new(),
+            provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            tools: vec![tool::FS_READ.to_owned()],
+            skills: Vec::new(),
+        })
+        .expect("created");
+    let session = state
+        .create_session("project-1", None, Some(&reviewer.id))
+        .expect("session");
 
-    app.sessions.delete(&session_id).expect("deleted");
-    assert_eq!(app.sessions.count_for_agent(&reviewer.id), 0);
-    app.agents
-        .delete(&reviewer.id)
+    // Through `AppState`, not the store: the store cannot see the session
+    // document, so this refusal only exists at the level that can, and the
+    // panel's Remove button is the only thing in front of it.
+    let err = state.delete_agent(&reviewer.id).expect_err("refused");
+    assert!(
+        err.to_string().contains('1'),
+        "the count is named, so the user knows what to delete first: {err}"
+    );
+    assert!(
+        state.agents().get(&reviewer.id).is_ok(),
+        "and the identity is kept, not half-removed"
+    );
+
+    // Refused, never cascaded: the session is still bound to it, and still its
+    // own record of what that identity did.
+    assert_eq!(
+        state.agent_of(&session.id),
+        reviewer,
+        "the refusal left the binding alone"
+    );
+
+    state.sessions().delete(&session.id).expect("deleted");
+    state
+        .delete_agent(&reviewer.id)
         .expect("nothing runs as it any more");
+    assert!(state.agents().get(&reviewer.id).is_err());
+}
+
+/// The built-in identity is refused before the session count is even looked
+/// at: it is not a record, so there is nothing a user could delete first that
+/// would make it go.
+#[test]
+fn the_builtin_identity_is_refused_even_with_nothing_bound_to_it() {
+    let dir = TempDir::new().expect("temp dir");
+    let state = aegis_lib::AppState::new(dir.path());
+
+    let err = state.delete_agent(DEFAULT_AGENT_ID).expect_err("refused");
+    assert!(err.to_string().contains("built-in"), "{err}");
+    assert_eq!(state.agent_list().len(), 1);
 }
 
 /// An identity, and a session's binding to it, survive a restart of the whole
