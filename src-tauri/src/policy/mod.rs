@@ -606,12 +606,12 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
                 identity = identity.name,
                 "a tool call outside the identity's allow-list"
             );
+            // The name is quoted and carries no trailing noun, so an identity
+            // whose name is already a noun phrase does not read as "the
+            // Unknown identity identity".
             return Decision::deny(
                 ErrorCode::Denied,
-                format!(
-                    "the {} identity is not allowed to use `{tool_name}`",
-                    identity.name
-                ),
+                format!("`{}` is not allowed to use `{tool_name}`", identity.name),
             );
         }
     }

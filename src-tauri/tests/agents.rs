@@ -502,3 +502,54 @@ fn an_identity_cannot_be_deleted_while_a_session_still_runs_as_it() {
         .delete(&reviewer.id)
         .expect("nothing runs as it any more");
 }
+
+/// An identity, and a session's binding to it, survive a restart of the whole
+/// runtime — not just of the store it lives in.
+///
+/// The store's own round-trip is covered in `store/agents.rs`. This is the
+/// level above it: `AppState` builds four documents over one directory, and
+/// "the identity was there and then it was not" is a failure that would show
+/// up here and nowhere else.
+#[test]
+fn an_identity_and_its_sessions_survive_a_restart_of_the_runtime() {
+    let dir = TempDir::new().expect("temp dir");
+
+    let first = aegis_lib::AppState::new(dir.path());
+    let reviewer = first
+        .agents()
+        .create(&AgentDraft {
+            name: "Reviewer".to_owned(),
+            role: "reads and reports".to_owned(),
+            instructions: String::new(),
+            provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            tools: vec![tool::FS_READ.to_owned()],
+            skills: Vec::new(),
+        })
+        .expect("created");
+    let session = first
+        .create_session("project-1", None, Some(&reviewer.id))
+        .expect("session");
+    drop(first);
+
+    let second = aegis_lib::AppState::new(dir.path());
+
+    assert_eq!(
+        second.agent_list().len(),
+        2,
+        "the built-in identity and the one that was created"
+    );
+    let reloaded = second.agents().get(&reviewer.id).expect("still on file");
+    assert_eq!(reloaded, reviewer);
+    assert_eq!(second.agent_of(&session.id), reviewer);
+
+    // And a third construction, because the failure being chased was a file
+    // that had been emptied between two runs rather than by either of them.
+    let third = aegis_lib::AppState::new(dir.path());
+    assert_eq!(third.agent_list().len(), 2);
+    assert!(
+        std::fs::read_to_string(dir.path().join("agents.json"))
+            .expect("read")
+            .contains("Reviewer"),
+        "opening the store must never rewrite it"
+    );
+}
