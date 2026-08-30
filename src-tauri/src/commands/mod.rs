@@ -6,8 +6,9 @@
 //!
 //! Domains land with their phases: `window`, `project`, `audit`, `session`,
 //! `approval`, from Phase 8 `settings`, from Phase 11 `workspace` — the
-//! shared-file convention inside a project's folder — and from Phase 12
-//! `agent`, the identities a session can be opened as.
+//! shared-file convention inside a project's folder — from Phase 12 `agent`,
+//! the identities a session can be opened as, and from Phase 13 `skill`, the
+//! runbooks those identities may run.
 //!
 //! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
 //! accept `camelCase` from JavaScript and rename it, so every command taking
@@ -20,5 +21,6 @@ pub mod audit;
 pub mod project;
 pub mod session;
 pub mod settings;
+pub mod skill;
 pub mod window;
 pub mod workspace;

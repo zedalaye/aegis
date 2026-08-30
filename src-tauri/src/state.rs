@@ -53,6 +53,7 @@ pub struct AppState {
     http: Option<reqwest::Client>,
     self_exe: Option<PathBuf>,
     captures: PathBuf,
+    skills: PathBuf,
 }
 
 impl AppState {
@@ -93,6 +94,11 @@ impl AppState {
             // existing directory to scope the asset protocol to, and so a
             // user can find the folder before there is anything in it.
             captures: prepare_captures(data_dir),
+            // Seeded on a first run only, and never argued about afterwards:
+            // see `skills::seed`. Ordinary files in an ordinary directory,
+            // which is what lets a user write, edit and delete a runbook with
+            // their own editor.
+            skills: prepare_skills(data_dir),
         }
     }
 
@@ -272,6 +278,25 @@ impl AppState {
         self.agents.delete(agent_id)
     }
 
+    /// The user's skill library (PLAN 7.3, Phase 13).
+    ///
+    /// Beside the stores rather than inside a workspace, because a runbook
+    /// like "never send without review" is a fact about how this person works,
+    /// not about one project. The other scope — runbooks that *are* about one
+    /// project — lives in that project's folder and travels with it.
+    pub fn skills(&self) -> &Path {
+        &self.skills
+    }
+
+    /// The skills one identity may run, in one workspace, right now.
+    ///
+    /// The composition this module exists for, on the skill side: the library
+    /// is Aegis', the `skills/` directory is the project's, and the allow-list
+    /// is the identity's. No single one of the three can answer on its own.
+    pub fn skill_catalog(&self, workspace: Option<&Path>) -> Vec<crate::skills::Skill> {
+        crate::skills::catalog(&self.skills, workspace)
+    }
+
     /// This application's own binary, when the platform would name it.
     pub fn self_exe(&self) -> Option<&Path> {
         self.self_exe.as_deref()
@@ -448,6 +473,19 @@ impl AppState {
     }
 }
 
+/// Creates the skill library and puts the one example runbook in it.
+///
+/// Not canonicalized, unlike the capture directory: nothing matches this path
+/// against a scope, it is only read from, and a canonical form would only
+/// change what a tracing line prints. A directory that cannot be created
+/// leaves a library with nothing in it, which reads as a catalog with nothing
+/// in it — the honest answer, and one the panel can render.
+fn prepare_skills(data_dir: &Path) -> PathBuf {
+    let library = data_dir.join(crate::skills::LIBRARY_DIR);
+    crate::skills::seed(&library);
+    library
+}
+
 /// Creates the capture directory and resolves it to its canonical form.
 ///
 /// Canonical because Tauri's asset-protocol scope canonicalizes the path the
@@ -474,6 +512,25 @@ mod tests {
     use super::*;
 
     use tempfile::TempDir;
+
+    /// The library is there from startup with one runbook in it, so a fresh
+    /// install has an example of the format in the place people look for one.
+    #[test]
+    fn the_skill_library_is_seeded_on_a_first_run() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+
+        assert_eq!(state.skills().parent(), Some(dir.path()));
+
+        let catalog = state.skill_catalog(None);
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].name, crate::skills::REVIEW_SKILL);
+        assert!(catalog[0].runnable(), "{:?}", catalog[0].problem);
+
+        // And no identity is offered it until someone grants it: the built-in
+        // one is the assistant from before skills existed.
+        assert!(crate::skills::granted(&catalog, &Agent::builtin()).is_empty());
+    }
 
     /// Captures go beside the stores and never into a workspace (PLAN 5.4).
     /// The directory exists from startup, because the asset-protocol scope in
@@ -537,6 +594,7 @@ mod tests {
             turn_id: "t1",
             call_id: "c1",
             tool: "fs_list",
+            skill: "",
             decision: crate::audit::AuditDecision::Auto,
             policy_reason: "a read-only listing inside the workspace",
             args: &serde_json::json!({ "path": "." }),
@@ -613,6 +671,7 @@ mod tests {
             turn_id: "t1",
             call_id: "c1",
             tool: "fs_write",
+            skill: "",
             decision: crate::audit::AuditDecision::AllowOnce,
             policy_reason: "this creates a file in the workspace",
             args: &serde_json::json!({ "path": "a.txt", "content": "x" }),

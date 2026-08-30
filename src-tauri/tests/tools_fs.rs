@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome, READ_MAX_BYTES};
-use aegis_lib::DEFAULT_AGENT_ID;
+use aegis_lib::{SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -100,6 +100,13 @@ impl Fixture {
             args: &args,
             progress: &NullProgress,
             cancel: &cancel,
+            // Nothing here runs a skill; the runner has its own tests.
+            skills: SkillCtx {
+                library: &self.captures,
+                workspace: None,
+                tools: &[],
+                active: None,
+            },
         };
 
         match decide(&ctx, tool_name, args.clone()) {
@@ -456,7 +463,13 @@ fn the_tools_offered_to_the_model_are_the_ones_this_build_runs() {
             "fs_read",
             "fs_write",
             "shell_exec",
-            "screen_capture"
+            "screen_capture",
+            // Phase 13. Loading a runbook and recording what came of it are
+            // verbs like any other, so they are registry entries like any
+            // other — which is what puts a skill run through the same policy,
+            // the same envelope and the same audit line as everything else.
+            "skill_run",
+            "skill_return",
         ]
     );
 }

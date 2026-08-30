@@ -137,6 +137,8 @@ struct App {
     audit: AuditLog,
     session_id: String,
     captures: PathBuf,
+    /// An empty skill library: these files are about other things.
+    library: PathBuf,
     /// The identity these turns run as: the built-in one, which holds every
     /// tool. What an allow-list does to a call is `tests/agents.rs`.
     agent: Agent,
@@ -166,6 +168,7 @@ impl App {
             audit: AuditLog::new(&data),
             session_id,
             captures: data.join("captures"),
+            library: data.join("skills"),
             agent: Agent::builtin(),
         }
     }
@@ -183,6 +186,7 @@ impl App {
             sink,
             self_exe: None,
             captures: &self.captures,
+            skills: &self.library,
         }
     }
 

@@ -26,7 +26,10 @@
 //! approved past — so it is a check in [`decide_call`] rather than a row in the
 //! matrix. A tool the identity does hold is then judged exactly as before: an
 //! allow-list narrows what an identity could ever do, and never auto-allows a
-//! call.
+//! call. Phase 13 adds the second allow-list beside it, for the same three
+//! reasons: may this identity run this *skill*. Both refuse with `E_DENIED`
+//! and neither opens a dialog, because a prompt offering to let an identity
+//! exceed its own allow-list is a prompt that should not exist.
 //!
 //! Layout: [`path`] resolves and contains, [`matrix`] holds the decision table
 //! of PLAN 3, [`grants`] remembers what a session already approved, and this
@@ -42,6 +45,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::ErrorCode;
+use crate::skills::handoff;
 
 pub use grants::{Grant, GrantStore};
 
@@ -59,6 +63,10 @@ pub mod tool {
     pub const SHELL_EXEC: &str = "shell_exec";
     /// Capture a display.
     pub const SCREEN_CAPTURE: &str = "screen_capture";
+    /// Load a runbook into this turn.
+    pub const SKILL_RUN: &str = "skill_run";
+    /// Record the result of the runbook that was loaded.
+    pub const SKILL_RETURN: &str = "skill_return";
 }
 
 /// How alarming a call should look in the approval dialog.
@@ -275,6 +283,24 @@ pub enum ResolvedCall {
         /// Which display to capture.
         display: String,
     },
+    /// `skill_run`, with the name checked against the identity's allow-list.
+    ///
+    /// No path: a skill is named, not located, by the model. Where its runbook
+    /// lives is a fact about the installation and the workspace, resolved by
+    /// the tool from [`SkillCtx`](crate::skills::SkillCtx) — the same reason
+    /// `screen_capture` does not carry the capture directory.
+    SkillRun {
+        /// The skill's name.
+        name: String,
+    },
+    /// `skill_return`, with every artefact path resolved and contained.
+    ///
+    /// Boxed because it is by far the widest variant and every other call
+    /// would otherwise pay for it in the size of the enum.
+    SkillReturn {
+        /// The return, as `COS.md` writes one.
+        report: Box<handoff::Report>,
+    },
 }
 
 impl ResolvedCall {
@@ -289,6 +315,8 @@ impl ResolvedCall {
             Self::FsWrite { .. } => tool::FS_WRITE,
             Self::ShellExec { .. } => tool::SHELL_EXEC,
             Self::ScreenCapture { .. } => tool::SCREEN_CAPTURE,
+            Self::SkillRun { .. } => tool::SKILL_RUN,
+            Self::SkillReturn { .. } => tool::SKILL_RETURN,
         }
     }
 }
@@ -340,6 +368,16 @@ pub enum ToolCall {
         /// Display selector; `primary` when absent.
         display: Option<String>,
     },
+    /// `skill_run`.
+    SkillRun {
+        /// The skill's name, already checked to be shaped like one.
+        name: String,
+    },
+    /// `skill_return`.
+    SkillReturn {
+        /// The return, with its artefact paths still as the model wrote them.
+        report: Box<handoff::Draft>,
+    },
 }
 
 impl ToolCall {
@@ -351,6 +389,8 @@ impl ToolCall {
             Self::FsWrite { .. } => tool::FS_WRITE,
             Self::ShellExec { .. } => tool::SHELL_EXEC,
             Self::ScreenCapture { .. } => tool::SCREEN_CAPTURE,
+            Self::SkillRun { .. } => tool::SKILL_RUN,
+            Self::SkillReturn { .. } => tool::SKILL_RETURN,
         }
     }
 
@@ -405,6 +445,47 @@ impl ToolCall {
                 let a: ScreenCaptureArgs = convert(tool_name, args)?;
                 Ok(Self::ScreenCapture { display: a.display })
             }
+            tool::SKILL_RUN => {
+                let a: SkillRunArgs = convert(tool_name, args)?;
+                let name = a.name.trim();
+                // Checked here rather than by the tool, because the identity's
+                // allow-list is matched against this string a moment later and
+                // a name that could be `../../etc` would be a name the
+                // allow-list and the filesystem disagree about.
+                if !crate::skills::is_name(name) {
+                    return Err(format!(
+                        "`{name}` is not a skill name. They look like `inbox.triage`: lower-case \
+                         letters, digits, `.`, `-` and `_`"
+                    ));
+                }
+                Ok(Self::SkillRun {
+                    name: name.to_owned(),
+                })
+            }
+            tool::SKILL_RETURN => {
+                let a: SkillReturnArgs = convert(tool_name, args)?;
+                let status = match a.status.trim() {
+                    "done" => handoff::Status::Done,
+                    "blocked" => handoff::Status::Blocked,
+                    "needs_you" => handoff::Status::NeedsYou,
+                    other => {
+                        return Err(format!(
+                            "`{other}` is not a status. A run ends `done`, `blocked` or \
+                             `needs_you`"
+                        ))
+                    }
+                };
+                Ok(Self::SkillReturn {
+                    report: Box::new(handoff::Draft {
+                        status,
+                        summary: a.summary,
+                        artefacts: a.artefacts,
+                        evidence: a.evidence,
+                        open_questions: a.open_questions,
+                        next_owner: a.next_owner.unwrap_or_default(),
+                    }),
+                })
+            }
             other => Err(format!("unknown tool `{other}`")),
         }
     }
@@ -456,6 +537,31 @@ struct ScreenCaptureArgs {
     display: Option<String>,
 }
 
+/// Wire shape of `skill_run` arguments.
+#[derive(Debug, Deserialize)]
+struct SkillRunArgs {
+    name: String,
+}
+
+/// Wire shape of `skill_return` arguments (`COS.md` *Handoff*).
+///
+/// `status` arrives as a string rather than as the enum so an unrecognized one
+/// is answered with the three that work, instead of with whatever `serde`
+/// says about a variant name.
+#[derive(Debug, Deserialize)]
+struct SkillReturnArgs {
+    status: String,
+    summary: String,
+    #[serde(default)]
+    artefacts: Vec<String>,
+    #[serde(default)]
+    evidence: Vec<String>,
+    #[serde(default)]
+    open_questions: Vec<String>,
+    #[serde(default)]
+    next_owner: Option<String>,
+}
+
 /// The geometry of the display a capture would take.
 ///
 /// Supplied by the caller rather than measured here, so policy stays a pure
@@ -493,12 +599,25 @@ pub struct Identity<'a> {
     pub name: &'a str,
     /// The tools it may call.
     pub tools: &'a [String],
+    /// The skills it may run (PLAN 7.3, Phase 13).
+    ///
+    /// A second allow-list rather than a wider first one, because they gate
+    /// different things: a tool is a verb on the machine, a skill is a runbook
+    /// that sequences those verbs. Holding a skill never adds a tool — the
+    /// runner refuses a run whose declared tools are not all in the list above
+    /// — and holding every tool never adds a skill.
+    pub skills: &'a [String],
 }
 
 impl Identity<'_> {
     /// Whether this identity may call `tool`.
     fn allows(&self, tool: &str) -> bool {
         self.tools.iter().any(|granted| granted == tool)
+    }
+
+    /// Whether this identity may run `skill`.
+    fn allows_skill(&self, skill: &str) -> bool {
+        self.skills.iter().any(|granted| granted == skill)
     }
 }
 
@@ -614,6 +733,28 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
                 format!("`{}` is not allowed to use `{tool_name}`", identity.name),
             );
         }
+
+        // The second allow-list, in the same place and for the same reasons
+        // (PLAN 7.3, Phase 13). It does not depend on a workspace — a runbook
+        // in the library is granted or not whether or not a folder is mounted
+        // — and it cannot be approved past, because a dialog offering to let
+        // an identity run a skill it was not granted is the allow-list asking
+        // to be overruled. The name was never in the identity's catalog, so
+        // reaching here means an invented name or one out of an older
+        // transcript.
+        if let ToolCall::SkillRun { name } = &call {
+            if !identity.allows_skill(name) {
+                tracing::info!(
+                    skill = %name,
+                    identity = identity.name,
+                    "a skill outside the identity's allow-list"
+                );
+                return Decision::deny(
+                    ErrorCode::Denied,
+                    format!("`{}` is not allowed to run `{name}`", identity.name),
+                );
+            }
+        }
     }
 
     let Some(workspace) = ctx.workspace else {
@@ -695,6 +836,7 @@ mod tests {
         let ctx = PolicyCtx::new("s1", Some(&workspace), &grants).with_identity(Identity {
             name: "Reviewer",
             tools: &allowed,
+            skills: &[],
         });
 
         match decide(
@@ -729,6 +871,7 @@ mod tests {
         let ctx = PolicyCtx::new("s1", None, &grants).with_identity(Identity {
             name: "Scribe",
             tools: &[],
+            skills: &[],
         });
 
         match decide(&ctx, tool::FS_READ, json!({ "path": "a.txt" })) {
@@ -738,6 +881,50 @@ mod tests {
             }
             other => panic!("expected a denial, got {other:?}"),
         }
+    }
+
+    /// The Phase 13 half of the same gate: a skill the identity was not
+    /// granted is refused before the runbook is even located, with no approval
+    /// offered — and holding every tool does not grant a skill.
+    #[test]
+    fn a_skill_outside_the_identitys_allow_list_is_refused_by_name() {
+        let grants = GrantStore::new();
+        let workspace = std::env::current_dir().expect("a workspace to measure against");
+        let every: Vec<String> = crate::tools::names()
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let held = vec!["inbox.triage".to_owned()];
+        let ctx = PolicyCtx::new("s1", Some(&workspace), &grants).with_identity(Identity {
+            name: "Triager",
+            tools: &every,
+            skills: &held,
+        });
+
+        match decide(&ctx, tool::SKILL_RUN, json!({ "name": "deploy.draft" })) {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::Denied);
+                assert!(reason.contains("Triager"), "{reason}");
+                assert!(reason.contains("deploy.draft"), "{reason}");
+            }
+            other => panic!("expected a denial, got {other:?}"),
+        }
+
+        // The one it holds is auto-allowed: loading a runbook it was granted
+        // is not a question to put to anyone.
+        assert!(matches!(
+            decide(&ctx, tool::SKILL_RUN, json!({ "name": "inbox.triage" })),
+            Decision::Auto { .. }
+        ));
+    }
+
+    /// A name that is not shaped like one never reaches the allow-list, so
+    /// "granted" and "on the filesystem" cannot be made to disagree.
+    #[test]
+    fn a_skill_name_that_is_a_path_is_refused_at_the_door() {
+        let call = ToolCall::parse(tool::SKILL_RUN, json!({ "name": "../../etc/passwd" }));
+        let reason = call.expect_err("refused");
+        assert!(reason.contains("inbox.triage"), "{reason}");
     }
 
     /// A decision with no identity behind it is the pre-Phase-12 one. Every

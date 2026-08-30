@@ -36,11 +36,16 @@ provider_id: string,
  */
 tools: Array<string>, 
 /**
- * The skills it may run.
+ * The skills it may run (PLAN 7.3, Phase 13).
  *
- * Recorded now, read in Phase 13. Nothing in this build executes a skill,
- * and this list never widens [`Agent::tools`] — a skill is a runbook, not
- * a grant (PLAN 7.3, Phase 13).
+ * The per-agent scope of `COS.md` *Skills*: not a directory, but a
+ * selection from the runbooks the library and the workspace hold. It
+ * never widens [`Agent::tools`] — a skill sequences tools, it does not
+ * grant them, and a run whose runbook calls a tool this identity lacks is
+ * refused before its first step.
+ *
+ * Empty for the built-in identity, which is what it was before this phase
+ * and stays: a skill is always something someone granted.
  */
 skills: Array<string>, 
 /**
@@ -79,7 +84,8 @@ provider_id: string,
  */
 tools: Array<string>, 
 /**
- * Skill names, for Phase 13.
+ * The runbooks it may run. Requires `skill_run` and `skill_return` in
+ * [`AgentDraft::tools`] when it is not empty.
  */
 skills: Array<string>, };
 
@@ -316,6 +322,21 @@ call_id: string,
  * Tool name.
  */
 tool: string, 
+/**
+ * The skill run this call was part of (PLAN 7.3, Phase 13).
+ *
+ * "A run without `skill` on the line cannot be budgeted or replayed"
+ * (PLAN 7.6). Every call made between a `skill_run` and its
+ * `skill_return` carries the name — not only the two the skill tools make
+ * — so the question a replay asks is answerable: *what did this runbook
+ * actually do, and what was it refused*.
+ *
+ * Empty for a call made outside a run, and for every line written before
+ * this phase. `#[serde(default)]` for the same reason `agent_id` carries
+ * one: the file is its own wire format, and a reader that refused the
+ * older lines would lose the history the log is kept for.
+ */
+skill: string, 
 /**
  * Auto-allowed, approved, or refused.
  */
@@ -636,6 +657,75 @@ message_count: number,
  * What the session is doing *right now*.
  */
 state: SessionState, };
+
+/**
+ * One catalog entry.
+ *
+ * Everything except the runbook. A `Skill` is what the panel draws, what the
+ * system message is built from, and what the allow-list is matched against;
+ * the body is [`load`]ed only by a run, which is the whole point of the type
+ * not having a field for it.
+ */
+export type Skill = { 
+/**
+ * The skill's name, which is its directory's: `inbox.triage`.
+ */
+name: string, 
+/**
+ * Where it was found.
+ */
+scope: SkillScope, 
+/**
+ * What the author versioned it as. Empty when the file will not parse.
+ */
+version: string, 
+/**
+ * The first paragraph of *When to use it*, capped. Empty when it will not
+ * parse.
+ */
+summary: string, 
+/**
+ * The tools its steps declare they will call.
+ */
+tools: Array<string>, 
+/**
+ * The `SKILL.md` itself, so a person can go and open it.
+ */
+path: string, 
+/**
+ * Whether a workspace skill of this name is hiding a library one.
+ *
+ * Reported rather than silently resolved: two runbooks with one name is
+ * exactly the state where somebody is running the one they did not mean
+ * to, and the panel can say so.
+ */
+shadows: boolean, 
+/**
+ * Why this one cannot run, when it cannot.
+ *
+ * A file that will not parse stays in the catalog carrying its refusal,
+ * rather than disappearing: the author is the only person who can fix it,
+ * and a skill that vanished would tell them nothing. It is never offered
+ * to the model — [`granted`] drops it.
+ */
+problem: string | null, };
+
+/**
+ * Which of `COS.md`'s scopes a skill was found in.
+ *
+ * The per-agent scope is not here because it is not a place: it is the
+ * identity's allow-list, applied to what these two found.
+ */
+export type SkillScope = "library" | "workspace";
+
+/**
+ * How a skill run ended (`COS.md` *Handoff*).
+ *
+ * Three states and no fourth. "Partly done" is `needs_you` with the rest in
+ * `open_questions`; a runner that offered a fourth would be offering a place
+ * to put work nobody then picks up.
+ */
+export type Status = "done" | "blocked" | "needs_you";
 
 /**
  * Why a model stopped.

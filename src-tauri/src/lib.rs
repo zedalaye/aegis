@@ -18,7 +18,10 @@
 //! already exist, rather than a new store. Later phases add commands and
 //! modules without changing this entry shape. Phase 12 adds the agent
 //! registry: identities as data, a session bound to one, and a tool allow-list
-//! the model is filtered by and policy refuses against.
+//! the model is filtered by and policy refuses against. Phase 13 adds the
+//! skill runner: versioned `SKILL.md` runbooks in a library and in the
+//! workspace, a catalog in every request, and the body loaded only into the
+//! turn that asked for it.
 
 pub mod agent;
 pub mod approval;
@@ -28,6 +31,7 @@ mod display;
 mod error;
 pub mod policy;
 pub mod secrets;
+pub mod skills;
 mod state;
 pub mod store;
 pub mod tools;
@@ -45,6 +49,7 @@ pub use audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord,
 pub use error::{AppError, AppResult, ErrorCode};
 pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
 pub use secrets::{ApiKey, KeySource, SecretStore};
+pub use skills::{Skill, SkillCtx, SkillScope};
 pub use state::AppState;
 pub use store::{
     Agent, AgentDraft, AgentStore, MaskedSettings, Message, Project, ProjectDetail,
@@ -163,6 +168,7 @@ pub fn run() {
             commands::settings::settings_probe_provider,
             commands::workspace::workspace_layout,
             commands::workspace::workspace_scaffold,
+            commands::skill::skill_list,
         ])
         .setup(|app| {
             // State is built here rather than on the builder because loading

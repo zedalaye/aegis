@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, Grant, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, ProgressSink, Stream, ToolCtx, ToolOutcome};
-use aegis_lib::DEFAULT_AGENT_ID;
+use aegis_lib::{SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -152,6 +152,13 @@ impl Fixture {
             args: &args,
             progress,
             cancel,
+            // Nothing here runs a skill; the runner has its own tests.
+            skills: SkillCtx {
+                library: &self.captures,
+                workspace: None,
+                tools: &[],
+                active: None,
+            },
         };
 
         match self.judge(&args) {

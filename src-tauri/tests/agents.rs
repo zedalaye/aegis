@@ -84,6 +84,8 @@ struct App {
     approvals: ApprovalRegistry,
     audit: AuditLog,
     captures: PathBuf,
+    /// An empty skill library: these files are about other things.
+    library: PathBuf,
 }
 
 impl App {
@@ -105,6 +107,7 @@ impl App {
             approvals: ApprovalRegistry::new(),
             audit: AuditLog::new(&data),
             captures: data.join("captures"),
+            library: data.join("skills"),
         }
     }
 
@@ -143,6 +146,7 @@ impl App {
             agent,
             &history,
             Some(&self.workspace),
+            None,
             None,
             aegis_lib::tools::schemas_for(&agent.tools),
         );
@@ -205,6 +209,7 @@ impl App {
             sink,
             self_exe: None,
             captures: &self.captures,
+            skills: &self.library,
         }
         .run(&plan, &cancel)
         .await;
@@ -466,6 +471,7 @@ fn a_session_written_before_identities_is_the_assistant_it_always_was() {
         &resolved,
         &history,
         Some(&workspace),
+        None,
         None,
         aegis_lib::tools::schemas_for(&resolved.tools),
     );

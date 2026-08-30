@@ -17,16 +17,18 @@
 //!   per turn, consumed in order. This is how a test drives a tool call, a
 //!   truncated arguments string or a provider error through the loop.
 //!
-//! The improvised mode has three deliberate exceptions to "never touch the
-//! machine", and they are what make the approval gate usable before there is a
-//! model: a message containing [`WRITE_TRIGGER`] makes it ask for an
-//! `fs_write` (PLAN 6, Phase 6 — "the fake provider is scripted to request an
-//! `fs_write`"), one containing [`RUN_TRIGGER`] makes it ask for a
-//! `shell_exec` (Phase 7), and one containing [`CAPTURE_TRIGGER`] makes it ask
-//! for a `screen_capture` (Phase 9). All three are words the user has to type,
-//! not heuristics over what they said: a fake model that decided on its own
-//! when to reach for the disk, for a process or for the screen would be exactly
-//! the behaviour the gate exists to catch.
+//! The improvised mode has four deliberate exceptions to "never touch the
+//! machine", and they are what make the approval gate — and, from Phase 13,
+//! the skill runner — usable before there is a model: a message containing
+//! [`WRITE_TRIGGER`] makes it ask for an `fs_write` (PLAN 6, Phase 6 — "the
+//! fake provider is scripted to request an `fs_write`"), one containing
+//! [`RUN_TRIGGER`] makes it ask for a `shell_exec` (Phase 7), one containing
+//! [`CAPTURE_TRIGGER`] makes it ask for a `screen_capture` (Phase 9), and one
+//! containing [`SKILL_TRIGGER`] makes it load and close a skill run (Phase
+//! 13). All four are words the user has to type, not heuristics over what they
+//! said: a fake model that decided on its own when to reach for the disk, for
+//! a process or for the screen would be exactly the behaviour the gate exists
+//! to catch.
 //!
 //! Tokens are emitted with a small delay so streaming is visibly streaming and
 //! a cancel has something to interrupt. Tests use [`FakeProvider::instant`],
@@ -67,6 +69,18 @@ pub const RUN_TRIGGER: &str = "/run";
 /// thumbnail while the model is told only where the file is. Matched
 /// case-insensitively anywhere in the user's message.
 pub const CAPTURE_TRIGGER: &str = "/capture";
+
+/// The word that makes the improvising provider run a skill.
+///
+/// Typing it is the Phase 13 walkthrough, and it is the one trigger that takes
+/// two rounds: the provider calls `skill_run` on the first runbook the catalog
+/// offers, reads the steps back, and then closes the run with a `skill_return`
+/// — so the catalog, the loaded body, the validated return and the skill name
+/// on the audit lines can all be seen without a model. It stops there rather
+/// than carrying the steps out, because a scripted provider following a
+/// runbook would be pretending to be the thing this trigger exists to make
+/// visible. Matched case-insensitively anywhere in the user's message.
+pub const SKILL_TRIGGER: &str = "/skill";
 
 /// The file the triggered write targets, relative to the workspace.
 ///
@@ -180,11 +194,19 @@ impl Provider for FakeProvider {
 /// a debugger.
 fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
     let said = last_user_text(request);
+    let asked = said.to_lowercase();
+
+    // Before `already_answered`, because this is the one trigger that spans
+    // two rounds: its second round is exactly the round in which a tool
+    // message exists. It decides what to do from what came back, which is why
+    // it can be re-entered without asking for the same thing again.
+    if asked.contains(SKILL_TRIGGER) {
+        return skill_turn(request);
+    }
 
     // The three things this provider will reach for the machine over, and only
     // because the user named them.
     if !already_answered(request) {
-        let asked = said.to_lowercase();
         if asked.contains(WRITE_TRIGGER) {
             return ask_to_write(&said);
         }
@@ -212,7 +234,9 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
          request a file write; `{RUN_TRIGGER}` and I will request a command; \
          `{CAPTURE_TRIGGER}` and I will ask to photograph your primary \
          display. Any of them you can refuse, allow once, or allow for the \
-         rest of the session, and find the audit line on disk afterwards.",
+         rest of the session, and find the audit line on disk afterwards. \
+         `{SKILL_TRIGGER}` runs the first skill this identity was granted, \
+         which takes two rounds and needs no approval at all.",
         plural = if tools == 1 { "" } else { "s" },
     );
 
@@ -357,6 +381,188 @@ fn ask_to_capture() -> Vec<ModelEvent> {
     ]
 }
 
+/// A turn that runs a skill: `skill_run`, then `skill_return`, then a word.
+///
+/// Which of the three depends only on what came back, so the same function
+/// answers every round of the demo. That is also what makes it honest about
+/// the phase: a run is a span inside one turn, and the provider can see where
+/// in the span it is by reading the tool messages of that turn.
+///
+/// It deliberately does not carry the runbook's steps out. A scripted provider
+/// following a procedure would be imitating the model, and what this trigger
+/// exists to show is the runner — the catalog, the body arriving on demand,
+/// the return being validated, and the skill's name on the audit lines.
+fn skill_turn(request: &ModelRequest) -> Vec<ModelEvent> {
+    let answers = answers_this_turn(request);
+
+    if answers
+        .iter()
+        .any(|body| body.contains(r#""tool":"skill_return""#))
+    {
+        return say(
+            "That is the whole loop: the catalog named the runbook, `skill_run` handed me its \
+             steps for this turn only, and `skill_return` checked the status object against the \
+             shape a handoff has to come back in. Both calls are on the audit log with the \
+             skill's name on them. A real model would have carried the steps out in between; \
+             there is none behind this reply.",
+        );
+    }
+
+    match answers
+        .iter()
+        .rev()
+        .find(|body| body.contains(r#""tool":"skill_run""#))
+    {
+        // The run is open. Close it, and deliberately with a `blocked`: this
+        // provider did not do the work, and a `done` claiming otherwise is the
+        // exact thing the return validation exists to refuse.
+        Some(body) if body.contains(r#""ok":true"#) => match meta_skill(body) {
+            Some(name) => ask_to_return(&name),
+            None => say("The runbook loaded but its envelope named no skill, which is a bug."),
+        },
+        Some(_) => say(
+            "The runbook did not load — the result above says why. Nothing was run, and there is \
+             nothing to return.",
+        ),
+        None => match first_catalog_skill(request) {
+            Some(name) => ask_to_load(&name),
+            None => say(
+                "This identity was granted no skills, so there is no catalog in my instructions \
+                 and nothing to run. Skills are granted per identity in Settings → Identities, \
+                 from the runbooks in your library and in this workspace's `skills/` folder.",
+            ),
+        },
+    }
+}
+
+/// A turn that loads one runbook, and nothing else.
+fn ask_to_load(name: &str) -> Vec<ModelEvent> {
+    let arguments = serde_json::json!({ "name": name }).to_string();
+
+    vec![
+        ModelEvent::TextDelta {
+            text: format!(
+                "Loading the `{name}` runbook. This one needs no approval — it reads a file you \
+                 put in your own library or workspace, and everything it then tells me to do is \
+                 gated exactly as it would be otherwise.\n"
+            ),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::SKILL_RUN.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// A turn that closes the run with an honest `blocked`.
+fn ask_to_return(name: &str) -> Vec<ModelEvent> {
+    let arguments = serde_json::json!({
+        "status": "blocked",
+        "summary": format!(
+            "Loaded the {name} runbook and read its steps. There is no model behind this \
+             provider, so none of them were carried out."
+        ),
+        "open_questions": [
+            "Name a base URL and a model in Settings, and a real one will follow these steps."
+        ],
+        "next_owner": "human",
+    })
+    .to_string();
+
+    vec![
+        ModelEvent::TextDelta {
+            text: "I have the steps. Returning `blocked` rather than `done`, because I did not \
+                   do them — a `done` here would be refused anyway: the runner checks that the \
+                   artefacts a run claims are really on disk.\n"
+                .to_owned(),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::SKILL_RETURN.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// A plain streamed reply, with no tool call in it.
+fn say(text: &str) -> Vec<ModelEvent> {
+    let mut events: Vec<ModelEvent> = tokens(text)
+        .into_iter()
+        .map(|text| ModelEvent::TextDelta { text })
+        .collect();
+
+    events.push(ModelEvent::Finish {
+        reason: StopReason::Stop,
+        usage: None,
+    });
+    events
+}
+
+/// The `tool` messages that belong to this turn, oldest first.
+///
+/// Scoped after the most recent user message, for the reason
+/// [`already_answered`] is: "this turn" and "this conversation" are different
+/// questions, and only the first one says where in a skill run we are.
+fn answers_this_turn(request: &ModelRequest) -> Vec<&str> {
+    let from = request
+        .messages
+        .iter()
+        .rposition(|message| matches!(message, WireMessage::User { .. }))
+        .unwrap_or(0);
+
+    request.messages[from..]
+        .iter()
+        .filter_map(|message| match message {
+            WireMessage::Tool { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The skill an envelope's `meta` names.
+///
+/// Read out of the JSON as text rather than parsed: this provider has no
+/// business owning a copy of the envelope's shape, and the one field it needs
+/// is the one the runner documents as the run's name
+/// ([`META_SKILL`](crate::skills::META_SKILL)).
+fn meta_skill(envelope: &str) -> Option<String> {
+    let key = format!("\"{}\":\"", crate::skills::META_SKILL);
+    let at = envelope.find(&key)? + key.len();
+    let rest = &envelope[at..];
+    let end = rest.find('"')?;
+
+    Some(rest[..end].to_owned())
+}
+
+/// The first skill the catalog in the system message offers.
+///
+/// Read back out of the built request, like [`workspace_line`], so what this
+/// picks is what the runtime actually told the model it could run — including
+/// nothing, when the identity was granted none.
+fn first_catalog_skill(request: &ModelRequest) -> Option<String> {
+    let system = request.messages.iter().find_map(|message| match message {
+        WireMessage::System { content } => Some(content.as_str()),
+        _ => None,
+    })?;
+
+    system.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("- `")?;
+        let end = rest.find('`')?;
+        Some(rest[..end].to_owned())
+    })
+}
+
 /// Whether the call this turn asked for has already been answered.
 ///
 /// Scoped to the messages after the most recent user message, which is what
@@ -477,6 +683,7 @@ mod tests {
             &[crate::store::Message::user(text)],
             Some(&PathBuf::from("/home/p/work")),
             None,
+            None,
             crate::tools::schemas(),
         )
     }
@@ -516,6 +723,7 @@ mod tests {
             FAKE_MODEL,
             &crate::store::Agent::builtin(),
             &[],
+            None,
             None,
             None,
             Vec::new(),
@@ -691,6 +899,83 @@ mod tests {
         // arguments do not parse is answered rather than asked about.
         let args: serde_json::Value = serde_json::from_str(&call.1).expect("valid arguments");
         assert_eq!(args, serde_json::json!({}));
+    }
+
+    /// PLAN 7.3, Phase 13: the skill trigger walks a whole run — load, then
+    /// return, then stop — so the runner can be seen working without a model.
+    /// The three rounds are asserted together because what the trigger is
+    /// demonstrating is the *sequence*, and each round is decided from what the
+    /// last one came back with.
+    #[tokio::test]
+    async fn the_skill_trigger_loads_a_runbook_and_then_closes_the_run() {
+        /// The one call a round made, if it made one.
+        fn call_of(events: &[ModelEvent]) -> Option<(String, String)> {
+            events.iter().find_map(|event| match event {
+                ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                } => Some((name.clone()?, args_delta.clone())),
+                _ => None,
+            })
+        }
+
+        let provider = FakeProvider::instant();
+        let catalog = "Skills you may run.\n\n- `inbox.triage` (v1, this workspace) — sorts an \
+                       item into the board.";
+
+        // Round one: the catalog names a runbook, so it asks for that one.
+        let mut request = request_saying("please /skill");
+        if let Some(WireMessage::System { content }) = request.messages.first_mut() {
+            content.push_str("\n\n");
+            content.push_str(catalog);
+        }
+        let opened = call_of(&drain(&provider, request.clone()).await).expect("a call");
+        assert_eq!(opened.0, crate::policy::tool::SKILL_RUN);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&opened.1).expect("arguments"),
+            serde_json::json!({ "name": "inbox.triage" })
+        );
+
+        // Round two: the run is open, so it closes it — and honestly, with a
+        // `blocked`, because it did not do the work.
+        request.messages.push(WireMessage::Tool {
+            tool_call_id: "call_1".to_owned(),
+            content: r#"{"ok":true,"tool":"skill_run","meta":{"skill":"inbox.triage"}}"#.to_owned(),
+        });
+        let closed = call_of(&drain(&provider, request.clone()).await).expect("a call");
+        assert_eq!(closed.0, crate::policy::tool::SKILL_RETURN);
+        let args: serde_json::Value = serde_json::from_str(&closed.1).expect("arguments");
+        assert_eq!(args["status"], "blocked");
+        assert!(
+            args["open_questions"]
+                .as_array()
+                .is_some_and(|questions| !questions.is_empty()),
+            "a blocked with nothing to answer would be refused by the runner: {args}"
+        );
+
+        // Round three: the run is closed, so it says so and stops.
+        request.messages.push(WireMessage::Tool {
+            tool_call_id: "call_2".to_owned(),
+            content: r#"{"ok":true,"tool":"skill_return","meta":{"skill":"inbox.triage"}}"#
+                .to_owned(),
+        });
+        let finished = drain(&provider, request).await;
+        assert!(call_of(&finished).is_none(), "the loop ends in a word");
+        assert!(text_of(&finished).contains("audit log"), "{:?}", finished);
+    }
+
+    /// An identity granted no skills has no catalog in its system message, and
+    /// the trigger says so rather than inventing a name to call.
+    #[tokio::test]
+    async fn the_skill_trigger_with_no_catalog_asks_for_nothing() {
+        let events = drain(&FakeProvider::instant(), request_saying("/skill please")).await;
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelEvent::ToolCallDelta { .. })),
+            "nothing to run means no call: {events:?}"
+        );
+        assert!(text_of(&events).contains("granted no skills"));
     }
 
     /// The trigger fires once per turn, not once per round. A provider that

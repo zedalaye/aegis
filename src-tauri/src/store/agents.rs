@@ -28,9 +28,16 @@
 //! **Instructions are capped, and the cap is the point.** The system prompt
 //! stays a policy summary plus what is true right now (PLAN 7.1, *System
 //! prompt*). An identity may say what it is for; it may not carry a runbook.
-//! Recurring procedure is a skill, and skills are Phase 13 — an identity whose
-//! instructions have grown into one is procedure that phase would have to
-//! fight.
+//! Recurring procedure is a skill — a versioned `SKILL.md` the runner loads
+//! only when it is invoked ([`skills`](crate::skills)) — and an identity whose
+//! instructions had grown into one would be procedure paid for on every turn,
+//! whether it was needed or not.
+//!
+//! From Phase 13 the skill list is the second allow-list rather than a
+//! recorded intention: it selects, per identity, from the runbooks the library
+//! and the workspace hold. It grants no tool. What it does require is
+//! `skill_run` and `skill_return` in the tool list, because an identity that
+//! may run a runbook and cannot load one holds a grant that does nothing.
 
 use std::fs;
 use std::io;
@@ -43,6 +50,8 @@ use uuid::Uuid;
 
 use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
+use crate::policy::tool;
+use crate::skills;
 use crate::tools;
 
 /// Name of the document under the application-data directory.
@@ -85,9 +94,6 @@ const ROLE_MAX_CHARS: usize = 160;
 /// Everything above it is a skill (PLAN 7.6).
 const INSTRUCTIONS_MAX_CHARS: usize = 2000;
 
-/// Longest skill name.
-const SKILL_MAX_CHARS: usize = 64;
-
 /// Most skills one identity may be granted.
 const SKILLS_MAX: usize = 64;
 
@@ -118,11 +124,16 @@ pub struct Agent {
     /// schemas, and policy refuses anything outside the list even when the
     /// model asks for it anyway.
     pub tools: Vec<String>,
-    /// The skills it may run.
+    /// The skills it may run (PLAN 7.3, Phase 13).
     ///
-    /// Recorded now, read in Phase 13. Nothing in this build executes a skill,
-    /// and this list never widens [`Agent::tools`] — a skill is a runbook, not
-    /// a grant (PLAN 7.3, Phase 13).
+    /// The per-agent scope of `COS.md` *Skills*: not a directory, but a
+    /// selection from the runbooks the library and the workspace hold. It
+    /// never widens [`Agent::tools`] — a skill sequences tools, it does not
+    /// grant them, and a run whose runbook calls a tool this identity lacks is
+    /// refused before its first step.
+    ///
+    /// Empty for the built-in identity, which is what it was before this phase
+    /// and stays: a skill is always something someone granted.
     pub skills: Vec<String>,
     /// Whether this is the built-in identity, which cannot be edited or
     /// deleted. Derived, never stored.
@@ -177,6 +188,18 @@ impl Agent {
     pub fn allows(&self, tool: &str) -> bool {
         self.tools.iter().any(|granted| granted == tool)
     }
+
+    /// Whether this identity may run `skill`.
+    ///
+    /// Deliberately not "the built-in identity may run everything", which is
+    /// how the tool list behaves for it. The built-in identity *is* the
+    /// assistant of Phases 5–11 written down, and that assistant had no skills
+    /// because there were none; handing it every runbook the moment one
+    /// appears would change what the default identity means under the sessions
+    /// already using it. An identity you want to run skills is one you make.
+    pub fn allows_skill(&self, skill: &str) -> bool {
+        self.skills.iter().any(|granted| granted == skill)
+    }
 }
 
 /// What a create or an update carries.
@@ -198,7 +221,8 @@ pub struct AgentDraft {
     /// Tool names from the registry. May be empty — an identity that only reads
     /// and writes prose is a useful thing to be able to make.
     pub tools: Vec<String>,
-    /// Skill names, for Phase 13.
+    /// The runbooks it may run. Requires `skill_run` and `skill_return` in
+    /// [`AgentDraft::tools`] when it is not empty.
     pub skills: Vec<String>,
 }
 
@@ -619,16 +643,16 @@ impl Valid {
             if skill.is_empty() {
                 continue;
             }
-            if skill.chars().count() > SKILL_MAX_CHARS
-                || !skill
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c))
-            {
+            // The same predicate discovery uses, so a name that can be
+            // granted is a name a runbook's directory can have and there is no
+            // third spelling in between.
+            if !skills::is_name(skill) {
                 return Err(AppError::Agent {
                     field: "skills",
                     reason: format!(
                         "`{skill}` is not a skill name. Use lower-case letters, digits, `.`, `-` \
-                         and `_`, like `inbox.triage`"
+                         and `_`, up to {} characters, like `inbox.triage`",
+                        skills::NAME_MAX_CHARS
                     ),
                 });
             }
@@ -641,6 +665,29 @@ impl Valid {
                 field: "skills",
                 reason: format!("an identity may hold at most {SKILLS_MAX} skills"),
             });
+        }
+
+        // Granting a runbook to an identity that cannot load one is a grant
+        // that does nothing, and a form that saved it would be a form that
+        // lies. Refused rather than quietly widened: an allow-list that grows
+        // on its own is the one thing an allow-list must not do. The panel
+        // ticks both boxes when a skill is typed, so this is the enforcement
+        // behind an affordance rather than a wall in front of the user.
+        if !skills.is_empty() {
+            if let Some(missing) = [tool::SKILL_RUN, tool::SKILL_RETURN]
+                .iter()
+                .find(|name| !tools.iter().any(|granted| granted == *name))
+            {
+                return Err(AppError::Agent {
+                    field: "tools",
+                    reason: format!(
+                        "an identity that may run a skill needs `{missing}` as well — `{}` loads \
+                         a runbook and `{}` records what came of it",
+                        tool::SKILL_RUN,
+                        tool::SKILL_RETURN
+                    ),
+                });
+            }
         }
 
         Ok(Self {
@@ -662,6 +709,11 @@ mod tests {
 
     use crate::error::ErrorCode;
     use crate::policy::tool;
+
+    /// The two tools an identity granted a skill has to hold.
+    fn skill_tools() -> Vec<String> {
+        vec![tool::SKILL_RUN.to_owned(), tool::SKILL_RETURN.to_owned()]
+    }
 
     /// A draft that passes, so a test can change one field and assert on that
     /// field alone.
@@ -864,7 +916,8 @@ mod tests {
     }
 
     /// The prompt stays a policy summary plus what is true now (PLAN 7.1). An
-    /// identity that has grown a runbook is what Phase 13 exists to take over.
+    /// identity that has grown a runbook is procedure paid for on every turn;
+    /// a skill is the same procedure paid for on the turns that use it.
     #[test]
     fn instructions_are_capped_and_the_message_says_where_a_runbook_goes() {
         let (_dir, store) = store();
@@ -896,8 +949,11 @@ mod tests {
     }
 
     #[test]
-    fn skill_names_are_shaped_now_and_resolved_in_phase_13() {
+    fn skill_names_are_the_ones_a_runbook_directory_can_have() {
         let (_dir, store) = store();
+
+        let mut granted = draft("Triager");
+        granted.tools.extend(skill_tools());
 
         let created = store
             .create(&AgentDraft {
@@ -906,7 +962,7 @@ mod tests {
                     "  ".to_owned(),
                     "inbox.triage".to_owned(),
                 ],
-                ..draft("Triager")
+                ..granted.clone()
             })
             .expect("created");
         assert_eq!(
@@ -914,14 +970,48 @@ mod tests {
             vec!["inbox.triage"],
             "blanks dropped, duplicates collapsed"
         );
+        assert!(created.allows_skill("inbox.triage"));
+        assert!(!created.allows_skill("deploy.draft"));
 
         let err = store
             .create(&AgentDraft {
+                name: "Other".to_owned(),
                 skills: vec!["Inbox Triage".to_owned()],
-                ..draft("Other")
+                ..granted
             })
             .expect_err("refused");
         assert!(err.to_string().contains("inbox.triage"), "{err}");
+    }
+
+    /// A skill an identity cannot load is a grant that does nothing, and the
+    /// refusal says which tools to tick rather than saving it silently.
+    #[test]
+    fn granting_a_skill_without_the_tools_that_run_one_is_refused() {
+        let (_dir, store) = store();
+
+        let err = store
+            .create(&AgentDraft {
+                skills: vec!["inbox.triage".to_owned()],
+                ..draft("Triager")
+            })
+            .expect_err("refused");
+
+        let json = serde_json::to_value(&err).expect("serializes");
+        assert_eq!(json["field"], "tools", "the form marks the tick-list");
+        assert!(err.to_string().contains(tool::SKILL_RUN), "{err}");
+        assert!(err.to_string().contains(tool::SKILL_RETURN), "{err}");
+    }
+
+    /// The built-in identity holds every tool and no skill: it is the
+    /// assistant from before either allow-list existed, and that assistant had
+    /// no runbooks.
+    #[test]
+    fn the_builtin_identity_runs_no_skill() {
+        let builtin = Agent::builtin();
+
+        assert!(builtin.skills.is_empty());
+        assert!(!builtin.allows_skill("inbox.triage"));
+        assert!(builtin.allows(tool::SKILL_RUN), "it can still load one");
     }
 
     #[test]

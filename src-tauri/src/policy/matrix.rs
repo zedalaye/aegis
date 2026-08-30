@@ -1,9 +1,10 @@
 //! The decision table of PLAN 3.
 //!
-//! Six rows over five tools, written out once. Every branch here answers one
-//! question — *auto, ask, or refuse* — and nothing else in the runtime is
-//! allowed to answer it, which is the point of the table being a single
-//! `match` rather than a check inside each tool.
+//! Six rows over five tools, written out once, plus the two Phase 13 rows for
+//! `skill_run` and `skill_return`. Every branch here answers one question —
+//! *auto, ask, or refuse* — and nothing else in the runtime is allowed to
+//! answer it, which is the point of the table being a single `match` rather
+//! than a check inside each tool.
 //!
 //! Reading order inside each tool matters and is deliberate:
 //!
@@ -30,6 +31,7 @@ use super::{
     ScreenGeometry, ToolCall,
 };
 use crate::error::ErrorCode;
+use crate::skills::handoff;
 
 /// Above this, a contained read stops being routine and is asked about.
 ///
@@ -400,6 +402,62 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                         .to_owned(),
                 },
             ))
+        }
+
+        // The two rows of PLAN 7.3, Phase 13. Both are `auto`, and the reason
+        // is not that a new tool is assumed harmless — a new row defaults to
+        // *ask* (PLAN 7.2, row 7) — but that neither of these reaches past
+        // this process. `skill_run` reads a runbook the user themselves put in
+        // their library or their workspace; `skill_return` writes nothing at
+        // all, it validates. What a runbook then tells the model to *do* is
+        // every bit as gated as it was before: each step is an ordinary call
+        // through this table, so a dialog here would ask the user to approve
+        // reading a file in order to be asked again about everything it says.
+        //
+        // The narrowing that does apply to them is the identity's skill
+        // allow-list, checked in `decide_call` before this table is reached.
+        ToolCall::SkillRun { name } => Ok(Decision::Auto {
+            call: ResolvedCall::SkillRun { name },
+            reason: "loading a runbook this identity was granted",
+        }),
+
+        ToolCall::SkillReturn { report } => {
+            // Artefacts are resolved and contained like any other path the
+            // model names. A return is a claim about files, and a claim about
+            // a file outside the workspace is one this session has no standing
+            // to make — the tool then only has to ask whether they are there.
+            let mut artefacts = Vec::with_capacity(report.artefacts.len());
+            for shown in &report.artefacts {
+                let target = resolve(workspace, shown)?;
+                if !target.inside {
+                    return Err(Decision::deny(
+                        ErrorCode::PathOutsideWorkspace,
+                        format!(
+                            "`{shown}` is outside the workspace, so it is not an artefact of this \
+                             run. Name a path inside it"
+                        ),
+                    ));
+                }
+                artefacts.push(handoff::Artefact {
+                    shown: shown.clone(),
+                    path: target.path,
+                });
+            }
+
+            let report = *report;
+            Ok(Decision::Auto {
+                call: ResolvedCall::SkillReturn {
+                    report: Box::new(handoff::Report {
+                        status: report.status,
+                        summary: report.summary,
+                        artefacts,
+                        evidence: report.evidence,
+                        open_questions: report.open_questions,
+                        next_owner: report.next_owner,
+                    }),
+                },
+                reason: "recording the result of a skill run",
+            })
         }
     }
 }

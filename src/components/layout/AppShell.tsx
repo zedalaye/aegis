@@ -27,6 +27,7 @@ import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachAuditEvents } from "../../state/audit";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 import { attachSettingsEvents, useSettings } from "../../state/settings";
+import { useSkills } from "../../state/skills";
 import { useWorkspace } from "../../state/workspace";
 
 import AuditDrawer from "../audit/AuditDrawer";
@@ -129,6 +130,7 @@ export default function AppShell() {
   const projectId = useProjects((s) => s.detail?.project.id ?? null);
   const loadSessions = useSessions((s) => s.loadFor);
   const loadShared = useWorkspace((s) => s.loadFor);
+  const loadSkills = useSkills((s) => s.loadFor);
   const resetSessions = useSessions((s) => s.reset);
   const sessionId = useSessions((s) => s.detail?.session.id ?? null);
   const syncApprovals = useApprovals((s) => s.syncFor);
@@ -181,7 +183,12 @@ export default function AppShell() {
       void loadSessions(projectId);
     }
     void loadShared(projectId);
-  }, [projectId, loadSessions, resetSessions, loadShared]);
+    // And so does the skill catalog, for a reason the shared-file panel does
+    // not have: half of it comes from the project's own `skills/` folder, and
+    // the identity form offers those names as things to grant. `null` is not
+    // "clear it" — the library half is still worth listing with nothing open.
+    void loadSkills(projectId);
+  }, [projectId, loadSessions, resetSessions, loadShared, loadSkills]);
 
   // And the approval queue follows the open session. Refetched rather than
   // carried over: a window that was closed while a turn was waiting missed the

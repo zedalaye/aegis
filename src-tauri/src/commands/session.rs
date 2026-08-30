@@ -197,6 +197,7 @@ async fn run_turn<R: Runtime>(
         sink: &sink,
         self_exe: state.self_exe(),
         captures: state.captures(),
+        skills: state.skills(),
     }
     .run(&plan, &cancel)
     .await;

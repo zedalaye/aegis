@@ -27,7 +27,10 @@
 //!   file, so a log that has grown for months still answers instantly.
 //!
 //! The entry shape is PLAN 2.1, "Settings and audit"; the decision vocabulary
-//! is PLAN 3.1's.
+//! is PLAN 3.1's. It has grown twice since, both times by adding a field with
+//! a `serde` default rather than by changing one — `agent_id` in Phase 12 and
+//! `skill` in Phase 13 — which is the property PLAN 7.1 asks the log to keep:
+//! a schema that can grow `agent_id`, `skill`, `tokens`, `handoff_id`.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
@@ -159,6 +162,20 @@ pub struct AuditEntry {
     pub call_id: String,
     /// Tool name.
     pub tool: String,
+    /// The skill run this call was part of (PLAN 7.3, Phase 13).
+    ///
+    /// "A run without `skill` on the line cannot be budgeted or replayed"
+    /// (PLAN 7.6). Every call made between a `skill_run` and its
+    /// `skill_return` carries the name — not only the two the skill tools make
+    /// — so the question a replay asks is answerable: *what did this runbook
+    /// actually do, and what was it refused*.
+    ///
+    /// Empty for a call made outside a run, and for every line written before
+    /// this phase. `#[serde(default)]` for the same reason `agent_id` carries
+    /// one: the file is its own wire format, and a reader that refused the
+    /// older lines would lose the history the log is kept for.
+    #[serde(default)]
+    pub skill: String,
     /// Auto-allowed, approved, or refused.
     pub decision: AuditDecision,
     /// Why policy decided that, in the words the user was shown.
@@ -210,6 +227,8 @@ pub struct AuditRecord<'a> {
     pub call_id: &'a str,
     /// Tool name.
     pub tool: &'a str,
+    /// The skill run this call was part of; empty outside one.
+    pub skill: &'a str,
     /// Auto-allowed, approved, or refused.
     pub decision: AuditDecision,
     /// Why, in the words the user was shown.
@@ -241,6 +260,7 @@ impl AuditRecord<'_> {
             turn_id: self.turn_id.to_owned(),
             call_id: self.call_id.to_owned(),
             tool: self.tool.to_owned(),
+            skill: self.skill.to_owned(),
             decision: self.decision,
             policy_reason: self.policy_reason.to_owned(),
             args_digest: digest(self.args),
@@ -502,6 +522,7 @@ mod tests {
             turn_id: "t1",
             call_id: "call_1",
             tool: "fs_read",
+            skill: "",
             decision: AuditDecision::Auto,
             policy_reason: "an ordinary read inside the workspace",
             args,

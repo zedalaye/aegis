@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 12 (agent registry) — the MVP is feature-complete, and the
+> **Status: Phase 13 (skill runner) — the MVP is feature-complete, and the
 > post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -90,6 +90,17 @@ ever sent to it.
 > through. The audit line names the identity, so *who ran this* is answerable afterwards. Leaving
 > the picker alone gets the built-in **Assistant**, which holds every tool — the assistant Aegis
 > had before identities existed, now with a name. See *Identities*.
+>
+> **And an identity can follow a runbook.** A skill is a `SKILL.md` — when to use it, the tools
+> it will call, the steps, how to check the result, and what to do when the source it needs is
+> missing. Aegis creates one in your library on first run and one in each workspace you set the
+> shared files up in. What every request carries is the *catalog*: one line per runbook the
+> identity may run. The steps are loaded only when it says `skill_run`, for that reply, so twenty
+> procedures cost twenty lines of context rather than twenty procedures. A run grants nothing —
+> every step is an ordinary tool call through the same dialog — and a runbook calling a tool the
+> identity does not hold is refused before its first step rather than halfway through. The run
+> ends with a status object that is checked, not believed: a `done` naming a file that is not on
+> disk comes back refused. Every audit line in between carries the skill's name. See *Skills*.
 
 ---
 
@@ -168,6 +179,12 @@ No provider and no key needed — the scripted provider is enough to exercise th
    press *New session*, then send `/write`. No prompt appears: the write is refused outright
    because that identity does not hold `fs_write`, and the audit line records the refusal against
    it. See [Identities](#identities).
+9. **Run a skill.** *Settings → Skills* lists the runbooks Aegis found. Edit an identity, click
+   `never-send-without-review` under **Skills** — `skill_run` and `skill_return` tick themselves
+   — and save. Open a session as it and send `/skill`. It takes two rounds: the runbook is
+   loaded, then the run is closed with a `blocked` status, because there is no model behind the
+   scripted provider to carry the steps out. Both lines are in the audit log with the skill's
+   name on them. See [Skills](#skills).
 
 ## Point it at a model
 
@@ -278,6 +295,11 @@ A document Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` an
 with an empty list rather than refusing to open. Deleting a project forgets it and its sessions;
 the workspace folder itself is never touched.
 
+Beside them, `skills/` holds your runbook library: one directory per skill, each with a
+`SKILL.md` in it. Aegis puts `never-send-without-review` there on a first run and never touches
+the folder again — delete it and it stays deleted, because a library is yours. A workspace's own
+runbooks live in that workspace instead, and travel with it. See *Skills*.
+
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
 named `capture-<UTC timestamp>-<random>.png`. They are here rather than in your workspace on
 purpose: a capture is Aegis' own artefact, and one written into a project folder would end up in
@@ -288,8 +310,8 @@ scoped to it at startup — the WebView has no filesystem permission of any kind
 
 Beside it, `audit.jsonl` records one JSON line per tool call — every call, whether it ran, was
 refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
-running to read it. Each line names the session, the identity it ran as, the tool, why policy
-decided what it did, and what came of it. It records the *paths* a call touched but never the contents of a file: a log
+running to read it. Each line names the session, the identity it ran as, the skill run it was
+part of when it was part of one, the tool, why policy decided what it did, and what came of it. It records the *paths* a call touched but never the contents of a file: a log
 that quoted every `fs_write` would become the one place on your machine where everything the
 agent ever wrote is collected in plain text. A line for a capture carries the file's path, its
 pixel size and a SHA-256 of the bytes on disk — enough to say later which capture a call
@@ -306,7 +328,7 @@ tool call.
 Aegis' own data is above. This is the other half: files that live in **your** workspace folder,
 not in Aegis' application-data directory, and that the agent reads at the start of every reply.
 
-The convention is four directories:
+The convention is five directories:
 
 | | Holds |
 | --- | --- |
@@ -314,6 +336,7 @@ The convention is four directories:
 | `status/` | `STATUS.md`: what is true right now. A board, rewritten in place, not a log |
 | `artefacts/` | what was produced — a draft, a report, an export, a patch |
 | `decisions/` | `DECISIONS.md`: one entry per decision, newest last |
+| `skills/` | this project's own runbooks, one directory each. Seeded with `inbox.triage` |
 
 **Set up shared files** in the sidebar creates whatever is missing and seeds each one with a
 short template. It never overwrites: a file that is already there is left byte for byte as it
@@ -326,7 +349,9 @@ to it. They are ordinary files: commit them, edit them in your editor, `grep` th
 Once they exist, two things change.
 
 **The agent reads them.** Every request carries the current `STATUS.md`, the recent end of
-`DECISIONS.md`, and the *names* of what is in `briefs/` and `artefacts/`. Names, not contents:
+`DECISIONS.md`, and the *names* of what is in `briefs/` and `artefacts/`. Not `skills/`: those
+reach the model as the skill catalog instead, which says what each runbook is *for* rather than
+only what it is called. Names, not contents:
 a brief is referred to by path and read with `fs_read` if it is needed, so a folder full of long
 documents does not quietly consume the context window. The two state files are capped at 2 KB
 each in the prompt, and when a file is longer the agent is told how much it is not seeing and
@@ -354,8 +379,8 @@ it may use. **Settings → Identities** is where they are made.
 | **Name** | what the session picker shows. Unique, case-insensitively |
 | **Role** | one line saying what this identity is for. It is what the picker shows beside the name, and the first thing the model is told about itself |
 | **Instructions** | carried into the system message of every request this identity makes. Capped at 2000 characters on purpose — see below |
-| **Tools** | a tick-list of `fs_list`, `fs_read`, `fs_write`, `shell_exec`, `screen_capture`. Everything unticked is refused |
-| **Skills** | recorded, not yet runnable. Nothing in this build executes a skill; the runner is the next phase |
+| **Tools** | a tick-list of `fs_list`, `fs_read`, `fs_write`, `shell_exec`, `screen_capture`, `skill_run`, `skill_return`. Everything unticked is refused |
+| **Skills** | the runbooks it may load. Granting one ticks `skill_run` and `skill_return`, because an identity that cannot load a runbook holds a grant that does nothing |
 
 Pick one from the **as** control beside *New session* and the session is bound to it. That
 binding is permanent: there is no way to move a session to a different identity, because a
@@ -386,9 +411,120 @@ keep it. Editing one reaches its sessions on their next turn.
 
 **Instructions are capped, and the cap is deliberate.** The system message stays a policy summary
 plus what is true right now. An identity may say what it is; it may not carry a runbook. Recurring
-procedure belongs in a skill — a versioned `SKILL.md` loaded only when it is invoked — which is
-`PLAN.md` § 7.6 and the next phase. An identity whose instructions had grown into a runbook would
-be exactly the procedure that phase has to take back.
+procedure belongs in a skill — a versioned `SKILL.md` loaded only when it is invoked — because a
+procedure in the instructions is paid for on every turn whether it is needed or not. See *Skills*.
+
+**The built-in Assistant holds no skills.** It holds every tool, and that is the point of it: it
+is the assistant Aegis had before either allow-list existed. Giving it every runbook the moment
+one appeared would change what the default identity means under the sessions already using it. A
+skill is always something you granted.
+
+---
+
+## Skills
+
+A skill is a **runbook**: a procedure written down once, so nothing has to re-derive it in a
+context window every time. `Settings → Skills` lists the ones this install can run.
+
+It is not a tool and it is not a memory. A tool is a verb on the machine. A memory is a
+preference or an exception. A skill *sequences* tools toward a criterion for being done, under
+whatever the identity was already allowed to do.
+
+### The file
+
+One directory per skill, holding a `SKILL.md`. The directory's name is the skill's name —
+`inbox.triage`, `never-send-without-review`: lower case, digits, `.`, `-`, `_`.
+
+```markdown
+---
+version: 1
+tools: fs_read, fs_write
+---
+
+# inbox.triage
+
+## When to use it
+## Inputs required and tools it will call
+## Steps
+## How to validate
+## What to return
+## What requires approval
+## What to do if the source is missing
+```
+
+**All seven headings are required, in that order**, and nothing else may sit beside them. That is
+stricter than markdown needs to be, on purpose: the headings are the contract between whoever
+writes a runbook and whoever runs it, and a file that quietly left out *what to do if the source
+is missing* would be a runbook whose failure mode is inventing an answer. A file that does not
+parse is listed in the panel with the reason rather than hidden — you are the only person who can
+fix it — and it is never offered to a model.
+
+`tools:` is not decoration: it is what lets a run be refused *before* it starts.
+
+### Where they live
+
+| Scope | Lives | For |
+| --- | --- | --- |
+| **Library** | `skills/` beside your projects file | how *you* work — "never send without review" |
+| **Workspace** | `skills/` inside the project folder | how *this* project works, and it travels with the repo |
+| **Per identity** | the identity's allow-list | which of the above that identity may run |
+
+A workspace runbook shadows a library one of the same name; the panel says when that is
+happening. Aegis seeds the library with `never-send-without-review` on a first run, and each
+workspace with `inbox.triage` when you press *Set up shared files* — both are examples of the
+format in the place you would look for one, and both are ordinary files you can rewrite or
+delete.
+
+### Catalog in, body on demand
+
+This is the whole shape, and the reason skills are cheap.
+
+Every request carries the **catalog**: one line per runbook the identity may run — the name, the
+version, where it came from, when to use it, and what it will call. The **steps are not there**.
+The model asks for them with `skill_run` when it is about to follow them, they arrive for that
+reply, and the next one does not carry them unless it runs the skill again. Twenty procedures
+cost twenty lines, not twenty procedures.
+
+Editing a `SKILL.md` takes effect on the next run; nothing is cached. Press **Re-read** in the
+panel after fixing one.
+
+### A skill grants nothing
+
+Three rules, and none of them is inside the runbook:
+
+- **A skill you were not granted is refused before the file is even located**, with no dialog. A
+  prompt offering to let an identity exceed its own allow-list is a prompt that should not exist.
+- **A runbook that calls a tool the identity does not hold fails closed**, at `skill_run`, naming
+  the tool. Not four rounds in, with half a job done in your folder.
+- **Every step is an ordinary tool call.** Same matrix, same approval dialog, same audit line. A
+  runbook that says "write the file" produces the write prompt you would have got anyway.
+
+### The return
+
+A run ends with `skill_return`, and it is *checked*, not believed — `COS.md`'s handoff shape:
+
+```
+status: done | blocked | needs_you
+summary:             # five lines max
+artefacts:           # paths inside the workspace
+evidence:            # a test, a diff, a capture
+open_questions:
+next_owner:
+```
+
+A `done` naming an artefact that is not on disk is refused, which catches the commonest failure
+there is: a model describing a file it never wrote. A `done` pointing at nothing at all is
+refused too — it could not be checked afterwards or replayed. A `blocked` or a `needs_you` needs
+at least one open question, because escalating with nothing to answer is a dead end for whoever
+it reaches. A refused return leaves the run open, so the corrected one is still part of it.
+
+Then **every audit line between the two calls carries the skill's name** — not just the two the
+runner makes. That is what makes "what did this runbook actually do, and what was it refused"
+answerable later.
+
+Why bother: a procedure that lives in a system prompt is paid for on every turn and drifts every
+time someone rephrases it; one that lives in a chat is gone at the next compaction. `COS.md` is
+the reasoning in full, `PLAN.md` § 7.6 the argument for it being the efficiency layer.
 
 ---
 
@@ -398,7 +534,7 @@ be exactly the procedure that phase has to take back.
 src/           React app — presentation and typed IPC glue only
   ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
-  components/  layout, chat, sessions, approvals, projects, agents, settings, audit
+  components/  layout, chat, sessions, approvals, projects, agents, skills, settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
@@ -406,8 +542,9 @@ src-tauri/
                event payloads, turn registry
     store/     projects.json, sessions.json, agents.json and settings.json, behind one
                atomic write
-    tools/     fs, shell, screenshot — behind one ToolSpec registry
+    tools/     fs, shell, screenshot, skill — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
+    skills/    the runbook format, the catalog, and the handoff result a run returns
     workspace.rs  the shared-file convention inside a project folder: scaffold, and the
                capped digest every request carries
     approval.rs  pending approvals: the channel a turn parks on until you answer
@@ -448,6 +585,15 @@ Read this before pointing Aegis at anything you care about.
   call for one is refused with no prompt offered — you cannot be asked to let an identity exceed
   its own list. What it is *not* is a second approval layer with a bypass: ticking `fs_write` for
   an identity still puts every write to you through the ordinary dialog. A call has to pass both.
+- **A skill is a procedure, not a permission.** Running a runbook grants nothing: every step in
+  it is an ordinary tool call that goes through the same matrix and the same dialog it would have
+  gone through anyway, and a runbook whose declared tools the identity does not hold is refused
+  before its first step rather than partway through. A skill the identity was not granted is
+  refused before the file is even located, with no prompt — you cannot be asked to let an
+  identity exceed its own list. The runbook itself is a file in a folder you own, so treat it the
+  way you would treat a script you are about to run: a `SKILL.md` somebody sent you is
+  instructions your model will follow, and what it can reach while following them is whatever you
+  ticked.
 - **There is no sandbox.** Approved tools run as you, with your privileges and environment. The
   real boundary is that you read the exact path, program, arguments and working directory before
   approving. Treat every approval as if you were typing the command yourself.
@@ -479,7 +625,7 @@ Read this before pointing Aegis at anything you care about.
   `OPENAI_API_KEY`. Over `http://` the key crosses the network in clear text. That is allowed so
   that local servers work, and it is worth reserving for a server on your own machine.
 - **Every tool call is audited**, allowed or denied, one JSON line each, with the identity that
-  made it, the policy reason and the outcome — see *Where your data lives*. Arguments are recorded as a SHA-256 digest plus
+  made it, the skill run it belonged to, the policy reason and the outcome — see *Where your data lives*. Arguments are recorded as a SHA-256 digest plus
   a redacted copy that keeps paths and replaces file content with its size.
 
 ## Troubleshooting

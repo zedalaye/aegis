@@ -5,9 +5,11 @@
  * is a fact about the application, like the provider, and not about any project
  * — the same reason Settings is reachable with nothing open.
  *
- * Each row says the two things that decide whether you would pick it: what it
- * is for, and what it can touch. The tools are spelled out rather than counted,
- * because "3 tools" is not an answer to "may this thing write to my repo".
+ * Each row says the three things that decide whether you would pick it: what
+ * it is for, what it can touch, and which runbooks it may follow. The tools are
+ * spelled out rather than counted, because "3 tools" is not an answer to "may
+ * this thing write to my repo", and the skills are spelled out for the same
+ * reason.
  */
 
 import type { Agent } from "../../ipc/bindings";
@@ -48,7 +50,7 @@ function Row({ agent }: { readonly agent: Agent }) {
         {agent.builtin ? (
           <span
             className="agent__badge"
-            title="The identity a session gets when none is chosen. It holds every tool, and it is what Aegis was before identities existed — which is why it cannot be edited or removed."
+            title="The identity a session gets when none is chosen. It holds every tool and no skill — it is what Aegis was before either allow-list existed, which is why it cannot be edited or removed."
           >
             built in
           </span>
@@ -84,7 +86,7 @@ function Row({ agent }: { readonly agent: Agent }) {
       <Tools agent={agent} />
       {agent.skills.length === 0 ? null : (
         <p className="agent__skills">
-          Skills, for later:{" "}
+          May run{" "}
           {agent.skills.map((skill) => (
             <code key={skill}>{skill}</code>
           ))}
@@ -113,10 +115,10 @@ export default function AgentList() {
   return (
     <>
       <p className="settings__note">
-        An identity is a name, what it is for, and the tools it may use. A
-        session is opened as one and stays as one — the transcript is the record
-        of what that identity did. Editing an identity reaches its sessions on
-        their next turn.
+        An identity is a name, what it is for, the tools it may use, and the
+        runbooks it may follow. A session is opened as one and stays as one —
+        the transcript is the record of what that identity did. Editing an
+        identity reaches its sessions on their next turn.
       </p>
 
       <ul className="agent__list">

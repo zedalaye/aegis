@@ -11,8 +11,9 @@
  * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects"), sessions and
  * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals"),
  * the audit log and the provider settings (PLAN 2.1, "Settings and audit"),
- * the shared-workspace convention (PLAN 7.3, Phase 11), and the identities a
- * session can be opened as (PLAN 7.3, Phase 12).
+ * the shared-workspace convention (PLAN 7.3, Phase 11), the identities a
+ * session can be opened as (PLAN 7.3, Phase 12), and the runbooks those
+ * identities may run (PLAN 7.3, Phase 13).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -37,6 +38,7 @@ import type {
   ScaffoldReport,
   SessionDetail,
   SessionSummary,
+  Skill,
   TurnHandle,
   WorkspaceLayout,
 } from "./bindings";
@@ -464,4 +466,23 @@ export function workspaceLayout(projectId: string): Promise<WorkspaceLayout> {
  */
 export function workspaceScaffold(projectId: string): Promise<ScaffoldReport> {
   return call<ScaffoldReport>("workspace_scaffold", { project_id: projectId });
+}
+
+/**
+ * Every runbook the skill library and one project's workspace hold.
+ *
+ * `projectId` may be `null`: Settings is reachable with nothing open, and the
+ * library alone is the honest answer when there is no workspace to look in.
+ * A project whose folder has gone lists the library alone rather than failing.
+ *
+ * Measured on every call rather than cached, like the workspace layout: a
+ * `SKILL.md` is an ordinary file in a folder the user owns, and one edited in
+ * their editor a minute ago is the one the next turn will run.
+ *
+ * There is deliberately no command that *writes* a runbook, and none that runs
+ * one. Writing is an editor's job, or an ordinary `fs_write` under the gate;
+ * running is something a turn does, under the identity's allow-list.
+ */
+export function skillList(projectId: string | null): Promise<Skill[]> {
+  return call<Skill[]>("skill_list", { project_id: projectId });
 }

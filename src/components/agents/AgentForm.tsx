@@ -1,21 +1,26 @@
 /**
- * Creating or editing one identity (PLAN 7.3, Phase 12).
+ * Creating or editing one identity (PLAN 7.3, Phases 12 and 13).
  *
- * Four things to fill in and one to tick: a name, a role, what it should carry
- * into every request, and which tools it holds. The tool list is the part that
- * matters, so it is a set of checkboxes rather than a text field — an
- * allow-list you type is an allow-list you typo.
+ * Four things to fill in and two allow-lists: a name, a role, what it should
+ * carry into every request, the tools it holds, and the runbooks it may run.
+ * The two lists are the part that matters, so they are sets of checkboxes and
+ * chips rather than text fields — an allow-list you type is an allow-list you
+ * typo.
  *
- * The tools are read from the identities the runtime already sent rather than
- * from a list written here. The built-in identity holds every tool this build
- * has, by construction, so it *is* the catalogue — and one that cannot drift
- * out of step with the registry the way a copy in the UI would.
+ * Neither list is written here. The tools come from the built-in identity,
+ * which holds every tool this build has by construction, so it *is* the
+ * catalogue; the skills come from the runbooks the runtime found on disk. Both
+ * would drift if the UI kept a copy.
+ *
+ * The skills field stays a text input under those chips, because a workspace
+ * runbook is only discoverable while that project is open, and an identity has
+ * to be grantable a skill that is not in front of you right now.
  *
  * A refused value lands under the input it is about, like the provider form's,
  * because the runtime says which field it was talking about.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { Agent, AgentDraft } from "../../ipc/bindings";
 import {
@@ -24,6 +29,7 @@ import {
   draftOf,
   useAgents,
 } from "../../state/agents";
+import { useSkills } from "../../state/skills";
 
 /** What each tool does, in the fewest words that distinguish it. */
 const TOOL_SUMMARY: Record<string, string> = {
@@ -32,7 +38,19 @@ const TOOL_SUMMARY: Record<string, string> = {
   fs_write: "write files",
   shell_exec: "run programs",
   screen_capture: "capture the screen",
+  skill_run: "load a runbook it was granted",
+  skill_return: "record what a runbook produced",
 };
+
+/**
+ * The two tools an identity granted a skill has to hold.
+ *
+ * Mirrors the check in `store/agents.rs`: a runbook it cannot load is a grant
+ * that does nothing. They are ticked here rather than added silently on save,
+ * so the widening is something the user watches happen and can undo — which is
+ * the difference between an affordance and an allow-list that grows by itself.
+ */
+const SKILL_TOOLS = ["skill_run", "skill_return"] as const;
 
 /** The tools this build has, taken from the identity that holds them all. */
 function catalogue(agents: readonly Agent[]): readonly string[] {
@@ -45,6 +63,16 @@ function parseSkills(text: string): string[] {
     .split(",")
     .map((name) => name.trim())
     .filter((name) => name.length > 0);
+}
+
+/** `text` with `name` added, or removed if it was already there. */
+function toggleSkill(text: string, name: string): string {
+  const names = parseSkills(text);
+  const without = names.filter((granted) => granted !== name);
+
+  return (without.length === names.length ? [...names, name] : without).join(
+    ", ",
+  );
 }
 
 /** The refusal that belongs under `field`, if the last save produced one. */
@@ -105,6 +133,7 @@ export default function AgentForm({
   const save = useAgents((s) => s.save);
   const cancel = useAgents((s) => s.cancelEdit);
   const toolsError = useFieldError("tools");
+  const known = useSkills((s) => s.skills);
 
   // Seeded once, from whatever the form was opened on. Re-seeding on every
   // render would throw away what the user is typing; the store closes the form
@@ -129,6 +158,28 @@ export default function AgentForm({
         ? [...draft.tools, tool]
         : draft.tools.filter((name) => name !== tool),
     });
+
+  const granted = parseSkills(skillsText);
+
+  // Granting a runbook to an identity that cannot load one is a grant that does
+  // nothing, and the runtime refuses to save it. Ticking the two boxes here is
+  // that rule made visible *before* the save rather than reported after it —
+  // and it only ever adds, so a user who unticks one is not fought with.
+  // Keyed on the text rather than on the parsed list: that list is a new array
+  // on every render, and an effect keyed on it would never stop running.
+  useEffect(() => {
+    if (parseSkills(skillsText).length === 0) {
+      return;
+    }
+    setDraft((current) => {
+      const missing = SKILL_TOOLS.filter(
+        (tool) => !current.tools.includes(tool),
+      );
+      return missing.length === 0
+        ? current
+        : { ...current, tools: [...current.tools, ...missing] };
+    });
+  }, [skillsText]);
 
   return (
     <form
@@ -183,7 +234,7 @@ export default function AgentForm({
         // The cap is enforced in Rust, and the reason for it is said here
         // rather than only in the refusal: a form that explains the rule before
         // it is broken is worth more than one that explains it after.
-        hint="Carried into every request this identity makes. Say what it is, not how to carry out a procedure — a runbook is a skill, and skills come later."
+        hint="Carried into every request this identity makes. Say what it is, not how to carry out a procedure — a procedure is a skill, and a skill is loaded only when it is used."
       >
         {({ id, invalid, describedBy }) => (
           <textarea
@@ -235,23 +286,51 @@ export default function AgentForm({
         id="agent-skills"
         label="Skills"
         field="skills"
-        // Recorded, not runnable. Saying so on the field is the honest thing:
-        // a list that silently did nothing would be worse than no list, and
-        // hiding it would leave the only way to fill it in hand-editing
-        // `agents.json`.
-        hint="Comma-separated, like inbox.triage. Nothing runs a skill yet — this build records which ones an identity would be allowed to run, and the runner comes with the next phase. A skill never widens the tools above."
+        // A text field under the chips, not only chips: a workspace runbook is
+        // discoverable while that project is open and not otherwise, and an
+        // identity has to be grantable a skill that is not in front of you.
+        hint="The runbooks this identity may load. It is never offered one it was not granted, and holding one never adds a tool — a runbook that calls a tool from the list above and does not have it is refused before its first step."
       >
         {({ id, invalid, describedBy }) => (
-          <input
-            id={id}
-            className={`field__input${invalid ? " field__input--bad" : ""}`}
-            value={skillsText}
-            onChange={(event) => setSkillsText(event.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-            aria-invalid={invalid}
-            aria-describedby={describedBy}
-          />
+          <>
+            {known.length === 0 ? null : (
+              <ul className="agentform__skillpicks">
+                {known.map((skill) => {
+                  const on = granted.includes(skill.name);
+                  return (
+                    <li key={`${skill.scope}:${skill.name}`}>
+                      <button
+                        type="button"
+                        className={`chip${on ? " chip--on" : ""}`}
+                        aria-pressed={on}
+                        title={
+                          skill.problem === null
+                            ? `${skill.summary} (${skill.scope === "workspace" ? "this workspace" : "library"})`
+                            : `This runbook will not run as written: ${skill.problem}`
+                        }
+                        onClick={() =>
+                          setSkillsText((text) => toggleSkill(text, skill.name))
+                        }
+                      >
+                        {skill.name}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <input
+              id={id}
+              className={`field__input${invalid ? " field__input--bad" : ""}`}
+              value={skillsText}
+              onChange={(event) => setSkillsText(event.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="inbox.triage, never-send-without-review"
+              aria-invalid={invalid}
+              aria-describedby={describedBy}
+            />
+          </>
         )}
       </Field>
 

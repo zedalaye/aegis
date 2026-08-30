@@ -2,8 +2,10 @@
  * One line of the audit log.
  *
  * The row answers, in order, the four questions someone opening the drawer
- * has: *when*, *what tool*, *did it run*, and *how did it end*. Everything
- * else — the ids, the identity it ran as, the digest, the file a capture left
+ * has: *when*, *what tool*, *did it run*, and *how did it end*. A fifth sits
+ * beside the tool when there is one — which skill the call was part of, since
+ * that is what turns a column of verbs back into a procedure. Everything else
+ * — the ids, the identity it ran as, the digest, the file a capture left
  * behind — is behind a disclosure, because a drawer that made every row six
  * lines tall would be a drawer nobody scrolls.
  *
@@ -88,6 +90,14 @@ export default function AuditRow({
           {formatTimeOfDay(entry.ts)}
         </time>
         <span className="auditrow__tool">{entry.tool}</span>
+        {/* On the head rather than behind the disclosure: which runbook a call
+            belongs to is what makes a column of tool names readable as a
+            procedure instead of as a list of verbs. */}
+        {entry.skill === "" ? null : (
+          <span className="auditrow__skill" title={`Part of the ${entry.skill} run`}>
+            {entry.skill}
+          </span>
+        )}
         <span className="auditrow__chips">
           {refused ? (
             <span className="auditrow__chip auditrow__chip--deny">

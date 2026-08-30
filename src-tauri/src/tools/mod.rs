@@ -26,9 +26,13 @@
 //! explains itself and tries something else, and the turn keeps going.
 //!
 //! Every tool the MVP names is here: `fs_list`, `fs_read`, `fs_write`,
-//! `shell_exec` and, since Phase 9, `screen_capture`. The registry and the
-//! decision table are the same list, which is what makes "a tool nothing
-//! gates" a thing this code cannot express.
+//! `shell_exec` and, since Phase 9, `screen_capture`; since Phase 13,
+//! `skill_run` and `skill_return` beside them. The registry and the decision
+//! table are the same list, which is what makes "a tool nothing gates" a thing
+//! this code cannot express — and it is why the two skill tools are entries
+//! here rather than a channel of their own. A skill is not a tool, but *asking
+//! for a runbook* is a verb like any other, and putting it anywhere else would
+//! mean a second dispatch path with a second place to remember the audit line.
 //!
 //! [`run`] is `async` because of the two tools that reach outside this process.
 //! The filesystem tools are short, local and synchronous, and are called
@@ -42,6 +46,7 @@
 pub mod fs;
 pub mod screenshot;
 pub mod shell;
+pub mod skill;
 
 use std::fmt;
 use std::path::Path;
@@ -55,6 +60,7 @@ use ts_rs::TS;
 use crate::audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 use crate::error::ErrorCode;
 use crate::policy::{tool, ResolvedCall};
+use crate::skills::SkillCtx;
 
 /// Most bytes `fs_read` will return in one envelope (PLAN 4.3).
 pub const READ_MAX_BYTES: u64 = 256 * 1024;
@@ -203,6 +209,23 @@ impl ToolResult {
         Self::failure(tool, code, message)
     }
 
+    /// An envelope built directly, for tests of the runtime around tools.
+    ///
+    /// Only the three fields the turn loop branches on. Everything else that
+    /// wants an envelope gets one by running a tool, which is the point.
+    #[cfg(test)]
+    pub(crate) fn for_test(ok: bool, tool: &str, meta: Value) -> Self {
+        Self {
+            ok,
+            tool: tool.to_owned(),
+            content: String::new(),
+            truncated: false,
+            bytes: 0,
+            meta,
+            error: None,
+        }
+    }
+
     /// The envelope as the JSON string that goes into a `tool` message.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| {
@@ -266,6 +289,14 @@ pub(crate) struct Produced {
     /// audit line and the transcript from here, which is why the tool does not
     /// have to know about either.
     artifact: Option<AuditArtifact>,
+    /// The skill this call belongs to, when the call itself says which.
+    ///
+    /// Only `skill_run` sets it, and only because it is the call that *opens*
+    /// a run: nothing was running when it was made, so [`ToolCtx::skills`]
+    /// would put no name on its line and the opening of a run would be the one
+    /// event of a run that is not on the record. Every later call in the span
+    /// gets the name from the context instead.
+    skill: Option<String>,
 }
 
 impl Produced {
@@ -286,6 +317,7 @@ impl Produced {
             bytes_out,
             outcome: None,
             artifact: None,
+            skill: None,
         }
     }
 
@@ -299,6 +331,7 @@ impl Produced {
             bytes_out: 0,
             outcome: None,
             artifact: None,
+            skill: None,
         }
     }
 
@@ -320,6 +353,12 @@ impl Produced {
     /// Records the file the call wrote.
     pub(crate) fn with_artifact(mut self, artifact: AuditArtifact) -> Self {
         self.artifact = Some(artifact);
+        self
+    }
+
+    /// Names the skill run this call opened.
+    pub(crate) fn in_skill(mut self, name: &str) -> Self {
+        self.skill = Some(name.to_owned());
         self
     }
 }
@@ -401,6 +440,25 @@ pub fn registry() -> &'static [ToolSpec] {
             name: tool::SCREEN_CAPTURE,
             description: "Capture the primary display and write it to a PNG outside the                           workspace. Returns the file's path, its pixel size and a SHA-256 —                           never the image, which this build cannot read back, so do not expect                           to see what was on the screen. Every capture is approved by the user                           first and holds whatever was on that display, so ask for one only                           when the user has asked to be looked at.",
             parameters: screenshot::capture_schema,
+        },
+        ToolSpec {
+            name: tool::SKILL_RUN,
+            description: "Load a skill's runbook into this turn. A skill is a procedure someone \
+                          already wrote down; the catalog in your instructions says which ones \
+                          you may run and what each is for. This returns the steps — it does not \
+                          carry any of them out, and it grants you nothing: every step is an \
+                          ordinary tool call, put to the user exactly as it would be otherwise. \
+                          The steps last for this turn only. Finish a run with `skill_return`.",
+            parameters: skill::run_schema,
+        },
+        ToolSpec {
+            name: tool::SKILL_RETURN,
+            description: "Close the skill you loaded and record what came of it. `status` is \
+                          `done`, `blocked` or `needs_you`; `summary` is five lines at most; \
+                          `artefacts` are paths inside the workspace, and they are checked — a \
+                          `done` naming a file that is not on disk is refused. A `blocked` or a \
+                          `needs_you` needs at least one `open_questions` entry.",
+            parameters: skill::return_schema,
         },
     ]
 }
@@ -490,6 +548,15 @@ pub struct ToolCtx<'a> {
     /// reads it today; everything else finishes faster than a person can ask
     /// it not to.
     pub cancel: &'a CancellationToken,
+    /// Where the skill library is, and which run is open (PLAN 7.3, Phase 13).
+    ///
+    /// Held here for the reason `captures` is: where Aegis keeps runbooks and
+    /// which identity is running are facts about the installation and the
+    /// session, not about what the model asked for. `active` is also what puts
+    /// the skill's name on *every* audit line of a run, not only the two the
+    /// skill tools make — which is what makes a run budgetable and replayable
+    /// afterwards (PLAN 7.6, *Audit names the skill*).
+    pub skills: SkillCtx<'a>,
 }
 
 // Written out rather than derived: `&dyn ProgressSink` has no `Debug`, and
@@ -503,6 +570,7 @@ impl fmt::Debug for ToolCtx<'_> {
             .field("turn_id", &self.turn_id)
             .field("call_id", &self.call_id)
             .field("captures", &self.captures)
+            .field("skill", &self.skills.active)
             .field("cancelled", &self.cancel.is_cancelled())
             .finish_non_exhaustive()
     }
@@ -568,6 +636,11 @@ pub async fn run(
                 }
             }
         }
+        // Neither of these reaches outside the process: one reads a runbook,
+        // the other checks a report against `COS.md`'s shape. They run inline
+        // like the filesystem tools, and for the same reason.
+        ResolvedCall::SkillRun { name } => skill::run(name, ctx.skills),
+        ResolvedCall::SkillReturn { report } => skill::ret(report, ctx.skills),
     };
 
     // `as` saturates at `u64::MAX` here, which is 584 million years: the cast
@@ -581,6 +654,14 @@ pub async fn run(
         turn_id: ctx.turn_id,
         call_id: ctx.call_id,
         tool: name,
+        // The call's own claim first, then the run it is inside. Only
+        // `skill_run` makes one, and only for its own line: it opens the run,
+        // so nothing was active when it was judged (see `Produced::skill`).
+        skill: produced
+            .skill
+            .as_deref()
+            .or(ctx.skills.active)
+            .unwrap_or(""),
         decision,
         policy_reason: reason,
         args: ctx.args,
@@ -634,6 +715,9 @@ pub fn refuse(
         turn_id: ctx.turn_id,
         call_id: ctx.call_id,
         tool: tool_name,
+        // A refusal inside a run belongs to that run: "what did this skill try
+        // and get told no about" is exactly what a replay has to answer.
+        skill: ctx.skills.active.unwrap_or(""),
         decision,
         policy_reason: reason,
         args: ctx.args,
@@ -674,6 +758,8 @@ mod tests {
             tool::FS_WRITE,
             tool::SHELL_EXEC,
             tool::SCREEN_CAPTURE,
+            tool::SKILL_RUN,
+            tool::SKILL_RETURN,
         ];
 
         for spec in registry() {

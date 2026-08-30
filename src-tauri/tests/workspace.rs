@@ -77,6 +77,8 @@ struct App {
     audit: AuditLog,
     session_id: String,
     captures: PathBuf,
+    /// An empty skill library: these files are about other things.
+    library: PathBuf,
 }
 
 impl App {
@@ -103,6 +105,7 @@ impl App {
             audit: AuditLog::new(&data),
             session_id,
             captures: data.join("captures"),
+            library: data.join("skills"),
         }
     }
 
@@ -119,6 +122,7 @@ impl App {
             &Agent::builtin(),
             &history,
             Some(&self.workspace),
+            None,
             shared.as_deref(),
             Vec::new(),
         );
@@ -164,6 +168,7 @@ impl App {
             sink,
             self_exe: None,
             captures: &self.captures,
+            skills: &self.library,
         };
 
         let running = turn.run(&plan, &cancel);

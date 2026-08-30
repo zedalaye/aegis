@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, Grant, GrantStore, PolicyCtx, Risk};
 use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome};
-use aegis_lib::DEFAULT_AGENT_ID;
+use aegis_lib::{SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -90,6 +90,13 @@ impl Fixture {
             args: &args,
             progress: &NullProgress,
             cancel: &cancel,
+            // Nothing here runs a skill; the runner has its own tests.
+            skills: SkillCtx {
+                library: &self.captures,
+                workspace: None,
+                tools: &[],
+                active: None,
+            },
         };
 
         match self.judge(args.clone()) {
@@ -127,6 +134,13 @@ impl Fixture {
             args: &args,
             progress: &NullProgress,
             cancel: &cancel,
+            // Nothing here runs a skill; the runner has its own tests.
+            skills: SkillCtx {
+                library: &self.captures,
+                workspace: None,
+                tools: &[],
+                active: None,
+            },
         };
 
         tools::refuse(

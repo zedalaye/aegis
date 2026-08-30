@@ -51,6 +51,7 @@ use crate::approval::{Answer, ApprovalRegistry, Decision as Answered, ResolvedBy
 use crate::audit::{AuditDecision, AuditLog, Outcome};
 use crate::error::ErrorCode;
 use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
+use crate::skills::{self, SkillCtx};
 use crate::store::{
     Agent, Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
 };
@@ -135,6 +136,14 @@ pub struct Turn<'a> {
     /// artefact of the harness, and one landing in a project folder would end
     /// up in someone's next commit.
     pub captures: &'a Path,
+    /// The user's skill library (PLAN 7.3, Phase 13).
+    ///
+    /// One of the two places a runbook is found; the other is the workspace,
+    /// which the turn already knows. Passed in rather than derived for the
+    /// reason `captures` is: where Aegis keeps its own files is a fact about
+    /// the installation, and a loop that went looking for it could not be run
+    /// in a test without one.
+    pub skills: &'a Path,
 }
 
 /// The [`ProgressSink`] one tool call writes its live output to.
@@ -212,6 +221,23 @@ impl Turn<'_> {
         let mut rounds = 0u32;
         let mut usage = None;
 
+        // Read once per turn rather than per round. A runbook can be edited
+        // between two messages and the next turn picks that up, but a catalog
+        // that changed halfway through a turn would show the model one list
+        // and then judge its choice against another — the same reason the
+        // identity and the provider are resolved once, above this call.
+        //
+        // The catalog is a line per runbook. The bodies stay on disk until
+        // `skill_run` asks for one (PLAN 7.6).
+        let catalog = skills::catalog(self.skills, plan.workspace.as_deref());
+        let offered = skills::granted(&catalog, self.agent);
+        let skill_block = skills::prompt_block(&offered);
+
+        // Which runbook this turn is currently following, if any. A local, so
+        // it cannot outlive the turn: the body was loaded into this turn and
+        // the span it names is this turn's (see `skills::track`).
+        let mut skill: Option<String> = None;
+
         // Per-turn, like the delta counter, and shared with every tool call in
         // the turn — the UI drops anything out of order, and a counter that
         // restarted per call would make two calls' frames indistinguishable
@@ -243,6 +269,7 @@ impl Turn<'_> {
                 self.agent,
                 &history,
                 plan.workspace.as_deref(),
+                skill_block.as_deref(),
                 shared.as_deref(),
                 // Half of the tool ACL, and the half the model can see: an
                 // identity that was not granted `shell_exec` is not offered
@@ -298,11 +325,12 @@ impl Turn<'_> {
                             rounds,
                             "tool round cap reached"
                         );
-                        self.refuse_all(plan, &calls);
+                        self.refuse_all(plan, &calls, skill.as_deref());
                         break StopReason::Stop;
                     }
 
-                    self.execute(plan, &calls, cancel, &progress_seq).await;
+                    self.execute(plan, &calls, cancel, &progress_seq, &mut skill)
+                        .await;
                     rounds += 1;
 
                     if cancel.is_cancelled() {
@@ -311,6 +339,19 @@ impl Turn<'_> {
                 }
             }
         };
+
+        // A run that never returned. Said out loud rather than carried into
+        // the next turn: the runbook was loaded into *this* one, and a span
+        // that outlived it would put a skill's name on calls made after the
+        // user had moved the conversation somewhere else.
+        if let Some(unfinished) = &skill {
+            tracing::warn!(
+                session_id = %plan.session_id,
+                turn_id = %plan.turn_id,
+                skill = %unfinished,
+                "the turn ended without a skill_return"
+            );
+        }
 
         self.sink.emit(Event::TurnFinished(TurnFinished {
             session_id: plan.session_id.clone(),
@@ -483,12 +524,19 @@ impl Turn<'_> {
         calls: &[AssembledCall],
         cancel: &CancellationToken,
         progress_seq: &AtomicU32,
+        skill: &mut Option<String>,
     ) {
         for call in calls {
             if cancel.is_cancelled() {
                 self.abandon(plan, call);
                 continue;
             }
+
+            // Cloned rather than borrowed for the length of the call: the
+            // context below holds it, and the run is updated from the result
+            // once the call is done. One `String` per tool call is not worth a
+            // lifetime that would have to be threaded through `ToolCtx`.
+            let running = skill.clone();
 
             let args = match &call.args {
                 Ok(args) => args.clone(),
@@ -531,6 +579,12 @@ impl Turn<'_> {
                 args: &args,
                 progress: &progress,
                 cancel,
+                skills: SkillCtx {
+                    library: self.skills,
+                    workspace: plan.workspace.as_deref(),
+                    tools: &self.agent.tools,
+                    active: running.as_deref(),
+                },
             };
 
             // Measured for the one tool whose prompt names a display, and for
@@ -549,6 +603,7 @@ impl Turn<'_> {
                     .with_identity(Identity {
                         name: &self.agent.name,
                         tools: &self.agent.tools,
+                        skills: &self.agent.skills,
                     });
 
             let judged = match policy::decide(&policy_ctx, &call.name, args.clone()) {
@@ -600,6 +655,10 @@ impl Turn<'_> {
             let Some(outcome) = judged else {
                 continue;
             };
+
+            // Before the transcript is touched, so the next call of this same
+            // round is already inside the run a `skill_run` just opened.
+            skills::track(skill, &call.name, &outcome.result);
 
             // Keyed on what was audited rather than on `ok` alone, so a call
             // that was refused reads as refused in the transcript instead of
@@ -725,7 +784,7 @@ impl Turn<'_> {
     /// Used for the round cap: the model has to see one `tool` message per
     /// call it made, or the next request it appears in is structurally
     /// invalid (see [`transcript`]).
-    fn refuse_all(&self, plan: &TurnPlan, calls: &[AssembledCall]) {
+    fn refuse_all(&self, plan: &TurnPlan, calls: &[AssembledCall], skill: Option<&str>) {
         let refused = CancellationToken::new();
 
         for call in calls {
@@ -745,6 +804,14 @@ impl Turn<'_> {
                 // nothing is there to cancel.
                 progress: &NullProgress,
                 cancel: &refused,
+                skills: SkillCtx {
+                    library: self.skills,
+                    workspace: plan.workspace.as_deref(),
+                    tools: &self.agent.tools,
+                    // The cap was reached inside whatever run was open, and
+                    // the refusals it produces belong to that run.
+                    active: skill,
+                },
             };
             let outcome = tools::refuse(
                 &ctx,
@@ -1029,6 +1096,9 @@ mod tests {
         sink: Recorder,
         session_id: String,
         captures: PathBuf,
+        /// An empty skill library. These tests are about the loop; the runner
+        /// has its own, in `skills` and in `tests/skills.rs`.
+        library: PathBuf,
         /// The identity every fixture turn runs as: the built-in one, which
         /// holds every tool, so these tests are about the loop and not about
         /// an allow-list.
@@ -1067,6 +1137,7 @@ mod tests {
                 sink: Recorder::default(),
                 session_id,
                 captures,
+                library: data.join("skills"),
                 agent: Agent::builtin(),
             }
         }
@@ -1091,6 +1162,7 @@ mod tests {
                 sink: &self.sink,
                 self_exe: None,
                 captures: &self.captures,
+                skills: &self.library,
             }
         }
 

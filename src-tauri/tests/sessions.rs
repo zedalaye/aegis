@@ -139,6 +139,7 @@ impl App {
             sink,
             self_exe: None,
             captures: &self.data.join("captures"),
+            skills: &self.data.join("skills"),
         }
         .run(&plan, &cancel)
         .await;
@@ -435,6 +436,7 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
         &Agent::builtin(),
         &history,
         Some(&app.workspace),
+        None,
         None,
         Vec::new(),
     );

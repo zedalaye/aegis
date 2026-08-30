@@ -1,9 +1,16 @@
-//! The shared-workspace convention (PLAN 7.3, Phase 11; `COS.md` *Memory*).
+//! The shared-workspace convention (PLAN 7.3, Phases 11 and 13; `COS.md`
+//! *Memory*).
 //!
 //! Four directories inside the folder the user picked — `briefs/`, `status/`,
 //! `artefacts/`, `decisions/` — and two files that carry state rather than
-//! documentation: `status/STATUS.md` and `decisions/DECISIONS.md`. That is the
-//! whole of it. No new store, no hidden directory, no second filesystem beside
+//! documentation: `status/STATUS.md` and `decisions/DECISIONS.md`. Phase 13
+//! adds a fifth, `skills/`, for the runbooks that are about *this* project
+//! rather than about the machine; it is here rather than in
+//! [`skills`](crate::skills) because it is one more directory of the same
+//! convention, laid down by the same button, and a second scaffolder would be
+//! a second thing to keep in step. It reaches the model as the skill catalog
+//! rather than through [`digest`], which is the one difference and is written
+//! on the slot. That is the whole of it. No new store, no hidden directory, no second filesystem beside
 //! the workspace (PLAN 7.1, *Workspace*): these are ordinary files in the
 //! user's own folder, which is what makes them editable by a human, visible to
 //! `git`, and reachable by the same `fs_read` / `fs_write` tools under the same
@@ -22,12 +29,17 @@
 //!   `decisions/DECISIONS.md` with `fs_write`, under the gate, on the audit
 //!   log. The convention is the schema; [`PREAMBLE`] is the instruction.
 //!
+//! Every path in [`CONVENTION`] is a path the ordinary tools can reach, and
+//! nothing here is privileged: `skills/inbox.triage/SKILL.md` is a file in
+//! someone's repository that a person can edit, `git log`, and delete.
+//!
 //! ## Why the digest is small on purpose
 //!
 //! The system prompt must stay a policy summary plus the facts of this session
-//! (PLAN 7.1, *System prompt*): grow it into runbooks and Phase 13 spends its
-//! life fighting procedure that is already in the prompt. So the digest carries
-//! *state*, capped, and never procedure. The two state files are excerpted to
+//! (PLAN 7.1, *System prompt*): a digest that grew into runbooks would be
+//! procedure paid for on every turn, which is exactly what the skill catalog
+//! and its load-on-demand body exist to avoid. So the digest carries *state*,
+//! capped, and never procedure. The two state files are excerpted to
 //! [`EXCERPT_MAX_BYTES`] each; `briefs/` and `artefacts/` contribute their file
 //! **names** only. Nothing here pastes a brief or an artefact into the
 //! conversation — `COS.md` is explicit that inputs are paths, never paste, and
@@ -42,6 +54,7 @@ use ts_rs::TS;
 
 use crate::error::{AppError, AppResult};
 use crate::policy::path;
+use crate::skills;
 
 /// The state file a session reads first: what is true now.
 pub const STATUS_FILE: &str = "status/STATUS.md";
@@ -61,7 +74,7 @@ pub const EXCERPT_MAX_BYTES: u64 = 2 * 1024;
 /// Most file names listed for `briefs/` and `artefacts/`.
 const LISTING_MAX_ENTRIES: usize = 12;
 
-/// How a slot reaches the model.
+/// How a slot reaches the model, when it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Digest {
     /// The names of the directory's entries, never their content.
@@ -86,8 +99,15 @@ struct Slot {
     file: &'static str,
     /// What that file starts as. Written once, never rewritten.
     seed: &'static str,
-    /// What the slot contributes to [`digest`].
-    digest: Digest,
+    /// What the slot contributes to [`digest`], or `None` when it contributes
+    /// nothing.
+    ///
+    /// `skills/` is the one that contributes nothing, and deliberately: its
+    /// contents already reach the model as the skill *catalog*
+    /// ([`skills::prompt_block`](crate::skills::prompt_block)), which says
+    /// what each runbook is for rather than only what it is called. Listing
+    /// the filenames a second time would be paying twice for less.
+    digest: Option<Digest>,
 }
 
 impl Slot {
@@ -103,39 +123,58 @@ impl Slot {
 ///
 /// Brief in, work, artefact out, decision recorded: the order a piece of work
 /// actually moves through, which is also the order that reads best in a panel.
-const CONVENTION: [Slot; 4] = [
+const CONVENTION: [Slot; 5] = [
     Slot {
         dir: "briefs",
         file: "README.md",
         seed: BRIEFS_SEED,
-        digest: Digest::Listing,
+        digest: Some(Digest::Listing),
     },
     Slot {
         dir: "status",
         file: "STATUS.md",
         seed: STATUS_SEED,
-        digest: Digest::Head,
+        digest: Some(Digest::Head),
     },
     Slot {
         dir: "artefacts",
         file: "README.md",
         seed: ARTEFACTS_SEED,
-        digest: Digest::Listing,
+        digest: Some(Digest::Listing),
     },
     Slot {
         dir: "decisions",
         file: "DECISIONS.md",
         seed: DECISIONS_SEED,
-        digest: Digest::Tail,
+        digest: Some(Digest::Tail),
+    },
+    // Phase 13. A workspace's own runbooks travel with the folder, which is
+    // the whole reason the scope exists: "how *this* project is deployed" is
+    // not a fact about the machine Aegis is installed on. Seeded with the
+    // `inbox.triage` stub PLAN 7.3 asks for — file in, status and artefact
+    // out — so the format has an example in the place people will look for
+    // one.
+    Slot {
+        dir: skills::LIBRARY_DIR,
+        file: TRIAGE_FILE,
+        seed: skills::TRIAGE_SEED,
+        digest: None,
     },
 ];
+
+/// The stub runbook seeded into a workspace, relative to `skills/`.
+///
+/// A skill is a directory holding a `SKILL.md`, so this slot's "file" is two
+/// levels deep — which is why [`scaffold`] creates the seed's parent rather
+/// than only the slot's directory.
+const TRIAGE_FILE: &str = "inbox.triage/SKILL.md";
 
 /// What the model is told once the convention is present.
 ///
 /// Where each kind of thing lives, and the one rule that makes the convention
 /// worth having — the decision goes in the file, not in the thread.
 /// Deliberately not a runbook: how to triage an inbox or review a patch is a
-/// skill (PLAN 7.6), and a skill is Phase 13.
+/// skill ([`skills`](crate::skills)), loaded into the one turn that runs it.
 const PREAMBLE: &str = "\
 This workspace keeps its shared memory in files. Delegated work is briefed in \
 `briefs/`, what is true right now is in `status/STATUS.md`, anything produced \
@@ -307,7 +346,7 @@ pub fn layout(root: &Path) -> WorkspaceLayout {
 pub fn digest(root: &Path) -> Option<String> {
     let sections: Vec<String> = CONVENTION
         .iter()
-        .filter_map(|slot| match slot.digest {
+        .filter_map(|slot| match slot.digest? {
             Digest::Listing => listing(root, slot),
             Digest::Head | Digest::Tail => excerpt(root, slot),
         })
@@ -356,8 +395,9 @@ fn listing(root: &Path, slot: &Slot) -> Option<String> {
 fn excerpt(root: &Path, slot: &Slot) -> Option<String> {
     let rel = slot.rel_file();
     let path = inside(root, &rel)?;
+    let digest = slot.digest?;
 
-    let (text, total) = match window(&path, slot.digest) {
+    let (text, total) = match window(&path, digest) {
         Ok(read) => read,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return None,
         Err(err) => {
@@ -370,7 +410,7 @@ fn excerpt(root: &Path, slot: &Slot) -> Option<String> {
     // seeing and where the rest is, which is the difference between an excerpt
     // and a file that quietly lies about its own length.
     let header = if total > EXCERPT_MAX_BYTES {
-        let end = match slot.digest {
+        let end = match digest {
             Digest::Tail => "last",
             _ => "first",
         };
@@ -454,6 +494,15 @@ pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
         if file.exists() {
             kept.push(rel_file);
             continue;
+        }
+
+        // A slot's seed may sit a level below its directory — a skill is a
+        // folder holding a `SKILL.md` — so the file's own parent is created
+        // rather than only `slot.dir`.
+        if let Some(parent) = file.parent() {
+            if !parent.is_dir() {
+                fs::create_dir_all(parent).map_err(|err| failed(&rel_file, &err))?;
+            }
         }
 
         fs::write(&file, slot.seed).map_err(|err| failed(&rel_file, &err))?;
@@ -551,7 +600,7 @@ mod tests {
         let (_dir, root) = workspace();
         let layout = layout(&root);
 
-        assert_eq!(layout.entries.len(), 4);
+        assert_eq!(layout.entries.len(), CONVENTION.len());
         assert!(layout
             .entries
             .iter()
@@ -569,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffolding_creates_the_four_directories_and_their_files() {
+    fn scaffolding_creates_every_directory_of_the_convention_and_its_file() {
         let (_dir, root) = workspace();
         let report = scaffold(&root).expect("scaffolded");
 
@@ -580,12 +629,42 @@ mod tests {
                 "status/STATUS.md",
                 "artefacts/README.md",
                 "decisions/DECISIONS.md",
+                "skills/inbox.triage/SKILL.md",
             ]
         );
         assert!(report.kept.is_empty());
         assert!(layout(&root).complete);
         assert!(root.join(STATUS_FILE).is_file());
         assert!(root.join(DECISIONS_FILE).is_file());
+    }
+
+    /// The workspace stub of PLAN 7.3, Phase 13, laid down by the same button
+    /// as the rest of the convention — and found by the runner as a workspace
+    /// skill, which is the only thing that makes seeding it worth anything.
+    #[test]
+    fn the_seeded_workspace_runbook_is_one_the_runner_can_find_and_read() {
+        let (_dir, root) = workspace();
+        scaffold(&root).expect("scaffolded");
+
+        let found = skills::catalog(&root.join("nothing-here"), Some(&root));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "inbox.triage");
+        assert_eq!(found[0].scope, skills::SkillScope::Workspace);
+        assert!(found[0].runnable(), "{:?}", found[0].problem);
+    }
+
+    /// `skills/` is in the convention and not in the digest: the catalog
+    /// already tells the model what each runbook is for, and listing the
+    /// filenames again would cost a line of every request to say less.
+    #[test]
+    fn the_skills_directory_contributes_nothing_to_the_digest() {
+        let (_dir, root) = workspace();
+        scaffold(&root).expect("scaffolded");
+
+        let digest = digest(&root).expect("a digest");
+        assert!(digest.contains("briefs/"), "{digest}");
+        assert!(!digest.contains("skills/"), "{digest}");
+        assert!(!digest.contains("inbox.triage"), "{digest}");
     }
 
     /// The point of the report: re-running it is safe, and says so.

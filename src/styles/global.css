@@ -1607,6 +1607,160 @@ body {
   font-style: italic;
 }
 
+/*
+ * The runbooks the runtime found, offered as things to grant. A chip toggles
+ * a name in the field below it rather than replacing that field: a workspace
+ * runbook is only discoverable while its project is open, and an identity has
+ * to be grantable a skill that is not in front of you right now.
+ */
+.agentform__skillpicks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+}
+
+.chip--on {
+  border-color: var(--accent);
+  background: var(--panel);
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------------------
+ * Skills (PLAN 7.3, Phase 13)
+ *
+ * A list of runbooks, not an editor. Every row is read-only and carries its
+ * path, because the thing you do with a skill you want to change is open the
+ * file.
+ * ------------------------------------------------------------------------ */
+
+.skill__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0 0 0.8rem;
+  padding: 0;
+  list-style: none;
+}
+
+.skill {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+/*
+ * A runbook that will not parse. Marked, and still listed: the author is the
+ * only person who can fix it, and one that vanished would say nothing.
+ */
+.skill--broken {
+  border-color: var(--warning);
+}
+
+.skill__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.skill__name {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.skill__scope,
+.skill__version {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.skill__badge {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.skill__summary {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.skill__problem {
+  margin: 0;
+  color: var(--warning);
+  font-size: 0.78rem;
+}
+
+.skill__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.skill__tools code {
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.skill__path {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.skill__note {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .agentform {
   display: flex;
   flex-direction: column;
@@ -1830,6 +1984,22 @@ body {
     "Liberation Mono", monospace;
   font-size: 0.8rem;
   font-weight: 600;
+}
+
+/*
+ * The skill a call was part of, beside the tool name rather than in the
+ * chips: it says what the call *is* — a step of a procedure — and the chips
+ * say how it went, which is a different question.
+ */
+.auditrow__skill {
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  white-space: nowrap;
 }
 
 .auditrow__chips {
