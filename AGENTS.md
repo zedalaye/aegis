@@ -24,10 +24,13 @@ Local desktop app that:
 
 - can operate the machine (fs, shell, git) under an approval gate
 
-- manages projects (workspace folder + session + task list). The folder's
-  convention files are git-backed by default when they are laid down
-  (`PLAN.md` § 7.11); picking a folder does not `git init`, and the
-  harness is not a git host
+- manages projects (workspace folder + session + task list + optional
+  execution host). The folder's convention files are git-backed by
+  default when they are laid down (`PLAN.md` § 7.11); picking a folder
+  does not `git init`, and the harness is not a git host. A WSL distro
+  is an execution host on the project (`PLAN.md` § 7.12), not a second
+  runtime: `fs_*` stays on this process; `shell_exec` lands in the
+  distro the operator named. Picking a folder does not imply WSL.
 
 - stays in the system tray
 
@@ -160,10 +163,10 @@ on another). Keys stay in the OS keyring / env, never in the WebView.
 A CoS without (1) recites. Do not build (2) first.
 
 Chrome polish is `PLAN.md` § 7.10. Workspace versioning (`git init` on scaffold,
-never an auto-commit) is § 7.11. Neither is a step in this list, and neither is
-a reason to delay (1)–(3). There is no in-app editor. A skill is a file: the
-operator's editor, or `fs_write` under the gate. Granting it to an identity is a
-separate act.
+never an auto-commit) is § 7.11. Execution host (WSL) is § 7.12. None is a
+step in this list, and none is a reason to delay (1)–(3). There is no in-app
+editor. A skill is a file: the operator's editor, or `fs_write` under the
+gate. Granting it to an identity is a separate act.
 
 ## Permissions
 
@@ -188,9 +191,10 @@ separate act.
   because the work is useless, but because they do not belong in the
   harness: multi-agent is in-process (CoS + specialists + files);
   `docker` / `ssh` / `sbx` on PATH are already `shell_exec` under the
-  gate; a later workspace-scoped executor (`PLAN.md` § 7.9) is
-  containment for *our* tools, not a VM manager and not computer-use of
-  the desktop.
+  gate; WSL is not a program the model calls — wrapping is
+  `shell_exec`'s when the project has that host (`PLAN.md` § 7.12); a
+  later workspace-scoped executor (`PLAN.md` § 7.9) is containment for
+  *our* tools, not a VM manager and not computer-use of the desktop.
 
 ## Code rules
 

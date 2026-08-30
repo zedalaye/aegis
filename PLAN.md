@@ -409,10 +409,13 @@ no metacharacter parsing to defeat. Any denylist of "dangerous commands" (`rm -r
 a security boundary and must not be described as one in the UI or the README.
 
 The real boundary is narrow and should be stated plainly: the user reads the exact `program`,
-`args` and `cwd` before anything mutating runs. The MVP has no sandbox — tools run as the user,
+`args` and `cwd` before anything mutating runs. When the project has an execution host
+(§ 7.12), those three are the Linux program, args and cwd, plus the distro name —
+`wsl.exe` is not what they approve. The MVP has no sandbox — tools run as the user,
 inheriting the app's environment and privileges. A later workspace-scoped executor
 (§ 7.9) does not weaken this prompt; it limits where an approved `shell_exec` can
-land. It is not a reason to auto-allow mutate.
+land. It is not a reason to auto-allow mutate. WSL is not that executor: it is the
+OS the repo already uses.
 
 ---
 
@@ -543,7 +546,13 @@ sees it, can explain itself and try something else. The turn continues.
   metacharacters entirely. But `.cmd`/`.bat` shims (`pnpm`, `npm`) are not launchable via
   `CreateProcess`: resolve through PATHEXT and, when the resolved target is a `.cmd`, invoke
   `cmd /c <resolved>` with args still passed as a vector. Document it, or it will look like
-  "pnpm doesn't work".
+  "pnpm doesn't work". PATHEXT and `.cmd` shims apply only when the execution host is this
+  Windows process. A WSL host (§ 7.12) uses the distro's PATH; `pnpm` is a Linux binary.
+- **WSL is an execution host, not a compile footnote.** An operator's software folders
+  may live in a distro while this process is a Windows Tauri app. `fs_*` over `\\wsl$\`
+  is UNC (the bullet above). `shell_exec` on that workspace without § 7.12 is the
+  *Windows* toolchain. Compiling Aegis under Ubuntu, or painting a GTK window through
+  WSLg (§ 5.3), is not operating those projects. Do not treat either as the slice.
 - **Console flash.** Child processes pop a console window unless spawned with `CREATE_NO_WINDOW`
   (`std::os::windows::process::CommandExt::creation_flags`).
 - **Screenshots.** Multi-monitor with mixed DPI: the app must be per-monitor DPI aware or
@@ -727,11 +736,11 @@ These are constraints on Phases 5–10, not extra work.
 | **Audit** | one jsonl line per tool call | a closed schema that cannot later grow `agent_id`, `skill`, `tokens`, `handoff_id` |
 | **Process** | tray app, hide-on-close, lives while the window is gone | quit-on-last-window-close (kills a future scheduler) |
 | **Settings / keys** | one `{base_url, model, key}` in keyring or env | put keys in the WebView, or freeze the settings payload so a provider list cannot be added |
-| **Project** | `{name, path, sessions}` | assume every project is a **software** repo (language layout, GitHub, `node_modules`). A finance or watch workspace is still just a folder. That is not a reason to skip versioning: the convention's files are git-backed by default (§ 7.11), which is not the same as being a codebase |
+| **Project** | `{name, path, sessions}` | assume every project is a **software** repo (language layout, GitHub, `node_modules`). A finance or watch workspace is still just a folder. That is not a reason to skip versioning: the convention's files are git-backed by default (§ 7.11), which is not the same as being a codebase. Do not assume the UI host OS is the tool host OS: an optional execution host (§ 7.12) is how a Unix workspace on a Windows UI stays one project, not a second runtime |
 | **System prompt** | short: policy summary + workspace path | grow it into runbooks. Recurring procedure that lands in the prompt of Phases 5–12 is procedure Phase 13 will have to fight |
 | **Control surface** | WebView as the only face; `session_send` / `approval_resolve` stay callable as Rust functions, not only as `invoke` wrappers | a second agent loop for Keybase / X Chat / Telegram / Discord; Keybase `TlfName` / X user ids / Discord snowflakes / Telegram chat ids in session storage; an inbound HTTP webhook; treating WhatsApp or a customer-facing X Chat bot as a control face |
 | **Remote bind** | no TCP listen; Tauri IPC to the local WebView only | bind `0.0.0.0`, Tailscale Funnel, embed libtailscale/tsnet, or a second HTTP API with a different command set than § 2 |
-| **Tool executor** | in-process, as the user, after § 3 | hard-wire `Command` / `std::fs` so a later workspace-scoped sandbox cannot sit behind the same `ToolSpec`; treat a denylist or `allow_session` as isolation; give the agent the host desktop (accessibility tree, raw mouse/keyboard) |
+| **Tool executor** | in-process, as the user, after § 3 | hard-wire `Command` / `std::fs` so a later workspace-scoped sandbox cannot sit behind the same `ToolSpec`; hard-wire Windows `CreateProcess` / PATHEXT so a WSL host (§ 7.12) cannot; treat a denylist or `allow_session` as isolation; give the agent the host desktop (accessibility tree, raw mouse/keyboard) |
 
 Phase 5 in particular: `session_create` / `SessionSummary` may omit `agent_id` today. Do not
 add a dummy field "for later". Do not, either, name columns and events as if the assistant
@@ -759,13 +768,15 @@ What the MVP already is, vs what § 7.3 still has to add.
 Each phase ends in something you can run. No phase depends on a later one. Domain connectors
 are last on purpose.
 
-Two slices are **not** steps in this list, and must not delay Phases 14–16:
+Three slices are **not** steps in this list, and must not delay Phases 14–16:
 
 - **§ 7.10** chrome (title-bar icons, a button that reveals the folder in the OS file manager)
 - **§ 7.11** workspace versioning (`git init` when the convention is laid down, never an
   auto-commit)
+- **§ 7.12** execution host (WSL). Windows UI; `shell_exec` in the distro when the project
+  says so
 
-Both may start once Phase 13 has landed.
+All three may start once Phase 13 has landed.
 
 **Phase 11 — Workspace convention**
 Document and optionally scaffold, inside a user-picked workspace: `briefs/`, `status/`,
@@ -863,8 +874,8 @@ identity. Suggested order, because each pack is allowed to fail without blocking
 Never start pack *n+1* because pack *n* is exciting. Never add a domain by growing
 `agent/turn.rs`.
 
-§ 7.10 (chrome) and § 7.11 (versioning) may run at any time after Phase 13. They do not
-insert here, and they are not Phases 20 and 21.
+§ 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
+after Phase 13. They do not insert here, and they are not Phases 20, 21 and 22.
 
 ### 7.4 Hard rules that survive every later phase
 
@@ -882,6 +893,8 @@ insert here, and they are not Phases 20 and 21.
   writes a runbook the same way it writes a decision: `fs_write`, under the gate, on the
   audit log. A workspace laid down by the convention is a git work tree (§ 7.11); a
   commit is still a gated `shell_exec`.
+- The UI host OS is not assumed to be the tool host OS. A WSL distro is an execution
+  host on the project (§ 7.12), not a second runtime and not outbound SSH.
 
 ### 7.5 What would make the mode unusable (do not do these)
 
@@ -906,7 +919,8 @@ insert here, and they are not Phases 20 and 21.
   layer. Multi-agent is in-process (CoS + specialists + files). Another
   machine or a VM the operator already runs is a **tool target**
   (`shell_exec` of `ssh` / `docker` / `sbx`, or a later MCP server),
-  same matrix. See § 7.8 outbound and § 7.9.
+  same matrix. See § 7.8 outbound and § 7.9. WSL on this PC is an
+  execution host (§ 7.12), not a fleet member.
 - Giving the agent the host desktop (computer-use, accessibility tree,
   "it can click anything") as the way to "operate the machine". That is
   already out of MVP scope — a different product, not a missing
@@ -924,9 +938,13 @@ insert here, and they are not Phases 20 and 21.
   off the audit log. That is a second way to change what the agent will do.
 - A session that grants itself a skill it just wrote. Writing the file is not an allow-list
   change; `agent_update` stays a Settings act, in force on the next turn.
-- Inserting chrome polish or `git init` into § 7.3 as Phase 13.5 / 14, or delaying
-  memory, handoff, or the scheduler for icons or a repository. Those slices are § 7.10
-  and § 7.11.
+- Inserting chrome polish, `git init`, or WSL into § 7.3 as Phase 13.5 / 14, or delaying
+  memory, handoff, or the scheduler for icons, a repository, or a distro. Those slices
+  are § 7.10, § 7.11 and § 7.12.
+- Teaching the model to call `wsl.exe` or `bash -c` so Linux folders "just work". The
+  distro is a project field; wrapping is `shell_exec`'s, like `.cmd` shims (§ 5.1,
+  § 7.12). Silent fallback to Windows `CreateProcess` when WSL is missing is the
+  wrong OS, not a recovery.
 - `git init` on `project_create`, or a nested repository inside a folder that is already a
   work tree. Picking a workspace is not consent to mutate it; scaffold is. Nested `.git`
   directories split history in half and are how people lose the parent repo.
@@ -1128,6 +1146,11 @@ Not remote access. There is **no** planned agent-to-agent wire.
 `COS.md` handoffs are files and a schema, in one process. Phase 12–15
 specialists are identities in that process, not boxes on the tailnet.
 
+WSL on the same PC is **not** this section. It is not another machine
+and not a second Aegis. It is an execution host on the project
+(§ 7.12): `shell_exec` lands in the distro the operator named. `ssh`
+to a VPS stays outbound, high-risk ask, path outside the workspace.
+
 A remote host (or a VM the operator already started) is a **tool
 target**, not a second Aegis:
 
@@ -1207,6 +1230,12 @@ them. Do not add a hypervisor crate during Phases 0–10.
 The MVP executor is the host user, stated honestly. If the operator
 already isolates work in Docker or a microVM, the harness does not
 need to know: it runs `program` + `args` under the gate, like `git`.
+
+WSL is not this box. The distro is the operator's Linux userland,
+already running, with their `$HOME` and docker socket if they
+installed them. § 7.12 routes `shell_exec` there; it does not isolate.
+A later microVM for a Unix workspace is still the containment seam;
+WSL is how we reach the OS the repo already uses.
 
 ### 7.10 Chrome polish — not a CoS phase
 
@@ -1302,7 +1331,9 @@ the five directories — so `project_create` never inits. **`workspace_scaffold`
 `shell_exec` and not a libgit2 crate. A GUI-launched app may have a
 thin PATH (same class of problem as Keybase on Windows, § 7.7): resolve
 `git` / `git.exe` the way a later face resolves `keybase`. Failure to
-init is a line in the report, not a failed scaffold.
+init is a line in the report, not a failed scaffold. When the project
+has an execution host (§ 7.12), this `git` is that host's `git`. A
+Windows `git init` on a `\\wsl$\` tree is the wrong git.
 
 **Never**
 
@@ -1357,3 +1388,97 @@ work tree leaves a `.git` there and says so; pressing it on a folder
 that already is one does not create a nested repo; a later `fs_write`
 still does not commit. `git` absent from PATH does not block the
 directories.
+
+### 7.12 Execution host (WSL) — not a CoS phase
+
+Not a step in § 7.3. Not Phase 22. Not a second Aegis. Not a Linux
+microVM (§ 7.9). Not outbound SSH (§ 7.8).
+
+The UI host and the tool host are not the same OS on a Windows
+operator whose software projects live in Ubuntu (WSL). Opening the
+code folder is the workspace: `fs_*` already sees those files (UNC
+`\\wsl$\…`, or a folder under `C:\` mounted at `/mnt/c`). `shell_exec`
+today is `CreateProcess` on Windows (§ 5.1). That is the Windows
+toolchain. It is not `git` / `docker` / the test runner in the distro.
+
+This slice may start once Phase 13 has landed. It must not delay
+Phases 14–16. It is not § 7.9 (containment for *our* tools). It is
+not Phase 19 (Coolify / deploy). It is how `shell_exec` reaches the
+OS the repo already uses.
+
+**Default.** A project has no execution host. `shell_exec` stays
+today's spawn (Windows `CreateProcess`, macOS/Linux `exec`). This
+repo stays that default. Picking a folder does not imply WSL. A
+finance or watch workspace does not get a distro.
+
+**When.** The operator sets an execution host on the project. Only
+Windows offers WSL. A Linux or macOS build refuses a WSL host rather
+than ignoring it.
+
+```ts
+type ExecHost = { kind: "wsl"; distro: string } | null; // null = process host
+type ExecHostOption = { kind: "host" } | { kind: "wsl"; distro: string };
+```
+
+`Project` grows `exec_host`. Absent on disk = `null`. Sessions inherit
+it; they do not override it. Do not add a dummy field ahead of this
+slice (same rule as `agent_id` in § 7.1).
+
+**What changes**
+
+- `shell_exec` schema is unchanged: `program` + `args` + `cwd`. No
+  `sh -c`. The model does not pass `wsl` or a distro name.
+- Runtime translates the workspace (and any contained `cwd`) to a
+  Linux path in that distro (`wslpath`, or the equivalent). Spawn is
+  `wsl.exe -d <distro> -e <program> <args>`: `-e` / `--exec` so there
+  is no login-shell metacharacter layer. Arguments stay a vector.
+- PATH, HOME, the default distro user: the distro's. Do not pass
+  `-u root`. `pnpm` is the Linux binary, not `pnpm.cmd`. PATHEXT,
+  `CREATE_NO_WINDOW` and `.cmd` shims apply only on the Windows host.
+- The approval dialog names the distro, the Linux cwd, the program
+  and the args — the same honesty as § 3.3. `allow_session` still
+  keys on the program basename (`git`, `pnpm`), not on `wsl.exe`.
+- Stop and the deadline terminate the Linux process, not only
+  `wsl.exe`. A leftover `cargo` in the distro is a failed exit.
+- `fs_*` is unchanged. Containment is still the Windows-canonical
+  workspace. `\\wsl$\` is UNC (§ 5.1); do not invent a second
+  filesystem. A capture is still *this* display.
+- A missing distro, WSL not installed, or a path that cannot be
+  translated fails before spawn (`E_TOOL_FAILED`, or a dedicated
+  `E_EXEC_HOST` if one code is clearer). It is not a prompt to run
+  the same call on Windows. Silent fallback to `CreateProcess` is
+  forbidden: that would be the wrong OS.
+
+**Commands** (this slice, not § 2 today)
+
+| Command | Args | Returns |
+| --- | --- | --- |
+| `project_set_exec_host` | `{ project_id, host: ExecHost }` | `Project` |
+| `project_list_exec_hosts` | — | `ExecHostOption[]` |
+
+`project_list_exec_hosts` is what `wsl.exe -l -q` can see, plus the
+process host. `project_create` / `project_open` grow the field;
+existing `projects.json` rows have no host and must keep working.
+
+**Never**
+
+- `wsl.exe` as a tool the model calls. Wrapping is the runtime's,
+  like `.cmd` shims;
+- `bash -c` / `wsl … sh -c` around a model-supplied string;
+- auto-detecting WSL from a `\\wsl$\` path and flipping the host
+  (picking a folder is not consent);
+- running Aegis itself under WSLg as the way to operate Linux
+  projects (display is second-class, § 5.3; this Windows app is
+  the UI);
+- a second agent loop in the distro;
+- Docker Desktop, Hyper-V, or a virt UI. `docker` inside the distro
+  is an ordinary `shell_exec` once the host is WSL;
+- delaying Phases 14–16 until this exists. Do not hard-wire
+  `shell.rs` so this cannot sit behind the same `ToolSpec`
+  (§ 7.1 *Tool executor*).
+
+**Exit:** a project pointed at a folder in Ubuntu, with exec host
+`Ubuntu`, can `shell_exec` `git` / `ls` / a test runner that exists
+only in the distro; the approval line shows the Linux cwd; Stop
+kills that command; a project with no host is unchanged. `fs_read`
+of a file in that folder still does not go through WSL.
