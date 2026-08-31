@@ -28,9 +28,10 @@
 //!
 //! The entry shape is PLAN 2.1, "Settings and audit"; the decision vocabulary
 //! is PLAN 3.1's. It has grown twice since, both times by adding a field with
-//! a `serde` default rather than by changing one — `agent_id` in Phase 12 and
-//! `skill` in Phase 13 — which is the property PLAN 7.1 asks the log to keep:
-//! a schema that can grow `agent_id`, `skill`, `tokens`, `handoff_id`.
+//! a `serde` default rather than by changing one — `agent_id` in Phase 12,
+//! `skill` in Phase 13 and `handoff` in Phase 15 — which is the property
+//! PLAN 7.1 asks the log to keep: a schema that can grow `agent_id`, `skill`,
+//! `tokens`, `handoff_id`.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
@@ -176,6 +177,20 @@ pub struct AuditEntry {
     /// older lines would lose the history the log is kept for.
     #[serde(default)]
     pub skill: String,
+    /// The delegation this call was part of (PLAN 7.3, Phase 15).
+    ///
+    /// The other half of "one run id over CoS + specialists" (PLAN 7.2, row
+    /// 10): the CoS's `handoff_delegate` line carries it, and so does every
+    /// call every specialist makes while working on one of its briefs — in
+    /// their own sessions, under their own identities. Given `agent_id` beside
+    /// it, a replay can say who ran, under whose brief, and what it cost.
+    ///
+    /// Empty outside a delegation, and on every line written before this
+    /// phase. `#[serde(default)]` for the reason `agent_id` and `skill` carry
+    /// one: the file is its own wire format, and a reader that refused the
+    /// older lines would lose the history the log is kept for.
+    #[serde(default)]
+    pub handoff: String,
     /// Auto-allowed, approved, or refused.
     pub decision: AuditDecision,
     /// Why policy decided that, in the words the user was shown.
@@ -229,6 +244,8 @@ pub struct AuditRecord<'a> {
     pub tool: &'a str,
     /// The skill run this call was part of; empty outside one.
     pub skill: &'a str,
+    /// The delegation this call was part of; empty outside one.
+    pub handoff: &'a str,
     /// Auto-allowed, approved, or refused.
     pub decision: AuditDecision,
     /// Why, in the words the user was shown.
@@ -261,6 +278,7 @@ impl AuditRecord<'_> {
             call_id: self.call_id.to_owned(),
             tool: self.tool.to_owned(),
             skill: self.skill.to_owned(),
+            handoff: self.handoff.to_owned(),
             decision: self.decision,
             policy_reason: self.policy_reason.to_owned(),
             args_digest: digest(self.args),
@@ -523,6 +541,7 @@ mod tests {
             call_id: "call_1",
             tool: "fs_read",
             skill: "",
+            handoff: "",
             decision: AuditDecision::Auto,
             policy_reason: "an ordinary read inside the workspace",
             args,

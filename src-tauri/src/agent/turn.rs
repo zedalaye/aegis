@@ -39,9 +39,18 @@
 //! on a `oneshot`. The wait is inside the same `select!` as the cancel token
 //! and under a five-minute deadline, so neither a user who walks away nor one
 //! who presses stop leaves a turn holding a call forever.
+//!
+//! **A turn knows where it sits, and nothing else about the team.** From Phase
+//! 15 the same loop drives a session someone typed into and a run a brief
+//! opened ([`Standing`]). That is one flag reaching three places — which tools
+//! the model is offered, what policy refuses, and whether the turn ends the
+//! moment a report is filed — and no fourth. There is deliberately no second
+//! loop for delegated work: a specialist's turn is this turn, under its own
+//! identity, through the same gate and onto the same audit log.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
@@ -51,12 +60,14 @@ use crate::approval::{Answer, ApprovalRegistry, Decision as Answered, ResolvedBy
 use crate::audit::{AuditDecision, AuditLog, Outcome};
 use crate::compact;
 use crate::error::ErrorCode;
+use crate::handoff::{self, bus};
 use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
 use crate::skills::{self, SkillCtx};
 use crate::store::memories::{self, MemoryStore};
 use crate::store::{
     Agent, Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
 };
+use crate::tools::handoff::HandoffCtx;
 use crate::tools::{self, NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult};
 use crate::workspace;
 
@@ -78,6 +89,93 @@ pub const MAX_TOOL_ROUNDS: u32 = 8;
 
 /// How long a `turn:delta` frame stays open.
 pub const DELTA_FRAME: Duration = Duration::from_millis(50);
+
+/// Where a turn sits in the Chef-de-Cabinet loop (PLAN 7.3, Phase 15).
+///
+/// Two states, and they are exclusive by construction rather than by care: a
+/// turn either may hand work out or *is* handed-out work, and there is no way
+/// to spell both. That is `COS.md` *Roles* as a type — three roles, one Chief
+/// of Staff, and a specialist that routed work would be a second one.
+///
+/// It decides three things, all in [`Turn::run`]: which tools the model is
+/// offered, what [`policy::decide`] refuses, and whether the turn ends the
+/// moment a report is filed.
+pub enum Standing<'a> {
+    /// A session someone opened. It may delegate, if the application gave it a
+    /// bus and its identity holds the tool.
+    ///
+    /// `None` is a turn with no bus at all: a test, or a build with nothing
+    /// behind the tool. The model is then not offered `handoff_delegate`.
+    Own(Option<&'a Arc<dyn bus::Runner>>),
+    /// A run a brief opened. It may not delegate, and it answers by filing a
+    /// report into this cell.
+    Delegated(&'a handoff::Open),
+}
+
+impl Standing<'_> {
+    /// The delegated run this turn is, if it is one.
+    const fn open(&self) -> Option<&handoff::Open> {
+        match self {
+            Self::Own(_) => None,
+            Self::Delegated(open) => Some(open),
+        }
+    }
+
+    /// What a tool call in this turn is given.
+    const fn ctx(&self) -> HandoffCtx<'_> {
+        match self {
+            Self::Own(bus) => HandoffCtx {
+                bus: *bus,
+                open: None,
+            },
+            Self::Delegated(open) => HandoffCtx {
+                bus: None,
+                open: Some(open),
+            },
+        }
+    }
+}
+
+/// The tools this turn's identity actually holds.
+///
+/// The stored allow-list, adjusted for where the turn sits — and adjusted in
+/// both directions, because each of the two handoff tools is useless in exactly
+/// the place the other one belongs.
+///
+/// A delegated run **gains** `handoff_return` whether or not anyone granted it.
+/// That is not the allow-list being widened: it is the only channel the run has
+/// to answer at all, it reaches nothing outside this process, and a specialist
+/// that could not return would be work that silently never comes back. It
+/// **loses** `handoff_delegate`, which policy refuses anyway — the point of
+/// taking it out of the schemas as well is that the model never spends a round
+/// asking for something it will be told no about.
+///
+/// An ordinary session loses `handoff_return`, for the mirror reason: there is
+/// nothing there for it to close, so offering it is offering a call that can
+/// only fail.
+fn held(agent: &Agent, standing: &Standing<'_>) -> Vec<String> {
+    let (dropped, added) = match standing {
+        Standing::Own(_) => (policy::tool::HANDOFF_RETURN, None),
+        Standing::Delegated(_) => (
+            policy::tool::HANDOFF_DELEGATE,
+            Some(policy::tool::HANDOFF_RETURN),
+        ),
+    };
+
+    let mut held: Vec<String> = agent
+        .tools
+        .iter()
+        .filter(|name| name.as_str() != dropped)
+        .cloned()
+        .collect();
+
+    if let Some(added) = added {
+        if !held.iter().any(|name| name == added) {
+            held.push(added.to_owned());
+        }
+    }
+    held
+}
 
 /// What a turn needs to know about itself.
 #[derive(Debug, Clone)]
@@ -154,6 +252,14 @@ pub struct Turn<'a> {
     /// scoped to is [`Turn::agent`] and nothing else — the store spans every
     /// identity, and every call into it names one.
     pub memories: &'a MemoryStore,
+    /// Where this turn sits in the Chef-de-Cabinet loop (PLAN 7.3, Phase 15).
+    ///
+    /// Resolved by the caller, like the identity and the provider, and for the
+    /// same reason: whether this is a session someone is typing into or a run a
+    /// brief opened is settled before the first request, and a loop that could
+    /// change its mind halfway through would offer the model one set of tools
+    /// and judge its calls against another.
+    pub standing: Standing<'a>,
 }
 
 /// The [`ProgressSink`] one tool call writes its live output to.
@@ -243,6 +349,13 @@ impl Turn<'_> {
         let offered = skills::granted(&catalog, self.agent);
         let skill_block = skills::prompt_block(&offered);
 
+        // Once per turn, like the catalog: what this identity holds *here*.
+        // Every use of the allow-list below reads this rather than
+        // `agent.tools` — the schemas the model is shown, the identity policy
+        // judges against, and the fail-closed check a runbook gets — so the
+        // three cannot disagree about whether this run can file a report.
+        let held = held(self.agent, &self.standing);
+
         // Which runbook this turn is currently following, if any. A local, so
         // it cannot outlive the turn: the body was loaded into this turn and
         // the span it names is this turn's (see `skills::track`).
@@ -267,8 +380,8 @@ impl Turn<'_> {
         // between two rounds would show the model one set of standing facts and
         // then answer from another. The write still lands — the next turn
         // carries it, and the tool's own result says what was recorded.
-        let held = self.memories.list_for(&self.agent.id);
-        let memory_block = memories::prompt_block(&held, held.len());
+        let remembered = self.memories.list_for(&self.agent.id);
+        let memory_block = memories::prompt_block(&remembered, remembered.len());
 
         // Per-turn, like the delta counter, and shared with every tool call in
         // the turn — the UI drops anything out of order, and a counter that
@@ -324,7 +437,7 @@ impl Turn<'_> {
                 // is the refusal in `policy::decide_call`, which is what catches
                 // a call replayed out of a transcript written under a wider
                 // grant.
-                tools::schemas_for(&self.agent.tools),
+                tools::schemas_for(&held),
             );
 
             let stream = self.provider.stream(request);
@@ -372,16 +485,26 @@ impl Turn<'_> {
                             rounds,
                             "tool round cap reached"
                         );
-                        self.refuse_all(plan, &calls, skill.as_deref());
+                        self.refuse_all(plan, &calls, &held, skill.as_deref());
                         break StopReason::Stop;
                     }
 
-                    self.execute(plan, &calls, cancel, &progress_seq, &mut skill)
+                    self.execute(plan, &calls, &held, cancel, &progress_seq, &mut skill)
                         .await;
                     rounds += 1;
 
                     if cancel.is_cancelled() {
                         break StopReason::Cancelled;
+                    }
+
+                    // A brief that has been answered is a turn with nothing
+                    // left to do. Ending here rather than letting the model
+                    // take another round is what keeps a delegation's cost
+                    // bounded by its report, and it is also what the runner is
+                    // waiting on — the report is already in the cell.
+                    if self.standing.open().is_some_and(handoff::Open::closed) {
+                        tracing::debug!(turn_id = %plan.turn_id, "the brief was returned");
+                        break StopReason::Stop;
                     }
                 }
             }
@@ -397,6 +520,19 @@ impl Turn<'_> {
                 turn_id = %plan.turn_id,
                 skill = %unfinished,
                 "the turn ended without a skill_return"
+            );
+        }
+
+        // A brief that was never returned. The runner turns this into a
+        // failed attempt — and, after the second, into a line on the board
+        // asking the human. Said here too, because "the model just stopped" is
+        // the one failure that is otherwise invisible in a log.
+        if self.standing.open().is_some_and(|open| !open.closed()) {
+            tracing::warn!(
+                session_id = %plan.session_id,
+                turn_id = %plan.turn_id,
+                ?reason,
+                "a delegated turn ended without a handoff_return"
             );
         }
 
@@ -569,6 +705,7 @@ impl Turn<'_> {
         &self,
         plan: &TurnPlan,
         calls: &[AssembledCall],
+        held: &[String],
         cancel: &CancellationToken,
         progress_seq: &AtomicU32,
         skill: &mut Option<String>,
@@ -629,10 +766,11 @@ impl Turn<'_> {
                 skills: SkillCtx {
                     library: self.skills,
                     workspace: plan.workspace.as_deref(),
-                    tools: &self.agent.tools,
+                    tools: held,
                     active: running.as_deref(),
                 },
                 memories: self.memories,
+                handoffs: self.standing.ctx(),
             };
 
             // Measured for the one tool whose prompt names a display, and for
@@ -650,9 +788,14 @@ impl Turn<'_> {
                     .with_screen(screen.as_ref())
                     .with_identity(Identity {
                         name: &self.agent.name,
-                        tools: &self.agent.tools,
+                        tools: held,
                         skills: &self.agent.skills,
                     });
+            let policy_ctx = if self.standing.open().is_some() {
+                policy_ctx.delegated()
+            } else {
+                policy_ctx
+            };
 
             let judged = match policy::decide(&policy_ctx, &call.name, args.clone()) {
                 Decision::Auto {
@@ -832,7 +975,13 @@ impl Turn<'_> {
     /// Used for the round cap: the model has to see one `tool` message per
     /// call it made, or the next request it appears in is structurally
     /// invalid (see [`transcript`]).
-    fn refuse_all(&self, plan: &TurnPlan, calls: &[AssembledCall], skill: Option<&str>) {
+    fn refuse_all(
+        &self,
+        plan: &TurnPlan,
+        calls: &[AssembledCall],
+        held: &[String],
+        skill: Option<&str>,
+    ) {
         let refused = CancellationToken::new();
 
         for call in calls {
@@ -855,12 +1004,13 @@ impl Turn<'_> {
                 skills: SkillCtx {
                     library: self.skills,
                     workspace: plan.workspace.as_deref(),
-                    tools: &self.agent.tools,
+                    tools: held,
                     // The cap was reached inside whatever run was open, and
                     // the refusals it produces belong to that run.
                     active: skill,
                 },
                 memories: self.memories,
+                handoffs: self.standing.ctx(),
             };
             let outcome = tools::refuse(
                 &ctx,
@@ -1217,6 +1367,7 @@ mod tests {
                 captures: &self.captures,
                 skills: &self.library,
                 memories: &self.memories,
+                standing: Standing::Own(None),
             }
         }
 

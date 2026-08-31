@@ -213,5 +213,46 @@ export default function DiffPreview({
           </p>
         </>
       );
+
+    case "handoff":
+      // Who is about to work on what — which is the decision COS.md gives the
+      // human, and the only one this dialog is asking. The constraints and the
+      // definition of done are in the brief file named below and in the
+      // transcript of each run; reproducing four whole briefs here would be a
+      // dialog nobody reads.
+      return (
+        <>
+          <ol className="briefs" aria-label="Briefs">
+            {detail.briefs.map((brief) => (
+              <li key={`${brief.owner}-${brief.goal}`} className="briefs__item">
+                <span className="briefs__owner">{brief.owner}</span>
+                <span className="briefs__goal">{brief.goal}</span>
+                <span className="briefs__meta">
+                  {brief.priority} · wants a {brief.return_format} ·{" "}
+                  {brief.inputs === 1 ? "1 input" : `${brief.inputs} inputs`}
+                </span>
+              </li>
+            ))}
+          </ol>
+          <dl className="detail">
+            <Field label="Reviewed by">
+              {detail.reviewer ??
+                "nobody — what comes back goes straight to this session"}
+            </Field>
+            <Field label="Filed in" mono>
+              {detail.filed_in ??
+                "nowhere — this workspace has no briefs/ folder yet"}
+            </Field>
+          </dl>
+          <p className="detail__note">
+            Each of these opens a session of its own, under the identity named,
+            and runs at the same time as the others. They work with the tools
+            that identity holds — not with yours, and not with anything you have
+            allowed for this session: whatever they want to write or run asks
+            you again, in their own sessions. What comes back here is a status,
+            an artefact list and any open questions, never their conversations.
+          </p>
+        </>
+      );
   }
 }

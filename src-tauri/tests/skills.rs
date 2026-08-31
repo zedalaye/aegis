@@ -45,6 +45,7 @@ use aegis_lib::agent::turn::TurnPlan;
 use aegis_lib::agent::wire::{ModelEvent, StopReason, WireMessage};
 use aegis_lib::policy::tool;
 use aegis_lib::skills::{self, SkillScope};
+use aegis_lib::Standing;
 use aegis_lib::{
     Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditEntry, AuditLog, Event, FakeProvider,
     GrantStore, MemoryStore, Message, SessionState, SessionStore, Turn, TurnRegistry,
@@ -251,6 +252,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            standing: Standing::Own(None),
         }
         .run(&plan, &cancel)
         .await;
@@ -289,12 +291,22 @@ fn the_catalog_is_listable_and_carries_no_step_of_any_runbook() {
 
     let catalog = skills::catalog(&app.library, Some(&app.workspace));
     let names: Vec<&str> = catalog.iter().map(|skill| skill.name.as_str()).collect();
-    assert_eq!(names, vec!["inbox.triage", skills::REVIEW_SKILL]);
+    assert_eq!(
+        names,
+        vec![skills::COS_SKILL, "inbox.triage", skills::REVIEW_SKILL]
+    );
 
     // Two scopes, and each found where `COS.md` says it lives: the standing
-    // rule in the user's library, the project's own procedure in the project.
+    // rules in the user's library, the project's own procedure in the project.
     let scopes: Vec<SkillScope> = catalog.iter().map(|skill| skill.scope).collect();
-    assert_eq!(scopes, vec![SkillScope::Workspace, SkillScope::Library]);
+    assert_eq!(
+        scopes,
+        vec![
+            SkillScope::Library,
+            SkillScope::Workspace,
+            SkillScope::Library
+        ]
+    );
     assert!(catalog.iter().all(aegis_lib::Skill::runnable));
 
     let system = app.next_system_message(&session_id, &triager);

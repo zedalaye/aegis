@@ -28,20 +28,25 @@
 //! Every tool the MVP names is here: `fs_list`, `fs_read`, `fs_write`,
 //! `shell_exec` and, since Phase 9, `screen_capture`; since Phase 13,
 //! `skill_run` and `skill_return` beside them; since Phase 14, `memory_write`
-//! and `memory_search`. The registry and the decision table are the same list,
+//! and `memory_search`; since Phase 15, `handoff_delegate` and
+//! `handoff_return`. The registry and the decision table are the same list,
 //! which is what makes "a tool nothing gates" a thing this code cannot express
-//! — and it is why the skill and memory tools are entries here rather than
-//! channels of their own. A skill is not a tool and a memory is not a tool,
-//! but *asking for a runbook* and *remembering something* are verbs like any
-//! other, and putting either anywhere else would mean a second dispatch path
-//! with a second place to remember the audit line.
+//! — and it is why the skill, memory and handoff tools are entries here rather
+//! than channels of their own. A skill is not a tool, a memory is not a tool
+//! and a delegation is not a tool, but *asking for a runbook*, *remembering
+//! something* and *handing work to someone* are verbs like any other, and
+//! putting any of them anywhere else would mean a second dispatch path with a
+//! second place to remember the audit line.
 //!
 //! Not everything registered here reaches outside this process. `skill_run`
-//! reads a runbook, `skill_return` validates a report, `memory_search` scans a
-//! small document, and `memory_write` appends to one. Only the last of those
-//! four asks the user, and the reason is not where it reaches but what it
-//! changes: a memory is in the system message of every later turn, which makes
-//! it durable and invisible at the time, which is what the gate is for.
+//! reads a runbook, `skill_return` and `handoff_return` validate a report,
+//! `memory_search` scans a small document, and `memory_write` appends to one.
+//! Two of those six ask the user, and in neither case is the reason where the
+//! call reaches. A memory is in the system message of every later turn, which
+//! makes it durable and invisible at the time. A delegation starts other
+//! identities working, which is the one decision `COS.md` reserves for the
+//! human — who does what — even though every step any of them then takes comes
+//! back through this same table.
 //!
 //! [`run`] is `async` because of the two tools that reach outside this process.
 //! The filesystem tools are short, local and synchronous, and are called
@@ -53,6 +58,7 @@
 //! a blocking thread rather than parking a runtime worker on it.
 
 pub mod fs;
+pub mod handoff;
 pub mod memory;
 pub mod screenshot;
 pub mod shell;
@@ -72,6 +78,7 @@ use crate::error::ErrorCode;
 use crate::policy::{tool, ResolvedCall};
 use crate::skills::SkillCtx;
 use crate::store::memories::MemoryStore;
+use handoff::HandoffCtx;
 
 /// Most bytes `fs_read` will return in one envelope (PLAN 4.3).
 pub const READ_MAX_BYTES: u64 = 256 * 1024;
@@ -308,6 +315,12 @@ pub(crate) struct Produced {
     /// event of a run that is not on the record. Every later call in the span
     /// gets the name from the context instead.
     skill: Option<String>,
+    /// The delegation this call opened, when it is the call that opened one.
+    ///
+    /// Only `handoff_delegate` sets it, and for the reason `skill` is set by
+    /// `skill_run`: nothing was open when the call was made, so the id would
+    /// otherwise be missing from the one line of a delegation that starts it.
+    handoff: Option<String>,
 }
 
 impl Produced {
@@ -329,6 +342,7 @@ impl Produced {
             outcome: None,
             artifact: None,
             skill: None,
+            handoff: None,
         }
     }
 
@@ -343,6 +357,7 @@ impl Produced {
             outcome: None,
             artifact: None,
             skill: None,
+            handoff: None,
         }
     }
 
@@ -370,6 +385,12 @@ impl Produced {
     /// Names the skill run this call opened.
     pub(crate) fn in_skill(mut self, name: &str) -> Self {
         self.skill = Some(name.to_owned());
+        self
+    }
+
+    /// Names the delegation this call opened.
+    pub(crate) fn in_handoff(mut self, id: &str) -> Self {
+        self.handoff = Some(id.to_owned());
         self
     }
 }
@@ -465,10 +486,12 @@ pub fn registry() -> &'static [ToolSpec] {
         ToolSpec {
             name: tool::SKILL_RETURN,
             description: "Close the skill you loaded and record what came of it. `status` is \
-                          `done`, `blocked` or `needs_you`; `summary` is five lines at most; \
-                          `artefacts` are paths inside the workspace, and they are checked — a \
-                          `done` naming a file that is not on disk is refused. A `blocked` or a \
-                          `needs_you` needs at least one `open_questions` entry.",
+                          `done`, `blocked` or `needs_you`; `summary` is five lines at most. A \
+                          `done` has to point at something checkable: a path in `artefacts`, or \
+                          what you read or ran, in `evidence`. Artefact paths are verified, so a \
+                          `done` naming a file that is not on disk is refused — and so is one \
+                          pointing at nothing at all. A `blocked` or a `needs_you` needs at \
+                          least one `open_questions` entry.",
             parameters: skill::return_schema,
         },
         ToolSpec {
@@ -487,6 +510,29 @@ pub fn registry() -> &'static [ToolSpec] {
                           carry the most recent memories, so use this for older ones, or to \
                           check whether something is already known before remembering it again.",
             parameters: memory::search_schema,
+        },
+        ToolSpec {
+            name: tool::HANDOFF_DELEGATE,
+            description: "Hand briefs to other identities and wait for what they return. Each \
+                          brief runs at the same time, as its owner, in a session of its own, \
+                          with its own tools and its own memory — none of yours. Inputs are \
+                          paths and links, never pasted text: write the document first and name \
+                          it. What comes back is a board of statuses and artefact paths, not \
+                          their conversations, and an owner that does not answer twice comes \
+                          back as `needs_you` for the human.",
+            parameters: handoff::delegate_schema,
+        },
+        ToolSpec {
+            name: tool::HANDOFF_RETURN,
+            description: "Close the brief you were given and report what came of it. Only a \
+                          delegated run has one to close. `status` is `done`, `blocked` or \
+                          `needs_you`; `summary` is five lines at most. A `done` has to point at \
+                          something checkable: a path in `artefacts`, or — when the brief asked \
+                          only for a status — what you read or ran, in `evidence`. Artefact \
+                          paths are verified, so a `done` naming a file that is not on disk is \
+                          refused, and so is one pointing at nothing at all. A `blocked` or a \
+                          `needs_you` needs at least one `open_questions` entry.",
+            parameters: handoff::report_schema,
         },
     ]
 }
@@ -594,6 +640,17 @@ pub struct ToolCtx<'a> {
     /// tool takes an identity as an argument, so an identity reading or
     /// writing another's memories is not a call that can be made.
     pub memories: &'a MemoryStore,
+    /// Who can carry a brief, and which brief this turn is answering
+    /// (PLAN 7.3, Phase 15).
+    ///
+    /// Held here for the reason the skill library is: whether this session may
+    /// route work, and whether it is itself routed work, are facts about the
+    /// application and the turn rather than about what the model asked for.
+    /// `open` is also what puts the delegation's id on *every* audit line a
+    /// specialist writes — not only the two the handoff tools make — which is
+    /// what makes one run replayable across the CoS and everyone under it
+    /// (PLAN 7.2, row 10).
+    pub handoffs: HandoffCtx<'a>,
 }
 
 // Written out rather than derived: `&dyn ProgressSink` has no `Debug`, and
@@ -608,6 +665,7 @@ impl fmt::Debug for ToolCtx<'_> {
             .field("call_id", &self.call_id)
             .field("captures", &self.captures)
             .field("skill", &self.skills.active)
+            .field("handoff", &self.handoffs.id())
             .field("cancelled", &self.cancel.is_cancelled())
             .finish_non_exhaustive()
     }
@@ -684,6 +742,14 @@ pub async fn run(
             memory::write(ctx.memories, ctx.agent_id, *kind, text, source.as_deref())
         }
         ResolvedCall::MemorySearch { query } => memory::search(ctx.memories, ctx.agent_id, query),
+        // The one call in this table that waits on other agents. It is awaited
+        // here rather than spawned and forgotten, because the model asked a
+        // question and a tool that answered before the answer existed would be
+        // lying to it. The wait is bounded by the bus, not by this line.
+        ResolvedCall::HandoffDelegate { plan } => {
+            handoff::delegate(plan, ctx.handoffs, ctx.cancel).await
+        }
+        ResolvedCall::HandoffReturn { report } => handoff::ret(report, ctx.handoffs),
     };
 
     // `as` saturates at `u64::MAX` here, which is 584 million years: the cast
@@ -705,6 +771,14 @@ pub async fn run(
             .as_deref()
             .or(ctx.skills.active)
             .unwrap_or(""),
+        // The same reading, for the same reason: `handoff_delegate` opens a
+        // delegation, so nothing was open when its own line was written, while
+        // every call a specialist makes is inside one and takes the id from
+        // its context.
+        handoff: produced
+            .handoff
+            .as_deref()
+            .unwrap_or_else(|| ctx.handoffs.id()),
         decision,
         policy_reason: reason,
         args: ctx.args,
@@ -759,8 +833,10 @@ pub fn refuse(
         call_id: ctx.call_id,
         tool: tool_name,
         // A refusal inside a run belongs to that run: "what did this skill try
-        // and get told no about" is exactly what a replay has to answer.
+        // and get told no about" is exactly what a replay has to answer. The
+        // same holds for a brief.
         skill: ctx.skills.active.unwrap_or(""),
+        handoff: ctx.handoffs.id(),
         decision,
         policy_reason: reason,
         args: ctx.args,
@@ -805,6 +881,8 @@ mod tests {
             tool::SKILL_RETURN,
             tool::MEMORY_WRITE,
             tool::MEMORY_SEARCH,
+            tool::HANDOFF_DELEGATE,
+            tool::HANDOFF_RETURN,
         ];
 
         for spec in registry() {

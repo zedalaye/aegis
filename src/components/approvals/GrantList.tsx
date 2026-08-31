@@ -41,6 +41,8 @@ function scopeLabel(grant: Grant): string {
       return "Capture the primary display";
     case "memory_write":
       return "Remember things as this identity";
+    case "handoff_delegate":
+      return "Hand briefs to other identities";
   }
 }
 

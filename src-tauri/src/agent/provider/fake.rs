@@ -17,7 +17,7 @@
 //!   per turn, consumed in order. This is how a test drives a tool call, a
 //!   truncated arguments string or a provider error through the loop.
 //!
-//! The improvised mode has five deliberate exceptions to "never touch the
+//! The improvised mode has six deliberate exceptions to "never touch the
 //! machine", and they are what make the approval gate — and, from Phase 13,
 //! the skill runner — usable before there is a model: a message containing
 //! [`WRITE_TRIGGER`] makes it ask for an `fs_write` (PLAN 6, Phase 6 — "the
@@ -25,11 +25,19 @@
 //! [`RUN_TRIGGER`] makes it ask for a `shell_exec` (Phase 7), one containing
 //! [`CAPTURE_TRIGGER`] makes it ask for a `screen_capture` (Phase 9), and one
 //! containing [`SKILL_TRIGGER`] makes it load and close a skill run (Phase
-//! 13), and one containing [`REMEMBER_TRIGGER`] makes it ask to remember
-//! something (Phase 14). All five are words the user has to type, not
-//! heuristics over what they said: a fake model that decided on its own when
-//! to reach for the disk, for a process, for the screen or for its own memory
-//! would be exactly the behaviour the gate exists to catch.
+//! 13), one containing [`REMEMBER_TRIGGER`] makes it ask to remember something
+//! (Phase 14), and one containing [`DELEGATE_TRIGGER`] makes it hand two briefs
+//! to another identity and wait for the board (Phase 15). All six are words the
+//! user has to type, not heuristics over what they said: a fake model that
+//! decided on its own when to reach for the disk, for a process, for the
+//! screen, for its own memory or for somebody else's turn would be exactly the
+//! behaviour the gate exists to catch.
+//!
+//! There is one exception, and it is not a decision the provider makes: a
+//! request that offers `handoff_return` is a run a brief opened, and it is
+//! answered with that call. The only thing the identity that briefed it will
+//! ever see is the report, so a fake that replied with prose would be
+//! demonstrating a failure rather than the loop.
 //!
 //! Tokens are emitted with a small delay so streaming is visibly streaming and
 //! a cancel has something to interrupt. Tests use [`FakeProvider::instant`],
@@ -90,6 +98,18 @@ pub const SKILL_TRIGGER: &str = "/skill";
 /// Settings and at the top of the *next* reply this identity gives. Matched
 /// case-insensitively anywhere in the user's message.
 pub const REMEMBER_TRIGGER: &str = "/remember";
+
+/// The word that makes the improvising provider hand work to other identities.
+///
+/// Typing it is the Phase 15 walkthrough, and it is the only trigger that
+/// starts *other agents*: the dialog names the owners, two sessions open under
+/// those identities and run at the same time, and what comes back into this
+/// transcript is a board of statuses rather than either of their conversations.
+/// The word may be followed by an identity's name — `/delegate Scribe` — and
+/// with nothing after it the briefs go to the built-in assistant, which is the
+/// one identity that certainly exists. Matched case-insensitively anywhere in
+/// the user's message.
+pub const DELEGATE_TRIGGER: &str = "/delegate";
 
 /// What the triggered memory says.
 ///
@@ -221,6 +241,19 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
     // it can be re-entered without asking for the same thing again.
     if asked.contains(SKILL_TRIGGER) {
         return skill_turn(request);
+    }
+
+    // A run a brief opened answers with a `handoff_return` and nothing else,
+    // whatever was typed into it: the only thing the identity that briefed it
+    // will ever see is that call (PLAN 7.3, Phase 15).
+    if is_delegated(request) && !already_answered(request) {
+        return return_the_brief(request);
+    }
+
+    // Also before `already_answered`, and for the same reason as the skill
+    // trigger: its second round is the one where the board has come back.
+    if asked.contains(DELEGATE_TRIGGER) {
+        return delegate_turn(request, &said);
     }
 
     // The four things this provider will ask for, and only because the user
@@ -556,6 +589,194 @@ fn ask_to_return(name: &str) -> Vec<ModelEvent> {
     ]
 }
 
+/// A turn that hands two briefs out, waits, and reads the board back.
+///
+/// The Phase 15 walkthrough, and the one trigger that starts other agents: the
+/// dialog names the owners, two sessions open under those identities, each runs
+/// its own turn through the same gate, and what comes back here is a board of
+/// statuses rather than either of their conversations.
+///
+/// Two briefs rather than one, because the claim being demonstrated is that
+/// they run *at the same time* — one brief would prove a call, not a fan-out.
+/// Both go to the identity the user named after the trigger, or to the built-in
+/// one, since this provider cannot see the registry and inventing an owner
+/// would be a delegation that fails before it starts.
+fn delegate_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
+    let answers = answers_this_turn(request);
+
+    if let Some(board) = answers
+        .iter()
+        .find(|body| body.contains(r#""tool":"handoff_delegate""#))
+    {
+        return say(if board.contains(r#""ok":true"#) {
+            "Both briefs came back. What I was handed is a board — a status, an artefact list \
+             and any open questions per owner — and not one line of what either of them \
+             actually said to itself. Their sessions are in the sidebar if you want to read \
+             them; the point is that I did not have to. Each of them ran under its own \
+             identity's allow-list, so anything they wanted to write asked you, not me."
+        } else {
+            "The delegation did not go out. The refusal is on the tool card above and on the \
+             audit log; nothing was started, so there is nothing to stop."
+        });
+    }
+
+    let owner = owner_named(said);
+    let brief = |goal: &str, done: &str| {
+        serde_json::json!({
+            "goal": goal,
+            "owner": owner,
+            "priority": "normal",
+            "inputs": [],
+            "constraints": ["say what you are, and do not touch anything"],
+            "definition_of_done": done,
+            "approval_needed": "nothing: neither brief asks for a tool",
+            "return_format": "status",
+        })
+    };
+
+    let arguments = serde_json::json!({
+        "briefs": [
+            brief(
+                "Say, in one line, which identity you are running as",
+                "the return names the identity",
+            ),
+            brief(
+                "Say, in one line, what a brief gave you that a chat would not",
+                "the return answers the question",
+            ),
+        ],
+    })
+    .to_string();
+
+    vec![
+        ModelEvent::TextDelta {
+            text: format!(
+                "Handing two briefs to `{owner}`. They run at the same time, in sessions of \
+                 their own, and I will see what they return rather than what they said.\n"
+            ),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::HANDOFF_DELEGATE.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// The identity named after the trigger, or the built-in one.
+///
+/// `/delegate Scribe` hands the briefs to Scribe. With nothing after it they go
+/// to the assistant, which is the one identity that certainly exists.
+fn owner_named(said: &str) -> String {
+    // The lowered copy is both searched *and* sliced. Lowering can change a
+    // string's length — `İ` is one character and two lower-case ones — so an
+    // index found in the copy is not necessarily a character boundary in the
+    // original, and slicing the original with it would panic on a message that
+    // happens to contain one. What comes back is lower case, which costs
+    // nothing: the runner matches an owner's name case-insensitively.
+    let lower = said.to_lowercase();
+    let Some(at) = lower.find(DELEGATE_TRIGGER) else {
+        return crate::store::Agent::builtin().name;
+    };
+
+    match lower[at + DELEGATE_TRIGGER.len()..]
+        .split_whitespace()
+        .next()
+    {
+        Some(name) => name.to_owned(),
+        None => crate::store::Agent::builtin().name,
+    }
+}
+
+/// The answer a delegated run gives: a `handoff_return`, and nothing else.
+///
+/// A specialist that ended its turn with prose would have said nothing anybody
+/// is listening for — which is exactly the failure the bus turns into a second
+/// attempt and then an escalation, so this provider does the thing a real model
+/// is supposed to do rather than demonstrating the failure.
+fn return_the_brief(request: &ModelRequest) -> Vec<ModelEvent> {
+    let goal = last_user_text(request)
+        .lines()
+        .find_map(|line| line.strip_prefix("goal: ").map(str::to_owned))
+        .unwrap_or_else(|| "the brief".to_owned());
+
+    let identity = request
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            WireMessage::System { content } => content
+                .lines()
+                .find_map(|line| line.strip_prefix("You are working as `"))
+                .and_then(|line| line.split('`').next())
+                .map(str::to_owned),
+            _ => None,
+        })
+        .unwrap_or_else(|| crate::store::Agent::builtin().name);
+
+    let arguments = serde_json::json!({
+        "status": "blocked",
+        "summary": format!(
+            "Read the brief as `{identity}`. There is no model behind this provider, so \
+             \u{201c}{goal}\u{201d} was not carried out."
+        ),
+        "evidence": ["the brief arrived as this run's first message"],
+        "open_questions": [
+            "Name a base URL and a model in Settings, and a real one will answer this brief."
+        ],
+        "next_owner": "human",
+    })
+    .to_string();
+
+    vec![
+        ModelEvent::TextDelta {
+            text: "Returning `blocked`: I read the brief and did not do it. A `done` would be \
+                   refused anyway — the runner checks the artefacts a return claims.\n"
+                .to_owned(),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::HANDOFF_RETURN.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// Whether this request is a delegated run's.
+///
+/// Read off the tools rather than off the text, because there it is a fact
+/// rather than a guess about a message. `Turn::held` offers `handoff_return`
+/// to a run a brief opened and takes `handoff_delegate` away from it, and does
+/// the mirror of that everywhere else — so the two are never on one list, and
+/// "return without delegate" is the state itself.
+///
+/// Both halves are checked rather than only the first, so a caller that hands
+/// this provider the whole registry (which no turn does) reads as the ordinary
+/// session it is rather than as a run with a brief behind it.
+fn is_delegated(request: &ModelRequest) -> bool {
+    offers(request, crate::policy::tool::HANDOFF_RETURN)
+        && !offers(request, crate::policy::tool::HANDOFF_DELEGATE)
+}
+
+/// Whether one tool is on the request's list.
+fn offers(request: &ModelRequest, name: &str) -> bool {
+    request.tools.iter().any(|tool| {
+        tool.get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(serde_json::Value::as_str)
+            == Some(name)
+    })
+}
+
 /// A plain streamed reply, with no tool call in it.
 fn say(text: &str) -> Vec<ModelEvent> {
     let mut events: Vec<ModelEvent> = tokens(text)
@@ -735,6 +956,22 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The owner named after the trigger, and the built-in identity without
+    /// one. Lowering a message can change its length, so the index the trigger
+    /// is found at is only ever used on the string it was found in.
+    #[test]
+    fn the_delegate_trigger_names_an_owner_without_ever_slicing_mid_character() {
+        let builtin = crate::store::Agent::builtin().name;
+
+        assert_eq!(owner_named("/delegate Scribe please"), "scribe");
+        assert_eq!(owner_named("please /DELEGATE Reader"), "reader");
+        assert_eq!(owner_named("/delegate"), builtin);
+        assert_eq!(owner_named("nothing here"), builtin);
+        // `İ` lowers to two characters, so an index into the lowered copy is
+        // past the end of the original by the time the trigger is reached.
+        assert_eq!(owner_named("İİİ /delegate Scribe"), "scribe");
     }
 
     fn request_saying(text: &str) -> ModelRequest {

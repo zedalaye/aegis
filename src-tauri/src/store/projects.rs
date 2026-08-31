@@ -469,6 +469,7 @@ mod tests {
                 updated_at: "2026-08-28T09:41:07.412Z".to_owned(),
                 message_count: 3,
                 state: SessionState::AwaitingApproval,
+                delegated: None,
             }],
         };
 
@@ -515,6 +516,7 @@ mod tests {
                 "updated_at",
                 "message_count",
                 "state",
+                "delegated",
             ])
         );
 

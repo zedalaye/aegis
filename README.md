@@ -204,7 +204,13 @@ No provider and no key needed — the scripted provider is enough to exercise th
     the top of every later reply. Allow it, send anything else, and the reply now opens with what
     it knows. *Settings → Memory* is where you correct or forget it; there is no tool that can.
     See [Memory](#memory).
-11. **Fold a long session.** Press **Compact** in the session header. Once a conversation has
+11. **Hand work to someone else.** Make a second identity — a **Scribe** with `fs_read` — and
+    give the one you are talking to `handoff_delegate`. Send `/delegate Scribe`. The prompt names
+    the owners and what each is being asked for; allow it, and two sessions open under Scribe and
+    run at the same time. What comes back into your transcript is a board of statuses, not their
+    conversations, and both of their sessions are in the sidebar with a `brief` badge if you want
+    to read them. See [Handoffs](#handoffs).
+12. **Fold a long session.** Press **Compact** in the session header. Once a conversation has
     more than a few turns, the older ones become a few lines of state — goal, files, decisions,
     blockers — marked in place with *What it kept* beside it. Your transcript is untouched; only
     what the model carries changes. See [Compaction](#compaction).
@@ -259,7 +265,7 @@ see *Troubleshooting*.
 
 ```sh
 cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol, turns,
-                               # skills, memory, compaction
+                               # skills, memory, compaction, handoffs
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 pnpm typecheck                 # TypeScript, strict
 ```
@@ -322,8 +328,8 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts `never-send-without-review` there on a first run and never touches
-the folder again — delete it and it stays deleted, because a library is yours. A workspace's own
+`SKILL.md` in it. Aegis puts `never-send-without-review` and `cos.loop` there on a first run and
+never touches the folder again — delete it and it stays deleted, because a library is yours. A workspace's own
 runbooks live in that workspace instead, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -496,10 +502,10 @@ fix it — and it is never offered to a model.
 | **Per identity** | the identity's allow-list | which of the above that identity may run |
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
-happening. Aegis seeds the library with `never-send-without-review` on a first run, and each
-workspace with `inbox.triage` when you press *Set up shared files* — both are examples of the
-format in the place you would look for one, and both are ordinary files you can rewrite or
-delete.
+happening. Aegis seeds the library with `never-send-without-review` and `cos.loop` on a first
+run, and each workspace with `inbox.triage` when you press *Set up shared files* — all three are
+examples of the format in the place you would look for one, and all three are ordinary files you
+can rewrite or delete. `cos.loop` is the Chief-of-Staff loop; see [Handoffs](#handoffs).
 
 ### Catalog in, body on demand
 
@@ -657,6 +663,123 @@ makes it true.
 
 ---
 
+## Handoffs
+
+One identity can hand work to others and wait for what they return. That is the whole of the
+Chef-de-Cabinet mode: **a Chief of Staff routes, specialists do the work, and the human decides
+anything irreversible** — three roles, and a specialist that started routing would be a second
+Chief of Staff.
+
+What travels between them is a fixed object, not a conversation.
+
+```
+goal:                 Draft the release note for 0.4
+owner:                Scribe
+priority:             normal
+inputs:
+  - artefacts/changelog.md
+constraints:
+  - no marketing language
+definition_of_done:   artefacts/release-0.4.md exists and names every user-visible change
+approval_needed:      the write
+return_format:        artefact
+```
+
+and every return has the same six fields, whatever it was asked to do:
+
+```
+status: done | blocked | needs_you
+summary:              five lines at most
+artefacts:            paths
+evidence:             a test, a diff, a capture
+open_questions:
+next_owner:
+```
+
+### Inputs are paths, never paste
+
+The one rule with teeth. An entry in `inputs` that spans several lines is **refused**, with a
+message saying to write the text to a file and name the path instead. Pasted prose in a brief is
+how one agent's context ends up inside another's, and then inside the next one's — which is the
+failure the whole shape exists to prevent.
+
+### What actually happens
+
+Each brief opens **a session of its own**, bound to the identity it names, and they run at the
+same time. Those sessions are in your sidebar with a `brief` badge; you can open one and read
+exactly what it did, because it is an ordinary transcript.
+
+A specialist works under **its own** allow-list, not the Chief of Staff's, and its session holds
+none of the Chief of Staff's session grants. If it wants to write a file, it asks you — in its
+own session, so the sidebar row shows *waiting on you* and you click the row to answer. It
+cannot delegate: the tool is not on its list, and it is refused if it asks anyway.
+
+When the workspace has the shared files set up, each brief is also written into `briefs/`, so
+what was handed out is on disk and in git rather than only in a transcript.
+
+### What comes back
+
+A board. Not a transcript, and not a concatenation of them:
+
+```
+2 briefs: 1 done, 1 blocked; review done
+
+--- brief 1 — Draft the release note for 0.4 (Scribe)
+brief: briefs/3f2a91b8-draft-the-release-note.md
+status: done
+summary:
+  Wrote the note from the changelog; 9 user-visible changes.
+artefacts:
+  - artefacts/release-0.4.md
+evidence: —
+open_questions: —
+next_owner: —
+…
+```
+
+There is no code path from a specialist's messages to the Chief of Staff's context. That is
+structural rather than careful: the only thing a delegated run can produce is a return, and a
+return has no field wide enough to hold a conversation.
+
+### When nobody answers
+
+Every attempt is bounded — five minutes, then it is cancelled the way pressing **Stop** cancels
+it. A run that ends without returning gets **one** more attempt, in the same session so nothing
+it already did is thrown away, and is told that this is the last one. After that the board says
+`needs_you` and names the human. Two failures, not twelve creative retries.
+
+An escalation is not an error. The other briefs still ran, and their statuses are on the same
+board; a Chief of Staff's job is to route what worked and put the rest on the attention list.
+
+### The loop is a skill, not a personality
+
+`cos.loop` ships in the skill library beside `never-send-without-review`: read the board, update
+the attention list, route what is new, retry what is blocked once, ping only when something is
+irreversible, ambiguous or on a deadline, write the status, stop. It is a `SKILL.md` in a folder
+you own — read it, change it, delete it. It is not baked into any prompt, and no identity runs it
+until you grant it one.
+
+### Setting it up
+
+1. *Settings → Identities*: make a **Chief** with `fs_read`, `fs_write` and `handoff_delegate`,
+   and grant it the `cos.loop` skill. Make one or two narrow specialists — a **Scribe** with
+   `fs_read` and `fs_write`, say.
+2. *Set up shared files* in the sidebar, so there is a board to read and a `briefs/` to file in.
+3. Open a session as the Chief and ask for something that needs both of them.
+
+With the scripted provider, `/delegate Scribe` hands two briefs to `Scribe` and shows the whole
+path without a model: the approval dialog naming the owners, two sessions opening, and a board
+coming back. See [the walkthrough](#walk-through-it-in-two-minutes).
+
+### One run id over all of it
+
+Every audit line a specialist writes carries the delegation the brief came from, beside the
+identity that made the call — so "who ran, under whose brief, and why did it fail" is answerable
+from `audit.jsonl` without opening a chat. It is under **Delegation** in the audit drawer's
+detail.
+
+---
+
 ## Layout
 
 ```
@@ -672,9 +795,13 @@ src-tauri/
                event payloads, turn registry
     store/     projects.json, sessions.json, agents.json, memories.json and
                settings.json, behind one atomic write
-    tools/     fs, shell, screenshot, skill, memory — behind one ToolSpec registry
+    tools/     fs, shell, screenshot, skill, memory, handoff — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
-    skills/    the runbook format, the catalog, and the handoff result a run returns
+    skills/    the runbook format and the catalog: a line per skill in context, the body
+               only when one is run
+    handoff/   the brief that goes out and the report that comes back, the bus that
+               carries them (parallel, bounded, two attempts, then the human), and the
+               runner that turns a brief into an ordinary session and turn
     workspace.rs  the shared-file convention inside a project folder: scaffold, and the
                capped digest every request carries
     compact.rs the older half of a transcript, derived into state — no summarizer,
@@ -726,6 +853,16 @@ Read this before pointing Aegis at anything you care about.
   way you would treat a script you are about to run: a `SKILL.md` somebody sent you is
   instructions your model will follow, and what it can reach while following them is whatever you
   ticked.
+- **Handing work out is one approval, and it is not a blanket one.** `handoff_delegate` prompts
+  because it is the only call that makes *other identities run* — more requests to your provider,
+  under other allow-lists, for as long as the deadline allows. The dialog names every owner and
+  what each is being asked for. What the approval covers is the routing and nothing else: each
+  specialist runs in a session of its own, holding **none** of this session's grants, so
+  everything it wants to write, run or capture prompts you again there. A specialist cannot
+  delegate in turn — the tool is not on its list, and it is refused if it asks anyway — so a
+  delegation is one level deep and its cost is bounded by the number of briefs you saw. Note that
+  a specialist's prompt appears in *its* session: the sidebar row says *waiting on you*, and an
+  approval nobody answers within five minutes is refused like any other.
 - **There is no sandbox.** Approved tools run as you, with your privileges and environment. The
   real boundary is that you read the exact path, program, arguments and working directory before
   approving. Treat every approval as if you were typing the command yourself.

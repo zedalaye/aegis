@@ -908,6 +908,53 @@ routes, pings only on irreversible / ambiguous / deadline, writes status, stops.
 brief fans out to two specialists in parallel and the CoS returns a five-line status, not a
 concatenated transcript.
 
+*Landed as:* both halves of the object in one module, `handoff/`, because they are one
+contract — a brief's `return_format` is a promise about the report, and a report's
+`next_owner` is the start of the next brief. `Brief { goal, owner, priority, inputs[],
+constraints[], definition_of_done, approval_needed, return_format }` joins the `Report` Phase 13
+already validated against. `check_brief` enforces one rule with real value and the rest are
+caps: **inputs are paths and links, never paste** — an entry with a line break in it is refused,
+because pasted prose in `inputs` is how a CoS's context ends up inside a specialist's and then
+inside the next one's.
+
+Two tools, `handoff_delegate` and `handoff_return`, registered and dispatched like every other
+so a delegation is gated, audited and cancelled by machinery that already exists. Delegating
+**asks**, with a session grant: it is the only call in the matrix that causes *other agents to
+run*, and what the dialog is for is the decision `COS.md` gives the human — who works on what.
+The grant covers the routing and nothing else; every step a specialist then takes is judged by
+the same table under its own identity, in a session holding none of the CoS's grants.
+
+A delegated run is **an ordinary session**, bound to the owner's identity, driven by the
+ordinary `Turn`. No second agent loop, no worker pool, no privileged path — which is also what
+makes it visible: a specialist's run opens in the sidebar with a `brief` badge and an ordinary
+transcript, so "what did the reviewer actually do" is a click. `Delegated { handoff_id,
+from_session_id, brief }` on the session record says where it came from.
+
+The split that carries the phase is `bus` (policy) against `Runner` (machinery). Parallel — one
+task per brief, joined in the order they were written; bounded — `ATTEMPT_TIMEOUT`, cancelled
+through the turn's own token, so a timed-out specialist stops the way a stopped one does; two
+attempts, the second continuing the *same* session so nothing done in the first is thrown away;
+then a `needs_you` on the board naming the human. Escalation is a line, not an error: the CoS
+routes what worked whatever happened to the rest. Fan-in is a reviewer brief that runs after the
+others and is handed their **artefact paths** — never their sessions.
+
+Depth is one, enforced in `decide_call` rather than in the tool, because a dialog asking a
+person to approve a call that is going to be refused anyway is a dialog that teaches them to
+click through. `Standing::{Own, Delegated}` makes it structural: a delegated run is not offered
+`handoff_delegate`, and gains `handoff_return` — the only channel it has to answer — whether or
+not anyone granted it. An ordinary session loses `handoff_return` for the mirror reason.
+
+The audit line grows `handoff`, the field PLAN 7.1 said it had to be able to grow: one id over
+the CoS's call and every tool call every specialist makes under it, beside `agent_id`. That is
+half of Phase 17's replay, recorded now because it cannot be reconstructed later.
+
+The loop itself is **a skill, not prompt text**: `cos.loop` is seeded into the library beside
+`never-send-without-review`. Read the board, update attention, route, retry once, ping only on
+irreversible / ambiguous / deadline, write the status, stop — every step of it an ordinary tool
+call. A loop baked into the runtime would be the loop every identity ran on every turn, and one
+nobody could edit; as a runbook it costs a catalog line until someone runs it, and granting it
+is a separate act (§ 7.6 *Authoring*).
+
 **Phase 16 — Scheduler**
 Routines that fire a skill on a clock or a trigger. Budget per agent and per routine. Pause,
 rewind, "fire" a role, clone a role without cloning its rotten memory. Exit: a watch routine

@@ -5,9 +5,9 @@
  * has: *when*, *what tool*, *did it run*, and *how did it end*. A fifth sits
  * beside the tool when there is one — which skill the call was part of, since
  * that is what turns a column of verbs back into a procedure. Everything else
- * — the ids, the identity it ran as, the digest, the file a capture left
- * behind — is behind a disclosure, because a drawer that made every row six
- * lines tall would be a drawer nobody scrolls.
+ * — the ids, the identity it ran as, the delegation it belonged to, the digest,
+ * the file a capture left behind — is behind a disclosure, because a drawer
+ * that made every row six lines tall would be a drawer nobody scrolls.
  *
  * Two things this deliberately does not do.
  *
@@ -158,6 +158,16 @@ export default function AuditRow({
               <>
                 <dt>Identity</dt>
                 <dd className="facts__path">{entry.agent_id}</dd>
+              </>
+            )}
+            {/* The one id that spans several sessions: a delegation covers the
+                Chief of Staff's call and every specialist's turn under it, so
+                filtering the log by it is how a whole run is read back
+                (PLAN 7.2, row 10). */}
+            {entry.handoff === "" ? null : (
+              <>
+                <dt>Delegation</dt>
+                <dd className="facts__path">{entry.handoff}</dd>
               </>
             )}
             <dt>Turn</dt>

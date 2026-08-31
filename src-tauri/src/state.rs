@@ -594,8 +594,8 @@ mod tests {
 
     use tempfile::TempDir;
 
-    /// The library is there from startup with one runbook in it, so a fresh
-    /// install has an example of the format in the place people look for one.
+    /// The library is there from startup with the example runbooks in it, so a
+    /// fresh install has the format in the place people look for it.
     #[test]
     fn the_skill_library_is_seeded_on_a_first_run() {
         let dir = TempDir::new().expect("temp dir");
@@ -604,9 +604,14 @@ mod tests {
         assert_eq!(state.skills().parent(), Some(dir.path()));
 
         let catalog = state.skill_catalog(None);
-        assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog[0].name, crate::skills::REVIEW_SKILL);
-        assert!(catalog[0].runnable(), "{:?}", catalog[0].problem);
+        let names: Vec<&str> = catalog.iter().map(|skill| skill.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [crate::skills::COS_SKILL, crate::skills::REVIEW_SKILL]
+        );
+        for skill in &catalog {
+            assert!(skill.runnable(), "{}: {:?}", skill.name, skill.problem);
+        }
 
         // And no identity is offered it until someone grants it: the built-in
         // one is the assistant from before skills existed.
@@ -676,6 +681,7 @@ mod tests {
             call_id: "c1",
             tool: "fs_list",
             skill: "",
+            handoff: "",
             decision: crate::audit::AuditDecision::Auto,
             policy_reason: "a read-only listing inside the workspace",
             args: &serde_json::json!({ "path": "." }),
@@ -753,6 +759,7 @@ mod tests {
             call_id: "c1",
             tool: "fs_write",
             skill: "",
+            handoff: "",
             decision: crate::audit::AuditDecision::AllowOnce,
             policy_reason: "this creates a file in the workspace",
             args: &serde_json::json!({ "path": "a.txt", "content": "x" }),

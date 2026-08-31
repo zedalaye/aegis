@@ -19,7 +19,8 @@
 //! summarized: every line below comes from something that actually happened —
 //! the first thing the user asked for, the paths `fs_write` actually wrote, the
 //! programs `shell_exec` actually ran, the status a `skill_return` actually
-//! reported, the questions it left open. A summarizer would cost a request,
+//! reported, who a `handoff_delegate` actually handed work to and how the board
+//! came back, the questions it left open. A summarizer would cost a request,
 //! could hallucinate a file that was never written, and would produce a
 //! different summary every time it ran over the same transcript. This produces
 //! the same state for the same messages, always, in microseconds, and every
@@ -222,6 +223,12 @@ struct Facts {
     ran: Vec<String>,
     /// Skill runs, and how each ended when it ended.
     skills: Vec<(String, Option<String>)>,
+    /// Work handed to other identities, and how the board came back.
+    ///
+    /// The one fact a Chief of Staff's session cannot afford to fold away: a
+    /// CoS transcript is exactly the kind that grows long, and "who is working
+    /// on what, and what came of it" is the whole of what it holds.
+    handed: Vec<String>,
     /// Questions a run left open.
     blockers: Vec<String>,
     /// Tools whose calls were refused, and how many times.
@@ -267,6 +274,12 @@ fn state(folded: &[Message]) -> String {
             })
             .collect();
         out.push_str(&format!("\nSkill runs: {}", runs.join(" · ")));
+    }
+    if !facts.handed.is_empty() {
+        out.push_str("\nHanded out:");
+        for handed in &facts.handed {
+            out.push_str(&format!("\n- {handed}"));
+        }
     }
     if !facts.blockers.is_empty() {
         out.push_str("\nOpen blockers:");
@@ -372,7 +385,43 @@ fn record(facts: &mut Facts, call: &ToolCallRecord) {
                 }
             }
         }
-        tool::SKILL_RETURN => {
+        // Who got what, and how the board came back. The owners and goals are
+        // the call's own arguments; the outcome is the one-line summary the
+        // runtime already put on the record, which is the board's headline.
+        // Read from there rather than re-derived, so the fold says exactly what
+        // the transcript says.
+        tool::HANDOFF_DELEGATE => {
+            let briefs = args.get("briefs").and_then(Value::as_array);
+            let who: Vec<String> = briefs
+                .map(|briefs| {
+                    briefs
+                        .iter()
+                        .filter_map(|brief| {
+                            let owner = brief.get("owner").and_then(Value::as_str)?;
+                            let goal = brief.get("goal").and_then(Value::as_str)?;
+                            Some(format!("{owner}: {}", one_line(goal, ASKED_MAX_CHARS)))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if !who.is_empty() && facts.handed.len() < LIST_MAX {
+                let line = match &call.summary {
+                    Some(summary) => format!(
+                        "{} — {}",
+                        who.join(" · "),
+                        one_line(summary, ASKED_MAX_CHARS)
+                    ),
+                    None => who.join(" · "),
+                };
+                facts.handed.push(line);
+            }
+        }
+        // Both returns are the same object, so both leave their questions in
+        // the same place. This arm is reached in a *delegated* session's own
+        // transcript — the one the specialist works in — which folds like any
+        // other when it runs long.
+        tool::SKILL_RETURN | tool::HANDOFF_RETURN => {
             let status = args
                 .get("status")
                 .and_then(Value::as_str)
@@ -607,6 +656,50 @@ mod tests {
         let state = plan(&messages, true).expect("something to fold").state;
         assert!(state.contains("inbox.triage — blocked"), "{state}");
         assert!(state.contains("- which mailbox"), "{state}");
+    }
+
+    /// What a Chief of Staff's session must not fold away: who is working on
+    /// what, and how the board came back. The outcome is read off the record
+    /// the runtime already wrote, so the state says what the transcript says.
+    #[test]
+    fn a_delegation_keeps_its_owners_and_what_the_board_said() {
+        let mut messages = conversation(6);
+        let mut handed = call(
+            tool::HANDOFF_DELEGATE,
+            r#"{"briefs":[{"goal":"Draft the release note","owner":"Scribe"},
+                          {"goal":"Check the changelog","owner":"Reader"}]}"#,
+            ToolCallStatus::Ok,
+        );
+        handed.summary = Some("2 briefs: 1 done, 1 blocked".to_owned());
+        messages.insert(1, Message::assistant("", vec![handed]));
+
+        let state = plan(&messages, true).expect("something to fold").state;
+
+        assert!(state.contains("Handed out:"), "{state}");
+        assert!(state.contains("Scribe: Draft the release note"), "{state}");
+        assert!(state.contains("Reader: Check the changelog"), "{state}");
+        assert!(state.contains("1 done, 1 blocked"), "{state}");
+    }
+
+    /// A brief a specialist could not finish leaves its question behind, in
+    /// that specialist's own session — which folds like any other.
+    #[test]
+    fn a_returned_brief_leaves_its_question_behind() {
+        let mut messages = conversation(6);
+        messages.insert(
+            1,
+            Message::assistant(
+                "",
+                vec![call(
+                    tool::HANDOFF_RETURN,
+                    r#"{"status":"blocked","summary":"no source","open_questions":["which changelog"]}"#,
+                    ToolCallStatus::Ok,
+                )],
+            ),
+        );
+
+        let state = plan(&messages, true).expect("something to fold").state;
+        assert!(state.contains("- which changelog"), "{state}");
     }
 
     /// A `done` run has nothing open, so it contributes no blocker.

@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, Grant, GrantStore, PolicyCtx, Risk};
 use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome};
+use aegis_lib::HandoffCtx;
 use aegis_lib::{MemoryStore, SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -103,6 +104,10 @@ impl Fixture {
             },
             // Nothing here remembers anything either.
             memories: &self.memories,
+            handoffs: HandoffCtx {
+                bus: None,
+                open: None,
+            },
         };
 
         match self.judge(args.clone()) {
@@ -149,6 +154,10 @@ impl Fixture {
             },
             // Nothing here remembers anything either.
             memories: &self.memories,
+            handoffs: HandoffCtx {
+                bus: None,
+                open: None,
+            },
         };
 
         tools::refuse(

@@ -19,6 +19,7 @@ use tempfile::TempDir;
 
 use aegis_lib::agent::event::EventSink;
 use aegis_lib::agent::turn::{self, TurnPlan};
+use aegis_lib::Standing;
 use aegis_lib::{
     Agent, ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore, MemoryStore, Message, Role,
     SessionState, SessionStore, StopReason, Turn, TurnRegistry, DEFAULT_AGENT_ID,
@@ -144,6 +145,7 @@ impl App {
             captures: &self.data.join("captures"),
             skills: &self.data.join("skills"),
             memories: &self.memories,
+            standing: Standing::Own(None),
         }
         .run(&plan, &cancel)
         .await;

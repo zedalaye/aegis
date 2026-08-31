@@ -61,6 +61,16 @@ pub enum Grant {
     /// memory has no path and no program, only a sentence, and a grant keyed on
     /// the sentence would be a grant that never matched twice.
     MemoryWrite,
+    /// Hand briefs to other identities for the rest of the session.
+    ///
+    /// Not scoped to an owner or a goal, for the reason [`Grant::MemoryWrite`]
+    /// is not scoped to a sentence: what a user approves here is *this session
+    /// may route work*, and a grant keyed on the goal would be one that never
+    /// matched twice. It stays narrow anyway, because it covers only the
+    /// routing — every tool call the specialists then make is judged by this
+    /// same table, under their own identities and with none of this session's
+    /// grants (they run in sessions of their own).
+    HandoffDelegate,
 }
 
 impl Grant {
@@ -88,6 +98,7 @@ impl Grant {
             Self::Shell { .. } => "shell_exec",
             Self::ScreenCapture => "screen_capture",
             Self::MemoryWrite => "memory_write",
+            Self::HandoffDelegate => "handoff_delegate",
         }
     }
 
@@ -118,6 +129,10 @@ impl Grant {
             Self::MemoryWrite => {
                 "remember things as this identity, for the rest of this session — you can read \
                  and correct them in Settings"
+                    .to_owned()
+            }
+            Self::HandoffDelegate => {
+                "hand briefs to other identities, for the rest of this session — what each of                  them then does is still approved call by call"
                     .to_owned()
             }
         }

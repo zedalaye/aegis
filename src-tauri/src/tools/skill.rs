@@ -37,8 +37,9 @@
 use serde_json::{json, Value};
 
 use crate::error::ErrorCode;
+use crate::handoff;
 use crate::policy::tool;
-use crate::skills::{self, handoff, SkillCtx, META_SKILL};
+use crate::skills::{self, SkillCtx, META_SKILL};
 
 use super::Produced;
 
@@ -58,46 +59,13 @@ pub fn run_schema() -> Value {
 }
 
 /// JSON Schema for `skill_return` arguments (`COS.md` *Handoff*).
+///
+/// The handoff module's, not a copy of it. A skill run and a delegated run
+/// close with the same object, so two schemas would be two places for the same
+/// six fields to drift apart — and the model would be told slightly different
+/// things about the same rule depending on which one it was closing.
 pub fn return_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "string",
-                "enum": ["done", "blocked", "needs_you"],
-                "description": "done when the definition of done is met; blocked when a source \
-                                or a step was not available; needs_you when it turns on a \
-                                decision only the human can make.",
-            },
-            "summary": {
-                "type": "string",
-                "description": "What happened, five lines at most.",
-            },
-            "artefacts": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "Paths inside the workspace that this run produced. They are \
-                                checked: a `done` naming a file that is not there is refused.",
-            },
-            "evidence": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "What backs the claim — a test that passed, a diff, a capture.",
-            },
-            "open_questions": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "What the next owner has to answer. Required for blocked and \
-                                needs_you.",
-            },
-            "next_owner": {
-                "type": "string",
-                "description": "Who should pick this up, if anyone.",
-            },
-        },
-        "required": ["status", "summary"],
-        "additionalProperties": false,
-    })
+    super::handoff::report_schema()
 }
 
 /// Loads a runbook into this turn.

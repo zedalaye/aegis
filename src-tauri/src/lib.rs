@@ -25,15 +25,21 @@
 //! of its three: per-agent memory — a store of preferences, exceptions and
 //! conventions scoped to one identity, in every request and written under the
 //! gate — and compaction, which folds a long session's older turns into coded
-//! state rather than asking a model to summarize them.
+//! state rather than asking a model to summarize them. Phase 15 is the first
+//! that builds *on* that bar rather than towards it: the handoff bus, where one
+//! identity hands briefs to others and reads back a board of statuses instead
+//! of their conversations. A delegated run is an ordinary session under the
+//! owner's own identity, driven by the same turn loop and gated by the same
+//! matrix — there is no second agent loop here, and that is the design.
 
 pub mod agent;
 pub mod approval;
 pub mod audit;
-mod commands;
+pub(crate) mod commands;
 pub mod compact;
 mod display;
 mod error;
+pub mod handoff;
 pub mod policy;
 pub mod secrets;
 pub mod skills;
@@ -45,7 +51,7 @@ pub mod workspace;
 
 pub use agent::{
     Event, EventSink, FakeProvider, ModelEvent, ModelRequest, OpenAiProvider, Provider,
-    ProviderProbe, StopReason, Turn, TurnPlan, TurnRegistry, Usage,
+    ProviderProbe, Standing, StopReason, Turn, TurnPlan, TurnRegistry, Usage,
 };
 pub use approval::{
     Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
@@ -53,6 +59,8 @@ pub use approval::{
 pub use audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 pub use compact::Plan as CompactionPlan;
 pub use error::{AppError, AppResult, ErrorCode};
+pub use handoff::runner::{Delegating, Host as HandoffHost};
+pub use handoff::{Brief, Plan as HandoffPlan, Priority, ReturnFormat};
 pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
 pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use skills::{Skill, SkillCtx, SkillScope};
@@ -63,6 +71,7 @@ pub use store::{
     SessionState, SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord,
     ToolCallStatus, TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
+pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
 pub use workspace::{ScaffoldReport, WorkspaceEntry, WorkspaceLayout};
 

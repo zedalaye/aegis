@@ -23,16 +23,18 @@
 //! and never appears in a condition. What actually gates is the ask itself and
 //! whether a grant is offered.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path};
 
 use super::path::{self, Resolved};
 use super::{
-    tool, ApprovalDetail, AskRequest, Decision, Grant, PolicyCtx, ResolvedCall, Risk,
+    tool, ApprovalDetail, AskRequest, Decision, Grant, HandoffRow, PolicyCtx, ResolvedCall, Risk,
     ScreenGeometry, ToolCall,
 };
 use crate::error::ErrorCode;
-use crate::skills::handoff;
+use crate::handoff::{self, bus};
+use crate::workspace;
 
 /// Above this, a contained read stops being routine and is asked about.
 ///
@@ -427,35 +429,10 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             // model names. A return is a claim about files, and a claim about
             // a file outside the workspace is one this session has no standing
             // to make — the tool then only has to ask whether they are there.
-            let mut artefacts = Vec::with_capacity(report.artefacts.len());
-            for shown in &report.artefacts {
-                let target = resolve(workspace, shown)?;
-                if !target.inside {
-                    return Err(Decision::deny(
-                        ErrorCode::PathOutsideWorkspace,
-                        format!(
-                            "`{shown}` is outside the workspace, so it is not an artefact of this \
-                             run. Name a path inside it"
-                        ),
-                    ));
-                }
-                artefacts.push(handoff::Artefact {
-                    shown: shown.clone(),
-                    path: target.path,
-                });
-            }
-
-            let report = *report;
+            let report = contained(workspace, *report)?;
             Ok(Decision::Auto {
                 call: ResolvedCall::SkillReturn {
-                    report: Box::new(handoff::Report {
-                        status: report.status,
-                        summary: report.summary,
-                        artefacts,
-                        evidence: report.evidence,
-                        open_questions: report.open_questions,
-                        next_owner: report.next_owner,
-                    }),
+                    report: Box::new(report),
                 },
                 reason: "recording the result of a skill run",
             })
@@ -529,6 +506,101 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             },
             reason: "reading this identity's own memories",
         }),
+
+        // The two rows of PLAN 7.3, Phase 15, and they are split the way the
+        // memory rows are: one of them starts something, the other one reports.
+        //
+        // `handoff_delegate` **asks**, and it is the row where the default of
+        // PLAN 7.2 row 7 — a new tool is an ask — is most obviously right. It
+        // is the only call in this table that causes *other agents to run*:
+        // more model requests, under other identities, with other allow-lists,
+        // for as long as the timeout allows. Every step any of them then takes
+        // is gated exactly as it would have been in the session the user is
+        // looking at, so this dialog is not standing in for those; what it is
+        // for is the decision `COS.md` gives the human — who works on what.
+        //
+        // A session grant is offered because a CoS that had to be re-approved
+        // for every routing decision is a CoS nobody would use, and because the
+        // grant covers the routing rather than the work: the specialists' own
+        // writes, commands and captures still stop and ask.
+        ToolCall::HandoffDelegate { plan } => {
+            let briefs = &plan.briefs;
+            if briefs.is_empty() {
+                return Err(Decision::deny(
+                    ErrorCode::ToolFailed,
+                    "there are no briefs to hand out. `briefs` is what this call is for".to_owned(),
+                ));
+            }
+            if briefs.len() > bus::FAN_OUT_MAX {
+                return Err(Decision::deny(
+                    ErrorCode::ToolFailed,
+                    format!(
+                        "{} briefs is more than the {} this can carry at once. Route the most \
+                         important ones now and the rest when they come back — a fan-out this \
+                         wide is a decision that has not been made yet",
+                        briefs.len(),
+                        bus::FAN_OUT_MAX
+                    ),
+                ));
+            }
+
+            // Checked before the dialog, not after it: a person should never be
+            // asked to approve a delegation that the bus is going to refuse.
+            // The refusal is `E_TOOL_FAILED` rather than a denial about rights,
+            // because nothing here is about rights — the brief is malformed,
+            // and the model can write a better one.
+            for one in briefs.iter().chain(plan.review.iter()) {
+                if let Err(reason) = handoff::check_brief(one) {
+                    return Err(Decision::deny(ErrorCode::ToolFailed, reason));
+                }
+            }
+
+            let rows: Vec<HandoffRow> = briefs.iter().map(row).collect();
+            let reviewer = plan.review.as_ref().map(|one| one.owner.trim().to_owned());
+            let filed_in = workspace
+                .join(workspace::BRIEFS_DIR)
+                .is_dir()
+                .then(|| format!("{}/", workspace::BRIEFS_DIR));
+            let grant = Grant::HandoffDelegate;
+
+            Ok(ask(
+                ResolvedCall::HandoffDelegate { plan: plan.clone() },
+                AskRequest {
+                    tool: tool::HANDOFF_DELEGATE,
+                    // Not because a brief is dangerous — nothing in it runs
+                    // unreviewed — but because this is the call that spends
+                    // other identities' turns, and the badge is what makes a
+                    // person read the owners rather than the first line.
+                    risk: Risk::Medium,
+                    title: "Hand out work",
+                    summary: summarize_handoff(&rows, reviewer.as_deref()),
+                    detail: ApprovalDetail::Handoff {
+                        briefs: rows,
+                        reviewer,
+                        filed_in,
+                    },
+                    scope_label: scope_label(Some(&grant)),
+                    grant: Some(grant),
+                    reason: "this starts other identities working, each under its own allow-list"
+                        .to_owned(),
+                },
+            ))
+        }
+
+        // Auto, exactly as `skill_return` is, and for the same reason: it
+        // writes nothing and reaches nothing. It validates a report and hands
+        // it to whoever is waiting. The artefacts are resolved and contained
+        // first, because a return is a claim about files and a claim about a
+        // file outside the workspace is one this run has no standing to make.
+        ToolCall::HandoffReturn { report } => {
+            let report = contained(workspace, *report)?;
+            Ok(Decision::Auto {
+                call: ResolvedCall::HandoffReturn {
+                    report: Box::new(report),
+                },
+                reason: "returning the brief this run was given",
+            })
+        }
     }
 }
 
@@ -544,6 +616,84 @@ fn summarize_memory(kind: &str, text: &str) -> String {
     }
     let head: String = text.chars().take(HEAD).collect();
     format!("{kind}: {head}…")
+}
+
+/// Resolves a return's artefact paths, and refuses one that leaves the folder.
+///
+/// Shared by `skill_return` and `handoff_return`, because it is the same claim
+/// in both: *these files exist and this run produced them*. Whether they are
+/// actually there is the tool's question ([`handoff::check`]); whether they are
+/// this workspace's to claim is this one.
+fn contained(workspace: &Path, draft: handoff::Draft) -> Result<handoff::Report, Decision> {
+    let mut artefacts = Vec::with_capacity(draft.artefacts.len());
+
+    for shown in &draft.artefacts {
+        let target = resolve(workspace, shown)?;
+        if !target.inside {
+            return Err(Decision::deny(
+                ErrorCode::PathOutsideWorkspace,
+                format!(
+                    "`{shown}` is outside the workspace, so it is not an artefact of this run. \
+                     Name a path inside it"
+                ),
+            ));
+        }
+        artefacts.push(handoff::Artefact {
+            shown: shown.clone(),
+            path: target.path,
+        });
+    }
+
+    Ok(handoff::Report {
+        status: draft.status,
+        summary: draft.summary,
+        artefacts,
+        evidence: draft.evidence,
+        open_questions: draft.open_questions,
+        next_owner: draft.next_owner,
+    })
+}
+
+/// One brief as the approval dialog draws it.
+///
+/// The goal, the owner and how much it starts from. Not the constraints and not
+/// the definition of done: those are what the *owner* has to read, and a dialog
+/// that reproduced four whole briefs would be a dialog nobody reads. They are in
+/// the file `filed_in` names, and in the transcript of the run.
+fn row(brief: &handoff::Brief) -> HandoffRow {
+    HandoffRow {
+        goal: brief.goal.trim().to_owned(),
+        owner: brief.owner.trim().to_owned(),
+        priority: brief.priority.as_str().to_owned(),
+        return_format: brief.return_format.as_str().to_owned(),
+        inputs: u32::try_from(brief.inputs.len()).unwrap_or(u32::MAX),
+    }
+}
+
+/// One line naming a delegation, for the dialog's header.
+///
+/// Who, not what: the owners are the decision a person is being asked to make,
+/// and the goals are underneath.
+fn summarize_handoff(rows: &[HandoffRow], reviewer: Option<&str>) -> String {
+    // Each owner once, in the order they were first named. Two briefs to the
+    // same identity is an ordinary thing to do — they are two runs, and the
+    // list underneath still has a row each — but a header reading "2 briefs to
+    // Scribe, Scribe" is a header that looks like a bug.
+    let mut owners: Vec<&str> = Vec::with_capacity(rows.len());
+    for row in rows {
+        if !owners.contains(&row.owner.as_str()) {
+            owners.push(&row.owner);
+        }
+    }
+
+    let mut line = match rows.len() {
+        1 => format!("1 brief to {}", owners.join(", ")),
+        n => format!("{n} briefs to {}", owners.join(", ")),
+    };
+    if let Some(reviewer) = reviewer {
+        let _ = write!(line, ", reviewed by {reviewer}");
+    }
+    line
 }
 
 /// Wraps a request into an ask.

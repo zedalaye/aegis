@@ -641,3 +641,238 @@ fn revoking_a_grant_brings_the_prompt_back() {
 
     assert_eq!(ask(call()).grant, Some(Grant::FsWrite));
 }
+
+// -------------------------------------------------------- handoff_delegate --
+
+/// One brief, as the model would send it.
+fn brief(goal: &str, owner: &str) -> serde_json::Value {
+    json!({
+        "goal": goal,
+        "owner": owner,
+        "definition_of_done": "the return says what you found",
+        "inputs": ["status/STATUS.md"],
+    })
+}
+
+/// Handing work out asks, because it is the call that spends other identities'
+/// turns — and it offers a session grant, because a Chief of Staff that had to
+/// be re-approved for every routing decision is one nobody would use.
+#[test]
+fn handing_work_out_asks_and_offers_a_grant_for_the_routing() {
+    let fixture = Fixture::new();
+
+    let request = ask(decide(
+        &fixture.ctx(),
+        tool::HANDOFF_DELEGATE,
+        json!({ "briefs": [brief("Draft it", "Scribe"), brief("Check it", "Reviewer")] }),
+    ));
+
+    assert_eq!(request.grant, Some(Grant::HandoffDelegate));
+    assert_eq!(request.risk, Risk::Medium);
+    assert!(request.summary.contains("Scribe"), "{}", request.summary);
+    assert!(request.summary.contains("Reviewer"), "{}", request.summary);
+
+    match request.detail {
+        ApprovalDetail::Handoff {
+            briefs, reviewer, ..
+        } => {
+            assert_eq!(briefs.len(), 2);
+            assert_eq!(briefs[0].owner, "Scribe");
+            assert_eq!(briefs[0].goal, "Draft it");
+            assert_eq!(briefs[0].inputs, 1);
+            assert!(reviewer.is_none());
+        }
+        other => panic!("expected a handoff detail, got {other:?}"),
+    }
+}
+
+/// Two briefs to one identity is ordinary — they are two runs — but the header
+/// names each owner once, because "2 briefs to Scribe, Scribe" looks like a bug.
+#[test]
+fn the_header_names_each_owner_once() {
+    let fixture = Fixture::new();
+
+    let request = ask(decide(
+        &fixture.ctx(),
+        tool::HANDOFF_DELEGATE,
+        json!({ "briefs": [brief("Draft it", "Scribe"), brief("Check it", "Scribe")] }),
+    ));
+
+    assert_eq!(request.summary, "2 briefs to Scribe");
+    match request.detail {
+        ApprovalDetail::Handoff { briefs, .. } => {
+            assert_eq!(briefs.len(), 2, "both are still drawn, one row each");
+        }
+        other => panic!("expected a handoff detail, got {other:?}"),
+    }
+}
+
+/// The dialog names the reviewer, because fanning in through one is part of
+/// what the person is approving.
+#[test]
+fn a_reviewer_is_named_in_the_dialog() {
+    let fixture = Fixture::new();
+
+    let request = ask(decide(
+        &fixture.ctx(),
+        tool::HANDOFF_DELEGATE,
+        json!({
+            "briefs": [brief("Draft it", "Scribe")],
+            "review": brief("Check what came back", "Auditor"),
+        }),
+    ));
+
+    match request.detail {
+        ApprovalDetail::Handoff { reviewer, .. } => {
+            assert_eq!(reviewer.as_deref(), Some("Auditor"))
+        }
+        other => panic!("expected a handoff detail, got {other:?}"),
+    }
+    assert!(request.summary.contains("Auditor"), "{}", request.summary);
+}
+
+/// A malformed brief is refused before a dialog opens: nobody should be asked
+/// to approve a delegation the bus is going to throw away.
+#[test]
+fn a_brief_that_pastes_a_thread_is_refused_before_anyone_is_asked() {
+    let fixture = Fixture::new();
+
+    let decision = decide(
+        &fixture.ctx(),
+        tool::HANDOFF_DELEGATE,
+        json!({
+            "briefs": [{
+                "goal": "Reply to this",
+                "owner": "Scribe",
+                "definition_of_done": "a reply exists",
+                "inputs": ["here is the thread:\nthem: hello\nus: hi"],
+            }],
+        }),
+    );
+
+    assert_eq!(denied(decision), ErrorCode::ToolFailed);
+}
+
+#[test]
+fn a_fan_out_wider_than_the_cap_is_refused_as_a_decision_not_yet_made() {
+    let fixture = Fixture::new();
+    let briefs: Vec<serde_json::Value> = (0..=aegis_lib::handoff::bus::FAN_OUT_MAX)
+        .map(|n| brief(&format!("Do thing {n}"), "Scribe"))
+        .collect();
+
+    let decision = decide(
+        &fixture.ctx(),
+        tool::HANDOFF_DELEGATE,
+        json!({ "briefs": briefs }),
+    );
+
+    assert_eq!(denied(decision), ErrorCode::ToolFailed);
+}
+
+#[test]
+fn a_delegation_with_no_briefs_is_refused() {
+    let fixture = Fixture::new();
+
+    let decision = decide(
+        &fixture.ctx(),
+        tool::HANDOFF_DELEGATE,
+        json!({ "briefs": [] }),
+    );
+
+    assert_eq!(denied(decision), ErrorCode::ToolFailed);
+}
+
+/// Depth is one. A run that is itself a brief cannot hand one out, and the
+/// refusal is about the role rather than about the allow-list.
+#[test]
+fn a_delegated_run_is_refused_a_delegation_of_its_own() {
+    let fixture = Fixture::new();
+
+    let decision = decide(
+        &fixture.ctx().delegated(),
+        tool::HANDOFF_DELEGATE,
+        json!({ "briefs": [brief("Pass it on", "Scribe")] }),
+    );
+
+    match decision {
+        Decision::Deny { code, reason } => {
+            assert_eq!(code, ErrorCode::Denied);
+            assert!(
+                reason.contains("blocked"),
+                "it says what to do instead: {reason}"
+            );
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------- handoff_return --
+
+/// Returning is automatic, exactly as `skill_return` is: it writes nothing and
+/// reaches nothing.
+#[test]
+fn returning_a_brief_is_automatic() {
+    let fixture = Fixture::new();
+    fixture.file("artefacts/note.md", "the note");
+
+    let call = auto(decide(
+        &fixture.ctx(),
+        tool::HANDOFF_RETURN,
+        json!({
+            "status": "done",
+            "summary": "wrote the note",
+            "artefacts": ["artefacts/note.md"],
+        }),
+    ));
+
+    match call {
+        ResolvedCall::HandoffReturn { report } => {
+            assert_eq!(report.artefacts.len(), 1);
+            assert_eq!(report.artefacts[0].shown, "artefacts/note.md");
+            assert!(report.artefacts[0].path.is_file());
+        }
+        other => panic!("expected a handoff return, got {other:?}"),
+    }
+}
+
+/// A return is a claim about files, and a claim about a file outside the
+/// workspace is one this run has no standing to make.
+#[test]
+fn an_artefact_outside_the_workspace_is_not_an_artefact_of_the_run() {
+    let fixture = Fixture::new();
+
+    let decision = decide(
+        &fixture.ctx(),
+        tool::HANDOFF_RETURN,
+        json!({
+            "status": "done",
+            "summary": "wrote it somewhere",
+            "artefacts": [fixture.outside_path("note.md")],
+        }),
+    );
+
+    assert_eq!(denied(decision), ErrorCode::PathOutsideWorkspace);
+}
+
+/// The same words mean the same thing in both returns, because they are one
+/// object: a bad status is answered with the three that work.
+#[test]
+fn a_status_that_is_not_one_of_the_three_is_answered_with_the_three() {
+    let fixture = Fixture::new();
+
+    for name in [tool::HANDOFF_RETURN, tool::SKILL_RETURN] {
+        let decision = decide(
+            &fixture.ctx(),
+            name,
+            json!({ "status": "partly", "summary": "some of it" }),
+        );
+
+        match decision {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::ToolFailed, "{name}");
+                assert!(reason.contains("needs_you"), "{name}: {reason}");
+            }
+            other => panic!("{name}: expected a refusal, got {other:?}"),
+        }
+    }
+}

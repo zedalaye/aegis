@@ -44,8 +44,8 @@ pub use agents::{Agent, AgentDraft, AgentStore, DEFAULT_AGENT_ID, DEFAULT_PROVID
 pub use memories::{Memory, MemoryDraft, MemoryKind, MemoryStore};
 pub use projects::{canonical_workspace, Project, ProjectDetail, Store};
 pub use sessions::{
-    Compaction, Message, Role, SessionDetail, SessionState, SessionStore, SessionSummary,
-    ToolCallRecord, ToolCallStatus, TurnHandle,
+    Compaction, Delegated, Message, Role, SessionDetail, SessionState, SessionStore,
+    SessionSummary, ToolCallRecord, ToolCallStatus, TurnHandle,
 };
 pub use settings::{MaskedSettings, ProviderSettings, SettingsStore};
 

@@ -70,6 +70,7 @@ export default function SessionItem({
   };
 
   const badge = STATE_LABEL[session.state];
+  const delegated = session.delegated !== null;
 
   if (editing) {
     return (
@@ -88,7 +89,11 @@ export default function SessionItem({
   }
 
   return (
-    <li className={`session${open ? " session--open" : ""}`}>
+    <li
+      className={`session${open ? " session--open" : ""}${
+        delegated ? " session--delegated" : ""
+      }`}
+    >
       <button
         type="button"
         className="session__open"
@@ -98,6 +103,14 @@ export default function SessionItem({
       >
         <span className="session__title">{session.title}</span>
         <span className="session__meta">
+          {delegated ? (
+            <span
+              className="session__badge session__badge--delegated"
+              title="Opened by a brief from another session. It ran under its own identity."
+            >
+              brief
+            </span>
+          ) : null}
           {session.message_count === 0
             ? "empty"
             : `${session.message_count} message${session.message_count === 1 ? "" : "s"}`}

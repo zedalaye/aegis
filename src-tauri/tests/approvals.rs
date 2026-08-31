@@ -31,6 +31,7 @@ use tempfile::TempDir;
 use aegis_lib::agent::event::EventSink;
 use aegis_lib::agent::provider::fake::{RUN_TRIGGER, WRITE_TARGET, WRITE_TRIGGER};
 use aegis_lib::agent::turn::{self, TurnPlan};
+use aegis_lib::Standing;
 use aegis_lib::{
     Agent, ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditDecision, AuditLog, Event,
     FakeProvider, Grant, GrantStore, MemoryStore, Message, Outcome, ResolvedBy, SessionState,
@@ -191,6 +192,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            standing: Standing::Own(None),
         }
     }
 

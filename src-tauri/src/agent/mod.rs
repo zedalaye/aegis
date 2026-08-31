@@ -31,5 +31,5 @@ pub mod wire;
 pub use event::{Event, EventSink, NullSink};
 pub use provider::{FakeProvider, OpenAiProvider, Provider, ProviderProbe};
 pub use registry::TurnRegistry;
-pub use turn::{Turn, TurnPlan, MAX_TOOL_ROUNDS};
+pub use turn::{Standing, Turn, TurnPlan, MAX_TOOL_ROUNDS};
 pub use wire::{ModelEvent, ModelRequest, StopReason, Usage};

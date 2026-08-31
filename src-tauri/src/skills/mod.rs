@@ -51,7 +51,6 @@
 //! replayable later (PLAN 7.6, *Audit names the skill*).
 
 pub mod doc;
-pub mod handoff;
 
 use std::fs;
 use std::io;
@@ -64,7 +63,6 @@ use crate::store::Agent;
 use crate::tools::ToolResult;
 
 pub use doc::SkillDoc;
-pub use handoff::{Report, Status};
 
 /// The directory skills live in — in the library and in a workspace alike.
 ///
@@ -453,7 +451,8 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 // The library on disk
 // ---------------------------------------------------------------------------
 
-/// Creates the library and puts one runbook in it, on a first run only.
+/// Creates the library and puts the example runbooks in it, on a first run
+/// only.
 ///
 /// Keyed on the *directory* not existing rather than on the file: seeding a
 /// skill someone deleted, every time the app starts, would be an application
@@ -462,25 +461,32 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 ///
 /// Best effort. A library that could not be created costs the examples and
 /// nothing else — [`catalog`] reads a missing directory as an empty one.
+///
+/// Two runbooks, and they are the two halves of the mode: the standing rule
+/// that nothing irreversible goes out unreviewed, and the loop a Chief of Staff
+/// runs. Neither is granted to anything by being here — an identity that may
+/// run one is an identity somebody granted it to (PLAN 7.6, *Authoring*).
 pub fn seed(library: &Path) {
     if library.exists() {
         return;
     }
 
-    let dir = library.join(REVIEW_SKILL);
-    if let Err(err) = fs::create_dir_all(&dir) {
-        tracing::warn!(%err, dir = %dir.display(), "could not create the skill library");
-        return;
-    }
-    if let Err(err) = fs::write(dir.join(SKILL_FILE), REVIEW_SEED) {
-        tracing::warn!(%err, "could not write the example skill");
-        return;
+    for (name, body) in [(REVIEW_SKILL, REVIEW_SEED), (COS_SKILL, COS_SEED)] {
+        let dir = library.join(name);
+        if let Err(err) = fs::create_dir_all(&dir) {
+            tracing::warn!(%err, dir = %dir.display(), "could not create the skill library");
+            return;
+        }
+        if let Err(err) = fs::write(dir.join(SKILL_FILE), body) {
+            tracing::warn!(%err, name, "could not write an example skill");
+            return;
+        }
     }
 
-    tracing::info!(dir = %library.display(), "skill library created with one example");
+    tracing::info!(dir = %library.display(), "skill library created with two examples");
 }
 
-/// The example the library starts with.
+/// One of the two examples the library starts with.
 pub const REVIEW_SKILL: &str = "never-send-without-review";
 
 /// `never-send-without-review`, the one skill a fresh library holds.
@@ -551,6 +557,111 @@ If the draft is not at the path you were given, return `status: blocked` with
 the path you tried in `open_questions`. Do not reconstruct the draft from the
 conversation and review that: a review of a draft nobody will send is worse
 than no review, because it reads like one.
+"#;
+
+/// The other skill a fresh library holds (PLAN 7.3, Phase 15).
+pub const COS_SKILL: &str = "cos.loop";
+
+/// `cos.loop`, the Chief-of-Staff loop as a runbook.
+///
+/// `COS.md` *Loop* is six steps: read the sources of truth and `/status`,
+/// update the attention list, route new work, retry what is blocked, ping the
+/// human only when it is irreversible, ambiguous or on a deadline, write the
+/// new status and stop. Every one of them is a tool call this build already
+/// has, which is exactly why it is a **skill** and not prompt text.
+///
+/// That is the whole argument for where this lives. PLAN 7.1 is explicit that
+/// the system prompt stays a policy summary plus what is true right now, and
+/// that procedure landing in it is procedure Phase 13 will have to fight. A
+/// Chief of Staff whose loop was baked into the runtime would be the loop every
+/// identity ran, on every turn, whether or not it was routing anything — and it
+/// could not be edited by the person whose office it is. As a runbook it costs
+/// one catalog line until someone runs it, it is a file in a folder they own,
+/// and granting it to an identity is a separate, deliberate act (PLAN 7.6,
+/// *Authoring*).
+///
+/// It is seeded rather than left to be written because the loop is not this
+/// operator's invention — it is the mode's, it is written down in `COS.md`, and
+/// a harness that shipped the handoff bus without it would be shipping the
+/// verbs and none of the grammar.
+const COS_SEED: &str = r#"---
+version: 1
+tools: fs_read, fs_write, handoff_delegate
+---
+
+# cos.loop
+
+## When to use it
+
+At the start of a working session where you are routing rather than doing, and
+whenever the human asks what is going on. It is the whole of your job: read the
+board, decide who does what, hand it out, write down what is now true, stop.
+
+Do not run it to do a piece of work yourself. If the answer is one file read
+and one reply, that is the answer — a delegation costs another agent's turn.
+
+## Inputs required and tools it will call
+
+- `status/STATUS.md`, which is the board.
+- `decisions/DECISIONS.md`, for what was already settled.
+- `briefs/`, for work that has already gone out.
+- Whatever the human just said, which is the only thing here that is new.
+
+Calls `fs_read` to read those, `handoff_delegate` to route, and `fs_write` to
+rewrite the board. It calls nothing else: a Chief of Staff that starts editing
+the artefacts has stopped being one.
+
+## Steps
+
+1. `fs_read` `status/STATUS.md` in full. Read `decisions/DECISIONS.md` too when
+   what you are about to route touches something that was decided.
+2. Update the attention list in your head first: what is waiting on a person,
+   what is in flight, what is blocked and on what. Anything not in one of those
+   three is not on the board.
+3. Route what is new. One brief per identity, each with a goal, a definition of
+   done, and inputs that are *paths* — if an owner needs a document, write it
+   with `fs_write` first and name the path. Hand out at most what a person could
+   read in one sitting; the rest waits for the next pass.
+4. Retry what is blocked, once, and only when something has changed since it
+   blocked. A brief that blocks twice on the same thing is for the human, not
+   for a third attempt.
+5. Ping the human only when it is irreversible, ambiguous, or on a deadline.
+   Those three and nothing else — a Chief of Staff who reports progress is a
+   Chief of Staff who is being read past.
+6. `fs_write` the board back whole, with attention, in flight and blocked each
+   naming a path or an owner. Then stop. Silence is the correct output of a
+   pass where nothing changed.
+
+## How to validate
+
+`status/STATUS.md` reads as of now: nothing is listed in flight that has come
+back, nothing is under attention that nobody is waiting for. Every line names
+either a path or an identity. The file is shorter than a screen; if it is not,
+the detail belongs in an artefact it points at.
+
+## What to return
+
+`skill_return` with `status: done`, `status/STATUS.md` in `artefacts`, and a
+summary of at most five lines: what changed, what is now waiting on the human,
+and nothing else. `status: needs_you` when routing is blocked on a decision only
+the human can make, with that decision in `open_questions`.
+
+Never return a concatenation of what the specialists said. They each returned a
+report; the board is what those add up to.
+
+## What requires approval
+
+`handoff_delegate` asks before anyone starts, and the write of the board is an
+ordinary `fs_write` under the same gate as any other. Nothing a specialist then
+does inherits your approvals: each of them is asked about its own calls, under
+its own identity.
+
+## What to do if the source is missing
+
+If `status/STATUS.md` is not there, the workspace has not been set up for this
+yet. Return `status: blocked`, say that the shared files are missing and that
+the button is in the project panel. Do not create the board yourself from what
+you remember — a board nobody agreed on is worse than no board.
 "#;
 
 /// `inbox.triage`, seeded into a workspace by the shared-files convention.
@@ -814,11 +925,15 @@ mod tests {
 
         seed(&library);
         let seeded = catalog(&library, None);
-        assert_eq!(seeded.len(), 1);
-        assert_eq!(seeded[0].name, REVIEW_SKILL);
-        assert!(seeded[0].runnable(), "{:?}", seeded[0].problem);
+        let names: Vec<&str> = seeded.iter().map(|skill| skill.name.as_str()).collect();
+        assert_eq!(names, [COS_SKILL, REVIEW_SKILL]);
+        for skill in &seeded {
+            assert!(skill.runnable(), "{}: {:?}", skill.name, skill.problem);
+        }
 
-        fs::remove_dir_all(library.join(REVIEW_SKILL)).expect("the user deletes it");
+        for name in [COS_SKILL, REVIEW_SKILL] {
+            fs::remove_dir_all(library.join(name)).expect("the user deletes it");
+        }
         seed(&library);
         assert!(
             catalog(&library, None).is_empty(),

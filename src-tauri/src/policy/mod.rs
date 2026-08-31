@@ -29,7 +29,12 @@
 //! call. Phase 13 adds the second allow-list beside it, for the same three
 //! reasons: may this identity run this *skill*. Both refuse with `E_DENIED`
 //! and neither opens a dialog, because a prompt offering to let an identity
-//! exceed its own allow-list is a prompt that should not exist.
+//! exceed its own allow-list is a prompt that should not exist. Phase 15 adds
+//! the one question in [`decide_call`] that is not about an identity at all —
+//! whether this *run* is itself a delegated brief, since a specialist that
+//! routed work would be a second Chief of Staff (`COS.md` *Roles*) — and it is
+//! refused in the same place and for the same reason: it could not be
+//! meaningfully approved.
 //!
 //! Layout: [`path`] resolves and contains, [`matrix`] holds the decision table
 //! of PLAN 3, [`grants`] remembers what a session already approved, and this
@@ -45,7 +50,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::ErrorCode;
-use crate::skills::handoff;
+use crate::handoff;
 use crate::store::memories;
 
 pub use grants::{Grant, GrantStore};
@@ -72,6 +77,10 @@ pub mod tool {
     pub const MEMORY_WRITE: &str = "memory_write";
     /// Look through what this identity remembers.
     pub const MEMORY_SEARCH: &str = "memory_search";
+    /// Hand briefs to other identities and wait for what comes back.
+    pub const HANDOFF_DELEGATE: &str = "handoff_delegate";
+    /// Close a delegated run with the report it was briefed for.
+    pub const HANDOFF_RETURN: &str = "handoff_return";
 }
 
 /// How alarming a call should look in the approval dialog.
@@ -180,6 +189,37 @@ pub enum ApprovalDetail {
         /// What it would rest on, when the model named something.
         source: Option<String>,
     },
+    /// Handing work to other identities (PLAN 7.3, Phase 15).
+    ///
+    /// One row per brief, plus the reviewer's when one was asked for. The
+    /// dialog draws the goals and the owners rather than the whole objects: a
+    /// person deciding whether to spend four model runs is deciding *who is
+    /// about to work on what*, and the constraints and the definition of done
+    /// are in the brief file this names.
+    Handoff {
+        /// One row per brief, in the order they would go out.
+        briefs: Vec<HandoffRow>,
+        /// The identity that would review what comes back, when one was named.
+        reviewer: Option<String>,
+        /// Where the briefs would be filed, when the workspace has a `briefs/`.
+        filed_in: Option<String>,
+    },
+}
+
+/// One brief, as the approval dialog draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct HandoffRow {
+    /// What is to be achieved.
+    pub goal: String,
+    /// The identity that would do it, as the model named it.
+    pub owner: String,
+    /// `high`, `normal` or `low`.
+    pub priority: String,
+    /// `status`, `artefact` or `question`.
+    pub return_format: String,
+    /// How many paths and links it starts from.
+    pub inputs: u32,
 }
 
 /// Everything policy knows about a call it wants the user to approve.
@@ -342,6 +382,27 @@ pub enum ResolvedCall {
         /// The words that must all appear.
         query: String,
     },
+    /// `handoff_delegate`, with every brief checked against `COS.md`'s shape.
+    ///
+    /// No owner resolution: which identity a name refers to is a fact about the
+    /// agent registry, which policy cannot see and has no business consulting.
+    /// The bus resolves it, and an owner nobody has heard of is a line on the
+    /// board rather than a refused call — the other briefs still ran.
+    ///
+    /// Boxed for the reason `SkillReturn` is: it is the widest variant, and
+    /// every other call would otherwise pay for it in the size of the enum.
+    HandoffDelegate {
+        /// Who gets what, and who checks it.
+        plan: Box<handoff::Plan>,
+    },
+    /// `handoff_return`, with every artefact path resolved and contained.
+    ///
+    /// The same shape `SkillReturn` carries, because it is the same object: a
+    /// run closes with a report whether a runbook framed it or a brief did.
+    HandoffReturn {
+        /// The return, as `COS.md` writes one.
+        report: Box<handoff::Report>,
+    },
 }
 
 impl ResolvedCall {
@@ -360,6 +421,8 @@ impl ResolvedCall {
             Self::SkillReturn { .. } => tool::SKILL_RETURN,
             Self::MemoryWrite { .. } => tool::MEMORY_WRITE,
             Self::MemorySearch { .. } => tool::MEMORY_SEARCH,
+            Self::HandoffDelegate { .. } => tool::HANDOFF_DELEGATE,
+            Self::HandoffReturn { .. } => tool::HANDOFF_RETURN,
         }
     }
 }
@@ -436,6 +499,16 @@ pub enum ToolCall {
         /// The words to look for; empty lists what is held.
         query: String,
     },
+    /// `handoff_delegate`.
+    HandoffDelegate {
+        /// Who gets what, and who checks it, as the model wrote them.
+        plan: Box<handoff::Plan>,
+    },
+    /// `handoff_return`.
+    HandoffReturn {
+        /// The return, with its artefact paths still as the model wrote them.
+        report: Box<handoff::Draft>,
+    },
 }
 
 impl ToolCall {
@@ -451,6 +524,8 @@ impl ToolCall {
             Self::SkillReturn { .. } => tool::SKILL_RETURN,
             Self::MemoryWrite { .. } => tool::MEMORY_WRITE,
             Self::MemorySearch { .. } => tool::MEMORY_SEARCH,
+            Self::HandoffDelegate { .. } => tool::HANDOFF_DELEGATE,
+            Self::HandoffReturn { .. } => tool::HANDOFF_RETURN,
         }
     }
 
@@ -522,28 +597,24 @@ impl ToolCall {
                     name: name.to_owned(),
                 })
             }
-            tool::SKILL_RETURN => {
-                let a: SkillReturnArgs = convert(tool_name, args)?;
-                let status = match a.status.trim() {
-                    "done" => handoff::Status::Done,
-                    "blocked" => handoff::Status::Blocked,
-                    "needs_you" => handoff::Status::NeedsYou,
-                    other => {
-                        return Err(format!(
-                            "`{other}` is not a status. A run ends `done`, `blocked` or \
-                             `needs_you`"
-                        ))
-                    }
+            tool::SKILL_RETURN => Ok(Self::SkillReturn {
+                report: Box::new(draft(convert(tool_name, args)?)?),
+            }),
+            tool::HANDOFF_RETURN => Ok(Self::HandoffReturn {
+                report: Box::new(draft(convert(tool_name, args)?)?),
+            }),
+            tool::HANDOFF_DELEGATE => {
+                let a: HandoffDelegateArgs = convert(tool_name, args)?;
+                let mut briefs = Vec::with_capacity(a.briefs.len());
+                for one in a.briefs {
+                    briefs.push(brief(one)?);
+                }
+                let review = match a.review {
+                    Some(one) => Some(brief(one)?),
+                    None => None,
                 };
-                Ok(Self::SkillReturn {
-                    report: Box::new(handoff::Draft {
-                        status,
-                        summary: a.summary,
-                        artefacts: a.artefacts,
-                        evidence: a.evidence,
-                        open_questions: a.open_questions,
-                        next_owner: a.next_owner.unwrap_or_default(),
-                    }),
+                Ok(Self::HandoffDelegate {
+                    plan: Box::new(handoff::Plan { briefs, review }),
                 })
             }
             tool::MEMORY_WRITE => {
@@ -648,13 +719,18 @@ struct MemorySearchArgs {
     query: Option<String>,
 }
 
-/// Wire shape of `skill_return` arguments (`COS.md` *Handoff*).
+/// Wire shape of a return, for `skill_return` and `handoff_return` alike
+/// (`COS.md` *Handoff*).
+///
+/// One struct for both, because it is one object: a run closes with a report
+/// whether a runbook framed it or a brief did, and two structs would be two
+/// places for the shape to drift from `COS.md`.
 ///
 /// `status` arrives as a string rather than as the enum so an unrecognized one
 /// is answered with the three that work, instead of with whatever `serde`
 /// says about a variant name.
 #[derive(Debug, Deserialize)]
-struct SkillReturnArgs {
+struct ReportArgs {
     status: String,
     summary: String,
     #[serde(default)]
@@ -665,6 +741,105 @@ struct SkillReturnArgs {
     open_questions: Vec<String>,
     #[serde(default)]
     next_owner: Option<String>,
+}
+
+/// Wire shape of `handoff_delegate` arguments (`COS.md` *Handoff*).
+#[derive(Debug, Deserialize)]
+struct HandoffDelegateArgs {
+    briefs: Vec<BriefArgs>,
+    #[serde(default)]
+    review: Option<BriefArgs>,
+}
+
+/// Wire shape of one brief.
+///
+/// `priority` and `return_format` arrive as strings, for the reason a status
+/// does: an unrecognized one is then answered with the words that work.
+#[derive(Debug, Deserialize)]
+struct BriefArgs {
+    goal: String,
+    owner: String,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    inputs: Vec<String>,
+    #[serde(default)]
+    constraints: Vec<String>,
+    definition_of_done: String,
+    #[serde(default)]
+    approval_needed: Option<String>,
+    #[serde(default)]
+    return_format: Option<String>,
+}
+
+/// One return, from the arguments as they arrived.
+///
+/// Shared by `skill_return` and `handoff_return`, which is the point: the same
+/// words mean the same thing whichever framed the run.
+fn draft(a: ReportArgs) -> Result<handoff::Draft, String> {
+    let status = match a.status.trim() {
+        "done" => handoff::Status::Done,
+        "blocked" => handoff::Status::Blocked,
+        "needs_you" => handoff::Status::NeedsYou,
+        other => {
+            return Err(format!(
+                "`{other}` is not a status. A run ends `done`, `blocked` or `needs_you`"
+            ))
+        }
+    };
+
+    Ok(handoff::Draft {
+        status,
+        summary: a.summary,
+        artefacts: a.artefacts,
+        evidence: a.evidence,
+        open_questions: a.open_questions,
+        next_owner: a.next_owner.unwrap_or_default(),
+    })
+}
+
+/// One brief, from the arguments as they arrived.
+///
+/// The words are checked here, before the shape is: a model that wrote
+/// `urgent` should be told the three that work rather than have `serde` refuse
+/// the whole call for a reason about a variant name. The *content* — a goal
+/// that is there, inputs that are paths — is [`handoff::check_brief`], applied
+/// by the table below, because a refusal about content should not be
+/// indistinguishable from one about spelling.
+fn brief(a: BriefArgs) -> Result<handoff::Brief, String> {
+    let priority = match a.priority.as_deref().map(str::trim) {
+        None | Some("") | Some("normal") => handoff::Priority::Normal,
+        Some("high") => handoff::Priority::High,
+        Some("low") => handoff::Priority::Low,
+        Some(other) => {
+            return Err(format!(
+                "`{other}` is not a priority. A brief is `high`, `normal` or `low`"
+            ))
+        }
+    };
+
+    let return_format = match a.return_format.as_deref().map(str::trim) {
+        None | Some("") | Some("status") => handoff::ReturnFormat::Status,
+        Some("artefact") => handoff::ReturnFormat::Artefact,
+        Some("question") => handoff::ReturnFormat::Question,
+        Some(other) => {
+            return Err(format!(
+                "`{other}` is not a return format. A brief asks for a `status`, an `artefact` or \
+                 a `question`"
+            ))
+        }
+    };
+
+    Ok(handoff::Brief {
+        goal: a.goal,
+        owner: a.owner,
+        priority,
+        inputs: a.inputs,
+        constraints: a.constraints,
+        definition_of_done: a.definition_of_done,
+        approval_needed: a.approval_needed.unwrap_or_default(),
+        return_format,
+    })
 }
 
 /// The geometry of the display a capture would take.
@@ -746,6 +921,15 @@ pub struct PolicyCtx<'a> {
     pub self_exe: Option<&'a Path>,
     /// The display geometry a capture would use, when it is known.
     pub screen: Option<&'a ScreenGeometry>,
+    /// Whether this turn is itself a delegated run (PLAN 7.3, Phase 15).
+    ///
+    /// True inside a specialist working on a brief, false in a session a person
+    /// is typing into. It gates exactly one thing — `handoff_delegate` — and it
+    /// is a fact about the *run* rather than about the identity, which is why
+    /// it is here rather than on [`Identity`]: the same reviewer identity may be
+    /// a CoS in one session and a specialist in the next, and its tool list does
+    /// not change between them.
+    pub delegated: bool,
     /// The identity the call is made under, and the tools it holds.
     ///
     /// `None` is "no identity is bound to this decision", which means every
@@ -765,8 +949,16 @@ impl<'a> PolicyCtx<'a> {
             grants,
             self_exe: None,
             screen: None,
+            delegated: false,
             identity: None,
         }
+    }
+
+    /// Marks this as a call made inside a delegated run.
+    #[must_use]
+    pub const fn delegated(mut self) -> Self {
+        self.delegated = true;
+        self
     }
 
     /// Names this application's binary, so `shell_exec` can refuse to run it.
@@ -860,6 +1052,23 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
                 );
             }
         }
+    }
+
+    // Depth is one, and it is enforced here rather than left to the tool
+    // because a dialog asking a person to approve a call that is going to be
+    // refused anyway is a dialog that teaches them to click through
+    // (PLAN 7.3, Phase 15; `COS.md` *Roles* — there are three, and a
+    // specialist that routes work is a second Chief of Staff). The model was
+    // not offered the schema either; reaching here means a name out of an
+    // older transcript, or an invented one.
+    if ctx.delegated && matches!(call, ToolCall::HandoffDelegate { .. }) {
+        tracing::info!("a delegated run tried to delegate");
+        return Decision::deny(
+            ErrorCode::Denied,
+            "you are working on a brief, and a brief is not re-delegated: one Chief of Staff \
+             routes, specialists do the work. If this needs someone else, return `blocked` and \
+             say who and why",
+        );
     }
 
     let Some(workspace) = ctx.workspace else {

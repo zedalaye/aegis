@@ -248,6 +248,12 @@ pub struct SessionSummary {
     pub message_count: u32,
     /// What the session is doing *right now*.
     pub state: SessionState,
+    /// The brief that opened this session, when one did (PLAN 7.3, Phase 15).
+    ///
+    /// `None` for every session a person started, which is every session before
+    /// this phase. The sidebar draws it as a badge rather than hiding the row:
+    /// work done on your behalf should be as visible as work you asked for.
+    pub delegated: Option<Delegated>,
 }
 
 /// A session and its transcript.
@@ -272,6 +278,34 @@ pub struct SessionDetail {
     /// that a window reopened mid-turn re-draws the dialog it missed, instead
     /// of leaving a turn blocked on a prompt nobody can see.
     pub pending_approvals: Vec<ApprovalRequest>,
+}
+
+/// Why a session exists, when a person did not open it (PLAN 7.3, Phase 15).
+///
+/// A delegated run is an ordinary session in every way that matters — same
+/// transcript, same approval gate, same audit lines, same identity binding —
+/// and this record is the difference: it says which delegation opened it, which
+/// session was delegating, and where the brief was filed.
+///
+/// It is on the session rather than in a store of its own because a delegated
+/// run *is* a session, and a second document listing which sessions are really
+/// runs would be a second thing to keep in step with this one. It is also what
+/// keeps the work visible: a specialist's session opens in the sidebar like any
+/// other, so "what did the reviewer actually do" is a click rather than a
+/// forensic exercise (`COS.md` aggregates status for the *CoS*, not for the
+/// person).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct Delegated {
+    /// The delegation this run belongs to. Shared with the audit lines.
+    pub handoff_id: String,
+    /// The session whose turn handed the brief out.
+    pub from_session_id: String,
+    /// Where the brief was filed, relative to the workspace root.
+    ///
+    /// `None` when the workspace has no `briefs/` — the brief then lives only
+    /// in the first message of this transcript, which is still a record of it.
+    pub brief: Option<String>,
 }
 
 /// What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
@@ -348,6 +382,13 @@ struct StoredSession {
     /// what it had — a transcript that reaches the model whole.
     #[serde(default)]
     compaction: Option<Compaction>,
+    /// The brief that opened this session, when one did.
+    ///
+    /// `#[serde(default)]` is the migration, as it was for `agent_id` and
+    /// `compaction`: a session written before Phase 15 reads back with none,
+    /// which is exactly what it is — one somebody opened themselves.
+    #[serde(default)]
+    delegated: Option<Delegated>,
 }
 
 impl StoredSession {
@@ -366,6 +407,7 @@ impl StoredSession {
             // A transcript that overflows `u32` is not a transcript.
             message_count: u32::try_from(self.messages.len()).unwrap_or(u32::MAX),
             state,
+            delegated: self.delegated.clone(),
         }
     }
 }
@@ -466,6 +508,32 @@ impl SessionStore {
         title: Option<&str>,
         agent_id: &str,
     ) -> AppResult<SessionSummary> {
+        self.open_session(project_id, title, agent_id, None)
+    }
+
+    /// Creates the session a brief opens (PLAN 7.3, Phase 15).
+    ///
+    /// The same call with a [`Delegated`] on it. Deliberately the same session
+    /// in every other respect: a specialist's run is gated, audited, titled and
+    /// listed exactly as a session someone typed into, because it is one.
+    pub fn create_delegated(
+        &self,
+        project_id: &str,
+        title: Option<&str>,
+        agent_id: &str,
+        delegated: Delegated,
+    ) -> AppResult<SessionSummary> {
+        self.open_session(project_id, title, agent_id, Some(delegated))
+    }
+
+    /// The one place a session record is built.
+    fn open_session(
+        &self,
+        project_id: &str,
+        title: Option<&str>,
+        agent_id: &str,
+        delegated: Option<Delegated>,
+    ) -> AppResult<SessionSummary> {
         let stamp = now();
         let session = StoredSession {
             id: Uuid::new_v4().to_string(),
@@ -479,6 +547,7 @@ impl SessionStore {
             updated_at: stamp,
             messages: Vec::new(),
             compaction: None,
+            delegated,
         };
         let created = session.to_summary(SessionState::Idle);
 
@@ -1218,6 +1287,7 @@ mod tests {
                 updated_at: "2026-08-28T09:41:07.412Z".to_owned(),
                 message_count: 3,
                 state: SessionState::AwaitingApproval,
+                delegated: None,
             },
             messages: vec![Message::assistant(
                 "done",
@@ -1276,6 +1346,7 @@ mod tests {
                 "updated_at",
                 "message_count",
                 "state",
+                "delegated",
             ])
         );
         assert_eq!(

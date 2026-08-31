@@ -44,6 +44,7 @@ use aegis_lib::agent::turn::TurnPlan;
 use aegis_lib::agent::wire::{ModelEvent, StopReason, WireMessage};
 use aegis_lib::policy::tool;
 use aegis_lib::store::memories;
+use aegis_lib::Standing;
 use aegis_lib::{
     compact, Agent, AgentDraft, AgentStore, ApprovalDecision, ApprovalRegistry, AuditLog, Event,
     FakeProvider, GrantStore, MemoryDraft, MemoryKind, MemoryStore, Message, SessionState,
@@ -265,6 +266,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            standing: Standing::Own(None),
         };
         let running = turn.run(&plan, &cancel);
 

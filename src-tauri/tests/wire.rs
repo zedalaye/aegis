@@ -26,6 +26,7 @@ use aegis_lib::agent::event::EventSink;
 use aegis_lib::agent::provider::openai;
 use aegis_lib::agent::turn::TurnPlan;
 use aegis_lib::agent::wire::{ToolCallAssembler, WireMessage};
+use aegis_lib::Standing;
 use aegis_lib::{
     Agent, ApiKey, ApprovalRegistry, AuditDecision, AuditLog, Event, GrantStore, MemoryStore,
     Message, ModelEvent, ModelRequest, OpenAiProvider, Provider, ProviderSettings, Role,
@@ -695,6 +696,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         captures: &data.join("captures"),
         skills: &data.join("skills"),
         memories: &MemoryStore::load(&data),
+        standing: Standing::Own(None),
     }
     .run(&plan, &cancel)
     .await;

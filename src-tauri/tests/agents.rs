@@ -41,6 +41,7 @@ use aegis_lib::agent::transcript;
 use aegis_lib::agent::turn::TurnPlan;
 use aegis_lib::agent::wire::{ModelEvent, StopReason, WireMessage};
 use aegis_lib::policy::tool;
+use aegis_lib::Standing;
 use aegis_lib::{
     Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore,
     MemoryStore, Message, SessionState, SessionStore, ToolCallStatus, Turn, TurnRegistry,
@@ -218,6 +219,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            standing: Standing::Own(None),
         }
         .run(&plan, &cancel)
         .await;

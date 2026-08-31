@@ -42,6 +42,8 @@ const TOOL_SUMMARY: Record<string, string> = {
   skill_return: "record what a runbook produced",
   memory_write: "remember something, for every later session",
   memory_search: "look through what it remembers",
+  handoff_delegate: "hand briefs to other identities and wait for them",
+  handoff_return: "report back on a brief it was handed",
 };
 
 /**

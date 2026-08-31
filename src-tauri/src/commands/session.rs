@@ -20,10 +20,14 @@
 //! registration is undone, or the session would be left running a turn that
 //! does not exist.
 
+use std::sync::Arc;
+
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::agent::event::{Event, EventSink};
-use crate::agent::turn::{self, Turn, TurnPlan};
+use crate::agent::turn::{self, Standing, Turn, TurnPlan};
+use crate::handoff::bus;
+use crate::handoff::runner::AppRunner;
 use crate::state::AppState;
 use crate::store::{Message, SessionDetail, SessionState, SessionSummary, TurnHandle};
 
@@ -208,6 +212,28 @@ async fn run_turn<R: Runtime>(
     let agent = state.agent_of(&plan.session_id);
     let provider = state.provider_for(&agent);
 
+    // What this turn's `handoff_delegate` would run against, if it makes one
+    // (PLAN 7.3, Phase 15). Built here rather than in `AppState` because it is
+    // per turn: it remembers the session it opened for each brief, so a retry
+    // continues that run instead of starting a third one.
+    //
+    // A session whose project is gone gets none: a delegation with no workspace
+    // is a team with no shared files, which is the thing the whole mode rests
+    // on (`COS.md` *Memory*).
+    let bus: Option<Arc<dyn bus::Runner>> =
+        state
+            .sessions()
+            .project_of(&plan.session_id)
+            .ok()
+            .map(|project_id| {
+                Arc::new(AppRunner::new(
+                    app.clone(),
+                    project_id,
+                    plan.session_id.clone(),
+                    plan.workspace.clone(),
+                )) as Arc<dyn bus::Runner>
+            });
+
     let reason = Turn {
         agent: &agent,
         sessions: state.sessions(),
@@ -221,6 +247,7 @@ async fn run_turn<R: Runtime>(
         captures: state.captures(),
         skills: state.skills(),
         memories: state.memories(),
+        standing: Standing::Own(bus.as_ref()),
     }
     .run(&plan, &cancel)
     .await;

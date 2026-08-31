@@ -191,7 +191,19 @@ text: string,
 /**
  * What it would rest on, when the model named something.
  */
-source: string | null, };
+source: string | null, } | { "kind": "handoff", 
+/**
+ * One row per brief, in the order they would go out.
+ */
+briefs: Array<HandoffRow>, 
+/**
+ * The identity that would review what comes back, when one was named.
+ */
+reviewer: string | null, 
+/**
+ * Where the briefs would be filed, when the workspace has a `briefs/`.
+ */
+filed_in: string | null, };
 
 /**
  * One approval, as the dialog receives it (PLAN 2.1, `ApprovalRequest`).
@@ -354,6 +366,21 @@ tool: string,
  */
 skill: string, 
 /**
+ * The delegation this call was part of (PLAN 7.3, Phase 15).
+ *
+ * The other half of "one run id over CoS + specialists" (PLAN 7.2, row
+ * 10): the CoS's `handoff_delegate` line carries it, and so does every
+ * call every specialist makes while working on one of its briefs — in
+ * their own sessions, under their own identities. Given `agent_id` beside
+ * it, a replay can say who ran, under whose brief, and what it cost.
+ *
+ * Empty outside a delegation, and on every line written before this
+ * phase. `#[serde(default)]` for the reason `agent_id` and `skill` carry
+ * one: the file is its own wire format, and a reader that refused the
+ * older lines would lose the history the log is kept for.
+ */
+handoff: string, 
+/**
  * Auto-allowed, approved, or refused.
  */
 decision: AuditDecision, 
@@ -436,6 +463,39 @@ at: string, };
 export type Decision = "allow_once" | "allow_session" | "deny";
 
 /**
+ * Why a session exists, when a person did not open it (PLAN 7.3, Phase 15).
+ *
+ * A delegated run is an ordinary session in every way that matters — same
+ * transcript, same approval gate, same audit lines, same identity binding —
+ * and this record is the difference: it says which delegation opened it, which
+ * session was delegating, and where the brief was filed.
+ *
+ * It is on the session rather than in a store of its own because a delegated
+ * run *is* a session, and a second document listing which sessions are really
+ * runs would be a second thing to keep in step with this one. It is also what
+ * keeps the work visible: a specialist's session opens in the sidebar like any
+ * other, so "what did the reviewer actually do" is a click rather than a
+ * forensic exercise (`COS.md` aggregates status for the *CoS*, not for the
+ * person).
+ */
+export type Delegated = { 
+/**
+ * The delegation this run belongs to. Shared with the audit lines.
+ */
+handoff_id: string, 
+/**
+ * The session whose turn handed the brief out.
+ */
+from_session_id: string, 
+/**
+ * Where the brief was filed, relative to the workspace root.
+ *
+ * `None` when the workspace has no `briefs/` — the brief then lives only
+ * in the first message of this transcript, which is still a record of it.
+ */
+brief: string | null, };
+
+/**
  * One `allow_session` grant.
  *
  * The variants are the scopes, not the tools: `fs_read` appears only as
@@ -447,7 +507,32 @@ export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "ki
 /**
  * The normalized program key — see [`Grant::shell`].
  */
-program: string, } | { "kind": "screen_capture" } | { "kind": "memory_write" };
+program: string, } | { "kind": "screen_capture" } | { "kind": "memory_write" } | { "kind": "handoff_delegate" };
+
+/**
+ * One brief, as the approval dialog draws it.
+ */
+export type HandoffRow = { 
+/**
+ * What is to be achieved.
+ */
+goal: string, 
+/**
+ * The identity that would do it, as the model named it.
+ */
+owner: string, 
+/**
+ * `high`, `normal` or `low`.
+ */
+priority: string, 
+/**
+ * `status`, `artefact` or `question`.
+ */
+return_format: string, 
+/**
+ * How many paths and links it starts from.
+ */
+inputs: number, };
 
 /**
  * Where the key in use came from (PLAN 2.1, `MaskedSettings`).
@@ -583,6 +668,15 @@ created_at: string, };
 export type Outcome = "ok" | "error" | "denied" | "cancelled";
 
 /**
+ * How soon a brief wants attention.
+ *
+ * Three words and no number. A scale of ten is a scale nobody calibrates, and
+ * what the field is for is the order a board is read in — which of these is
+ * waiting on a person, and which can sit.
+ */
+export type Priority = "high" | "normal" | "low";
+
+/**
  * A project as the UI sees it.
  */
 export type Project = { 
@@ -651,6 +745,16 @@ message: string, };
  * Who or what produced an answer (PLAN 2.2, `tool:approval_resolved`).
  */
 export type ResolvedBy = "user" | "policy" | "timeout";
+
+/**
+ * What the brief asks to come back (`COS.md`: `status | artefact | question`).
+ *
+ * It does not change the shape of the [`Report`] — every return is a report,
+ * which is what makes fan-in cheap. What it changes is what a *complete* one
+ * looks like, and the owner is told which was asked for so it can tell the
+ * difference between "say what you found" and "produce the file".
+ */
+export type ReturnFormat = "status" | "artefact" | "question";
 
 /**
  * How alarming a call should look in the approval dialog.
@@ -770,7 +874,15 @@ message_count: number,
 /**
  * What the session is doing *right now*.
  */
-state: SessionState, };
+state: SessionState, 
+/**
+ * The brief that opened this session, when one did (PLAN 7.3, Phase 15).
+ *
+ * `None` for every session a person started, which is every session before
+ * this phase. The sidebar draws it as a badge rather than hiding the row:
+ * work done on your behalf should be as visible as work you asked for.
+ */
+delegated: Delegated | null, };
 
 /**
  * One catalog entry.
@@ -833,7 +945,7 @@ problem: string | null, };
 export type SkillScope = "library" | "workspace";
 
 /**
- * How a skill run ended (`COS.md` *Handoff*).
+ * How a delegated run — or a skill run — ended (`COS.md` *Handoff*).
  *
  * Three states and no fourth. "Partly done" is `needs_you` with the rest in
  * `open_questions`; a runner that offered a fourth would be offering a place

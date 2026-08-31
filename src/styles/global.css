@@ -665,6 +665,22 @@ body {
   color: var(--danger);
 }
 
+/*
+ * A session a brief opened (PLAN 7.3, Phase 15). Quieter than the live-state
+ * badges beside it: those say what a row is doing now and want to be noticed,
+ * this one says where the row came from and only has to be readable.
+ */
+.session__badge--delegated {
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.session--delegated .session__title {
+  font-style: italic;
+}
+
 .session__action {
   flex-shrink: 0;
   width: 1.6rem;
@@ -1251,6 +1267,45 @@ body {
 
 .args__item {
   overflow-wrap: anywhere;
+}
+
+/* --- Briefs, in a handoff approval ---------------------------------------- */
+
+/*
+ * One row per brief: who, what, and the three facts that change how it will be
+ * read. Not the constraints and not the definition of done — a person deciding
+ * whether to start four runs is deciding who works on what, and the rest is in
+ * the brief file the dialog names underneath.
+ */
+.briefs {
+  margin: 0 0 0.6rem;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.briefs__item {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.briefs__owner {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.briefs__goal {
+  overflow-wrap: anywhere;
+}
+
+.briefs__meta {
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 /* --- Session grants ------------------------------------------------------- */

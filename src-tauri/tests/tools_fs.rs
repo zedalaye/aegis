@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome, READ_MAX_BYTES};
+use aegis_lib::HandoffCtx;
 use aegis_lib::{MemoryStore, SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -114,6 +115,10 @@ impl Fixture {
             },
             // Nothing here remembers anything either.
             memories: &self.memories,
+            handoffs: HandoffCtx {
+                bus: None,
+                open: None,
+            },
         };
 
         match decide(&ctx, tool_name, args.clone()) {
@@ -483,6 +488,8 @@ fn the_tools_offered_to_the_model_are_the_ones_this_build_runs() {
             // shows the sentence that would be remembered.
             "memory_write",
             "memory_search",
+            "handoff_delegate",
+            "handoff_return",
         ]
     );
 }

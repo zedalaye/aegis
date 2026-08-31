@@ -591,13 +591,25 @@ export function attachSessionEvents(): Promise<() => void> {
     "session:updated": (summary) => {
       setState((state) => {
         const known = state.sessions.some((session) => session.id === summary.id);
+        // An unknown row is inserted rather than dropped when it belongs to the
+        // list being shown, because from Phase 15 a session can appear without
+        // anyone clicking New: a brief opens one, under the identity it names
+        // (PLAN 7.3). Dropping it would leave a specialist working — and
+        // possibly waiting on an approval — with no row in the sidebar to say
+        // so. It is still scoped to this project's list: a summary for another
+        // project is not this list's business.
+        const belongs = state.sessions.some(
+          (session) => session.project_id === summary.project_id,
+        );
         const sessions = known
           ? ordered(
               state.sessions.map((session) =>
                 session.id === summary.id ? summary : session,
               ),
             )
-          : state.sessions;
+          : belongs
+            ? ordered([...state.sessions, summary])
+            : state.sessions;
 
         return {
           sessions,

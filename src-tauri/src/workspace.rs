@@ -56,6 +56,13 @@ use crate::error::{AppError, AppResult};
 use crate::policy::path;
 use crate::skills;
 
+/// Where a delegated brief is filed (`COS.md` *Handoff*; PLAN 7.3, Phase 15).
+///
+/// Named rather than spelled inline because two things now depend on it: the
+/// scaffolder below, and the handoff bus, which writes one file here per brief
+/// it hands out and refuses to invent the directory if it is not already there.
+pub const BRIEFS_DIR: &str = "briefs";
+
 /// The state file a session reads first: what is true now.
 pub const STATUS_FILE: &str = "status/STATUS.md";
 
@@ -125,7 +132,7 @@ impl Slot {
 /// actually moves through, which is also the order that reads best in a panel.
 const CONVENTION: [Slot; 5] = [
     Slot {
-        dir: "briefs",
+        dir: BRIEFS_DIR,
         file: "README.md",
         seed: BRIEFS_SEED,
         digest: Some(Digest::Listing),
