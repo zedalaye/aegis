@@ -43,8 +43,8 @@ use aegis_lib::agent::wire::{ModelEvent, StopReason, WireMessage};
 use aegis_lib::policy::tool;
 use aegis_lib::{
     Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore,
-    Message, SessionState, SessionStore, ToolCallStatus, Turn, TurnRegistry, DEFAULT_AGENT_ID,
-    DEFAULT_PROVIDER_ID,
+    MemoryStore, Message, SessionState, SessionStore, ToolCallStatus, Turn, TurnRegistry,
+    DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
 /// Collects every event a turn emits.
@@ -86,6 +86,8 @@ struct App {
     captures: PathBuf,
     /// An empty skill library: these files are about other things.
     library: PathBuf,
+    /// An empty memory store, for the same reason.
+    memories: MemoryStore,
 }
 
 impl App {
@@ -108,6 +110,7 @@ impl App {
             audit: AuditLog::new(&data),
             captures: data.join("captures"),
             library: data.join("skills"),
+            memories: MemoryStore::load(&data),
         }
     }
 
@@ -143,11 +146,15 @@ impl App {
         let history = self.sessions.messages(session_id).expect("messages");
         let request = transcript::build(
             "m",
-            agent,
+            &transcript::Context {
+                agent,
+                workspace: Some(&self.workspace),
+                memories: None,
+                skills: None,
+                shared: None,
+                compacted: None,
+            },
             &history,
-            Some(&self.workspace),
-            None,
-            None,
             aegis_lib::tools::schemas_for(&agent.tools),
         );
 
@@ -210,6 +217,7 @@ impl App {
             self_exe: None,
             captures: &self.captures,
             skills: &self.library,
+            memories: &self.memories,
         }
         .run(&plan, &cancel)
         .await;
@@ -468,11 +476,15 @@ fn a_session_written_before_identities_is_the_assistant_it_always_was() {
         .expect("messages");
     let request = transcript::build(
         "m",
-        &resolved,
+        &transcript::Context {
+            agent: &resolved,
+            workspace: Some(&workspace),
+            memories: None,
+            skills: None,
+            shared: None,
+            compacted: None,
+        },
         &history,
-        Some(&workspace),
-        None,
-        None,
         aegis_lib::tools::schemas_for(&resolved.tools),
     );
 

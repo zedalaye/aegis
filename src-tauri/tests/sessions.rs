@@ -20,7 +20,7 @@ use tempfile::TempDir;
 use aegis_lib::agent::event::EventSink;
 use aegis_lib::agent::turn::{self, TurnPlan};
 use aegis_lib::{
-    Agent, ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore, Message, Role,
+    Agent, ApprovalRegistry, AuditLog, Event, FakeProvider, GrantStore, MemoryStore, Message, Role,
     SessionState, SessionStore, StopReason, Turn, TurnRegistry, DEFAULT_AGENT_ID,
 };
 
@@ -67,6 +67,8 @@ impl EventSink for Recorder {
 struct App {
     _dir: TempDir,
     data: PathBuf,
+    /// An empty memory store: these files are about transcripts.
+    memories: MemoryStore,
     workspace: PathBuf,
     sessions: SessionStore,
     turns: TurnRegistry,
@@ -85,6 +87,7 @@ impl App {
 
         Self {
             sessions: SessionStore::load(&data),
+            memories: MemoryStore::load(&data),
             audit: AuditLog::new(&data),
             workspace: dunce::canonicalize(&workspace).expect("canonical workspace"),
             data,
@@ -140,6 +143,7 @@ impl App {
             self_exe: None,
             captures: &self.data.join("captures"),
             skills: &self.data.join("skills"),
+            memories: &self.memories,
         }
         .run(&plan, &cancel)
         .await;
@@ -431,13 +435,18 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
         .expect("append");
 
     let history = app.sessions.messages(&session.id).expect("messages");
+    let agent = Agent::builtin();
     let request = transcript::build(
         "m",
-        &Agent::builtin(),
+        &transcript::Context {
+            agent: &agent,
+            workspace: Some(&app.workspace),
+            memories: None,
+            skills: None,
+            shared: None,
+            compacted: None,
+        },
         &history,
-        Some(&app.workspace),
-        None,
-        None,
         Vec::new(),
     );
 

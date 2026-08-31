@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, Grant, GrantStore, PolicyCtx, Risk};
 use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome};
-use aegis_lib::{SkillCtx, DEFAULT_AGENT_ID};
+use aegis_lib::{MemoryStore, SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -40,6 +40,9 @@ struct Fixture {
     _dir: TempDir,
     workspace: PathBuf,
     captures: PathBuf,
+    /// An empty memory store. Nothing here remembers anything; the store is
+    /// only there because a tool call is not runnable without one.
+    memories: MemoryStore,
     grants: GrantStore,
     audit: AuditLog,
     runtime: tokio::runtime::Runtime,
@@ -56,6 +59,7 @@ impl Fixture {
         Self {
             workspace: dunce::canonicalize(&workspace).expect("canonical workspace"),
             captures: data.join("captures"),
+            memories: MemoryStore::load(&data),
             audit: AuditLog::new(&data),
             _dir: dir,
             grants: GrantStore::new(),
@@ -97,6 +101,8 @@ impl Fixture {
                 tools: &[],
                 active: None,
             },
+            // Nothing here remembers anything either.
+            memories: &self.memories,
         };
 
         match self.judge(args.clone()) {
@@ -141,6 +147,8 @@ impl Fixture {
                 tools: &[],
                 active: None,
             },
+            // Nothing here remembers anything either.
+            memories: &self.memories,
         };
 
         tools::refuse(

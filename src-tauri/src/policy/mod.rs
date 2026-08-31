@@ -46,6 +46,7 @@ use ts_rs::TS;
 
 use crate::error::ErrorCode;
 use crate::skills::handoff;
+use crate::store::memories;
 
 pub use grants::{Grant, GrantStore};
 
@@ -67,6 +68,10 @@ pub mod tool {
     pub const SKILL_RUN: &str = "skill_run";
     /// Record the result of the runbook that was loaded.
     pub const SKILL_RETURN: &str = "skill_return";
+    /// Remember something as this identity.
+    pub const MEMORY_WRITE: &str = "memory_write";
+    /// Look through what this identity remembers.
+    pub const MEMORY_SEARCH: &str = "memory_search";
 }
 
 /// How alarming a call should look in the approval dialog.
@@ -157,6 +162,23 @@ pub enum ApprovalDetail {
         logical_width: u32,
         /// Height in the display's own points.
         logical_height: u32,
+    },
+    /// Remembering something (PLAN 7.3, Phase 14).
+    ///
+    /// The whole memory, not a preview of it: it is one sentence by
+    /// construction, and a memory is the one mutating call where reading the
+    /// entire thing costs the user less than reading a summary of it would.
+    Memory {
+        /// `preference`, `exception` or `convention`.
+        ///
+        /// Not `kind`, which is the enum's own discriminant tag on the wire.
+        /// The two are different axes — *which tool asked* and *what sort of
+        /// memory* — and one JSON object cannot spell them the same.
+        memory_kind: String,
+        /// Exactly what would be remembered.
+        text: String,
+        /// What it would rest on, when the model named something.
+        source: Option<String>,
     },
 }
 
@@ -301,6 +323,25 @@ pub enum ResolvedCall {
         /// The return, as `COS.md` writes one.
         report: Box<handoff::Report>,
     },
+    /// `memory_write`, with the kind already known to be one of the three.
+    ///
+    /// No identity: which identity is remembering is a fact about the turn,
+    /// carried by [`ToolCtx`](crate::tools::ToolCtx), never by an argument the
+    /// model writes. An identity cannot ask to remember something as somebody
+    /// else because there is nowhere in this shape to say so.
+    MemoryWrite {
+        /// Which of the three kinds this is.
+        kind: memories::MemoryKind,
+        /// The memory itself, trimmed.
+        text: String,
+        /// What it rests on, when the model named something.
+        source: Option<String>,
+    },
+    /// `memory_search`, scoped to the calling identity for the same reason.
+    MemorySearch {
+        /// The words that must all appear.
+        query: String,
+    },
 }
 
 impl ResolvedCall {
@@ -317,6 +358,8 @@ impl ResolvedCall {
             Self::ScreenCapture { .. } => tool::SCREEN_CAPTURE,
             Self::SkillRun { .. } => tool::SKILL_RUN,
             Self::SkillReturn { .. } => tool::SKILL_RETURN,
+            Self::MemoryWrite { .. } => tool::MEMORY_WRITE,
+            Self::MemorySearch { .. } => tool::MEMORY_SEARCH,
         }
     }
 }
@@ -378,6 +421,21 @@ pub enum ToolCall {
         /// The return, with its artefact paths still as the model wrote them.
         report: Box<handoff::Draft>,
     },
+    /// `memory_write`.
+    MemoryWrite {
+        /// Which of the three kinds, already parsed — see
+        /// [`ToolCall::parse`].
+        kind: memories::MemoryKind,
+        /// The memory as the model wrote it.
+        text: String,
+        /// The citation, when it gave one.
+        source: Option<String>,
+    },
+    /// `memory_search`.
+    MemorySearch {
+        /// The words to look for; empty lists what is held.
+        query: String,
+    },
 }
 
 impl ToolCall {
@@ -391,6 +449,8 @@ impl ToolCall {
             Self::ScreenCapture { .. } => tool::SCREEN_CAPTURE,
             Self::SkillRun { .. } => tool::SKILL_RUN,
             Self::SkillReturn { .. } => tool::SKILL_RETURN,
+            Self::MemoryWrite { .. } => tool::MEMORY_WRITE,
+            Self::MemorySearch { .. } => tool::MEMORY_SEARCH,
         }
     }
 
@@ -486,6 +546,31 @@ impl ToolCall {
                     }),
                 })
             }
+            tool::MEMORY_WRITE => {
+                let a: MemoryWriteArgs = convert(tool_name, args)?;
+                // Parsed here rather than by the tool, so that "which of the
+                // three is this" is settled before the approval dialog has to
+                // name it. A dialog cannot ask about a kind nobody has read.
+                let Some(kind) = memories::MemoryKind::parse(&a.kind) else {
+                    return Err(format!(
+                        "`{}` is not a kind of memory. A memory is a `preference`, an \
+                         `exception` or a `convention`; anything else is a file in the workspace \
+                         or a skill",
+                        a.kind.trim()
+                    ));
+                };
+                Ok(Self::MemoryWrite {
+                    kind,
+                    text: a.text,
+                    source: a.source,
+                })
+            }
+            tool::MEMORY_SEARCH => {
+                let a: MemorySearchArgs = convert(tool_name, args)?;
+                Ok(Self::MemorySearch {
+                    query: a.query.unwrap_or_default(),
+                })
+            }
             other => Err(format!("unknown tool `{other}`")),
         }
     }
@@ -541,6 +626,26 @@ struct ScreenCaptureArgs {
 #[derive(Debug, Deserialize)]
 struct SkillRunArgs {
     name: String,
+}
+
+/// Wire shape of `memory_write` arguments.
+///
+/// `kind` arrives as a string rather than as the enum, for the reason
+/// `skill_return`'s status does: an unrecognized one is then answered with the
+/// three that work, instead of with whatever `serde` says about a variant name.
+#[derive(Debug, Deserialize)]
+struct MemoryWriteArgs {
+    kind: String,
+    text: String,
+    #[serde(default)]
+    source: Option<String>,
+}
+
+/// Wire shape of `memory_search` arguments.
+#[derive(Debug, Deserialize)]
+struct MemorySearchArgs {
+    #[serde(default)]
+    query: Option<String>,
 }
 
 /// Wire shape of `skill_return` arguments (`COS.md` *Handoff*).

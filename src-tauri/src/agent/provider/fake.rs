@@ -17,7 +17,7 @@
 //!   per turn, consumed in order. This is how a test drives a tool call, a
 //!   truncated arguments string or a provider error through the loop.
 //!
-//! The improvised mode has four deliberate exceptions to "never touch the
+//! The improvised mode has five deliberate exceptions to "never touch the
 //! machine", and they are what make the approval gate — and, from Phase 13,
 //! the skill runner — usable before there is a model: a message containing
 //! [`WRITE_TRIGGER`] makes it ask for an `fs_write` (PLAN 6, Phase 6 — "the
@@ -25,10 +25,11 @@
 //! [`RUN_TRIGGER`] makes it ask for a `shell_exec` (Phase 7), one containing
 //! [`CAPTURE_TRIGGER`] makes it ask for a `screen_capture` (Phase 9), and one
 //! containing [`SKILL_TRIGGER`] makes it load and close a skill run (Phase
-//! 13). All four are words the user has to type, not heuristics over what they
-//! said: a fake model that decided on its own when to reach for the disk, for
-//! a process or for the screen would be exactly the behaviour the gate exists
-//! to catch.
+//! 13), and one containing [`REMEMBER_TRIGGER`] makes it ask to remember
+//! something (Phase 14). All five are words the user has to type, not
+//! heuristics over what they said: a fake model that decided on its own when
+//! to reach for the disk, for a process, for the screen or for its own memory
+//! would be exactly the behaviour the gate exists to catch.
 //!
 //! Tokens are emitted with a small delay so streaming is visibly streaming and
 //! a cancel has something to interrupt. Tests use [`FakeProvider::instant`],
@@ -81,6 +82,24 @@ pub const CAPTURE_TRIGGER: &str = "/capture";
 /// runbook would be pretending to be the thing this trigger exists to make
 /// visible. Matched case-insensitively anywhere in the user's message.
 pub const SKILL_TRIGGER: &str = "/skill";
+
+/// The word that makes the improvising provider ask to remember something.
+///
+/// Typing it is the Phase 14 walkthrough: the dialog shows the exact sentence
+/// that would be remembered, and once allowed it appears under Memory in
+/// Settings and at the top of the *next* reply this identity gives. Matched
+/// case-insensitively anywhere in the user's message.
+pub const REMEMBER_TRIGGER: &str = "/remember";
+
+/// What the triggered memory says.
+///
+/// Fixed, and about the demo rather than about the user's work. A scripted
+/// provider that improvised a preference about someone it has never met would
+/// be writing words they never said into the one store that outlives every
+/// session — and unlike the demo file, a memory is not something you notice by
+/// looking at your workspace.
+pub const REMEMBER_TEXT: &str =
+    "the scripted provider was asked to demonstrate how a memory is recorded";
 
 /// The file the triggered write targets, relative to the workspace.
 ///
@@ -204,8 +223,9 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         return skill_turn(request);
     }
 
-    // The three things this provider will reach for the machine over, and only
-    // because the user named them.
+    // The four things this provider will ask for, and only because the user
+    // named them. Three reach the machine; the fourth reaches the identity's
+    // own memory, which is why it is here rather than answered inline.
     if !already_answered(request) {
         if asked.contains(WRITE_TRIGGER) {
             return ask_to_write(&said);
@@ -215,6 +235,9 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         }
         if asked.contains(CAPTURE_TRIGGER) {
             return ask_to_capture();
+        }
+        if asked.contains(REMEMBER_TRIGGER) {
+            return ask_to_remember();
         }
     }
 
@@ -236,7 +259,10 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
          display. Any of them you can refuse, allow once, or allow for the \
          rest of the session, and find the audit line on disk afterwards. \
          `{SKILL_TRIGGER}` runs the first skill this identity was granted, \
-         which takes two rounds and needs no approval at all.",
+         which takes two rounds and needs no approval at all. \
+         `{REMEMBER_TRIGGER}` asks to remember something — the one call here \
+         that touches nothing on your machine and still asks, because a memory \
+         reaches the top of every later reply this identity gives.",
         plural = if tools == 1 { "" } else { "s" },
     );
 
@@ -373,6 +399,41 @@ fn ask_to_capture() -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::SCREEN_CAPTURE.to_owned()),
             args_delta: "{}".to_owned(),
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// A turn that asks to remember one thing, and nothing else.
+///
+/// The one trigger whose call touches nothing on the machine and is still put
+/// to the user. That is the point of it: a memory reaches the top of every
+/// later reply this identity gives, which makes it closer to an instruction
+/// than to a note, and the dialog shows the whole sentence because a memory is
+/// one sentence.
+fn ask_to_remember() -> Vec<ModelEvent> {
+    let arguments = serde_json::json!({
+        "kind": "convention",
+        "text": REMEMBER_TEXT,
+        "source": "agent/provider/fake.rs",
+    })
+    .to_string();
+
+    vec![
+        ModelEvent::TextDelta {
+            text: "Remembering one thing — this needs your approval. Nothing on your machine \
+                   changes; what changes is what I carry into every later reply as this \
+                   identity.\n"
+                .to_owned(),
+        },
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::MEMORY_WRITE.to_owned()),
+            args_delta: arguments,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -677,13 +738,20 @@ mod tests {
     }
 
     fn request_saying(text: &str) -> ModelRequest {
+        let agent = crate::store::Agent::builtin();
+        let root = PathBuf::from("/home/p/work");
+
         transcript::build(
             FAKE_MODEL,
-            &crate::store::Agent::builtin(),
+            &transcript::Context {
+                agent: &agent,
+                workspace: Some(&root),
+                memories: None,
+                skills: None,
+                shared: None,
+                compacted: None,
+            },
             &[crate::store::Message::user(text)],
-            Some(&PathBuf::from("/home/p/work")),
-            None,
-            None,
             crate::tools::schemas(),
         )
     }
@@ -719,13 +787,18 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_without_a_workspace_is_reported_as_such() {
+        let agent = crate::store::Agent::builtin();
         let request = transcript::build(
             FAKE_MODEL,
-            &crate::store::Agent::builtin(),
+            &transcript::Context {
+                agent: &agent,
+                workspace: None,
+                memories: None,
+                skills: None,
+                shared: None,
+                compacted: None,
+            },
             &[],
-            None,
-            None,
-            None,
             Vec::new(),
         );
         let text = text_of(&drain(&FakeProvider::instant(), request).await);
@@ -899,6 +972,38 @@ mod tests {
         // arguments do not parse is answered rather than asked about.
         let args: serde_json::Value = serde_json::from_str(&call.1).expect("valid arguments");
         assert_eq!(args, serde_json::json!({}));
+    }
+
+    /// PLAN 7.3, Phase 14: the fake provider asks to remember something on
+    /// demand, so the one gate that protects nothing on the machine can still
+    /// be walked through without a model.
+    #[tokio::test]
+    async fn the_remember_trigger_asks_to_write_a_memory_about_the_demo() {
+        let asked = drain(
+            &FakeProvider::instant(),
+            request_saying("please /remember this"),
+        )
+        .await;
+
+        let call = asked
+            .iter()
+            .find_map(|event| match event {
+                ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                } => Some((name.clone(), args_delta.clone())),
+                _ => None,
+            })
+            .expect("a tool call");
+
+        assert_eq!(call.0.as_deref(), Some(crate::policy::tool::MEMORY_WRITE));
+
+        let args: serde_json::Value = serde_json::from_str(&call.1).expect("valid arguments");
+        assert_eq!(args["kind"], "convention");
+        assert_eq!(args["text"], REMEMBER_TEXT);
+        // About the demo, never about the user. A scripted provider inventing a
+        // preference would be putting words in somebody's mouth in the one
+        // store that outlives every session.
+        assert_eq!(args["source"], "agent/provider/fake.rs");
     }
 
     /// PLAN 7.3, Phase 13: the skill trigger walks a whole run — load, then

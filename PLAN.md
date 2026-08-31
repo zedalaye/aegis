@@ -183,6 +183,7 @@ type SessionSummary = {
 type SessionDetail = {
   session: SessionSummary;
   messages: Message[];
+  compaction: Compaction | null;  // Phase 14, see 7.3
   pending_approvals: ApprovalRequest[];
 };
 type Message = {
@@ -202,7 +203,9 @@ type TurnHandle = { session_id: string; turn_id: string };
 ```
 
 `session_send` returns as soon as the turn is registered; everything after that arrives as
-events. Sending while the session is `running` is rejected with `E_TURN_BUSY`.
+events. Sending while the session is `running` is rejected with `E_TURN_BUSY`. `session_compact`
+is the eighth command of this domain and is listed under *Memory* below, with the other half of
+the phase it belongs to.
 
 **Approvals**
 
@@ -231,7 +234,8 @@ type ApprovalDetail =
   | { kind: "fs_list";  path: string }
   | { kind: "fs_write"; path: string; bytes: number; exists: boolean; preview: string | null }
   | { kind: "shell";    program: string; args: string[]; cwd: string; shell_line: string }
-  | { kind: "screen";   display: string; width: number; height: number };
+  | { kind: "screen";   display: string; width: number; height: number }
+  | { kind: "memory";   memory_kind: MemoryKind; text: string; source: string | null };
 ```
 
 `fs_write.preview` is the first 4 KB when the content is valid UTF-8, otherwise `null`.
@@ -262,7 +266,44 @@ type AgentDraft = Omit<Agent, "id" | "builtin">;
 A refused field comes back as `E_INVALID_SETTING` with `error.field` — the same shape the
 provider form already uses, deliberately, so no screen learns a second vocabulary for "this
 input is wrong". `agent_delete` on an identity that sessions still run as is refused rather than
-cascaded; there is no command that rebinds a session's identity.
+cascaded; there is no command that rebinds a session's identity. Its *memories* do cascade
+(Phase 14): they are reachable only through the identity that holds them, so leaving them would
+grow a document with records nothing can name — which is a different question from orphaning a
+transcript, and gets the opposite answer.
+
+**Memory** (Phase 14, § 7.3 — not MVP)
+
+| Command | Args | Returns |
+| --- | --- | --- |
+| `memory_list` | `{ agent_id }` | `Memory[]` (most recently touched first) |
+| `memory_save` | `{ agent_id, memory_id?, draft }` | `Memory` |
+| `memory_forget` | `{ agent_id, memory_id }` | `Memory` (what went) |
+| `session_compact` | `{ session_id }` | `SessionDetail` |
+
+```ts
+type MemoryKind = "preference" | "exception" | "convention";
+type Memory = {
+  id: string;                 // uuid v4
+  agent_id: string;           // no accessor spans two identities
+  kind: MemoryKind;
+  text: string;               // one sentence, capped
+  source: string | null;      // COS.md "cite": a path, a ticket, a person
+  created_at: string; updated_at: string;
+};
+type MemoryDraft = Omit<Memory, "id" | "agent_id" | "created_at" | "updated_at">;
+type Compaction = {           // on SessionDetail; a pointer, never a deletion
+  through_message_id: string; // the last message the model no longer carries
+  folded: number; state: string; at: string;
+};
+```
+
+`memory_save` with no `memory_id` records a new memory, unless one already carries that text —
+then it touches that one and returns it, with its existing id. `memory_forget` on a memory
+belonging to another identity is *not found* rather than refused: the alternative confirms that a
+record exists somewhere the caller cannot see. `session_compact` always returns the detail,
+whether or not anything moved — a session too short to fold is an answer, drawn by finding no
+`compaction`, not a failure — and is refused with `E_TURN_BUSY` while a turn is running, since a
+turn folds once before its first request so that all its rounds reason against one history.
 
 **Settings and audit**
 
@@ -826,6 +867,37 @@ Memory store with CRUD, search, forget. Compaction writes *state*, then retrieve
 re-injects memory, not the novel. Flush facts to files before compact. Exit: after a forced
 compaction, the agent still knows the current goal, the open blockers, and the path to
 `DECISIONS.md`; it does not replay the whole chat.
+
+*Landed as:* `memories.json` beside the other documents; `Memory { id, agent_id, kind, text,
+source, created_at, updated_at }`, where `kind` is `preference | exception | convention` — the
+three words `COS.md` uses, and the whole vocabulary, because a store that accepted anything
+becomes the transcript it exists to replace. Scoping is structural: every accessor takes an
+`agent_id`, none of them spans two, and neither memory tool has an argument that names an
+identity. Commands `memory_list` / `memory_save` / `memory_forget`; tools `memory_write` and
+`memory_search`. **There is deliberately no `memory_forget` tool.** `COS.md` *Roles* gives the
+human memory correction, deleting is irreversible, and the record a delete most often removes is
+a correction somebody made — so the store has full CRUD, the model has create and read, and
+Forget is a button. `memory_write` is an *ask* with a session grant, like `fs_write`, because a
+memory reaches the system message of every later turn: durable, invisible at the time, and
+therefore closer to an instruction than to a note. The dialog shows the whole sentence, since a
+memory is one. `search` is a capped substring scan — no index, no ranking a caller cannot see.
+Consolidation is at the door rather than on a clock (the clock is Phase 16): a write repeating
+something already held touches it instead of duplicating, and says which happened.
+
+Compaction is **coded, not summarized** (PLAN 7.5). `compact::plan` derives state from what
+actually happened — the first thing asked, the paths `fs_write` wrote, the programs
+`shell_exec` ran, the status a `skill_return` reported, the questions it left open, the calls
+that were refused — so the same messages always produce the same state, in microseconds, with
+every claim checkable against the audit log. The cost is that the state is thin: it holds what
+was done, not what was reasoned, which is the intended trade, and is why the last
+`compact::KEEP_TURNS` turns stay raw. **Nothing is deleted.** A `Compaction { through_message_id,
+folded, state, at }` on the session is a *pointer*: the transcript stays whole on disk, the pane
+still scrolls through all of it, and a later fold re-derives from the messages rather than
+folding a summary into a summary. The cut is always immediately before a `user` message, which
+is what keeps the request valid. Automatic once a transcript passes `COMPACT_AT_BYTES`, checked
+once per turn before the first request; forced by `session_compact`. Retrieve-after-compact needs
+no step and has none: the memory block and the workspace digest are rebuilt into every system
+message, so they were never in the part that folds.
 
 **Phase 15 — Handoff bus + Chef de Cabinet loop**
 The `COS.md` *Handoff* objects: `goal / owner / priority / inputs / constraints /

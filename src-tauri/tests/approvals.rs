@@ -33,8 +33,8 @@ use aegis_lib::agent::provider::fake::{RUN_TRIGGER, WRITE_TARGET, WRITE_TRIGGER}
 use aegis_lib::agent::turn::{self, TurnPlan};
 use aegis_lib::{
     Agent, ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditDecision, AuditLog, Event,
-    FakeProvider, Grant, GrantStore, Message, Outcome, ResolvedBy, SessionState, SessionStore,
-    StopReason, ToolCallStatus, Turn, TurnRegistry, DEFAULT_AGENT_ID,
+    FakeProvider, Grant, GrantStore, MemoryStore, Message, Outcome, ResolvedBy, SessionState,
+    SessionStore, StopReason, ToolCallStatus, Turn, TurnRegistry, DEFAULT_AGENT_ID,
 };
 
 /// Collects every event a turn emits.
@@ -139,6 +139,8 @@ struct App {
     captures: PathBuf,
     /// An empty skill library: these files are about other things.
     library: PathBuf,
+    /// An empty memory store, for the same reason.
+    memories: MemoryStore,
     /// The identity these turns run as: the built-in one, which holds every
     /// tool. What an allow-list does to a call is `tests/agents.rs`.
     agent: Agent,
@@ -169,6 +171,7 @@ impl App {
             session_id,
             captures: data.join("captures"),
             library: data.join("skills"),
+            memories: MemoryStore::load(&data),
             agent: Agent::builtin(),
         }
     }
@@ -187,6 +190,7 @@ impl App {
             self_exe: None,
             captures: &self.captures,
             skills: &self.library,
+            memories: &self.memories,
         }
     }
 

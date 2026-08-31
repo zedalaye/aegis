@@ -17,6 +17,15 @@
 //! and read, which is worth more than the write amplification it costs. A
 //! transcript that outgrows it wants its own file; the seam for that is
 //! [`SessionStore::save`], the only place the whole document is serialized.
+//!
+//! From Phase 14 a session may also carry a [`Compaction`], and it is worth
+//! being clear about what that is not: it is a *pointer* plus derived state,
+//! never a deletion. The transcript above it stays in this document, whole and
+//! in order — [`SessionStore::compact`] adds a record and removes no message.
+//! What a fold changes is which messages [`compact::tail`] hands to the model,
+//! and nothing else. A store that trimmed the transcript to save the model
+//! tokens would be destroying the only copy of a conversation somebody is
+//! still reading.
 
 use std::fs;
 use std::io;
@@ -28,6 +37,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::approval::ApprovalRequest;
+use crate::compact::{self, Plan};
 
 use super::agents::DEFAULT_AGENT_ID;
 use super::{now, quarantine, strip_bom, write_atomic};
@@ -248,6 +258,12 @@ pub struct SessionDetail {
     pub session: SessionSummary,
     /// Oldest first — the order the transcript is read in.
     pub messages: Vec<Message>,
+    /// What has been folded out of the model's context, if anything.
+    ///
+    /// On the detail rather than on the summary because it is about the
+    /// *transcript*, and the summary is a sidebar row: what a fold changes is
+    /// how the conversation is drawn, and the sidebar does not draw one.
+    pub compaction: Option<Compaction>,
     /// Approvals this session is blocked on.
     ///
     /// Filled by [`AppState::session_detail`](crate::AppState::session_detail)
@@ -256,6 +272,27 @@ pub struct SessionDetail {
     /// that a window reopened mid-turn re-draws the dialog it missed, instead
     /// of leaving a turn blocked on a prompt nobody can see.
     pub pending_approvals: Vec<ApprovalRequest>,
+}
+
+/// What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
+///
+/// A pointer and a summary, never a deletion: `through_message_id` names the
+/// last message that no longer reaches the model, and the transcript on disk
+/// still holds every one of them. That split is the whole design — the user
+/// keeps scrolling through the conversation they had, and the model stops
+/// paying for it ([`compact`](crate::compact)).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct Compaction {
+    /// The last message that folds. Everything after it still reaches the
+    /// model.
+    pub through_message_id: String,
+    /// How many messages folded.
+    pub folded: u32,
+    /// What they became: goal, files, decisions, blockers.
+    pub state: String,
+    /// RFC3339, UTC.
+    pub at: String,
 }
 
 /// What `session_send` hands back (PLAN 2.1).
@@ -304,6 +341,13 @@ struct StoredSession {
     updated_at: String,
     #[serde(default)]
     messages: Vec<Message>,
+    /// What has been folded, or `None` for a session that never has been.
+    ///
+    /// `#[serde(default)]` is the migration, as it was for `agent_id`: a
+    /// session written before Phase 14 reads back with none, which is exactly
+    /// what it had — a transcript that reaches the model whole.
+    #[serde(default)]
+    compaction: Option<Compaction>,
 }
 
 impl StoredSession {
@@ -434,6 +478,7 @@ impl SessionStore {
             created_at: stamp.clone(),
             updated_at: stamp,
             messages: Vec::new(),
+            compaction: None,
         };
         let created = session.to_summary(SessionState::Idle);
 
@@ -478,6 +523,7 @@ impl SessionStore {
         Ok(SessionDetail {
             session: session.to_summary(state),
             messages: session.messages.clone(),
+            compaction: session.compaction.clone(),
             // Composed in by `AppState`, which can see the approval registry.
             pending_approvals: Vec::new(),
         })
@@ -493,6 +539,71 @@ impl SessionStore {
     pub fn messages(&self, id: &str) -> AppResult<Vec<Message>> {
         let sessions = self.sessions();
         Ok(Self::find(&sessions, id)?.messages.clone())
+    }
+
+    /// The transcript and what has been folded out of it (PLAN 7.3, Phase 14).
+    ///
+    /// Both under one lock, because they are one fact. Read separately, a
+    /// compaction landing between the two reads would produce a pointer into a
+    /// transcript that does not match it, and the request built from the pair
+    /// would be missing a turn nobody folded.
+    pub fn context(&self, id: &str) -> AppResult<(Vec<Message>, Option<Compaction>)> {
+        let sessions = self.sessions();
+        let session = Self::find(&sessions, id)?;
+        Ok((session.messages.clone(), session.compaction.clone()))
+    }
+
+    /// Folds the older part of a transcript into state, and reports what is
+    /// now folded.
+    ///
+    /// `force` is the button; without it the transcript also has to have grown
+    /// past [`compact::COMPACT_AT_BYTES`]. `Ok(None)` means nothing moved —
+    /// too few turns, or a fold that would land exactly where the last one did
+    /// — which is an ordinary answer and not a failure: pressing "compact" on
+    /// a short session should say "there is nothing to fold", not fail.
+    ///
+    /// The state is re-derived from the messages every time rather than folded
+    /// into whatever the previous compaction said. Deriving from the record is
+    /// what keeps a session compacted five times from being a summary of a
+    /// summary of a summary — the transcript is still all there, so there is
+    /// never a reason to compound.
+    ///
+    /// `updated_at` is deliberately not touched. A fold is maintenance, not
+    /// activity, and a sidebar that reordered itself because a session tidied
+    /// its own context would be reporting something that did not happen.
+    pub fn compact(&self, id: &str, force: bool) -> AppResult<Option<Compaction>> {
+        let mut sessions = self.sessions();
+        let session = Self::find_mut(&mut sessions, id)?;
+
+        let Some(Plan {
+            through_message_id,
+            folded,
+            state,
+        }) = compact::plan(&session.messages, force)
+        else {
+            return Ok(None);
+        };
+
+        if session
+            .compaction
+            .as_ref()
+            .is_some_and(|held| held.through_message_id == through_message_id)
+        {
+            tracing::debug!(session_id = id, "nothing new to fold");
+            return Ok(None);
+        }
+
+        let compaction = Compaction {
+            through_message_id,
+            folded,
+            state,
+            at: now(),
+        };
+        session.compaction = Some(compaction.clone());
+
+        self.save(&sessions)?;
+        tracing::info!(session_id = id, folded, force, "session compacted");
+        Ok(Some(compaction))
     }
 
     /// Which project a session belongs to.
@@ -1119,6 +1230,12 @@ mod tests {
                     image_path: None,
                 }],
             )],
+            compaction: Some(Compaction {
+                through_message_id: "m1".to_owned(),
+                folded: 6,
+                state: "Goal: ship it".to_owned(),
+                at: "2026-08-28T09:41:07.412Z".to_owned(),
+            }),
             pending_approvals: Vec::new(),
         };
 
@@ -1142,7 +1259,11 @@ mod tests {
 
         assert_eq!(
             fields(&json),
-            sorted(&["session", "messages", "pending_approvals"])
+            sorted(&["session", "messages", "compaction", "pending_approvals"])
+        );
+        assert_eq!(
+            fields(&json["compaction"]),
+            sorted(&["through_message_id", "folded", "state", "at"])
         );
         assert_eq!(
             fields(&json["session"]),

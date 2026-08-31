@@ -39,6 +39,7 @@ import type {
 } from "../ipc/bindings";
 import {
   sessionCancel,
+  sessionCompact,
   sessionCreate,
   sessionDelete,
   sessionList,
@@ -125,6 +126,18 @@ export type SessionsState = {
   send: (text: string) => Promise<void>;
   /** Cancels the running turn, if there is one. */
   cancel: () => Promise<void>;
+  /**
+   * Folds the open session's older turns into state (PLAN 7.3, Phase 14).
+   *
+   * Nothing is deleted: the transcript stays whole and the pane still scrolls
+   * through all of it. What changes is what the next request carries, which is
+   * why the detail is replaced with what comes back rather than patched.
+   *
+   * A session with too few turns to fold comes back unchanged, and the pane
+   * shows that by finding no fold — which is the honest answer rather than an
+   * error.
+   */
+  compact: () => Promise<void>;
   /** Clears the last error. */
   dismissError: () => void;
   /** Forgets everything. Called when the open project changes. */
@@ -276,6 +289,22 @@ export const useSessions = create<SessionsState>((set, get) => {
         // re-opens it — and what a command printed is not on disk, so coming
         // back shows the summary rather than the pane.
         set({ detail: outcome.value, streaming: null, output: {} });
+      }
+    },
+
+    compact: async () => {
+      const sessionId = get().detail?.session.id;
+      if (sessionId === undefined) {
+        return;
+      }
+
+      const outcome = await guard("session_compact", () =>
+        sessionCompact(sessionId),
+      );
+      // Dropped if the user has moved on: a fold for a session nobody is
+      // looking at any more would replace the detail of the one they are.
+      if (outcome.ok && get().detail?.session.id === sessionId) {
+        set({ detail: outcome.value });
       }
     },
 

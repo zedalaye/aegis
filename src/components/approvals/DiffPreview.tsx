@@ -186,5 +186,32 @@ export default function DiffPreview({
         </>
       );
     }
+
+    case "memory":
+      // The whole sentence, not a preview of it. A memory is one sentence by
+      // construction, and it is the one mutating call where reading the entire
+      // thing costs the user less than reading a summary would.
+      return (
+        <>
+          <dl className="detail">
+            <Field label="Kind">{detail.memory_kind}</Field>
+            <Field label="Rests on" mono>
+              {detail.source ?? "nothing — it would be read as a hypothesis"}
+            </Field>
+          </dl>
+          <figure className="preview">
+            <figcaption className="preview__caption">
+              What would be remembered
+            </figcaption>
+            <pre className="preview__body">{detail.text}</pre>
+          </figure>
+          <p className="detail__note">
+            This reaches the top of every later reply this identity gives, in
+            this session and in every session after it. Nothing on your machine
+            changes. You can read, correct and delete it under Memory in
+            Settings; the model cannot delete it.
+          </p>
+        </>
+      );
   }
 }

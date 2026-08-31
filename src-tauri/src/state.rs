@@ -24,8 +24,9 @@ use crate::error::{AppError, AppResult};
 use crate::policy::GrantStore;
 use crate::secrets::{key_hint, SecretStore};
 use crate::store::{
-    Agent, AgentStore, MaskedSettings, SessionDetail, SessionState, SessionStore, SessionSummary,
-    SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    Agent, AgentStore, MaskedSettings, Memory, MemoryDraft, MemoryStore, SessionDetail,
+    SessionState, SessionStore, SessionSummary, SettingsStore, Store, DEFAULT_AGENT_ID,
+    DEFAULT_PROVIDER_ID,
 };
 
 /// Shared state, registered with `Manager::manage` and read from commands via
@@ -41,6 +42,7 @@ pub struct AppState {
     store: Store,
     sessions: SessionStore,
     agents: AgentStore,
+    memories: MemoryStore,
     settings: SettingsStore,
     secrets: SecretStore,
     turns: TurnRegistry,
@@ -71,6 +73,7 @@ impl AppState {
             store: Store::load(data_dir),
             sessions: SessionStore::load(data_dir),
             agents: AgentStore::load(data_dir),
+            memories: MemoryStore::load(data_dir),
             settings: SettingsStore::load(data_dir),
             secrets: SecretStore::new(),
             turns: TurnRegistry::new(),
@@ -269,13 +272,91 @@ impl AppState {
     /// The check is here for the same reason the one above is: the agent store
     /// cannot see the session document. Refused rather than cascaded — see
     /// [`AppError::AgentInUse`](crate::AppError::AgentInUse).
+    ///
+    /// Its memories go with it, and that direction is deliberate: a memory is
+    /// only ever reachable through the identity that holds it, so memories of a
+    /// deleted identity are unreachable records that would grow the document
+    /// forever. Cascading here is not the same decision as refusing above —
+    /// what is refused there is orphaning a *transcript*, which is a record of
+    /// what happened and belongs to the user.
+    ///
+    /// The identity goes first. If forgetting then failed, the result would be
+    /// records nobody can read; the other order would leave an identity that
+    /// has already lost what it knew.
     pub fn delete_agent(&self, agent_id: &str) -> AppResult<()> {
         let bound = self.sessions.count_for_agent(agent_id);
         if bound > 0 {
             return Err(AppError::AgentInUse { count: bound });
         }
 
-        self.agents.delete(agent_id)
+        self.agents.delete(agent_id)?;
+
+        if let Err(err) = self.memories.forget_for_agent(agent_id) {
+            tracing::warn!(%err, agent_id, "the identity is gone; its memories are not");
+        }
+        Ok(())
+    }
+
+    /// Where this installation's memories are kept (PLAN 7.3, Phase 14).
+    pub fn memories(&self) -> &MemoryStore {
+        &self.memories
+    }
+
+    /// One identity's memories, most recently touched first.
+    ///
+    /// Takes an identity rather than defaulting to one: "whose memory" is the
+    /// whole question, and a panel that guessed would be showing somebody
+    /// else's.
+    pub fn memory_list(&self, agent_id: &str) -> AppResult<Vec<Memory>> {
+        // Checked so that a stale picker says "no such identity" rather than
+        // drawing an empty list that looks like an identity which has learned
+        // nothing.
+        let agent = self.agents.get(agent_id)?;
+        Ok(self.memories.list_for(&agent.id))
+    }
+
+    /// Records or corrects a memory, on the user's own account.
+    ///
+    /// The other half of `COS.md`'s *forget*: what the model may do is write
+    /// and read, under the approval gate; correcting what it got wrong is the
+    /// human's, and this is where that lands.
+    pub fn memory_save(
+        &self,
+        agent_id: &str,
+        memory_id: Option<&str>,
+        draft: &MemoryDraft,
+    ) -> AppResult<Memory> {
+        let agent = self.agents.get(agent_id)?;
+        self.memories.save(&agent.id, memory_id, draft)
+    }
+
+    /// Forgets one memory.
+    pub fn memory_forget(&self, agent_id: &str, memory_id: &str) -> AppResult<Memory> {
+        let agent = self.agents.get(agent_id)?;
+        self.memories.forget(&agent.id, memory_id)
+    }
+
+    /// Folds a session's older turns into state, and hands back the session as
+    /// it now reads (PLAN 7.3, Phase 14).
+    ///
+    /// Refused while a turn is running, with the same `E_TURN_BUSY` a second
+    /// send gets. The turn loop folds once, before its first request, precisely
+    /// so that a turn's rounds all reason against the same context; a fold
+    /// landing between two of them would show the model one history and then
+    /// judge its next move against another. The window hides the button while a
+    /// reply streams, but that is how the interface tells the truth, not how
+    /// the rule holds — this is where it holds.
+    ///
+    /// Otherwise it always returns the detail, whether or not anything moved. A
+    /// session with too few turns to fold is not a failure; it is an answer,
+    /// and one the panel draws by finding the fold still absent.
+    pub fn compact_session(&self, session_id: &str) -> AppResult<SessionDetail> {
+        if let Some(turn_id) = self.turns.active_turn(session_id) {
+            return Err(AppError::TurnBusy { turn_id });
+        }
+
+        self.sessions.compact(session_id, true)?;
+        self.session_detail(session_id)
     }
 
     /// The user's skill library (PLAN 7.3, Phase 13).

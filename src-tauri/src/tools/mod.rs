@@ -27,12 +27,21 @@
 //!
 //! Every tool the MVP names is here: `fs_list`, `fs_read`, `fs_write`,
 //! `shell_exec` and, since Phase 9, `screen_capture`; since Phase 13,
-//! `skill_run` and `skill_return` beside them. The registry and the decision
-//! table are the same list, which is what makes "a tool nothing gates" a thing
-//! this code cannot express — and it is why the two skill tools are entries
-//! here rather than a channel of their own. A skill is not a tool, but *asking
-//! for a runbook* is a verb like any other, and putting it anywhere else would
-//! mean a second dispatch path with a second place to remember the audit line.
+//! `skill_run` and `skill_return` beside them; since Phase 14, `memory_write`
+//! and `memory_search`. The registry and the decision table are the same list,
+//! which is what makes "a tool nothing gates" a thing this code cannot express
+//! — and it is why the skill and memory tools are entries here rather than
+//! channels of their own. A skill is not a tool and a memory is not a tool,
+//! but *asking for a runbook* and *remembering something* are verbs like any
+//! other, and putting either anywhere else would mean a second dispatch path
+//! with a second place to remember the audit line.
+//!
+//! Not everything registered here reaches outside this process. `skill_run`
+//! reads a runbook, `skill_return` validates a report, `memory_search` scans a
+//! small document, and `memory_write` appends to one. Only the last of those
+//! four asks the user, and the reason is not where it reaches but what it
+//! changes: a memory is in the system message of every later turn, which makes
+//! it durable and invisible at the time, which is what the gate is for.
 //!
 //! [`run`] is `async` because of the two tools that reach outside this process.
 //! The filesystem tools are short, local and synchronous, and are called
@@ -44,6 +53,7 @@
 //! a blocking thread rather than parking a runtime worker on it.
 
 pub mod fs;
+pub mod memory;
 pub mod screenshot;
 pub mod shell;
 pub mod skill;
@@ -61,6 +71,7 @@ use crate::audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditReco
 use crate::error::ErrorCode;
 use crate::policy::{tool, ResolvedCall};
 use crate::skills::SkillCtx;
+use crate::store::memories::MemoryStore;
 
 /// Most bytes `fs_read` will return in one envelope (PLAN 4.3).
 pub const READ_MAX_BYTES: u64 = 256 * 1024;
@@ -460,6 +471,23 @@ pub fn registry() -> &'static [ToolSpec] {
                           `needs_you` needs at least one `open_questions` entry.",
             parameters: skill::return_schema,
         },
+        ToolSpec {
+            name: tool::MEMORY_WRITE,
+            description: "Remember one thing as this identity, for every later session. Use it \
+                          for a preference, an exception or a convention — something that will \
+                          still be true next month and that you would otherwise have to be told \
+                          again. A fact about the project belongs in a workspace file instead, \
+                          and a procedure belongs in a skill. The user approves each one and can \
+                          correct or delete it afterwards; you cannot.",
+            parameters: memory::write_schema,
+        },
+        ToolSpec {
+            name: tool::MEMORY_SEARCH,
+            description: "Look through what this identity remembers. Your instructions already \
+                          carry the most recent memories, so use this for older ones, or to \
+                          check whether something is already known before remembering it again.",
+            parameters: memory::search_schema,
+        },
     ]
 }
 
@@ -557,6 +585,15 @@ pub struct ToolCtx<'a> {
     /// skill tools make — which is what makes a run budgetable and replayable
     /// afterwards (PLAN 7.6, *Audit names the skill*).
     pub skills: SkillCtx<'a>,
+    /// Where this identity's memories are kept (PLAN 7.3, Phase 14).
+    ///
+    /// Held here for the reason the capture directory and the skill library
+    /// are: which store the memories live in is a fact about the installation,
+    /// not about what the model asked for. Which *identity* is remembering
+    /// comes from [`ToolCtx::agent_id`], and only from there — neither memory
+    /// tool takes an identity as an argument, so an identity reading or
+    /// writing another's memories is not a call that can be made.
+    pub memories: &'a MemoryStore,
 }
 
 // Written out rather than derived: `&dyn ProgressSink` has no `Debug`, and
@@ -641,6 +678,12 @@ pub async fn run(
         // like the filesystem tools, and for the same reason.
         ResolvedCall::SkillRun { name } => skill::run(name, ctx.skills),
         ResolvedCall::SkillReturn { report } => skill::ret(report, ctx.skills),
+        // Also inline, and also inside this process: one appends a record to a
+        // small JSON document, the other scans it.
+        ResolvedCall::MemoryWrite { kind, text, source } => {
+            memory::write(ctx.memories, ctx.agent_id, *kind, text, source.as_deref())
+        }
+        ResolvedCall::MemorySearch { query } => memory::search(ctx.memories, ctx.agent_id, query),
     };
 
     // `as` saturates at `u64::MAX` here, which is 584 million years: the cast
@@ -760,6 +803,8 @@ mod tests {
             tool::SCREEN_CAPTURE,
             tool::SKILL_RUN,
             tool::SKILL_RETURN,
+            tool::MEMORY_WRITE,
+            tool::MEMORY_SEARCH,
         ];
 
         for spec in registry() {
