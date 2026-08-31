@@ -809,15 +809,18 @@ What the MVP already is, vs what § 7.3 still has to add.
 Each phase ends in something you can run. No phase depends on a later one. Domain connectors
 are last on purpose.
 
-Three slices are **not** steps in this list, and must not delay Phases 14–16:
+Four slices are **not** steps in this list:
 
 - **§ 7.10** chrome (title-bar icons, a button that reveals the folder in the OS file manager)
 - **§ 7.11** workspace versioning (`git init` when the convention is laid down, never an
   auto-commit)
 - **§ 7.12** execution host (WSL). Windows UI; `shell_exec` in the distro when the project
   says so
+- **§ 7.13** skill promotion (`PROPOSAL.md` then apply; writing is still not granting)
 
-All three may start once Phase 13 has landed.
+§ 7.10–7.12 may start once Phase 13 has landed, and must not delay Phases 14–16.
+§ 7.13 waits for Phase 17 (the CoS board). It must not delay Phases 15–17, and it
+is not a number between 15 and 16.
 
 **Phase 11 — Workspace convention**
 Document and optionally scaffold, inside a user-picked workspace: `briefs/`, `status/`,
@@ -910,8 +913,10 @@ concatenated transcript.
 
 **Phase 16 — Scheduler**
 Routines that fire a skill on a clock or a trigger. Budget per agent and per routine. Pause,
-rewind, "fire" a role, clone a role without cloning its rotten memory. Exit: a watch routine
-runs while the window is hidden, writes `/status`, and does not ping unless the skill says to.
+rewind, "fire" a role, clone a role without cloning its rotten memory. A routine names a
+**live** skill (`SKILL.md`), already granted, already run under watch at least once — never
+a chat, never a `PROPOSAL.md` (§ 7.13). Exit: a watch routine runs while the window is
+hidden, writes `/status`, and does not ping unless the skill says to.
 
 **Phase 17 — Status board + trace/replay**
 UI for the CoS board (attention, in-flight, blocked). One run id over CoS + specialists;
@@ -947,7 +952,8 @@ Never start pack *n+1* because pack *n* is exciting. Never add a domain by growi
 `agent/turn.rs`.
 
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
-after Phase 13. They do not insert here, and they are not Phases 20, 21 and 22.
+after Phase 13. § 7.13 (skill promotion) may run after Phase 17. They do not insert
+here, and they are not Phases 20, 21, 22 and 23.
 
 ### 7.4 Hard rules that survive every later phase
 
@@ -1010,9 +1016,10 @@ after Phase 13. They do not insert here, and they are not Phases 20, 21 and 22.
   off the audit log. That is a second way to change what the agent will do.
 - A session that grants itself a skill it just wrote. Writing the file is not an allow-list
   change; `agent_update` stays a Settings act, in force on the next turn.
-- Inserting chrome polish, `git init`, or WSL into § 7.3 as Phase 13.5 / 14, or delaying
-  memory, handoff, or the scheduler for icons, a repository, or a distro. Those slices
-  are § 7.10, § 7.11 and § 7.12.
+- Inserting chrome polish, `git init`, WSL, or a skill-proposal queue into § 7.3 as
+  Phase 13.5 / 15.5, or delaying memory, handoff, the scheduler, or the board for
+  icons, a repository, a distro, or an authoring UX. Those slices are § 7.10, § 7.11,
+  § 7.12 and § 7.13.
 - Teaching the model to call `wsl.exe` or `bash -c` so Linux folders "just work". The
   distro is a project field; wrapping is `shell_exec`'s, like `.cmd` shims (§ 5.1,
   § 7.12). Silent fallback to Windows `CreateProcess` when WSL is missing is the
@@ -1084,6 +1091,11 @@ editor and no `skill_create`.
 - Or in a session: an ordinary `fs_write` to `skills/<name>/SKILL.md` **inside the
   workspace**, through the approval dialog. The DiffPreview of that write is the moment
   the human signs the seven headings. Same matrix, same audit line as a decision.
+
+A later third path is § 7.13: `skills/<name>/PROPOSAL.md` in the workspace, then apply
+copies it to `SKILL.md` through the same gate. The catalog still only sees `SKILL.md`.
+That slice starts after Phase 17; it does not replace these two paths, and it does
+not grant.
 
 The **library** (`skills/` beside application data) is outside the workspace. A write
 there is the outside-WS row: ask every time, no session grant, risk high. A session may
@@ -1554,3 +1566,79 @@ existing `projects.json` rows have no host and must keep working.
 only in the distro; the approval line shows the Linux cwd; Stop
 kills that command; a project with no host is unchanged. `fs_read`
 of a file in that folder still does not go through WSL.
+
+### 7.13 Skill promotion — not a CoS phase
+
+Not a step in § 7.3. Not Phase 23. Not a skill marketplace. Not an
+in-app editor. Not OpenClaw's Skill Workshop as a product.
+
+Phase 13 already runs skills. § 7.6 already authors them: the
+operator's editor, or `fs_write` to `SKILL.md` under the gate.
+Writing is still not granting. After the CoS loop, specialists will
+hand back procedures as artefacts. Putting those live in one write,
+or putting a chat on a clock, is how a fuzzy workflow becomes a
+routine. This slice is the missing *pending* step — a proposal file,
+then apply — harvested from that lesson, not from their autonomy,
+ClawHub, or weekly rewrite.
+
+This slice starts once Phase 17 has landed. It must not delay
+Phases 15–17 (handoff, scheduler, board). It is not § 7.6 (the
+runner contract, already landed). It is not Phase 16 (the scheduler
+fires live skills; this is how a procedure becomes one). Do not
+insert it as Phase 15.5.
+
+**Default.** Authoring stays the two paths in § 7.6. A handwritten
+`SKILL.md` is live once it parses. This slice adds a third path; it
+does not replace those two, and it does not touch a skill it did not
+propose.
+
+**When.** An identity — typically the built-in Assistant, which holds
+every tool and no skills — writes `skills/<name>/PROPOSAL.md`
+**inside the workspace**, through the ordinary approval dialog. Apply
+is a second `fs_write` (or the same tool, same matrix, same audit
+line) that copies that file to `skills/<name>/SKILL.md` and leaves
+the proposal behind or removes it; the DiffPreview of that write is
+the moment the human signs the seven headings. Granting is still
+`agent_update` in Settings, in force on the next turn. A session
+cannot call `agent_update`. Apply is not a grant.
+
+**Workspace only.** Session-authored runbooks belong in the project
+folder, where they travel with the repo. The library (`skills/`
+beside application data) stays the outside-WS row: ask every time,
+no session grant, risk high — not this slice.
+
+**What the catalog sees.** Only `SKILL.md`. A proposal is listed
+somewhere a human can apply it (Settings → Skills is enough; no new
+editor). `skill_run` of a proposal name is refused before the file
+is located, with no dialog. A proposal that will not parse as the
+seven headings is listed with the reason and never applied.
+
+**Propose only.** There is no `auto`. There is no cron that rewrites
+or drops skills. There is no `/learn` that applies. There is no
+`skill_create` and no `skill_workshop` tool: the model writes a file
+the way it writes a decision. A CoS handoff that "learned a
+procedure" returns `artefacts: [skills/<name>/PROPOSAL.md]`. The CoS
+does not apply.
+
+**Phase 16's door** (also in § 7.3): a routine names a live skill,
+already granted, already run under watch at least once. Never a
+chat. Never a `PROPOSAL.md`.
+
+**Never**
+
+- a `skill_create` command, or a WebView write into the skill
+  library, around the gate and off the audit log;
+- apply that also ticks the identity (writing is not granting);
+- a session that grants itself a skill it just proposed;
+- patching a handwritten or library skill through this path;
+- auto-apply, a marketplace, a scanner product, or weekly
+  collection rewrite;
+- stuffing the proposal body into the system prompt;
+- delaying 15–17 until this exists, or inserting it into § 7.3.
+
+**Exit:** the built-in Assistant can file `skills/<name>/PROPOSAL.md`
+in a workspace; applying it through the gate produces a `SKILL.md`
+the catalog lists; `skill_run` still needs the name ticked on an
+identity; a proposal is never runnable; a handwritten skill is
+untouched; a routine still cannot name a proposal. No new tool. No
+editor. No grant.
