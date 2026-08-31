@@ -104,9 +104,18 @@ into a corner.
 Operating-mode brief: `COS.md` (invariants). Sequence: `PLAN.md` § 7.
 This file remains the coding contract. Intended mode: **Chef de Cabinet**
 — three roles (CoS, specialist, human), files as shared memory, skills as
-runbooks, handoffs instead of shared transcripts. Read `COS.md` for those
-rules; do not restate them here. Recurring work that still lives in a chat
-or a system prompt is not a skill — do not schedule it (`PLAN.md` § 7.6).
+runbooks, handoffs instead of shared transcripts. The CoS does **not** copy
+a human project-management method (sprints, activity tickets, stand-ups,
+cherishing the implementation). Those optimise calendar time and scarce
+writing. Agents invert the costs: generating an instance is cheap,
+re-perceiving a project that already lives in files is the waste, and the
+unit of cost is a round-trip. Work is a world specialists read and do not
+write, briefs that are oracle clauses, instances that are disposable,
+verification that is a program, écarts (the world would have to change)
+that escalate to the human. Read
+`COS.md` for those rules; `PLAN.md` § 7.2 for how they sit on this tree.
+Do not restate them here. Recurring work that still lives in a chat or a
+system prompt is not a skill — do not schedule it (`PLAN.md` § 7.6).
 
 ### What the harness must make possible (later)
 
@@ -154,7 +163,8 @@ on another). Keys stay in the OS keyring / env, never in the WebView.
 
 ### After-MVP order (fixed — `PLAN.md` § 7)
 
-1. Shared workspace convention + per-agent memory + skill runner
+1. Shared workspace convention (cabinet files + optional `world/`) +
+   per-agent memory + skill runner
 2. Then Chef de Cabinet (handoff bus, fan-out / fan-in, status board)
 3. Then scheduler of routines
 4. Then MCP connectors
@@ -164,10 +174,11 @@ A CoS without (1) recites. Do not build (2) first.
 
 Chrome polish is `PLAN.md` § 7.10. Workspace versioning (`git init` on scaffold,
 never an auto-commit) is § 7.11. Execution host (WSL) is § 7.12. Skill promotion
-(a proposal file, then apply; writing is still not granting) is § 7.13. None is a
-step in this list, and none is a reason to delay (1)–(3). There is no in-app
-editor. A skill is a file: the operator's editor, or `fs_write` under the
-gate. Granting it to an identity is a separate act.
+(a proposal file, then apply; writing is still not granting) is § 7.13. The
+`world/` constitution is the missed half of Phase 11 (`PLAN.md` § 7.2), not a
+Phase 20. None of these is a step in this list, and none is a reason to delay
+(1)–(3). There is no in-app editor. A skill is a file: the operator's editor,
+or `fs_write` under the gate. Granting it to an identity is a separate act.
 
 ## Permissions
 
@@ -211,6 +222,11 @@ gate. Granting it to an identity is a separate act.
   survive compaction belong in workspace files or stores. (MVP still
   persists the transcript; it is a session log, not the source of truth
   for decisions.)
+
+- Do not copy a human project-management method into a prompt, a skill,
+  or the board. Sprints, activity tickets, and "don't rewrite" are the
+  wrong scarcity. A turn that starts by exploring a world already in
+  `world/` is a defect, not professionalism.
 
 - Conventional commits
 

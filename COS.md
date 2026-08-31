@@ -26,7 +26,8 @@ Three identities only.
   wake the human. It does not know "the whole codebase + the whole life +
   three weeks of chats".
 - **Specialist** — one narrow job (inbox, code, research, review, …).
-- **Human** — irreversible decisions, quality bar, memory correction.
+- **Human** — irreversible decisions, quality bar, memory correction,
+  essence, taste. Not the re-reading of disposable code.
 
 One agent = one perimeter + one definition of done + an explicit list of
 things it must not do. A generalist "that helps with everything" is the
@@ -41,7 +42,7 @@ kills the team. Chat is never the database.
 | Layer | Holds | Lives | Who reads |
 | --- | --- | --- | --- |
 | Source of truth | tickets, mail, calendar, PRs, git | the real tools | everyone, live |
-| Shared workspace | briefs, status, decisions, artefacts | files in the project folder | the whole team |
+| Shared workspace | world, briefs, status, decisions, artefacts | files in the project folder | the whole team |
 | Role memory | preferences, exceptions, "how we do it here" | per-agent store | that agent; CoS as a summary |
 | Session context | the current chat | the model window | that agent, today |
 
@@ -59,6 +60,50 @@ The harness must provide these operations:
 
 If a fact must survive ten compactions, it does not belong in chat. File or
 skill.
+
+## Work
+
+The CoS does not run a human project-management method. Sprints, activity
+tickets, stand-ups, velocity, and cherishing an implementation are ceremony
+built around bodies that cannot fork and writing that is scarce. Agents
+invert that: generating is cheap, **re-perceiving is expensive**, and the
+cost function is round-trips — tokens spent reconstructing what a file
+already holds.
+
+A workspace may hold a **world** (`world/`): what the thing *is*, including
+the sins a dump showed, and how a new instance is known to be right. It is
+opt-in. A watch folder or a wish list has no oracle; empty templates there
+are theatre.
+
+Specialists **read** the world. They do not write it. They do not reopen
+declared source artefacts (a dump, logs) to "understand the project". If
+the task cannot be done without changing the essence, that is not their
+job: `needs_you`, one sentence, `next_owner` the CoS. Changing the world
+is a human decision, the same class as irreversible. Hashing `world/` to
+police writes is the lockfile of a harness that had no policy; this
+harness *is* the policy. Source artefacts may still be hashed, because
+nobody writes them in a session — the operator drops a new dump, and that
+is the only legitimate re-perception, bounded to the delta.
+
+The unit of work is an **oracle clause** (a claim that can be evidenced by
+paths) or an **écart** (the world would have to change). It is not an
+activity ticket. A third column — "tech debt", "architecture spike",
+"pick a framework" — is how a rewrite cherishes the instance and ignores
+the usage.
+
+The CoS **compiles**. Given a world, emit an instance. Verify against the
+oracle as a **program**, not a taste review of the diff. If the oracle
+fails and the world did not change, regenerate. Throwing the instance away
+is legal. Fan-out is the default when file surfaces do not collide; two
+specialists on the same dump multiply perception, not work.
+
+A new language for agents, or dedicated hardware, is a later workload —
+not the first object. Intention is `world/` now. An agent IR sits on a
+CoS that already compiles. Asking agents to play the human who types is
+the failure this section exists to prevent.
+
+How this sits on the tree (digest vs frame vs skills, the missed half of
+Phase 11) is `PLAN.md` § 7.2. Do not add phases here.
 
 ## Skills
 
@@ -116,11 +161,13 @@ criterion." The CoS aggregates **status**, not histories.
 
 Always the same:
 
-1. Read the sources of truth and `/status`
-2. Update the attention list
-3. Route new work
+1. Read the sources of truth, `world/` if it exists, and `/status`
+2. Update the attention list (source drift first; then open oracle clauses;
+   then écarts)
+3. Route new work — compile briefs, or a bounded perceive-delta, not both
 4. Retry what is blocked
-5. Ping the human only if irreversible, ambiguous, or on a deadline
+5. Ping the human only if irreversible, ambiguous, on a deadline, or the
+   essence would have to change
 6. Write the new status, then stop
 
 Silent when there is nothing to say. A chatty CoS rots as fast as an
@@ -149,4 +196,6 @@ rotten memory.
 
 The mode is real only when three things exist: shared workspace files, a
 per-agent memory store, and a skill runner. Until then a "CoS" recites.
-What to build, in what order, is `PLAN.md` § 7.
+A CoS that has those three and still routes activity tickets recites in a
+nicer schema: the cabinet without a world, or with a world specialists
+rewrite, is not *Work*. What to build, in what order, is `PLAN.md` § 7.

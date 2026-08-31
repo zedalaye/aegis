@@ -6,9 +6,11 @@ Anything marked *(post-MVP)* is a seam left open, not work to do now.
 
 Section 7 records the Chef-de-Cabinet horizon so remaining MVP work does not paint those
 later phases into a corner. `COS.md` is the invariant brief for that mode (roles, memory,
-skills contract, handoff schema, CoS loop) — not a second plan. **Do not implement § 7,
+work, skills contract, handoff schema, CoS loop) — not a second plan. **Do not implement § 7,
 and do not code from `COS.md`, until the MVP "Done when" in `AGENTS.md` is true.** A CoS
-graph started "as a head start" is a chatbot that recites.
+graph started "as a head start" is a chatbot that recites. A CoS that copies a human
+project-management method is the same chatbot with a nicer schema; how work actually
+moves is § 7.2.
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite on the front, Rust runtime in `src-tauri`,
 pnpm, Rust edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets
@@ -795,7 +797,7 @@ What the MVP already is, vs what § 7.3 still has to add.
 | --- | --- | --- |
 | 1. Agent registry (role, tools, skills, ACL) | one implicit assistant | `agents/` store: id, role, provider binding, tool allow-list, skill allow-list, memory path |
 | 2. Handoff bus with a fixed schema | a single session transcript | typed `Handoff` / `HandoffResult` objects (`COS.md` *Handoff*), not "read my thread" |
-| 3. `/workspace` as shared memory | user-picked folder; no convention | convention inside that folder: `briefs/`, `status/`, `artefacts/`, `decisions/`. The WebView does not grow a file tree or an editor — files stay ordinary files. § 7.11 versions the folder with git when the convention is laid down. § 7.10 reveals it in the OS file manager. Phase 17 is the structured read of `/status` |
+| 3. `/workspace` as shared memory | user-picked folder; no convention | two layers in that folder, different mutation rules. **Cabinet** (Phase 11): `briefs/`, `status/`, `artefacts/`, `decisions/`, `skills/` — in-flight work, rewritten often. **Constitution** (`world/`, the missed half of Phase 11): what the thing *is*, specialists read, they do not write. Opt-in; empty templates in a workspace with no essence are theatre. The WebView does not grow a file tree or an editor — files stay ordinary files. § 7.11 versions the folder with git when the convention is laid down. § 7.10 reveals it in the OS file manager. Phase 17 is the structured read of `/status`. How the CoS uses both layers is the rest of this subsection |
 | 4. Memory store per agent | none (transcript only) | CRUD + search + forget, scoped to that agent; CoS sees summaries, not dumps |
 | 5. Skill runner (`SKILL.md`) | none | catalog always cheap; body loaded only on `run skill:…`; authoring is a file write, not a `skill_create` command; see § 7.6 |
 | 6. Scheduler of routines | none; tray process already stays alive | cron/trigger on top of (5); never automate a still-fuzzy workflow |
@@ -803,6 +805,103 @@ What the MVP already is, vs what § 7.3 still has to add.
 | 8. Compactor + retrieve-after-compact | none; keep last N turns raw | compact to *state* (goal, decisions, files, blockers), then re-inject retrieved memory — CoS compact a **board**, never other agents' transcripts |
 | 9. Status board owned by the CoS | session list + audit drawer | `/status` files + a UI that shows attention, in-flight, blocked; CoS stays silent when empty |
 | 10. Trace / replay of a run | `audit.jsonl` per tool call | one run id covering CoS + specialists: who, tokens, tools, skill, artefacts, approval, failure reason |
+
+The table is the machinery. This is how it is used. A CoS that routes activity
+tickets through that machinery is a chatbot that recites in a nicer schema.
+`COS.md` *Work* is the invariant; this subsection is the mapping onto the
+tree. It is not a new number in § 7.3.
+
+**Scarcity.** Human methods (sprints, stand-ups, story points, "don't rewrite")
+optimise calendar time and scarce writing. Agents invert the costs: generating
+an instance is cheap; **re-perceiving** a project that already lives in `world/`
+is the waste; the unit of cost is a round-trip (tokens spent reconstructing
+what a file holds, a question the world already answers, a concatenated
+transcript as a handoff). Copying the human ceremony anyway is what § 7.5
+calls unusable.
+
+**Cabinet and constitution.** Phase 11 laid down the cabinet: `briefs/`,
+`status/`, `artefacts/`, `decisions/`, `skills/`. Those files change every
+turn — that is the point. A workspace that has an essence to protect also
+holds `world/` — essence, perceived schema, behaviours (including sins),
+oracle, essence-decisions, declared sources. Specialists read it. They do
+not write it. `decisions/DECISIONS.md` is operational; `world/decisions.md`
+is essence. Mixing them makes the constitution a standup log.
+
+`world/` is opt-in. The library still lists the skills; they return `blocked`
+if there is no world. Forcing empty templates into a watch folder or a wish
+list is theatre.
+
+**Unit of work.** Not an activity ticket ("build the sale screen"). An
+**oracle clause** (a claim evidenced by paths in `artefacts/`) or an
+**écart** (doing the brief would change the essence). A third column —
+tech debt, architecture spike, pick a CSS framework — is how a rewrite
+cherishes the instance and ignores the usage.
+
+**The CoS compiles.** Given a world, emit an instance. Verify against the
+oracle *as a program* (characterisation, a handful of scenarios — not a
+taste review of the diff). If the oracle fails and the world did not change,
+regenerate. Throwing the instance away is legal. Fan-out is the default when
+file surfaces do not collide; two specialists on the same dump multiply
+perception, not work.
+
+**Who writes `world/`.** Specialists: no. Not an ask with a session grant —
+a refusal, like a reviewer calling `fs_write`. If the brief cannot be done
+without changing the essence: `needs_you`, one sentence, `next_owner` the
+CoS. The CoS pings the human. Amending the world is a cabinet act; compile
+resumes after. Hashing `world/` to detect specialist writes is the lockfile
+of a harness that had no policy; Aegis *is* the policy. A checksum of
+`world/` may later be an attention signal (a human edited essence while a
+brief ran). It is not the permission system.
+
+**What is still hashed.** Declared source artefacts (`world/sources.yml`: a
+dump, logs). Nobody writes them in a session; the operator drops a new one.
+That is the only legitimate re-perception, and it is bounded to the delta.
+At launch of a compile brief the harness compares those hashes. Drift → do
+not launch the brief; route a perceive-delta or ping. This is **state** in
+the digest (a few words), not a runbook in the system prompt.
+
+**Frame, not a skill.** A skill can be skipped. The standing constraint of a
+compile session is injected when the CoS (or, until a world-aware `cos.loop`,
+`session_create`) opens work on a world: read `world/`, do not write it, do
+not open the dump, stop if the essence would have to move. A few lines. The
+novel stays on disk. The digest carries *status* (world present /
+specialists-read-only / sources drifted), never `essence.md` in full — § 7.1
+*System prompt*. Procedure that belongs in a skill stays in a skill; the
+frame is a harness injection because forgetting it is the defect the whole
+shape exists to prevent.
+
+**Library skills** (seeded once, like `never-send-without-review`). Granted
+to the CoS and to specialists by default: they *are* the mode, not an
+example to tick. Writing is still not granting for every other runbook.
+
+- `world.perceive-delta` — only when sources drifted. Inputs: the paths
+  whose hash moved. `blocked` if asked to understand the project from the
+  whole dump.
+- a verifier against the oracle — evidence is paths; the CoS does not
+  re-read the work.
+- `world.check` — for sessions that are not a CoS launch.
+
+There is no specialist skill `world.amend`. `cos.loop` gains one step in
+front of routing: if sources drifted, that is the attention item.
+
+**Later policy row** (not the kernel, not a reason to delay 16–17): `fs_read`
+of a declared source artefact, while a world is in force, is denied, not
+asked. Workspace-internal reads are otherwise auto-allow; without this row
+the dump in `sources/` is still readable and the frame is only a prompt.
+`shell_exec` that writes `world/` is the remaining hole; the human gate on
+shell is that hole's current answer.
+
+**Not a language and not a chip.** An intermediate representation and
+dedicated hardware are a later workload, not the first object. Intention is
+`world/` now. An agent IR (types, effects, patches) sits on a CoS that
+already compiles. A new Python for agents is asking them to play the human
+who types.
+
+**Not a new number in § 7.3.** `world/` is the missed half of Phase 11, the
+way § 7.11 was git. It may be laid down once Phase 15 has landed. It must
+not delay Phases 16–17. It is not a domain pack. It is not a sidecar and
+not a crate: the files live in the workspace, the gate is § 3, the loop is
+`cos.loop`.
 
 ### 7.3 Post-MVP phase order (do not reorder)
 
@@ -830,7 +929,10 @@ file a decision and a status without any new agent type. Cheap, and it makes eve
 honest.
 
 The files are meant to be committed. `git init` on scaffold, and the rule that a write is
-not a commit, are § 7.11 — the missed half of this phase, not a new number in this list.
+not a commit, are § 7.11 — one missed half of this phase, not a new number in this list.
+The other missed half is `world/` (§ 7.2): the constitution, opt-in, specialists
+read and do not write. It is not Phase 20. It may land now that Phase 15 has;
+it must not delay 16–17.
 
 **Phase 12 — Agent registry**
 Persist agents as data: role, system prompt, provider id, tool ACL, skill ACL. Sessions bind
@@ -1020,6 +1122,13 @@ here, and they are not Phases 20, 21, 22 and 23.
   commit is still a gated `shell_exec`.
 - The UI host OS is not assumed to be the tool host OS. A WSL distro is an execution
   host on the project (§ 7.12), not a second runtime and not outbound SSH.
+- Specialists read `world/`; they do not write it. An écart escalates. Amending
+  the constitution is a human decision, the same class as irreversible.
+- The unit of CoS work is an oracle clause or an écart, not an activity ticket.
+  The CoS compiles an instance and verifies it as a program. It does not run
+  a sprint.
+- Do not copy a human project-management method into a skill, a prompt, or
+  the board. Generating is cheap; re-perceiving is the waste.
 
 ### 7.5 What would make the mode unusable (do not do these)
 
@@ -1079,6 +1188,19 @@ here, and they are not Phases 20, 21, 22 and 23.
   the human sees.
 - A GitHub (or GitLab) product in the runtime so the folder can be "a real repo". A remote
   is the operator's. Phase 18 is an MCP connector, not `gh` baked into `src-tauri`.
+- Running the CoS as Scrum: sprints, stand-ups, velocity, a backlog of
+  activities. That is the wrong scarcity (`COS.md` *Work*).
+- A specialist that starts by exploring a repo whose world is already in
+  `world/`, or that reopens a declared dump "to understand the project".
+- Hashing `world/` as the permission system, or a `world.amend` skill on
+  every identity. Policy refuses the write; the écart goes to the CoS.
+- Putting the world-contract novel in every system prompt. Digest is
+  status; the frame is a few lines at launch; procedure is a skill.
+- Scaffolding empty `world/` templates into a workspace that has no
+  essence to protect.
+- Cherishing the instance (the architecture of the code as a project)
+  instead of the oracle. Regeneration is legal. A new language or a chip
+  for agents is not the first object.
 
 ### 7.6 Skills — why this is the efficiency layer
 
@@ -1106,7 +1228,7 @@ inbox specialist is allowed to run.
 
 | Scope | Lives | Example |
 | --- | --- | --- |
-| Global | harness / user library | never send without review; how to cite `DECISIONS.md` |
+| Global | harness / user library | never send without review; `world.perceive-delta`; how to cite `DECISIONS.md` |
 | Per-agent | that identity's allow-list | `inbox.triage`, `watch.digest`, `review.diff` |
 | Per-workspace | the project folder | "how this Rails app is deployed on Coolify" |
 
