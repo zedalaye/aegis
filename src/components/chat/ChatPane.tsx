@@ -53,6 +53,50 @@ function StatusLine() {
 }
 
 /**
+ * Folds this session's older turns into state, on demand (PLAN 7.3, Phase 14).
+ *
+ * In the header rather than beside the composer: it is about the session, not
+ * about the message being typed, and it is not part of sending one. Long
+ * sessions fold themselves once the transcript has grown expensive; this is for
+ * the times you would rather it happened now — before asking for something
+ * long, say.
+ *
+ * Hidden while a turn runs. A fold mid-turn would change what the next round
+ * carries, halfway through the reasoning the model is already doing, and the
+ * runtime folds at the top of a turn for exactly that reason.
+ */
+function CompactButton() {
+  const session = useSessions((s) => s.detail?.session ?? null);
+  const compaction = useSessions((s) => s.detail?.compaction ?? null);
+  const streaming = useSessions((s) => s.streaming);
+  const busy = useSessions((s) => s.busy);
+  const compact = useSessions((s) => s.compact);
+
+  if (session === null || streaming !== null) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      className="link chat__compact"
+      disabled={busy}
+      // The promise the button has to make, on the button: this is not a
+      // delete. Someone who thought it trimmed their conversation would be
+      // right to never press it.
+      title={
+        compaction === null
+          ? "Folds the older turns into a few lines of state, so replies stop paying for the whole conversation. Nothing is deleted — the transcript stays exactly as it is."
+          : `Folds again, up to the last few turns. ${compaction.folded} messages are already folded. Nothing is deleted.`
+      }
+      onClick={() => void compact()}
+    >
+      Compact
+    </button>
+  );
+}
+
+/**
  * The approval the user is being asked about, if any.
  *
  * One at a time, oldest first. The turn runs its calls sequentially and parks
@@ -111,6 +155,7 @@ export default function ChatPane() {
         <div className="chat__meta">
           <AgentBadge agentId={detail.session.agent_id} />
           <ModelBadge />
+          <CompactButton />
           <StatusLine />
         </div>
       </header>

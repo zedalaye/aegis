@@ -277,6 +277,34 @@ pub enum AppError {
         reason: String,
     },
 
+    /// A value on the memory form cannot be used (PLAN 7.3, Phase 14).
+    ///
+    /// Same shape and same code as [`AppError::Settings`] and
+    /// [`AppError::Agent`], for the same reason: three forms saying "this field
+    /// is wrong, here is what a working value looks like", answered the same
+    /// way by whichever panel raised it. The memory *tools* surface the same
+    /// message to the model instead, where it reads as a refusal that names
+    /// the fix.
+    #[error("that {field} cannot be used: {reason}")]
+    Memory {
+        /// The field, named as the user sees it — "text", "source".
+        field: &'static str,
+        /// What is wrong with the value, and what a working one looks like.
+        reason: String,
+    },
+
+    /// No memory carries that id *for this identity*.
+    ///
+    /// Deliberately not distinguished from "it belongs to another identity":
+    /// every memory accessor is scoped, and an error that said "that one is
+    /// somebody else's" would confirm the existence of a record the caller has
+    /// no business knowing about.
+    #[error("no memory with id `{id}`")]
+    MemoryNotFound {
+        /// The id that was looked up.
+        id: String,
+    },
+
     /// No agent carries that id, so the UI is holding a stale list.
     ///
     /// Same shape and same reasoning as [`AppError::ProjectNotFound`]: refetch
@@ -373,7 +401,9 @@ impl AppError {
             Self::TurnBusy { .. } => ErrorCode::TurnBusy,
             Self::ApprovalStale { .. } => ErrorCode::ApprovalStale,
             Self::GrantNotAllowed { .. } => ErrorCode::GrantNotAllowed,
-            Self::Settings { .. } | Self::Agent { .. } => ErrorCode::InvalidSetting,
+            Self::Settings { .. } | Self::Agent { .. } | Self::Memory { .. } => {
+                ErrorCode::InvalidSetting
+            }
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
@@ -384,6 +414,7 @@ impl AppError {
             | Self::AgentNotFound { .. }
             | Self::AgentBuiltin { .. }
             | Self::AgentInUse { .. }
+            | Self::MemoryNotFound { .. }
             | Self::Internal { .. }
             | Self::Audit { .. }
             | Self::Store { .. } => ErrorCode::Internal,
@@ -414,7 +445,9 @@ impl AppError {
     /// The input this failure is about, when it is about one.
     const fn field(&self) -> Option<&'static str> {
         match self {
-            Self::Settings { field, .. } | Self::Agent { field, .. } => Some(field),
+            Self::Settings { field, .. }
+            | Self::Agent { field, .. }
+            | Self::Memory { field, .. } => Some(field),
             _ => None,
         }
     }

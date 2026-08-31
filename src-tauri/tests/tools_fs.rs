@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, NullProgress, ToolCtx, ToolOutcome, READ_MAX_BYTES};
-use aegis_lib::{SkillCtx, DEFAULT_AGENT_ID};
+use aegis_lib::{MemoryStore, SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -31,6 +31,9 @@ struct Fixture {
     /// Where a capture would go. Nothing in this file captures anything; the
     /// path is here because a tool call is not runnable without one.
     captures: PathBuf,
+    /// An empty memory store. Nothing here remembers anything; the store is
+    /// only there because a tool call is not runnable without one.
+    memories: MemoryStore,
     /// `tools::run` is `async` for the sake of one tool, `shell_exec`. The
     /// filesystem tools have nothing to await, so rather than turn thirty
     /// tests into async ones this drives the future to completion here — the
@@ -46,6 +49,7 @@ impl Fixture {
         let data_guard = TempDir::new().expect("temp dir");
         let audit = AuditLog::new(data_guard.path());
         let captures = data_guard.path().join("captures");
+        let memories = MemoryStore::load(data_guard.path());
 
         Self {
             workspace: dunce::canonicalize(workspace_guard.path()).expect("canonical"),
@@ -56,6 +60,7 @@ impl Fixture {
             grants: GrantStore::new(),
             audit,
             captures,
+            memories,
             runtime: tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -107,6 +112,8 @@ impl Fixture {
                 tools: &[],
                 active: None,
             },
+            // Nothing here remembers anything either.
+            memories: &self.memories,
         };
 
         match decide(&ctx, tool_name, args.clone()) {
@@ -470,6 +477,12 @@ fn the_tools_offered_to_the_model_are_the_ones_this_build_runs() {
             // the same envelope and the same audit line as everything else.
             "skill_run",
             "skill_return",
+            // Phase 14, on the same terms. Remembering something is a verb,
+            // and one of the two is mutating — so `memory_write` goes through
+            // the approval dialog exactly as `fs_write` does, and the dialog
+            // shows the sentence that would be remembered.
+            "memory_write",
+            "memory_search",
         ]
     );
 }

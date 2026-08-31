@@ -14,11 +14,15 @@
  * identity may run, and an identity is who may run a skill. Half of that list
  * does come from the open project's folder, and it is still here rather than in
  * the rail, so "which `inbox.triage` will run" is answerable in one place.
+ * The memories of Phase 14 follow Identities for the same reason again: a
+ * memory belongs to an identity and to nothing else, and this panel is the
+ * only place a person can correct one.
  */
 
 import { useSettings } from "../../state/settings";
 
 import AgentList from "../agents/AgentList";
+import MemoryList from "../memory/MemoryList";
 import SkillList from "../skills/SkillList";
 import ProviderForm from "./ProviderForm";
 
@@ -82,6 +86,9 @@ export default function SettingsPanel() {
       <h2 className="settings__section">Identities</h2>
       <AgentList />
 
+      <h2 className="settings__section">Memory</h2>
+      <MemoryList />
+
       <h2 className="settings__section">Skills</h2>
       <SkillList />
 
@@ -89,7 +96,8 @@ export default function SettingsPanel() {
       <p className="settings__note">
         The base URL and the model are written to <code>settings.json</code>{" "}
         beside your projects. Identities go in <code>agents.json</code> next to
-        them, which is a file you can read and edit by hand. Runbooks are
+        them, which is a file you can read and edit by hand. Memories go in{" "}
+        <code>memories.json</code>, beside both. Runbooks are
         ordinary markdown in <code>skills/</code>, either beside those files or
         inside a workspace, where they travel with the repository. The key is
         not: it

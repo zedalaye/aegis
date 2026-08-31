@@ -55,6 +55,12 @@ pub enum Grant {
     },
     /// Capture the primary display.
     ScreenCapture,
+    /// Record memories as this identity, for the rest of the session.
+    ///
+    /// Not scoped further, because there is nothing narrower to scope it to: a
+    /// memory has no path and no program, only a sentence, and a grant keyed on
+    /// the sentence would be a grant that never matched twice.
+    MemoryWrite,
 }
 
 impl Grant {
@@ -81,6 +87,7 @@ impl Grant {
             Self::FsWrite => "fs_write",
             Self::Shell { .. } => "shell_exec",
             Self::ScreenCapture => "screen_capture",
+            Self::MemoryWrite => "memory_write",
         }
     }
 
@@ -107,6 +114,11 @@ impl Grant {
             ),
             Self::ScreenCapture => {
                 "capture the primary display, for the rest of this session".to_owned()
+            }
+            Self::MemoryWrite => {
+                "remember things as this identity, for the rest of this session — you can read \
+                 and correct them in Settings"
+                    .to_owned()
             }
         }
     }

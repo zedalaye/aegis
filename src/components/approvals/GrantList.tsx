@@ -39,6 +39,8 @@ function scopeLabel(grant: Grant): string {
       return `Run \`${grant.program}\` in this workspace, with any arguments`;
     case "screen_capture":
       return "Capture the primary display";
+    case "memory_write":
+      return "Remember things as this identity";
   }
 }
 

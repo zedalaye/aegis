@@ -21,12 +21,17 @@
 //! the model is filtered by and policy refuses against. Phase 13 adds the
 //! skill runner: versioned `SKILL.md` runbooks in a library and in the
 //! workspace, a catalog in every request, and the body loaded only into the
-//! turn that asked for it.
+//! turn that asked for it. Phase 14 completes `COS.md`'s *Bar* with the last
+//! of its three: per-agent memory — a store of preferences, exceptions and
+//! conventions scoped to one identity, in every request and written under the
+//! gate — and compaction, which folds a long session's older turns into coded
+//! state rather than asking a model to summarize them.
 
 pub mod agent;
 pub mod approval;
 pub mod audit;
 mod commands;
+pub mod compact;
 mod display;
 mod error;
 pub mod policy;
@@ -46,16 +51,17 @@ pub use approval::{
     Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
 };
 pub use audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
+pub use compact::Plan as CompactionPlan;
 pub use error::{AppError, AppResult, ErrorCode};
 pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
 pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use skills::{Skill, SkillCtx, SkillScope};
 pub use state::AppState;
 pub use store::{
-    Agent, AgentDraft, AgentStore, MaskedSettings, Message, Project, ProjectDetail,
-    ProviderSettings, Role, SessionDetail, SessionState, SessionStore, SessionSummary,
-    SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnHandle, DEFAULT_AGENT_ID,
-    DEFAULT_PROVIDER_ID,
+    Agent, AgentDraft, AgentStore, Compaction, MaskedSettings, Memory, MemoryDraft, MemoryKind,
+    MemoryStore, Message, Project, ProjectDetail, ProviderSettings, Role, SessionDetail,
+    SessionState, SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord,
+    ToolCallStatus, TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
 pub use workspace::{ScaffoldReport, WorkspaceEntry, WorkspaceLayout};
@@ -156,6 +162,7 @@ pub fn run() {
             commands::session::session_delete,
             commands::session::session_send,
             commands::session::session_cancel,
+            commands::session::session_compact,
             commands::approval::approval_list_pending,
             commands::approval::approval_resolve,
             commands::approval::approval_grants,
@@ -169,6 +176,9 @@ pub fn run() {
             commands::workspace::workspace_layout,
             commands::workspace::workspace_scaffold,
             commands::skill::skill_list,
+            commands::memory::memory_list,
+            commands::memory::memory_save,
+            commands::memory::memory_forget,
         ])
         .setup(|app| {
             // State is built here rather than on the builder because loading

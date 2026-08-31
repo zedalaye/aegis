@@ -175,7 +175,23 @@ logical_width: number,
 /**
  * Height in the display's own points.
  */
-logical_height: number, };
+logical_height: number, } | { "kind": "memory", 
+/**
+ * `preference`, `exception` or `convention`.
+ *
+ * Not `kind`, which is the enum's own discriminant tag on the wire.
+ * The two are different axes — *which tool asked* and *what sort of
+ * memory* — and one JSON object cannot spell them the same.
+ */
+memory_kind: string, 
+/**
+ * Exactly what would be remembered.
+ */
+text: string, 
+/**
+ * What it would rest on, when the model named something.
+ */
+source: string | null, };
 
 /**
  * One approval, as the dialog receives it (PLAN 2.1, `ApprovalRequest`).
@@ -387,6 +403,34 @@ error_code: string | null,
 artifact: AuditArtifact | null, };
 
 /**
+ * What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
+ *
+ * A pointer and a summary, never a deletion: `through_message_id` names the
+ * last message that no longer reaches the model, and the transcript on disk
+ * still holds every one of them. That split is the whole design — the user
+ * keeps scrolling through the conversation they had, and the model stops
+ * paying for it ([`compact`](crate::compact)).
+ */
+export type Compaction = { 
+/**
+ * The last message that folds. Everything after it still reaches the
+ * model.
+ */
+through_message_id: string, 
+/**
+ * How many messages folded.
+ */
+folded: number, 
+/**
+ * What they became: goal, files, decisions, blockers.
+ */
+state: string, 
+/**
+ * RFC3339, UTC.
+ */
+at: string, };
+
+/**
  * What the user answered (PLAN 2.1, `Decision`).
  */
 export type Decision = "allow_once" | "allow_session" | "deny";
@@ -403,7 +447,7 @@ export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "ki
 /**
  * The normalized program key — see [`Grant::shell`].
  */
-program: string, } | { "kind": "screen_capture" };
+program: string, } | { "kind": "screen_capture" } | { "kind": "memory_write" };
 
 /**
  * Where the key in use came from (PLAN 2.1, `MaskedSettings`).
@@ -441,6 +485,68 @@ key_hint: string | null,
  * explains the environment variable instead of offering to save a key.
  */
 keyring_available: boolean, };
+
+/**
+ * One memory, as the UI and the runtime see it.
+ */
+export type Memory = { 
+/**
+ * UUID v4.
+ */
+id: string, 
+/**
+ * The identity this belongs to. No accessor spans two.
+ */
+agent_id: string, 
+/**
+ * Which of the three it is.
+ */
+kind: MemoryKind, 
+/**
+ * The memory itself, in one sentence.
+ */
+text: string, 
+/**
+ * What it rests on: a path, a ticket, a person. `None` for a preference
+ * somebody simply stated.
+ */
+source: string | null, 
+/**
+ * RFC3339, UTC.
+ */
+created_at: string, 
+/**
+ * RFC3339, UTC. Bumped by a correction, and by a write that repeats
+ * something already held.
+ */
+updated_at: string, };
+
+/**
+ * What a create or a correction carries.
+ */
+export type MemoryDraft = { 
+/**
+ * Which of the three this is.
+ */
+kind: MemoryKind, 
+/**
+ * The memory itself. Trimmed, and never empty.
+ */
+text: string, 
+/**
+ * What it rests on, when it rests on something nameable.
+ */
+source: string | null, };
+
+/**
+ * What a memory *is*, which is also the whole vocabulary.
+ *
+ * Three variants and no `other`. The discipline is the one the seven skill
+ * headings impose: naming which of the three a memory is forces whoever
+ * writes it to notice when it is none of them, and a memory that is none of
+ * them belongs in a file or in a runbook.
+ */
+export type MemoryKind = "preference" | "exception" | "convention";
 
 /**
  * One message in a transcript.
@@ -593,6 +699,14 @@ session: SessionSummary,
  * Oldest first — the order the transcript is read in.
  */
 messages: Array<Message>, 
+/**
+ * What has been folded out of the model's context, if anything.
+ *
+ * On the detail rather than on the summary because it is about the
+ * *transcript*, and the summary is a sidebar row: what a fold changes is
+ * how the conversation is drawn, and the sidebar does not draw one.
+ */
+compaction: Compaction | null, 
 /**
  * Approvals this session is blocked on.
  *

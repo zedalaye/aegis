@@ -1,7 +1,7 @@
 //! Session and turn commands (PLAN 2.1, "Sessions and turns").
 //!
-//! Six of the seven commands are thin: look something up, hand it back. The
-//! seventh, [`session_send`], is the one with a shape worth reading.
+//! Seven of the eight commands are thin: look something up, hand it back. The
+//! eighth, [`session_send`], is the one with a shape worth reading.
 //!
 //! It returns as soon as the turn is *registered*, not when it is finished.
 //! Everything after that arrives as events (PLAN 2.1). Two reasons, and the
@@ -148,6 +148,28 @@ pub fn session_send(
     })
 }
 
+/// Folds this session's older turns into state (PLAN 7.3, Phase 14).
+///
+/// The button behind the automatic fold that every turn already does when a
+/// transcript has grown expensive. Forced, so it does not wait for that
+/// threshold — but it keeps the same number of recent turns raw, because how
+/// much is readable is not a function of why the fold was asked for.
+///
+/// Returns the session as it now reads, whether or not anything moved: a
+/// session with too few turns to fold is an answer, not a failure, and the
+/// panel draws it by finding no fold in the detail it got back.
+///
+/// Refused with `E_TURN_BUSY` while a turn is running, for the reason a second
+/// `session_send` is: a turn folds once, before its first request, so that all
+/// of its rounds reason against the same history.
+///
+/// Nothing is deleted. The transcript stays on disk in full and the pane still
+/// scrolls through all of it; what changes is only what reaches the model.
+#[tauri::command(rename_all = "snake_case")]
+pub fn session_compact(state: State<'_, AppState>, session_id: String) -> AppResult<SessionDetail> {
+    state.compact_session(&session_id)
+}
+
 /// Cancels a running turn.
 ///
 /// Idempotent from the user's side — pressing stop twice is not an error worth
@@ -198,6 +220,7 @@ async fn run_turn<R: Runtime>(
         self_exe: state.self_exe(),
         captures: state.captures(),
         skills: state.skills(),
+        memories: state.memories(),
     }
     .run(&plan, &cancel)
     .await;

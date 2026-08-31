@@ -12,14 +12,21 @@
  * bottom. Someone who has scrolled up to re-read something is reading it; a
  * pane that yanks itself back down every 50 ms while a reply streams is a pane
  * that cannot be read at all.
+ *
+ * A compacted session draws a fold marker in place, after the last message the
+ * model no longer carries (PLAN 7.3, Phase 14). Everything above it is still
+ * drawn: a fold changes what the *model* reads, never what is on disk, and a
+ * transcript that hid the folded half would be destroying the user's only copy
+ * of the conversation to save tokens.
  */
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
 
 import type { Message } from "../../ipc/bindings";
 import { isVisible, useSessions } from "../../state/sessions";
 import { useSettings } from "../../state/settings";
 
+import CompactionNotice from "./CompactionNotice";
 import MessageBubble from "./MessageBubble";
 
 /** How close to the bottom still counts as "at the bottom", in pixels. */
@@ -72,11 +79,41 @@ function EmptyTranscript() {
       reply comes from the scripted provider and tells you what the runtime
       actually sent. Include <code>/write</code> in a message to make it ask
       for permission to write a file, <code>/run</code> to make it ask to run a
-      command in your workspace, or <code>/capture</code> to make it ask for a
-      picture of your screen. Any of them is how you see the approval gate
-      work.
+      command in your workspace, <code>/capture</code> to make it ask for a
+      picture of your screen, or <code>/remember</code> to make it ask to
+      remember something. Any of them is how you see the approval gate work.
     </p>
   );
+}
+
+/**
+ * Which drawn bubble the fold marker goes after.
+ *
+ * The fold's pointer is the last message the model no longer carries, and that
+ * is frequently a `tool` message — which the transcript does not draw at all.
+ * So the marker is anchored to the last *visible* message at or before it,
+ * rather than to the pointer itself, or a fold would silently fail to appear
+ * exactly when the folded turn ended in tool calls.
+ *
+ * `null` means there is no drawn message above the fold, and the marker belongs
+ * at the top of the pane.
+ */
+function foldAfter(
+  messages: readonly Message[],
+  throughId: string,
+): string | null {
+  const at = messages.findIndex((message) => message.id === throughId);
+  if (at < 0) {
+    return null;
+  }
+
+  for (let index = at; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message !== undefined && isVisible(message)) {
+      return message.id;
+    }
+  }
+  return null;
 }
 
 /** The bubble a streaming reply is drawn into before it is finalized. */
@@ -100,6 +137,11 @@ export default function MessageList() {
 
   const messages = detail?.messages.filter(isVisible) ?? [];
   const buffer = streaming?.text ?? "";
+  const compaction = detail?.compaction ?? null;
+  const foldAnchor =
+    compaction === null || detail === null
+      ? null
+      : foldAfter(detail.messages, compaction.through_message_id);
 
   // Measured before the browser paints, so the decision is about where the
   // reader was, not where the new content has already pushed them.
@@ -129,8 +171,19 @@ export default function MessageList() {
     <div className="messages" ref={paneRef} aria-live="polite">
       {empty ? <EmptyTranscript /> : null}
 
+      {/* Nothing drawn is above the fold — every folded message was a tool
+          result — so the marker opens the pane. */}
+      {compaction !== null && foldAnchor === null ? (
+        <CompactionNotice compaction={compaction} />
+      ) : null}
+
       {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+        <Fragment key={message.id}>
+          <MessageBubble message={message} />
+          {compaction !== null && foldAnchor === message.id ? (
+            <CompactionNotice compaction={compaction} />
+          ) : null}
+        </Fragment>
       ))}
 
       {buffer === "" ? null : (

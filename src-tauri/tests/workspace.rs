@@ -37,7 +37,8 @@ use aegis_lib::agent::wire::{ModelEvent, StopReason, WireMessage};
 use aegis_lib::workspace::{self, DECISIONS_FILE, STATUS_FILE};
 use aegis_lib::{
     Agent, ApprovalDecision, ApprovalRegistry, ApprovalRequest, AuditLog, Event, FakeProvider,
-    GrantStore, Message, SessionState, SessionStore, Turn, TurnRegistry, DEFAULT_AGENT_ID,
+    GrantStore, MemoryStore, Message, SessionState, SessionStore, Turn, TurnRegistry,
+    DEFAULT_AGENT_ID,
 };
 
 /// Collects every event a turn emits.
@@ -79,6 +80,8 @@ struct App {
     captures: PathBuf,
     /// An empty skill library: these files are about other things.
     library: PathBuf,
+    /// An empty memory store, for the same reason.
+    memories: MemoryStore,
 }
 
 impl App {
@@ -106,6 +109,7 @@ impl App {
             session_id,
             captures: data.join("captures"),
             library: data.join("skills"),
+            memories: MemoryStore::load(&data),
         }
     }
 
@@ -117,13 +121,18 @@ impl App {
     fn next_system_message(&self) -> String {
         let history = self.sessions.messages(&self.session_id).expect("messages");
         let shared = workspace::digest(&self.workspace);
+        let agent = Agent::builtin();
         let request = transcript::build(
             "m",
-            &Agent::builtin(),
+            &transcript::Context {
+                agent: &agent,
+                workspace: Some(&self.workspace),
+                memories: None,
+                skills: None,
+                shared: shared.as_deref(),
+                compacted: None,
+            },
             &history,
-            Some(&self.workspace),
-            None,
-            shared.as_deref(),
             Vec::new(),
         );
 
@@ -169,6 +178,7 @@ impl App {
             self_exe: None,
             captures: &self.captures,
             skills: &self.library,
+            memories: &self.memories,
         };
 
         let running = turn.run(&plan, &cancel);

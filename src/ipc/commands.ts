@@ -12,8 +12,9 @@
  * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals"),
  * the audit log and the provider settings (PLAN 2.1, "Settings and audit"),
  * the shared-workspace convention (PLAN 7.3, Phase 11), the identities a
- * session can be opened as (PLAN 7.3, Phase 12), and the runbooks those
- * identities may run (PLAN 7.3, Phase 13).
+ * session can be opened as (PLAN 7.3, Phase 12), the runbooks those
+ * identities may run (PLAN 7.3, Phase 13), and what one identity has learned
+ * (PLAN 7.3, Phase 14).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -32,6 +33,8 @@ import type {
   Decision,
   Grant,
   MaskedSettings,
+  Memory,
+  MemoryDraft,
   Project,
   ProjectDetail,
   ProviderProbe,
@@ -485,4 +488,76 @@ export function workspaceScaffold(projectId: string): Promise<ScaffoldReport> {
  */
 export function skillList(projectId: string | null): Promise<Skill[]> {
   return call<Skill[]>("skill_list", { project_id: projectId });
+}
+
+/**
+ * One identity's memories, most recently touched first.
+ *
+ * `agentId` is required rather than defaulted: "whose memory" is the whole
+ * question this panel answers, and a list that quietly showed the built-in
+ * identity's while a picker was still loading would be the one wrong thing it
+ * could draw.
+ */
+export function memoryList(agentId: string): Promise<Memory[]> {
+  return call<Memory[]>("memory_list", { agent_id: agentId });
+}
+
+/**
+ * Records a memory, or corrects one.
+ *
+ * `memoryId` of `null` records a new one; otherwise it replaces that one,
+ * keeping its id. A refused field rejects with `E_INVALID_SETTING` and an
+ * `error.field` naming the input — the same shape the provider and identity
+ * forms already use.
+ *
+ * A new memory whose text an existing one already carries touches that one
+ * rather than storing a second copy, and resolves with the existing id. A
+ * caller that assumed it had created a row will find it already in the list,
+ * which is the truth.
+ */
+export function memorySave(
+  agentId: string,
+  memoryId: string | null,
+  draft: MemoryDraft,
+): Promise<Memory> {
+  return call<Memory>("memory_save", {
+    agent_id: agentId,
+    memory_id: memoryId,
+    draft,
+  });
+}
+
+/**
+ * Forgets one memory, and resolves with what went.
+ *
+ * There is no undo — the store is the only copy — which is why the panel
+ * confirms first and shows what it removed.
+ */
+export function memoryForget(
+  agentId: string,
+  memoryId: string,
+): Promise<Memory> {
+  return call<Memory>("memory_forget", {
+    agent_id: agentId,
+    memory_id: memoryId,
+  });
+}
+
+/**
+ * Folds this session's older turns into state (PLAN 7.3, Phase 14).
+ *
+ * The button behind the fold every turn already does on its own once a
+ * transcript has grown expensive. Resolves with the session as it now reads,
+ * whether or not anything moved: a session with too few turns to fold is an
+ * answer, not a failure, and the caller sees it by finding no `compaction` on
+ * what comes back.
+ *
+ * Rejects with `E_TURN_BUSY` while a turn is running: a turn folds once, before
+ * its first request, so that all of its rounds reason against the same history.
+ *
+ * Nothing is deleted. The transcript stays on disk in full and the pane still
+ * scrolls through all of it; what changes is only what reaches the model.
+ */
+export function sessionCompact(sessionId: string): Promise<SessionDetail> {
+  return call<SessionDetail>("session_compact", { session_id: sessionId });
 }

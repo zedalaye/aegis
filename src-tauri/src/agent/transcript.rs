@@ -20,7 +20,18 @@
 //! stronger reason: the catalog is one line per runbook, and the runbook
 //! itself is never here. A system message that carried the steps of every
 //! skill would pay for every procedure on every turn, which is the
-//! anti-pattern the catalog exists to prevent (PLAN 7.6).
+//! anti-pattern the catalog exists to prevent (PLAN 7.6). From Phase 14 it
+//! carries two more: what this identity has learned
+//! ([`memories`](crate::store::memories)), and — for a session that has been
+//! compacted — the state its older turns folded into
+//! ([`compact`](crate::compact)).
+//!
+//! Those last two are PLAN 7.3's retrieve-after-compact, and it is worth
+//! saying why nothing in this tree is named that. The memory block is rebuilt
+//! into *every* system message, so it was never in the part that folds: there
+//! is nothing to restore, in the same way there is nothing to restore about the
+//! workspace digest. What a compaction takes away is conversation. What it
+//! leaves standing is what the identity knows.
 //!
 //! The second is repair. The chat-completions API has a structural rule that
 //! the transcript can violate: every tool call in an assistant message must be
@@ -62,45 +73,69 @@ replies short, and say plainly when you are not sure.";
 /// model has nothing new to learn in order to read it.
 const UNANSWERED_ENVELOPE: &str = r#"{"ok":false,"tool":"","content":"","truncated":false,"bytes":0,"meta":{},"error":{"code":"E_CANCELLED","message":"this call never ran: the turn ended before it was executed"}}"#;
 
-/// The system message for a session: its identity, its workspace, its shared
-/// state.
+/// Everything the system message is built out of, for one request.
 ///
-/// The order is the order of how slowly the parts change. The standing
-/// instructions never change. The identity changes when someone edits it. The
-/// workspace changes when the project does. The shared digest changes on every
-/// request. Reading top to bottom is therefore reading from "what is always
-/// true" to "what is true right now", which is also the order that survives a
-/// model skimming it.
+/// A struct rather than six arguments, for the reason [`Turn`](super::Turn) is
+/// one: four of them are optional strings, a call site that transposed two
+/// would still compile, and a later phase adding a fifth should not re-thread
+/// every signature. Every field is *already rendered* text — this module reads
+/// no file and asks no store anything, which is what keeps it a projection with
+/// one direction.
+#[derive(Debug, Clone, Copy)]
+pub struct Context<'a> {
+    /// The identity the session is bound to (PLAN 7.3, Phase 12).
+    ///
+    /// The built-in one carries no role and no instructions, so a default
+    /// session's message is byte for byte the one Phase 11 produced.
+    pub agent: &'a Agent,
+    /// The session's workspace root, or `None` when the folder is gone.
+    pub workspace: Option<&'a Path>,
+    /// What this identity has learned (PLAN 7.3, Phase 14), or `None` when it
+    /// has learned nothing yet.
+    pub memories: Option<&'a str>,
+    /// The skill catalog (PLAN 7.3, Phase 13): one line per runbook this
+    /// identity may run, and never a step of one. That is the shape of that
+    /// phase — the catalog is standing context, because choosing a procedure
+    /// has to be possible on any turn, and the body is loaded by `skill_run`
+    /// into the turn that asked for it. `None` for an identity granted no
+    /// skills, which is every identity from before it.
+    pub skills: Option<&'a str>,
+    /// The shared-workspace digest (PLAN 7.3, Phase 11), or `None` for a folder
+    /// that does not use the convention.
+    pub shared: Option<&'a str>,
+    /// What this session's older turns folded into (PLAN 7.3, Phase 14), or
+    /// `None` for a session that has never been compacted.
+    pub compacted: Option<&'a str>,
+}
+
+/// The system message for a session: who it is, what it knows, where it is,
+/// and what has already happened in it.
 ///
-/// `agent` is the identity the session is bound to (PLAN 7.3, Phase 12). The
-/// built-in one carries no role and no instructions, so a default session's
-/// message is byte for byte the one Phase 11 produced.
+/// The order is the order of how slowly the parts change, so reading it top to
+/// bottom is reading from "what is always true" to "what is true right now" —
+/// which is also the order that survives a model skimming it.
+///
+/// 1. The standing instructions, which never change.
+/// 2. The identity, which changes when someone edits it.
+/// 3. The workspace, which changes when the project does.
+/// 4. The memories, which change when this identity learns something.
+/// 5. The skill catalog, which changes when somebody writes a runbook.
+/// 6. The shared digest, which changes on every request.
+/// 7. The folded state, which is this session's own history, and so sits
+///    closest to the conversation it stands in for.
 ///
 /// The workspace is named in full because a model asked to work "in the
 /// project" with no path guesses one, and a guessed absolute path is exactly
 /// the tool call the user then has to read carefully and refuse.
 ///
-/// `skills` is the skill catalog (PLAN 7.3, Phase 13): one line per runbook
-/// this identity may run, and never a step of one. That is the shape of the
-/// whole phase — the catalog is standing context, because choosing a procedure
-/// has to be possible on any turn, and the body is loaded by `skill_run` into
-/// the turn that asked for it. `None` for an identity granted no skills, which
-/// is every identity from before that phase.
-///
-/// `shared` is the shared-workspace digest (PLAN 7.3, Phase 11), or `None` for
-/// a folder that does not use the convention. It goes last because it is
-/// *state*: it changes on every request, where the catalog changes when
-/// somebody writes a runbook. The prompt stays a policy summary plus what is
-/// true right now (PLAN 7.1, *System prompt*) — which is why an identity's
-/// instructions are capped in the store, and why a runbook is a file this
-/// message names rather than text it carries.
-pub fn system_message(
-    agent: &Agent,
-    workspace: Option<&Path>,
-    skills: Option<&str>,
-    shared: Option<&str>,
-) -> String {
+/// The prompt stays a policy summary plus what is true right now (PLAN 7.1,
+/// *System prompt*). That is why an identity's instructions are capped in the
+/// store, why a runbook is a file this message names rather than text it
+/// carries, and why each of the four blocks appended at the end has a cap of
+/// its own.
+pub fn system_message(ctx: &Context<'_>) -> String {
     let mut prompt = String::from(SYSTEM_PROMPT);
+    let agent = ctx.agent;
 
     if !agent.role.is_empty() {
         prompt.push_str(&format!(
@@ -124,7 +159,7 @@ pub fn system_message(
         );
     }
 
-    match workspace {
+    match ctx.workspace {
         Some(path) => {
             prompt.push_str("\n\nThe workspace is: ");
             prompt.push_str(&path.display().to_string());
@@ -148,14 +183,15 @@ pub fn system_message(
         READ_MAX_BYTES / 1024
     ));
 
-    if let Some(skills) = skills {
+    // Appended in the documented order, and each only when there is one. A
+    // loop rather than four `if let`s because the order *is* the rule, and a
+    // list of four names is harder to reorder by accident than four blocks.
+    for block in [ctx.memories, ctx.skills, ctx.shared, ctx.compacted]
+        .into_iter()
+        .flatten()
+    {
         prompt.push_str("\n\n");
-        prompt.push_str(skills);
-    }
-
-    if let Some(shared) = shared {
-        prompt.push_str("\n\n");
-        prompt.push_str(shared);
+        prompt.push_str(block);
     }
 
     prompt
@@ -163,20 +199,23 @@ pub fn system_message(
 
 /// Builds the request for the next round of a turn.
 ///
-/// `history` is the session's stored messages, oldest first. Any `system`
-/// message in it is dropped: the one this function prepends is the current
-/// one, and two system messages is not a shape the API defines.
+/// `history` is the messages that still reach the model, oldest first — the
+/// whole transcript for a session that has never been compacted, and the raw
+/// tail for one that has ([`compact::tail`](crate::compact::tail)). Slicing it
+/// is the caller's, not this function's: what has folded is a fact about the
+/// session, which lives in the store, and a projection that went looking for it
+/// would need one.
+///
+/// Any `system` message in `history` is dropped: the one this function prepends
+/// is the current one, and two system messages is not a shape the API defines.
 pub fn build(
     model: &str,
-    agent: &Agent,
+    ctx: &Context<'_>,
     history: &[Message],
-    workspace: Option<&Path>,
-    skills: Option<&str>,
-    shared: Option<&str>,
     tools: Vec<serde_json::Value>,
 ) -> ModelRequest {
     let mut messages = vec![WireMessage::System {
-        content: system_message(agent, workspace, skills, shared),
+        content: system_message(ctx),
     }];
 
     for message in history {
@@ -311,14 +350,29 @@ mod tests {
         }
     }
 
+    /// A workspace path to point at. A `PathBuf` in the caller's frame rather
+    /// than a temporary, because [`Context`] borrows it.
+    fn root() -> PathBuf {
+        PathBuf::from("/w")
+    }
+
+    /// An identity in a workspace and nothing else: what most of these
+    /// assertions are about.
+    fn ctx<'a>(agent: &'a Agent, workspace: Option<&'a Path>) -> Context<'a> {
+        Context {
+            agent,
+            workspace,
+            memories: None,
+            skills: None,
+            shared: None,
+            compacted: None,
+        }
+    }
+
     #[test]
     fn the_system_message_names_the_workspace() {
-        let prompt = system_message(
-            &assistant(),
-            Some(&PathBuf::from("/home/p/work")),
-            None,
-            None,
-        );
+        let here = PathBuf::from("/home/p/work");
+        let prompt = system_message(&ctx(&assistant(), Some(&here)));
 
         assert!(prompt.contains("/home/p/work"), "{prompt}");
         assert!(
@@ -330,7 +384,7 @@ mod tests {
 
     #[test]
     fn a_session_without_a_workspace_is_told_so() {
-        let prompt = system_message(&assistant(), None, None, None);
+        let prompt = system_message(&ctx(&assistant(), None));
 
         assert!(prompt.contains("no workspace folder"), "{prompt}");
         assert!(!prompt.contains("Reads inside it"), "{prompt}");
@@ -341,7 +395,7 @@ mod tests {
     /// behaving differently for a migration nobody asked for.
     #[test]
     fn the_default_identity_leaves_the_message_exactly_as_it_was() {
-        let prompt = system_message(&assistant(), Some(&PathBuf::from("/w")), None, None);
+        let prompt = system_message(&ctx(&assistant(), Some(&root())));
 
         assert!(!prompt.contains("You are working as"), "{prompt}");
         assert!(!prompt.contains("holds no tools"), "{prompt}");
@@ -352,7 +406,7 @@ mod tests {
     /// session — and before anything that changes between two turns.
     #[test]
     fn an_identity_names_itself_before_the_session_facts() {
-        let prompt = system_message(&reviewer(), Some(&PathBuf::from("/w")), None, None);
+        let prompt = system_message(&ctx(&reviewer(), Some(&root())));
 
         let identity = prompt.find("Reviewer").expect("the identity is named");
         let workspace = prompt.find("The workspace is").expect("and the folder");
@@ -375,12 +429,11 @@ mod tests {
             ..reviewer()
         };
         assert!(
-            system_message(&none, Some(&PathBuf::from("/w")), None, None)
-                .contains("holds no tools"),
+            system_message(&ctx(&none, Some(&root()))).contains("holds no tools"),
             "an identity that cannot act should not discover it one refusal at a time"
         );
 
-        let some = system_message(&reviewer(), Some(&PathBuf::from("/w")), None, None);
+        let some = system_message(&ctx(&reviewer(), Some(&root())));
         assert!(
             !some.contains("holds no tools"),
             "an identity with tools has nothing to say about them: {some}"
@@ -394,12 +447,13 @@ mod tests {
     fn the_skill_catalog_is_carried_and_the_runbook_is_not() {
         let catalog = "Skills you may run.\n\n- `inbox.triage` (v1, this workspace) — sorts an \
                        item into the board. Calls fs_read, fs_write.";
-        let prompt = system_message(
-            &reviewer(),
-            Some(&PathBuf::from("/w")),
-            Some(catalog),
-            Some("status/STATUS.md:\nquiet"),
-        );
+        let reviewer = reviewer();
+        let root = root();
+        let prompt = system_message(&Context {
+            skills: Some(catalog),
+            shared: Some("status/STATUS.md:\nquiet"),
+            ..ctx(&reviewer, Some(&root))
+        });
 
         assert!(prompt.contains("inbox.triage"), "{prompt}");
         let skills = prompt.find("Skills you may run").expect("the catalog");
@@ -407,7 +461,7 @@ mod tests {
         assert!(skills < state, "{prompt}");
 
         // And an identity granted none is left exactly where Phase 12 left it.
-        let without = system_message(&reviewer(), Some(&PathBuf::from("/w")), None, None);
+        let without = system_message(&ctx(&reviewer, Some(&root)));
         assert!(!without.contains("Skills you may run"), "{without}");
     }
 
@@ -416,16 +470,62 @@ mod tests {
     /// workspace uses the convention (PLAN 7.3, Phase 11).
     #[test]
     fn the_shared_state_is_appended_and_changes_nothing_before_it() {
-        let plain = system_message(&assistant(), Some(&PathBuf::from("/w")), None, None);
-        let shared = system_message(
-            &assistant(),
-            Some(&PathBuf::from("/w")),
-            None,
-            Some("status/STATUS.md:\nquiet"),
-        );
+        let assistant = assistant();
+        let root = root();
+        let plain = system_message(&ctx(&assistant, Some(&root)));
+        let shared = system_message(&Context {
+            shared: Some("status/STATUS.md:\nquiet"),
+            ..ctx(&assistant, Some(&root))
+        });
 
         assert!(shared.starts_with(&plain), "{shared}");
         assert!(shared.ends_with("status/STATUS.md:\nquiet"), "{shared}");
+    }
+
+    /// The four appended blocks go in one order, and the order is the point:
+    /// slowest-changing first, and this session's own folded history last,
+    /// where it sits against the conversation it stands in for.
+    #[test]
+    fn the_appended_blocks_are_in_the_documented_order() {
+        let reviewer = reviewer();
+        let root = root();
+        let prompt = system_message(&Context {
+            memories: Some("What you have learned. \n- (preference) answers in French"),
+            skills: Some("Skills you may run.\n\n- `inbox.triage`"),
+            shared: Some("status/STATUS.md:\nquiet"),
+            compacted: Some("Earlier in this session, folded to state."),
+            ..ctx(&reviewer, Some(&root))
+        });
+
+        let at = |needle: &str| {
+            prompt
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {prompt}"))
+        };
+        let identity = at("Reviewer");
+        let memories = at("What you have learned");
+        let skills = at("Skills you may run");
+        let shared = at("status/STATUS.md");
+        let folded = at("folded to state");
+
+        assert!(identity < memories, "{prompt}");
+        assert!(memories < skills, "{prompt}");
+        assert!(skills < shared, "{prompt}");
+        assert!(shared < folded, "{prompt}");
+    }
+
+    /// An identity that has learned nothing, in a session that has never been
+    /// compacted, gets exactly the message Phase 13 produced. A phase that
+    /// silently changed every existing session's prompt would be a migration
+    /// nobody asked for.
+    #[test]
+    fn nothing_learned_and_nothing_folded_leaves_the_message_as_it_was() {
+        let reviewer = reviewer();
+        let root = root();
+        let prompt = system_message(&ctx(&reviewer, Some(&root)));
+
+        assert!(!prompt.contains("What you have learned"), "{prompt}");
+        assert!(!prompt.contains("folded to state"), "{prompt}");
     }
 
     #[test]
@@ -437,15 +537,7 @@ mod tests {
             Message::assistant("Three files.", Vec::new()),
         ];
 
-        let request = build(
-            "m",
-            &assistant(),
-            &history,
-            Some(&PathBuf::from("/w")),
-            None,
-            None,
-            Vec::new(),
-        );
+        let request = build("m", &ctx(&assistant(), Some(&root())), &history, Vec::new());
 
         assert!(matches!(request.messages[0], WireMessage::System { .. }));
         assert!(matches!(request.messages[1], WireMessage::User { .. }));
@@ -489,7 +581,7 @@ mod tests {
             Message::user("never mind, what about this"),
         ];
 
-        let request = build("m", &assistant(), &history, None, None, None, Vec::new());
+        let request = build("m", &ctx(&assistant(), None), &history, Vec::new());
 
         let answered: Vec<&str> = request
             .messages
@@ -526,7 +618,7 @@ mod tests {
             Message::tool("call_1", r#"{"ok":true}"#),
         ];
 
-        let request = build("m", &assistant(), &history, None, None, None, Vec::new());
+        let request = build("m", &ctx(&assistant(), None), &history, Vec::new());
         let answers = request
             .messages
             .iter()
@@ -546,15 +638,8 @@ mod tests {
             Message::user("hi"),
         ];
 
-        let request = build(
-            "m",
-            &assistant(),
-            &history,
-            Some(&PathBuf::from("/new")),
-            None,
-            None,
-            Vec::new(),
-        );
+        let fresh = PathBuf::from("/new");
+        let request = build("m", &ctx(&assistant(), Some(&fresh)), &history, Vec::new());
 
         let systems = request
             .messages
@@ -576,14 +661,14 @@ mod tests {
             ..Message::tool("x", "{}")
         }];
 
-        let request = build("m", &assistant(), &history, None, None, None, Vec::new());
+        let request = build("m", &ctx(&assistant(), None), &history, Vec::new());
         assert_eq!(request.messages.len(), 1, "only the system message remains");
     }
 
     #[test]
     fn the_tools_array_is_carried_through_untouched() {
         let tools = vec![json!({ "type": "function", "function": { "name": "fs_list" } })];
-        let request = build("m", &assistant(), &[], None, None, None, tools.clone());
+        let request = build("m", &ctx(&assistant(), None), &[], tools.clone());
 
         assert_eq!(request.tools, tools);
         assert_eq!(request.model, "m");

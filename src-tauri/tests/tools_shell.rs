@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
 use aegis_lib::policy::{decide, tool, Decision, Grant, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, ProgressSink, Stream, ToolCtx, ToolOutcome};
-use aegis_lib::{SkillCtx, DEFAULT_AGENT_ID};
+use aegis_lib::{MemoryStore, SkillCtx, DEFAULT_AGENT_ID};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -78,6 +78,9 @@ struct Fixture {
     /// Where a capture would go. Nothing in this file captures anything; the
     /// path is here because a tool call is not runnable without one.
     captures: PathBuf,
+    /// An empty memory store. Nothing here remembers anything; the store is
+    /// only there because a tool call is not runnable without one.
+    memories: MemoryStore,
 }
 
 impl Fixture {
@@ -87,6 +90,7 @@ impl Fixture {
         let data_guard = TempDir::new().expect("temp dir");
         let audit = AuditLog::new(data_guard.path());
         let captures = data_guard.path().join("captures");
+        let memories = MemoryStore::load(data_guard.path());
 
         Self {
             workspace: dunce::canonicalize(workspace_guard.path()).expect("canonical"),
@@ -97,6 +101,7 @@ impl Fixture {
             grants: GrantStore::new(),
             audit,
             captures,
+            memories,
         }
     }
 
@@ -159,6 +164,8 @@ impl Fixture {
                 tools: &[],
                 active: None,
             },
+            // Nothing here remembers anything either.
+            memories: &self.memories,
         };
 
         match self.judge(&args) {

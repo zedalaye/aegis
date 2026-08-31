@@ -1,10 +1,11 @@
 //! The decision table of PLAN 3.
 //!
 //! Six rows over five tools, written out once, plus the two Phase 13 rows for
-//! `skill_run` and `skill_return`. Every branch here answers one question —
-//! *auto, ask, or refuse* — and nothing else in the runtime is allowed to
-//! answer it, which is the point of the table being a single `match` rather
-//! than a check inside each tool.
+//! `skill_run` and `skill_return` and the two Phase 14 rows for `memory_write`
+//! and `memory_search`. Every branch here answers one question — *auto, ask, or
+//! refuse* — and nothing else in the runtime is allowed to answer it, which is
+//! the point of the table being a single `match` rather than a check inside
+//! each tool.
 //!
 //! Reading order inside each tool matters and is deliberate:
 //!
@@ -459,7 +460,90 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 reason: "recording the result of a skill run",
             })
         }
+
+        // The two rows of PLAN 7.3, Phase 14. They are split the way the
+        // filesystem rows are, and for the same reason rather than by analogy:
+        // one of them reads and the other one changes something that lasts.
+        //
+        // A memory is not a file, but it is closer to `fs_write` than to
+        // `skill_run`, because what it changes is the *next* turn's
+        // instructions and every turn's after that. That is a durable,
+        // invisible-at-the-time effect, and `AGENTS.md` puts those behind the
+        // gate. The dialog carries the sentence itself — a memory is one
+        // sentence by construction, so the user reads the whole thing rather
+        // than a preview of it.
+        ToolCall::MemoryWrite { kind, text, source } => {
+            let trimmed = text.trim();
+            // The store refuses this too, with a message written for the
+            // model. Catching it here as well is not a second copy of the
+            // rule: it is what keeps an approval dialog from ever asking a
+            // person to approve remembering nothing.
+            if trimmed.is_empty() {
+                return Err(Decision::deny(
+                    ErrorCode::ToolFailed,
+                    "there is nothing to remember. Say what is worth remembering, in one \
+                     sentence"
+                        .to_owned(),
+                ));
+            }
+
+            let source = source
+                .map(|source| source.trim().to_owned())
+                .filter(|source| !source.is_empty());
+            let grant = Grant::MemoryWrite;
+
+            Ok(ask(
+                ResolvedCall::MemoryWrite {
+                    kind,
+                    text: trimmed.to_owned(),
+                    source: source.clone(),
+                },
+                AskRequest {
+                    tool: tool::MEMORY_WRITE,
+                    // Durable and reversible, inside this application, touching
+                    // nothing on the machine. The same badge a workspace write
+                    // gets, for a change of about the same size.
+                    risk: Risk::Medium,
+                    title: "Remember this",
+                    summary: summarize_memory(kind.as_str(), trimmed),
+                    detail: ApprovalDetail::Memory {
+                        memory_kind: kind.as_str().to_owned(),
+                        text: trimmed.to_owned(),
+                        source,
+                    },
+                    scope_label: scope_label(Some(&grant)),
+                    grant: Some(grant),
+                    reason: "a memory reaches every later turn this identity takes".to_owned(),
+                },
+            ))
+        }
+
+        // Auto: it reads records this identity already holds, reaches nothing
+        // outside this process, and there is no version of it a user could
+        // usefully be asked about. The scoping that matters is not here at all
+        // — the query cannot name an identity, so `memory_search` can only ever
+        // look at the caller's own memories.
+        ToolCall::MemorySearch { query } => Ok(Decision::Auto {
+            call: ResolvedCall::MemorySearch {
+                query: query.trim().to_owned(),
+            },
+            reason: "reading this identity's own memories",
+        }),
     }
+}
+
+/// One line naming a memory, for the approval dialog's header.
+///
+/// The kind and enough of the sentence to recognize it. The dialog shows the
+/// whole thing underneath; this is what the row says when several are queued.
+fn summarize_memory(kind: &str, text: &str) -> String {
+    const HEAD: usize = 72;
+
+    if text.chars().count() <= HEAD {
+        return format!("{kind}: {text}");
+    }
+    let head: String = text.chars().take(HEAD).collect();
+    format!("{kind}: {head}…")
 }
 
 /// Wraps a request into an ask.

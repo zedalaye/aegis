@@ -49,9 +49,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::approval::{Answer, ApprovalRegistry, Decision as Answered, ResolvedBy, APPROVAL_TTL};
 use crate::audit::{AuditDecision, AuditLog, Outcome};
+use crate::compact;
 use crate::error::ErrorCode;
 use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
 use crate::skills::{self, SkillCtx};
+use crate::store::memories::{self, MemoryStore};
 use crate::store::{
     Agent, Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
 };
@@ -144,6 +146,14 @@ pub struct Turn<'a> {
     /// the installation, and a loop that went looking for it could not be run
     /// in a test without one.
     pub skills: &'a Path,
+    /// Where this identity's memories are kept (PLAN 7.3, Phase 14).
+    ///
+    /// Reached twice per turn and for two different things: read once at the
+    /// top, to build the block the system message carries, and held for the
+    /// whole turn because `memory_write` writes through it. The identity it is
+    /// scoped to is [`Turn::agent`] and nothing else — the store spans every
+    /// identity, and every call into it names one.
+    pub memories: &'a MemoryStore,
 }
 
 /// The [`ProgressSink`] one tool call writes its live output to.
@@ -238,6 +248,28 @@ impl Turn<'_> {
         // the span it names is this turn's (see `skills::track`).
         let mut skill: Option<String> = None;
 
+        // Once per turn, before the first request, and never mid-turn: a fold
+        // that landed between two rounds would take away context the model had
+        // already been reasoning against, halfway through. This is also the
+        // "flush before compact" of `COS.md` *Memory*, in the only form a
+        // coded compactor can honestly offer one — nothing is flushed because
+        // nothing is lost. The transcript stays on disk in full, what folded
+        // becomes state that names the files and the blockers, and what the
+        // identity has learned is in the block below, which no fold touches.
+        if let Err(err) = self.sessions.compact(&plan.session_id, false) {
+            // Worth a line and nothing more. A session that could not fold is a
+            // session with an expensive request, not a broken one.
+            tracing::warn!(%err, session_id = %plan.session_id, "could not compact the session");
+        }
+
+        // Read once per turn, like the catalog and for the same reason: a
+        // memory can be written *by this turn*, and a block that changed
+        // between two rounds would show the model one set of standing facts and
+        // then answer from another. The write still lands — the next turn
+        // carries it, and the tool's own result says what was recorded.
+        let held = self.memories.list_for(&self.agent.id);
+        let memory_block = memories::prompt_block(&held, held.len());
+
         // Per-turn, like the delta counter, and shared with every tool call in
         // the turn — the UI drops anything out of order, and a counter that
         // restarted per call would make two calls' frames indistinguishable
@@ -247,14 +279,25 @@ impl Turn<'_> {
         let progress_seq = AtomicU32::new(0);
 
         let reason = loop {
-            let history = match self.sessions.messages(&plan.session_id) {
-                Ok(history) => history,
+            // Transcript and fold together, under one lock: read apart, a
+            // compaction landing between them would give this round a pointer
+            // into a transcript that does not match it.
+            let (history, compaction) = match self.sessions.context(&plan.session_id) {
+                Ok(context) => context,
                 Err(err) => {
                     // The session was deleted while its turn was running.
                     tracing::warn!(%err, session_id = %plan.session_id, "the turn lost its session");
                     break self.fail(plan, ErrorCode::Internal, &err.to_string(), false);
                 }
             };
+            // What still reaches the model. The whole transcript for a session
+            // that has never folded; the raw tail for one that has.
+            let raw = compact::tail(
+                &history,
+                compaction
+                    .as_ref()
+                    .map(|held| held.through_message_id.as_str()),
+            );
 
             // Read fresh for every round, not once per turn: this *is* the
             // read path of the workspace convention (PLAN 7.3, Phase 11), and
@@ -266,11 +309,15 @@ impl Turn<'_> {
 
             let request = transcript::build(
                 self.provider.model(),
-                self.agent,
-                &history,
-                plan.workspace.as_deref(),
-                skill_block.as_deref(),
-                shared.as_deref(),
+                &transcript::Context {
+                    agent: self.agent,
+                    workspace: plan.workspace.as_deref(),
+                    memories: memory_block.as_deref(),
+                    skills: skill_block.as_deref(),
+                    shared: shared.as_deref(),
+                    compacted: compaction.as_ref().map(|held| held.state.as_str()),
+                },
+                raw,
                 // Half of the tool ACL, and the half the model can see: an
                 // identity that was not granted `shell_exec` is not offered
                 // one, so it never spends a round asking for it. The other half
@@ -585,6 +632,7 @@ impl Turn<'_> {
                     tools: &self.agent.tools,
                     active: running.as_deref(),
                 },
+                memories: self.memories,
             };
 
             // Measured for the one tool whose prompt names a display, and for
@@ -812,6 +860,7 @@ impl Turn<'_> {
                     // the refusals it produces belong to that run.
                     active: skill,
                 },
+                memories: self.memories,
             };
             let outcome = tools::refuse(
                 &ctx,
@@ -1099,6 +1148,9 @@ mod tests {
         /// An empty skill library. These tests are about the loop; the runner
         /// has its own, in `skills` and in `tests/skills.rs`.
         library: PathBuf,
+        /// An empty memory store, for the same reason: what the loop does with
+        /// one is that it reads it into the prompt and hands it to the tools.
+        memories: MemoryStore,
         /// The identity every fixture turn runs as: the built-in one, which
         /// holds every tool, so these tests are about the loop and not about
         /// an allow-list.
@@ -1138,6 +1190,7 @@ mod tests {
                 session_id,
                 captures,
                 library: data.join("skills"),
+                memories: MemoryStore::load(&data),
                 agent: Agent::builtin(),
             }
         }
@@ -1163,6 +1216,7 @@ mod tests {
                 self_exe: None,
                 captures: &self.captures,
                 skills: &self.library,
+                memories: &self.memories,
             }
         }
 

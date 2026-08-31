@@ -40,6 +40,8 @@ const TOOL_SUMMARY: Record<string, string> = {
   screen_capture: "capture the screen",
   skill_run: "load a runbook it was granted",
   skill_return: "record what a runbook produced",
+  memory_write: "remember something, for every later session",
+  memory_search: "look through what it remembers",
 };
 
 /**

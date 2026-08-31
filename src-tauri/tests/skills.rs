@@ -47,7 +47,8 @@ use aegis_lib::policy::tool;
 use aegis_lib::skills::{self, SkillScope};
 use aegis_lib::{
     Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditEntry, AuditLog, Event, FakeProvider,
-    GrantStore, Message, SessionState, SessionStore, Turn, TurnRegistry, DEFAULT_PROVIDER_ID,
+    GrantStore, MemoryStore, Message, SessionState, SessionStore, Turn, TurnRegistry,
+    DEFAULT_PROVIDER_ID,
 };
 
 /// Collects every event a turn emits.
@@ -89,6 +90,8 @@ struct App {
     approvals: ApprovalRegistry,
     audit: AuditLog,
     captures: PathBuf,
+    /// An empty memory store: these files are about runbooks.
+    memories: MemoryStore,
 }
 
 impl App {
@@ -129,6 +132,7 @@ impl App {
             approvals: ApprovalRegistry::new(),
             audit: AuditLog::new(&data),
             captures: data.join("captures"),
+            memories: MemoryStore::load(&data),
         }
     }
 
@@ -175,11 +179,15 @@ impl App {
 
         let request = transcript::build(
             "m",
-            agent,
+            &transcript::Context {
+                agent,
+                workspace: Some(&self.workspace),
+                memories: None,
+                skills: block.as_deref(),
+                shared: shared.as_deref(),
+                compacted: None,
+            },
             &history,
-            Some(&self.workspace),
-            block.as_deref(),
-            shared.as_deref(),
             aegis_lib::tools::schemas_for(&agent.tools),
         );
 
@@ -242,6 +250,7 @@ impl App {
             self_exe: None,
             captures: &self.captures,
             skills: &self.library,
+            memories: &self.memories,
         }
         .run(&plan, &cancel)
         .await;

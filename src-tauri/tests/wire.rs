@@ -27,9 +27,9 @@ use aegis_lib::agent::provider::openai;
 use aegis_lib::agent::turn::TurnPlan;
 use aegis_lib::agent::wire::{ToolCallAssembler, WireMessage};
 use aegis_lib::{
-    Agent, ApiKey, ApprovalRegistry, AuditDecision, AuditLog, Event, GrantStore, Message,
-    ModelEvent, ModelRequest, OpenAiProvider, Provider, ProviderSettings, Role, SessionState,
-    SessionStore, StopReason, Turn, TurnRegistry, DEFAULT_AGENT_ID,
+    Agent, ApiKey, ApprovalRegistry, AuditDecision, AuditLog, Event, GrantStore, MemoryStore,
+    Message, ModelEvent, ModelRequest, OpenAiProvider, Provider, ProviderSettings, Role,
+    SessionState, SessionStore, StopReason, Turn, TurnRegistry, DEFAULT_AGENT_ID,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -694,6 +694,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         self_exe: None,
         captures: &data.join("captures"),
         skills: &data.join("skills"),
+        memories: &MemoryStore::load(&data),
     }
     .run(&plan, &cancel)
     .await;

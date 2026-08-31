@@ -13,8 +13,8 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 13 (skill runner) — the MVP is feature-complete, and the
-> post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
+> **Status: Phase 14 (per-agent memory + compaction) — the MVP is
+> feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
 > time, and stop it mid-sentence. Transcripts are on disk and survive a restart.
@@ -58,9 +58,10 @@ ever sent to it.
 > things and never the picture.
 >
 > The scripted provider is still there and still useful: with no base URL configured it answers
-> every message with what the runtime sent it, and **`/write`**, **`/run`** and **`/capture`**
-> make it ask for a file write, a real command and a real screenshot, so the whole gate can be
-> walked through without spending a token or configuring a provider.
+> every message with what the runtime sent it, and **`/write`**, **`/run`**, **`/capture`** and
+> **`/remember`** make it ask for a file write, a real command, a real screenshot and a real
+> memory, so the whole gate can be walked through without spending a token or configuring a
+> provider.
 >
 > **The audit log has a window.** *Audit log* in the title bar opens a drawer beside the
 > transcript showing the tail of `audit.jsonl`, newest first: one row per tool call with the
@@ -101,6 +102,19 @@ ever sent to it.
 > identity does not hold is refused before its first step rather than halfway through. The run
 > ends with a status object that is checked, not believed: a `done` naming a file that is not on
 > disk comes back refused. Every audit line in between carries the skill's name. See *Skills*.
+>
+> **An identity now remembers things, and a long session stops paying for its whole history.**
+> A memory is one sentence — a **preference**, an **exception** or a **convention** — belonging
+> to one identity and reaching the top of every reply that identity gives, in this session and
+> every session after it. The model can record one and is asked first, with the sentence itself
+> in the dialog; it can search what it holds; it **cannot delete one**, because correcting a
+> memory is yours. *Settings → Memory* is where you read, add and forget them. And when a
+> conversation gets long, its older turns fold into a few lines of **state** — the goal, the
+> files written, the decisions filed, the blockers left open — while the last few turns stay
+> word for word. Nothing is deleted: your transcript stays exactly as it was and the pane still
+> scrolls through all of it; what changes is only what the model carries. **Compact** in the
+> session header does it now; otherwise it happens on its own once a transcript gets expensive.
+> See *Memory* and *Compaction*.
 
 ---
 
@@ -185,6 +199,15 @@ No provider and no key needed — the scripted provider is enough to exercise th
    loaded, then the run is closed with a `blocked` status, because there is no model behind the
    scripted provider to carry the steps out. Both lines are in the audit log with the skill's
    name on them. See [Skills](#skills).
+10. **Make it remember something.** Send `/remember`. The prompt shows the exact sentence — this
+    is the one call that touches nothing on your machine and still asks, because a memory reaches
+    the top of every later reply. Allow it, send anything else, and the reply now opens with what
+    it knows. *Settings → Memory* is where you correct or forget it; there is no tool that can.
+    See [Memory](#memory).
+11. **Fold a long session.** Press **Compact** in the session header. Once a conversation has
+    more than a few turns, the older ones become a few lines of state — goal, files, decisions,
+    blockers — marked in place with *What it kept* beside it. Your transcript is untouched; only
+    what the model carries changes. See [Compaction](#compaction).
 
 ## Point it at a model
 
@@ -235,7 +258,8 @@ see *Troubleshooting*.
 ## Tests
 
 ```sh
-cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol, turns
+cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol, turns,
+                               # skills, memory, compaction
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 pnpm typecheck                 # TypeScript, strict
 ```
@@ -266,9 +290,9 @@ tests before `pnpm typecheck` when you have touched an IPC type.
 
 ## Where your data lives
 
-Projects, sessions, identities and settings are stored as four small JSON documents —
-`projects.json`, `sessions.json`, `agents.json` and `settings.json` — under the application-data
-directory:
+Projects, sessions, identities, memories and settings are stored as five small JSON documents —
+`projects.json`, `sessions.json`, `agents.json`, `memories.json` and `settings.json` — under the
+application-data directory:
 
 | | Path |
 | --- | --- |
@@ -279,7 +303,9 @@ directory:
 `projects.json` holds names and workspace paths. `sessions.json` holds your conversations — the
 messages you sent, the replies, the tool calls each turn made, and which identity the session
 runs as. `agents.json` holds the identities you have made; the built-in one is not in it, because
-it is a constant in the runtime rather than a record you could delete. `settings.json` holds the
+it is a constant in the runtime rather than a record you could delete. `memories.json` holds what
+each identity has learned, each record naming the identity it belongs to — deleting an identity
+takes its memories with it, since nothing else can reach them. `settings.json` holds the
 base URL and the model id. **None of them holds a key**, and none records whether anything is
 *running*: a session interrupted by a crash or a power cut comes back idle, because there is no
 turn left to finish it.
@@ -290,7 +316,7 @@ on Windows, Keychain on macOS, a Secret Service on Linux — where you can inspe
 without Aegis. Set `AEGIS_API_KEY` in the environment instead and Aegis uses that; the credential
 store wins when both are present.
 
-All four documents are meant to be readable and are safe to edit by hand while Aegis is closed.
+All five documents are meant to be readable and are safe to edit by hand while Aegis is closed.
 A document Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` and the app starts
 with an empty list rather than refusing to open. Deleting a project forgets it and its sessions;
 the workspace folder itself is never touched.
@@ -528,25 +554,131 @@ the reasoning in full, `PLAN.md` § 7.6 the argument for it being the efficiency
 
 ---
 
+## Memory
+
+A memory is **one sentence an identity keeps**, and it reaches the top of every reply that
+identity gives — in this session and in every session after it. That is the whole feature, and
+it is why the shape is as narrow as it is: something that is carried into every future request
+is closer to an instruction than to a note.
+
+A memory is one of three things, and nothing else:
+
+| Kind | For | Example |
+| --- | --- | --- |
+| `preference` | how someone likes things done | "this client wants everything in French" |
+| `exception` | where the usual rule does not apply | "never touch the vendored crate" |
+| `convention` | how it is done here | "releases are tagged before the changelog" |
+
+Anything that is none of those is not a memory. A fact about a project is a **file** in that
+workspace (`briefs/`, `decisions/` — see *Shared workspace files*), and a procedure is a
+**skill**. A store that accepted everything would slowly become the transcript it exists to
+replace.
+
+Each memory can name **what it rests on** — a workspace path, a ticket, the person who said it.
+That is optional, and its absence is shown: a memory with no source is presented to the model as
+a hypothesis, not as proof. It is the difference between "you decided this, it is in
+`decisions/DECISIONS.md`" and "I think I remember this".
+
+### Who may do what
+
+|  | The model | You |
+| --- | --- | --- |
+| Record one | `memory_write` — **you are asked first** | *Settings → Memory* |
+| Read them | in every request, plus `memory_search` | *Settings → Memory* |
+| Correct one | — | *Settings → Memory* |
+| Forget one | — | *Settings → Memory* |
+
+**There is no tool that deletes a memory**, and that is deliberate rather than an omission.
+Deleting is irreversible, and what a delete most often removes is a correction *you* made. An
+agent that could quietly retire the memories it found inconvenient would have a memory exactly as
+reliable as its judgement on its worst turn. So the model is told, in its own instructions, that
+it cannot delete these and should say so plainly when one is wrong — and you correct it.
+
+**A write is asked about**, like `fs_write`, even though it touches nothing on your machine. The
+dialog shows the exact sentence that would be remembered — the whole thing, not a preview, since
+it is one sentence — and *Allow for this session* covers the rest of the session if you would
+rather not be asked each time. Every write is on the audit log either way.
+
+Writing something already held **touches that memory instead of storing a second copy**, and the
+model is told it was already known, so it can stop repeating itself. An identity holds at most
+200; past that a write is refused with "forget one first" rather than something being quietly
+evicted — what would be evicted is as likely to be your correction as the model's guess. The
+twenty most recently confirmed reach the prompt; `memory_search` finds the rest.
+
+Memories belong to **one identity**. There is no view of everybody's, no query that spans two,
+and neither tool has an argument that names an identity — so a "reviewer" cannot read what a
+"scribe" learned. Deleting an identity forgets what it knew, since nothing else could ever reach
+it again.
+
+---
+
+## Compaction
+
+A long conversation gets expensive: every reply pays for every turn before it. So the older turns
+**fold into state** and the recent ones stay word for word.
+
+What the model carries after a fold is a handful of lines derived from what actually happened:
+
+```
+Earlier in this session, folded to state. 24 messages are no longer in your context. …
+
+Goal: get the staging deploy working again
+Then asked: what about the rollback step · use the 2 GB box
+Files written: artefacts/checklist.md · decisions/DECISIONS.md
+Decisions: 2 filed in decisions/DECISIONS.md — read it rather than recalling them
+Commands run: cargo · git
+Skill runs: deploy.draft — done · watch.digest — blocked
+Open blockers:
+- which registry does staging pull from
+Refused earlier: shell_exec ×2. Do not retry a refused call unchanged.
+```
+
+**Nothing here was summarized by a model.** Every line is read off the record — the first thing
+you asked, the paths `fs_write` actually wrote, the programs `shell_exec` actually ran, the
+status a `skill_return` actually reported. So it costs nothing, it is the same every time, it
+cannot invent a file that was never written, and every claim in it can be checked against
+`audit.jsonl`. The price is that it is *thin*: it holds what was done, not what was reasoned,
+which is exactly why the last few turns are kept raw.
+
+**Nothing is deleted.** Your transcript stays whole on disk and the pane still scrolls through
+all of it; a dashed line marks where the fold is, with *What it kept* beside it. What changes is
+only what the model is sent. Fold again later and the state is re-derived from the messages — a
+session compacted five times is never a summary of a summary.
+
+It happens on its own, once per turn, when a transcript has grown past about 48 KB. **Compact**
+in the session header does it now.
+
+What survives a fold, and always did: what the identity **remembers** (above), and the current
+state of your **shared workspace files**. Neither of those was ever part of the conversation —
+both are rebuilt into every request — so there is no "restore after compacting" step anywhere in
+Aegis, and nothing to forget to call. If a fact has to survive ten of these, it belongs in a
+memory or in a file, not in the chat. That rule is `COS.md`'s, and this is the machinery that
+makes it true.
+
+---
+
 ## Layout
 
 ```
 src/           React app — presentation and typed IPC glue only
   ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
-  components/  layout, chat, sessions, approvals, projects, agents, skills, settings, audit
+  components/  layout, chat, sessions, approvals, projects, agents, skills, memory,
+               settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
     agent/     turn loop, wire protocol, providers (scripted, and OpenAI-compatible over SSE),
                event payloads, turn registry
-    store/     projects.json, sessions.json, agents.json and settings.json, behind one
-               atomic write
-    tools/     fs, shell, screenshot, skill — behind one ToolSpec registry
+    store/     projects.json, sessions.json, agents.json, memories.json and
+               settings.json, behind one atomic write
+    tools/     fs, shell, screenshot, skill, memory — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
     skills/    the runbook format, the catalog, and the handoff result a run returns
     workspace.rs  the shared-file convention inside a project folder: scaffold, and the
                capped digest every request carries
+    compact.rs the older half of a transcript, derived into state — no summarizer,
+               and nothing deleted
     approval.rs  pending approvals: the channel a turn parks on until you answer
     audit.rs   one jsonl line per tool call
     secrets.rs OS credential store, environment fallback, masking
@@ -608,6 +740,17 @@ Read this before pointing Aegis at anything you care about.
   records those same three things and never the picture. A capture that comes back entirely
   blank — which is how macOS reports a missing Screen Recording permission — is refused as
   `E_SCREEN_PERMISSION` rather than handed to the model as a picture of an empty desktop.
+- **A memory is durable and it is sent to your provider.** Everything an identity remembers is in
+  the system message of every request it makes, so a memory is worth reading before you allow it
+  the way you would read a file before allowing a write — and it is why the dialog shows the whole
+  sentence. The model can record one and read its own; it cannot delete one, and it cannot see
+  another identity's. Memories live in `memories.json` under the app data directory, never in
+  your workspace, and *Settings → Memory* is the one place they are corrected or removed. A
+  compaction never touches them: what folds is the conversation.
+- **A compaction is not a deletion.** Folding a session changes what the model is sent and
+  nothing else. Your transcript stays whole on disk, the audit log still answers for every call,
+  and the state the fold produces is derived from the record rather than summarized by a model —
+  so it cannot invent a file that was never written.
 - **The shared files are sent to your provider.** Once `status/` and `decisions/` exist, every
   request carries what is in them — that is the point of them, and it is worth knowing before you
   put something in `STATUS.md` you would not paste into a chat. Only those two files are read,
