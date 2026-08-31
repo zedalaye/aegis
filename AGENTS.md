@@ -163,7 +163,8 @@ on another). Keys stay in the OS keyring / env, never in the WebView.
 A CoS without (1) recites. Do not build (2) first.
 
 Chrome polish is `PLAN.md` § 7.10. Workspace versioning (`git init` on scaffold,
-never an auto-commit) is § 7.11. Execution host (WSL) is § 7.12. None is a
+never an auto-commit) is § 7.11. Execution host (WSL) is § 7.12. Skill promotion
+(a proposal file, then apply; writing is still not granting) is § 7.13. None is a
 step in this list, and none is a reason to delay (1)–(3). There is no in-app
 editor. A skill is a file: the operator's editor, or `fs_write` under the
 gate. Granting it to an identity is a separate act.
