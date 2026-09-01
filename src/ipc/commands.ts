@@ -14,8 +14,9 @@
  * the shared-workspace convention (PLAN 7.3, Phase 11), the identities a
  * session can be opened as (PLAN 7.3, Phase 12), the runbooks those
  * identities may run (PLAN 7.3, Phase 13), what one identity has learned
- * (PLAN 7.3, Phase 14), and the routines that fire a runbook on a clock
- * (PLAN 7.3, Phase 16).
+ * (PLAN 7.3, Phase 14), the routines that fire a runbook on a clock
+ * (PLAN 7.3, Phase 16), and the project's board and the runs its audit log
+ * folds into (PLAN 7.3, Phase 17).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -31,6 +32,7 @@ import type {
   AgentDraft,
   ApprovalRequest,
   AuditEntry,
+  Board,
   Decision,
   Grant,
   MaskedSettings,
@@ -41,6 +43,8 @@ import type {
   ProviderProbe,
   Routine,
   RoutineDraft,
+  RunRef,
+  RunTrace,
   ScaffoldReport,
   SessionDetail,
   SessionSummary,
@@ -372,6 +376,37 @@ export function auditTail(
  */
 export function auditLogPath(): Promise<string> {
   return call<string>("audit_log_path");
+}
+
+/**
+ * The open project's board: attention, in flight, blocked, and its runs.
+ *
+ * Measured on every call. Half of what it returns is live — what is running,
+ * what a dialog is waiting on, which clock stopped itself — so there is
+ * deliberately nothing to cache and no `board:changed` event: the panel asks
+ * again when something it already listens for says the answer may have moved.
+ *
+ * There is no counterpart that writes one. The file half is the user's own
+ * `status/STATUS.md`, and the way it is corrected is an ordinary `fs_write`
+ * through the approval gate, exactly like a decision.
+ */
+export function boardRead(projectId: string): Promise<Board> {
+  return call<Board>("board_read", { project_id: projectId });
+}
+
+/**
+ * One run, and the audit lines it is replayed from, oldest first.
+ *
+ * The reference is handed back from the board unchanged — it names a grouping
+ * of lines already in the log, not a path or anything else the window could
+ * widen. A run the panel is holding but the log has scrolled past rejects, and
+ * refetching the board is the answer.
+ */
+export function boardTrace(
+  projectId: string,
+  run: RunRef,
+): Promise<RunTrace> {
+  return call<RunTrace>("board_trace", { project_id: projectId, run });
 }
 
 /**

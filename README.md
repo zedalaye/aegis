@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 14 (per-agent memory + compaction) — the MVP is
+> **Status: Phase 17 (status board + trace/replay) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -115,6 +115,25 @@ ever sent to it.
 > scrolls through all of it; what changes is only what the model carries. **Compact** in the
 > session header does it now; otherwise it happens on its own once a transcript gets expensive.
 > See *Memory* and *Compaction*.
+>
+> **One identity can now hand work to another, and a clock can start one.** A *handoff* is a
+> brief out and a report back — goal, inputs as paths, definition of done — never a transcript to
+> read; a delegated run opens in the sidebar as an ordinary session with a `brief` badge, under
+> its own identity and the same approval gate. A *routine* fires one granted runbook, as one
+> identity, on a clock or when a folder changes, and it runs whether or not this window is open.
+> Nobody is watching a scheduled run, so it is never asked anything: what it may do is exactly
+> what you signed on the routine, and everything else is refused rather than parked on a prompt
+> you cannot see. See *Handoffs* and *Routines*.
+>
+> **And now there is a board.** *Board* in the title bar answers, for the open project, *who ran,
+> what did it cost, and why did it fail* — without opening a chat. Three columns: what wants a
+> person, what is running, what stopped short — half of it read structurally out of your own
+> `status/STATUS.md`, half of it what the runtime can see for itself, with every line saying
+> which. Underneath, every run in the recent log: a delegation with its specialists, a morning's
+> firing of a routine, a runbook, a conversation — each with who ran it, what it spent, what it
+> left on disk, and the audit lines it is replayed from. Nothing there writes: correcting the
+> board means editing `STATUS.md`, in your editor or through the same approval dialog as any
+> other change to your files. See *The board*.
 
 ---
 
@@ -223,6 +242,12 @@ No provider and no key needed — the scripted provider is enough to exercise th
     more than a few turns, the older ones become a few lines of state — goal, files, decisions,
     blockers — marked in place with *What it kept* beside it. Your transcript is untouched; only
     what the model carries changes. See [Compaction](#compaction).
+14. **Ask what happened.** Press **Board** in the title bar. Everything above is on it: the
+    routine's refused write under *Blocked* saying why, the delegation as one run naming both
+    specialists, the conversation you had, each with what it spent. Open one and you get the
+    audit lines it is replayed from — the same rows the drawer draws, because they are the same
+    lines. Nothing on that page can be edited, which is the point of it. See
+    [The board](#the-board).
 
 ## Point it at a model
 
@@ -274,7 +299,7 @@ see *Troubleshooting*.
 
 ```sh
 cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol, turns,
-                               # skills, memory, compaction, handoffs
+                               # skills, memory, compaction, handoffs, routines, the board
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 pnpm typecheck                 # TypeScript, strict
 ```
@@ -316,8 +341,9 @@ documents — `projects.json`, `sessions.json`, `agents.json`, `memories.json`, 
 | Linux | `~/.local/share/dev.aegis.harness/` |
 
 `projects.json` holds names and workspace paths. `sessions.json` holds your conversations — the
-messages you sent, the replies, the tool calls each turn made, and which identity the session
-runs as. `agents.json` holds the identities you have made; the built-in one is not in it, because
+messages you sent, the replies, the tool calls each turn made, which identity the session runs
+as, and what each finished turn spent in tokens, which is where the counters on the board come
+from. `agents.json` holds the identities you have made; the built-in one is not in it, because
 it is a constant in the runtime rather than a record you could delete. `memories.json` holds what
 each identity has learned, each record naming the identity it belongs to — deleting an identity
 takes its memories with it, since nothing else can reach them. `routines.json` holds what is on a
@@ -356,9 +382,12 @@ Beside it, `audit.jsonl` records one JSON line per tool call — every call, whe
 refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
 running to read it. Each line names the session, the identity it ran as, the skill run it was
 part of when it was part of one, the routine that started it when a clock did, the tool, why
-policy decided what it did, and what came of it. It records the *paths* a call touched but never the contents of a file: a log
-that quoted every `fs_write` would become the one place on your machine where everything the
-agent ever wrote is collected in plain text. A line for a capture carries the file's path, its
+policy decided what it did, and what came of it. It records the *paths* a call touched — including the ones a runbook or a brief named as
+what it produced, which is what lets the board say afterwards what a run left behind — but never
+the contents of a file: a log that quoted every `fs_write` would become the one place on your
+machine where everything the agent ever wrote is collected in plain text. It does not record
+tokens either, and for a different reason: they are spent by a model round rather than by a tool
+call, so they are counted on the session instead (see *The board*). A line for a capture carries the file's path, its
 pixel size and a SHA-256 of the bytes on disk — enough to say later which capture a call
 produced, and to check that the file is still that one, without the log holding a copy of it.
 The **Audit log** drawer in the title bar reads the tail of this file — the last 200 lines — and
@@ -895,6 +924,121 @@ edited.
 
 ---
 
+## The board
+
+**Board** in the title bar answers one question about the open project: *who ran, what did it
+cost, and why did it fail* — without opening a chat.
+
+It is two things stacked. The **board** is three columns; the **runs** underneath it are every
+piece of work in the recent log, newest first.
+
+### Attention, in flight, blocked
+
+The three columns are the ones `COS.md` gives a Chief of Staff, and each has one meaning:
+
+| | Holds |
+| --- | --- |
+| **Attention** | somebody has to do something: an approval on screen, a run that came back `needs_you`, a routine that gave up and named a human |
+| **In flight** | something is running right now |
+| **Blocked** | something stopped short and is *not* waiting on a person: a runbook that could not find its source, a routine that cannot fire as it stands, a run that failed |
+
+`needs_you` is Attention and not Blocked on purpose. The difference is who has to move next,
+which is the only thing a board is read to find out.
+
+Each column is filled from **two places**, and every line says which it came from.
+
+**Your `status/STATUS.md`** is the half no runtime can know: a client who has not answered, a
+decision waiting on a meeting, work that is late. Aegis reads it structurally — the three
+headings, and the lines under each — rather than showing you the file. Bullets and plain lines
+both count; an indented example block does not, and neither does a whole line of italics, which
+is how the seeded file says a column is empty. A heading it does not recognize simply ends the
+section above it, so a `STATUS.md` with extra sections in it loses nothing and invents nothing.
+
+**What this process can see for itself** is the other half: which session has a turn running,
+what a dialog is waiting on, which clock stopped itself after two silent runs, which routine
+cannot fire because its runbook was un-granted. None of that is in the file, and none of it
+should be — a board Aegis rewrote would stop being yours.
+
+Nothing in this window writes `STATUS.md`. Correcting it means editing the file, in your editor
+or by asking the agent — which is an ordinary `fs_write` through the approval dialog, on the
+audit log, exactly like filing a decision. There is no "mark as done".
+
+### Runs
+
+A **run** is one piece of work, wherever it happened. Aegis folds them out of the tail of
+`audit.jsonl` using ids that have been on every line since the phase that introduced them, so
+nothing new is recorded to make this work:
+
+| A run is | Held together by | So one row is |
+| --- | --- | --- |
+| a **delegation** | the handoff id | the Chief of Staff's own call *and* every call every specialist made under its briefs — in their own sessions, under their own identities |
+| a **routine's firing** | the routine, in the session it opened | one morning's run, not the routine's whole history |
+| a **runbook** | the skill name, in the session that ran it | one `skill_run` to its `skill_return` |
+| a **conversation** | the session | everything else you did in it |
+
+The widest id wins, which is the containment order: a specialist running a runbook under a brief
+is one delegation, not two rows.
+
+Each row says how it ended in the run's own words — `done`, `blocked`, `needs you`, `failed`, or
+just `ran`. Three rules decide that word, and they are worth knowing:
+
+- **A report wins over a refusal inside it.** A runbook that was refused a write, coped, and
+  returned `done` **is** done. The refusal is on the row as a number, not as a verdict.
+- **A conversation cannot fail.** Denying a call in a chat is your own answer and the turn
+  carries on by design; a board that read that as a failed conversation would be calling the
+  approval gate working as intended a problem. What went wrong inside one is on the row as counts
+  and in the replay line by line.
+- **A brief, a runbook or a firing that never reported has failed** — a silence is not an answer
+  — unless the session is still running, which is the one thing on the board that comes from this
+  process rather than from the record.
+
+Opening a row adds who ran it, which tools it called and how often, what it left on disk, and
+what it spent.
+
+### Replay
+
+Opening a run's replay shows **the audit lines themselves**, oldest first — the same rows the
+audit drawer draws, because they are the same lines. Nothing is rewritten into a narrative: you
+are reading the record, and a record prettied up first would be worth less than the file.
+
+The artefacts a run names are paths — files written, captures taken, and whatever a report
+listed as its output. Paths only. The log has never held the contents of a file and does not
+start now.
+
+### What it cost
+
+Tokens are counted per **turn**, on the session, as the provider reports them — and they are
+deliberately *not* on the audit line. A tool call is not what spends tokens: a model round is,
+several calls come out of one round, and a turn that called no tool at all still costs. A counter
+built from the log would silently omit every reply that only talked, which is most of them. So
+the run's cost is a join: the log says which turns a run made its calls in, and the session says
+what those turns spent.
+
+Two consequences worth knowing.
+
+Aegis **asks** for the count: every streaming request carries
+`stream_options: {"include_usage": true}`, because an OpenAI-compatible endpoint generally sends
+its usage chunk only when asked. If a server still sends none, that turn is recorded as
+**unknown** rather than as zero, and every total it is part of reads *at least* — a floor, not a
+total. If a server refuses the field outright, the next message fails with a message naming it,
+and **Test connection** in Settings says the same thing; it is not a silence.
+
+Every turn is charged to exactly one run, so the runs of a session add up to the session, and the
+sessions of a project add up to the total under **Runs**. A conversation that only talked still
+gets a row, with no calls and its full cost.
+
+The same number, for one conversation, sits beside the model in the chat header.
+
+### What it is not
+
+The board is a window on the log, not a second copy of it. Runs older than the tail Aegis reads
+are in `audit.jsonl` and not here — the file is the record, and `tail -f` still works. Deleting a
+session removes it from the board while its lines stay in the log: the log says what was done,
+the board is a view of one project's work, and it cannot invent a project for a conversation that
+no longer names one.
+
+---
+
 ## Layout
 
 ```
@@ -902,7 +1046,7 @@ src/           React app — presentation and typed IPC glue only
   ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
   components/  layout, chat, sessions, approvals, projects, agents, skills, memory,
-               routines, settings, audit
+               routines, board, settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
@@ -919,6 +1063,8 @@ src-tauri/
                runner that turns a brief into an ordinary session and turn
     schedule/  routines: which one may exist, when it is due, what its run is told —
                and the tick that fires one into an ordinary session nobody is watching
+    board/     the structured read of status/STATUS.md beside what the runtime can see,
+               and the fold of the audit log into runs — who ran, what it cost, why it failed
     workspace.rs  the shared-file convention inside a project folder: scaffold, and the
                capped digest every request carries
     compact.rs the older half of a transcript, derived into state — no summarizer,

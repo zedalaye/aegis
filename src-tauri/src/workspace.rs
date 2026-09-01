@@ -431,6 +431,48 @@ fn excerpt(root: &Path, slot: &Slot) -> Option<String> {
     Some(format!("{header}\n{}", text.trim_end()))
 }
 
+/// How much of `status/STATUS.md` the board reads (PLAN 7.3, Phase 17).
+///
+/// Larger than [`EXCERPT_MAX_BYTES`] and for a different reason. The excerpt is
+/// paid for on every model request, so it is small; the board is read when
+/// somebody opens it, and what they are opening it for is the whole of what is
+/// true right now. It is still bounded, because the file belongs to the user
+/// and nothing stops them pointing Aegis at a folder whose `STATUS.md` is a
+/// log somebody has been appending to for a year.
+pub const BOARD_MAX_BYTES: u64 = 64 * 1024;
+
+/// The board file and its text, for the structured read of `/status`
+/// (PLAN 7.2, row 3).
+///
+/// `None` when the convention has not been laid down, when the file was
+/// deleted, or when it cannot be read — three states the board draws the same
+/// way, because the answer to all of them is the same: there is no board in
+/// this folder yet, and the button that makes one is in the sidebar.
+///
+/// The path comes back beside the text so the panel can name the file it is
+/// showing. It is the absolute one: the board is the one place a person is
+/// invited to go and edit the file by hand.
+pub fn status(root: &Path) -> Option<(PathBuf, String)> {
+    let path = inside(root, STATUS_FILE)?;
+
+    let mut file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            tracing::warn!(%err, path = %path.display(), "the board file could not be read");
+            return None;
+        }
+    };
+
+    let mut bytes = Vec::new();
+    if let Err(err) = std::io::Read::take(&mut file, BOARD_MAX_BYTES).read_to_end(&mut bytes) {
+        tracing::warn!(%err, path = %path.display(), "the board file could not be read");
+        return None;
+    }
+
+    Some((path, String::from_utf8_lossy(&bytes).into_owned()))
+}
+
 /// Reads at most [`EXCERPT_MAX_BYTES`] from one end of a file.
 ///
 /// Seeking rather than reading the file and slicing it: these are read on every

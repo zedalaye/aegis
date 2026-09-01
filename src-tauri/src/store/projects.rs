@@ -406,7 +406,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::store::sessions::SessionState;
+    use crate::store::sessions::{Cost, SessionState};
 
     /// A store plus the directories it and its workspaces live in.
     struct Fixture {
@@ -471,6 +471,7 @@ mod tests {
                 state: SessionState::AwaitingApproval,
                 delegated: None,
                 scheduled: None,
+                cost: Cost::default(),
             }],
         };
 
@@ -519,6 +520,7 @@ mod tests {
                 "state",
                 "delegated",
                 "scheduled",
+                "cost",
             ])
         );
 

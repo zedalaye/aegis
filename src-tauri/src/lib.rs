@@ -41,6 +41,7 @@
 pub mod agent;
 pub mod approval;
 pub mod audit;
+pub mod board;
 pub(crate) mod commands;
 pub mod compact;
 mod display;
@@ -64,6 +65,8 @@ pub use approval::{
     Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
 };
 pub use audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
+pub use board::trace::{Run, RunKind, RunRef, RunStatus, SessionLedger};
+pub use board::{Board, Facts as BoardFacts, Item as BoardItem, Source as BoardSource};
 pub use compact::Plan as CompactionPlan;
 pub use error::{AppError, AppResult, ErrorCode};
 pub use handoff::runner::{Delegating, Host as HandoffHost};
@@ -74,11 +77,11 @@ pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use skills::{Reported, Returned, Skill, SkillCtx, SkillScope};
 pub use state::AppState;
 pub use store::{
-    Agent, AgentDraft, AgentStore, Compaction, LastRun, MaskedSettings, Memory, MemoryDraft,
+    Agent, AgentDraft, AgentStore, Compaction, Cost, LastRun, MaskedSettings, Memory, MemoryDraft,
     MemoryKind, MemoryStore, Message, Project, ProjectDetail, ProviderSettings, Role, Routine,
     RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled, SessionDetail, SessionState,
-    SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnHandle,
-    DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnCost,
+    TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
@@ -187,6 +190,8 @@ pub fn run() {
             commands::approval::approval_revoke_grant,
             commands::audit::audit_tail,
             commands::audit::audit_log_path,
+            commands::board::board_read,
+            commands::board::board_trace,
             commands::settings::settings_get,
             commands::settings::settings_set,
             commands::settings::settings_clear_key,

@@ -463,6 +463,93 @@ error_code: string | null,
 artifact: AuditArtifact | null, };
 
 /**
+ * The board of one project.
+ */
+export type Board = { 
+/**
+ * The project it is the board of.
+ */
+project_id: string, 
+/**
+ * Where `STATUS.md` is, when it is there. Empty when the convention has
+ * not been laid down in this workspace, which is a thing the panel says
+ * rather than an error.
+ */
+status_path: string, 
+/**
+ * A person has to do something.
+ */
+attention: Array<BoardItem>, 
+/**
+ * Something is running.
+ */
+in_flight: Array<BoardItem>, 
+/**
+ * Something stopped short.
+ */
+blocked: Array<BoardItem>, 
+/**
+ * Every run in the window, newest first.
+ */
+runs: Array<Run>, 
+/**
+ * What every session of the project has spent, in total.
+ *
+ * The whole project rather than the runs, because the runs are a window
+ * on the audit log and the sessions are all of them: a total that only
+ * counted what was still in the window would fall as the log grew.
+ */
+cost: Cost, };
+
+/**
+ * One line of the board.
+ *
+ * `BoardItem` on the wire, not `Item`: the generated bindings are one flat
+ * namespace shared by every payload in the runtime, and a type called `Item`
+ * there would be a name the next phase has to work around.
+ */
+export type BoardItem = { 
+/**
+ * The line itself.
+ */
+text: string, 
+/**
+ * What is worth knowing beside it: a reason, a runbook, an identity.
+ * Empty when the line says it all.
+ */
+detail: string, 
+/**
+ * Where it came from.
+ */
+source: BoardSource, 
+/**
+ * RFC3339 UTC, when the runtime knows. Empty for a line of the file,
+ * which carries no time of its own.
+ */
+at: string, 
+/**
+ * The session to open. Empty when there is none to open.
+ */
+session_id: string, 
+/**
+ * The routine this is about. Empty when it is not about one.
+ */
+routine_id: string, 
+/**
+ * The run to trace, when this line has one.
+ */
+run: RunRef | null, };
+
+/**
+ * Where a line on the board came from.
+ *
+ * On every item, because the two halves of a board are not equally current
+ * and a reader has to be able to tell them apart: the file is what somebody
+ * wrote down, the rest is what this process can see for itself.
+ */
+export type BoardSource = "status" | "approval" | "session" | "routine" | "run";
+
+/**
  * What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
  *
  * A pointer and a summary, never a deletion: `through_message_id` names the
@@ -489,6 +576,33 @@ state: string,
  * RFC3339, UTC.
  */
 at: string, };
+
+/**
+ * Tokens spent over some set of turns (PLAN 7.3, Phase 17).
+ *
+ * The unit the UI counts in. `unreported` is carried beside the totals rather
+ * than folded into them so a number can say how much of itself is missing: a
+ * session of ten turns where three providers stayed silent is *at least* this
+ * many tokens, and a board that could not say "at least" would be inventing
+ * precision it does not have.
+ */
+export type Cost = { 
+/**
+ * How many turns were summed.
+ */
+turns: number, 
+/**
+ * Of those, how many reported nothing.
+ */
+unreported: number, 
+/**
+ * Tokens into the model.
+ */
+prompt_tokens: number, 
+/**
+ * Tokens out of it.
+ */
+completion_tokens: number, };
 
 /**
  * What the user answered (PLAN 2.1, `Decision`).
@@ -944,6 +1058,95 @@ grants: Array<Grant>,
 runs_per_day: number, };
 
 /**
+ * One run, as the board lists it and the detail pane reads it.
+ */
+export type Run = { 
+/**
+ * What ties it together.
+ */
+run: RunRef, 
+/**
+ * What to call it: a brief's goal, a routine's name, a runbook's name, a
+ * conversation's title. Falls back to the id, which is never nothing.
+ */
+label: string, 
+/**
+ * The first thing it did, RFC3339 UTC.
+ */
+started_at: string, 
+/**
+ * The last, RFC3339 UTC.
+ */
+ended_at: string, 
+/**
+ * The identities that ran under it, in the order they first appear.
+ *
+ * More than one only for a delegation, which is the point of that kind:
+ * "who ran" is a list when a Chief of Staff hands work to two specialists.
+ */
+agents: Array<string>, 
+/**
+ * The sessions it touched, likewise. One click each.
+ */
+sessions: Array<string>, 
+/**
+ * The runbook it followed, when the run is not itself one.
+ */
+skill: string, 
+/**
+ * Every tool call it made, refused and failed ones included.
+ */
+calls: number, 
+/**
+ * How many a person was asked about.
+ */
+asked: number, 
+/**
+ * How many never ran, because policy or a person refused them.
+ */
+denied: number, 
+/**
+ * How many ran and failed.
+ */
+failed: number, 
+/**
+ * Which tools, and how often. Most-called first.
+ */
+tools: Array<Tally>, 
+/**
+ * What it left on disk: files written, captures taken, artefacts a report
+ * named. Paths, never contents — the log never held the contents.
+ */
+artefacts: Array<string>, 
+/**
+ * How it ended.
+ */
+status: RunStatus, 
+/**
+ * Why, in the words the record already used. Empty when there is nothing
+ * to explain.
+ */
+reason: string, 
+/**
+ * Tool execution time, summed over the calls.
+ *
+ * Not the wall clock: a run parked for five minutes on an approval dialog
+ * did not spend five minutes working, and the two numbers differing is
+ * usually the interesting part. The wall clock is `ended_at` less
+ * `started_at`, which the UI has both halves of.
+ */
+tool_ms: number, 
+/**
+ * What it spent.
+ */
+cost: Cost, };
+
+/**
+ * What kind of work a run was.
+ */
+export type RunKind = "handoff" | "routine" | "skill" | "session";
+
+/**
  * How a run ended, as the routine list draws it.
  *
  * The first three are the statuses a `skill_return` carries (`COS.md`
@@ -953,6 +1156,59 @@ runs_per_day: number, };
  * is not (PLAN 7.3, Phase 15, *When nobody answers*).
  */
 export type RunOutcome = "done" | "blocked" | "needs_you" | "failed";
+
+/**
+ * What ties a set of audit lines into one run.
+ *
+ * A kind and an id rather than an enum with four payloads, because this is
+ * also a map key and a value the UI hands back to ask for one run again.
+ * `session_id` is part of the key for everything except a delegation, which
+ * is the one kind that spans sessions on purpose.
+ */
+export type RunRef = { 
+/**
+ * What kind of work it was.
+ */
+kind: RunKind, 
+/**
+ * The id the lines share: the delegation, the routine, the runbook's
+ * name, or the session.
+ */
+id: string, 
+/**
+ * The session it happened in. Empty for a delegation.
+ */
+session_id: string, };
+
+/**
+ * How a run ended, in the vocabulary `COS.md` already uses.
+ *
+ * Four words plus one. The first four are a report's own — a run that
+ * returned says how it went, and nothing here second-guesses it.
+ * [`Ran`](RunStatus::Ran) is the fifth, and it is not a failure: it is work
+ * that made calls and never filed a report, which is what an ordinary
+ * conversation is.
+ */
+export type RunStatus = "done" | "blocked" | "needs_you" | "failed" | "ran";
+
+/**
+ * One run, and the lines it is replayed from.
+ *
+ * The replay of PLAN 7.2 row 10, and it is deliberately not a rendering: the
+ * entries are the audit lines themselves, in the order they happened, so what
+ * the pane shows is what is on disk rather than a story assembled about it.
+ * A person reading this is checking the record against the transcript, and a
+ * record that had been prettied up first would be worth less than the file.
+ */
+export type RunTrace = { 
+/**
+ * The run, as the board lists it.
+ */
+run: Run, 
+/**
+ * Its lines, oldest first.
+ */
+entries: Array<AuditEntry>, };
 
 /**
  * What one scaffolding run did.
@@ -1129,7 +1385,15 @@ delegated: Delegated | null,
  * because the two are different facts and a session could one day be both
  * — a routine's run is not a brief, and a brief is not on a clock.
  */
-scheduled: Scheduled | null, };
+scheduled: Scheduled | null, 
+/**
+ * What the whole conversation has spent (PLAN 7.3, Phase 17).
+ *
+ * Summed on read from the per-turn records rather than kept as a running
+ * total, for the reason `message_count` is: a stored aggregate is a second
+ * copy of a fact, and the two disagree the first time anything goes wrong.
+ */
+cost: Cost, };
 
 /**
  * One catalog entry.
@@ -1209,6 +1473,19 @@ export type StopReason = "stop" | "tool_calls" | "cancelled" | "length" | "error
  * Which pipe a chunk of tool output came from (PLAN 2.2, `tool:progress`).
  */
 export type Stream = "stdout" | "stderr";
+
+/**
+ * How many times one tool was called in a run.
+ */
+export type Tally = { 
+/**
+ * Tool name.
+ */
+tool: string, 
+/**
+ * How many calls.
+ */
+calls: number, };
 
 /**
  * `tool:approval_resolved` — an approval stopped being pending.
@@ -1434,6 +1711,46 @@ export type TrayActivate = {
  * Why the window came forward.
  */
 action: string, };
+
+/**
+ * What one turn spent, as the provider reported it (PLAN 7.3, Phase 17).
+ *
+ * One record per finished turn, whatever the turn did — a reply that only
+ * talked costs tokens as surely as one that ran six tools, and a ledger that
+ * only counted the second kind would answer "what did it cost" with a number
+ * nobody could reconcile against a bill.
+ *
+ * `turn_id` is the same id the audit line carries, which is the whole reason
+ * this can be joined to a run: the log says *which* turns a delegation or a
+ * runbook made its calls in, and this says what each of those turns spent.
+ *
+ * `reported` is the honesty flag. Not every OpenAI-compatible server sends a
+ * `usage` object, and a turn whose cost is unknown is recorded as unknown
+ * rather than as zero — a counter that quietly added nothing would read as a
+ * free turn, which is the one thing it certainly was not.
+ */
+export type TurnCost = { 
+/**
+ * The turn this is the cost of.
+ */
+turn_id: string, 
+/**
+ * Tokens in the requests this turn made.
+ */
+prompt_tokens: number, 
+/**
+ * Tokens in the replies it got back.
+ */
+completion_tokens: number, 
+/**
+ * Whether the provider actually said. `false` means the two counts above
+ * are zero because nothing was reported, not because nothing was spent.
+ */
+reported: boolean, 
+/**
+ * RFC3339, UTC. When the turn finished.
+ */
+at: string, };
 
 /**
  * `turn:delta` — a frame of assistant text.

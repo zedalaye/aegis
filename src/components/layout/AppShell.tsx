@@ -26,12 +26,14 @@ import { attachRoutineEvents, useRoutines } from "../../state/routines";
 import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachAuditEvents } from "../../state/audit";
+import { attachBoardEvents, useBoard } from "../../state/board";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 import { attachSettingsEvents, useSettings } from "../../state/settings";
 import { useSkills } from "../../state/skills";
 import { useWorkspace } from "../../state/workspace";
 
 import AuditDrawer from "../audit/AuditDrawer";
+import BoardPanel from "../board/BoardPanel";
 import ChatPane from "../chat/ChatPane";
 import SettingsPanel from "../settings/SettingsPanel";
 import Sidebar from "./Sidebar";
@@ -139,6 +141,7 @@ export default function AppShell() {
   const settingsOpen = useSettings((s) => s.open);
   const loadAgents = useAgents((s) => s.load);
   const loadRoutines = useRoutines((s) => s.load);
+  const boardOpen = useBoard((s) => s.open);
   // The *set* of projects, as a value that only changes when one is added or
   // removed — not on every refetch, which hands back a new array each time.
   const projectIds = useProjects((s) =>
@@ -187,6 +190,7 @@ export default function AppShell() {
       attachSettingsEvents(),
       attachAuditEvents(),
       attachRoutineEvents(),
+      attachBoardEvents(),
     ];
     return () => {
       for (const pending of attaching) {
@@ -227,8 +231,14 @@ export default function AppShell() {
       <div className="shell__body">
         <Sidebar />
         <main className="shell__main">
+          {/* Settings first: it is reachable with no project open, and a
+              board is about one. The board then wins over the transcript,
+              because opening it is a deliberate act and the chat is where the
+              window returns when it is closed. */}
           {settingsOpen ? (
             <SettingsPanel />
+          ) : boardOpen ? (
+            <BoardPanel />
           ) : projectId === null ? (
             <NoProject />
           ) : (

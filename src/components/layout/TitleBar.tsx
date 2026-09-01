@@ -14,12 +14,23 @@
  * has to be reachable on a fresh install where there is no project yet. The
  * audit log is here for the same reason and one more: the record covers every
  * session including deleted ones, so it does not belong under any of them.
+ *
+ * The board (Phase 17) is the one action here that *is* about a project, and it
+ * is here anyway: it is a mode the work area takes over, like Settings, and a
+ * button that lived in the rail beside the project rows would read as "open
+ * this project" rather than "show me its board".
+ *
+ * Settings and the board are two modes of one work area, so opening either
+ * closes the other. That is decided here rather than in the shell's render
+ * chain: a chain that merely preferred one would leave the other's button
+ * drawn as pressed with nothing behind it, which is a button that lies.
  */
 
 import { useEffect, useState } from "react";
 
 import { appQuit, windowHasTray, windowHide } from "../../ipc/commands";
 import { useAudit } from "../../state/audit";
+import { useBoard } from "../../state/board";
 import { useProjects } from "../../state/projects";
 import { useSettings } from "../../state/settings";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
@@ -31,6 +42,9 @@ export default function TitleBar() {
   const closeSettings = useSettings((s) => s.closePanel);
   const auditOpen = useAudit((s) => s.open);
   const toggleAudit = useAudit((s) => s.toggleDrawer);
+  const boardOpen = useBoard((s) => s.open);
+  const openBoard = useBoard((s) => s.openPanel);
+  const closeBoard = useBoard((s) => s.closePanel);
   const [hasTray, setHasTray] = useState(true);
 
   useEffect(() => {
@@ -63,6 +77,25 @@ export default function TitleBar() {
         <button
           type="button"
           className="button"
+          aria-pressed={boardOpen}
+          // Disabled with nothing open rather than hidden: a board is a fact
+          // about a project, and a button that vanished would read as a feature
+          // that is not there.
+          disabled={project === null}
+          onClick={() => {
+            if (boardOpen) {
+              closeBoard();
+            } else {
+              closeSettings();
+              void openBoard(project?.id ?? null);
+            }
+          }}
+        >
+          Board
+        </button>
+        <button
+          type="button"
+          className="button"
           aria-pressed={auditOpen}
           onClick={() => void toggleAudit()}
         >
@@ -76,6 +109,7 @@ export default function TitleBar() {
             if (settingsOpen) {
               closeSettings();
             } else {
+              closeBoard();
               void openSettings();
             }
           }}

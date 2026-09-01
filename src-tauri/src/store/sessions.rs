@@ -26,6 +26,18 @@
 //! and nothing else. A store that trimmed the transcript to save the model
 //! tokens would be destroying the only copy of a conversation somebody is
 //! still reading.
+//!
+//! From Phase 17 it also carries what each turn *cost*: one [`TurnCost`] per
+//! finished turn, and [`Cost`] over any set of them. That is here rather than
+//! on the audit line for a reason worth writing down, because PLAN 7.1 lists
+//! `tokens` beside `agent_id` and `skill` as a field the log could grow.
+//! **Tokens are not a property of a tool call.** They are spent by a model
+//! round, several calls can come out of one round, and — the fact that settles
+//! it — a turn that called no tool at all still spends them. A counter built
+//! from the audit log would silently omit every reply that only talked, which
+//! is most of them. So cost is recorded where it is spent, keyed by the same
+//! `turn_id` the audit line carries, and a run's cost is the join of the two
+//! ([`board::trace`](crate::board::trace)).
 
 use std::fs;
 use std::io;
@@ -261,6 +273,12 @@ pub struct SessionSummary {
     /// because the two are different facts and a session could one day be both
     /// — a routine's run is not a brief, and a brief is not on a clock.
     pub scheduled: Option<Scheduled>,
+    /// What the whole conversation has spent (PLAN 7.3, Phase 17).
+    ///
+    /// Summed on read from the per-turn records rather than kept as a running
+    /// total, for the reason `message_count` is: a stored aggregate is a second
+    /// copy of a fact, and the two disagree the first time anything goes wrong.
+    pub cost: Cost,
 }
 
 /// A session and its transcript.
@@ -355,6 +373,135 @@ pub struct Compaction {
     pub at: String,
 }
 
+/// What one turn spent, as the provider reported it (PLAN 7.3, Phase 17).
+///
+/// One record per finished turn, whatever the turn did — a reply that only
+/// talked costs tokens as surely as one that ran six tools, and a ledger that
+/// only counted the second kind would answer "what did it cost" with a number
+/// nobody could reconcile against a bill.
+///
+/// `turn_id` is the same id the audit line carries, which is the whole reason
+/// this can be joined to a run: the log says *which* turns a delegation or a
+/// runbook made its calls in, and this says what each of those turns spent.
+///
+/// `reported` is the honesty flag. Not every OpenAI-compatible server sends a
+/// `usage` object, and a turn whose cost is unknown is recorded as unknown
+/// rather than as zero — a counter that quietly added nothing would read as a
+/// free turn, which is the one thing it certainly was not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct TurnCost {
+    /// The turn this is the cost of.
+    pub turn_id: String,
+    /// Tokens in the requests this turn made.
+    #[ts(type = "number")]
+    pub prompt_tokens: u64,
+    /// Tokens in the replies it got back.
+    #[ts(type = "number")]
+    pub completion_tokens: u64,
+    /// Whether the provider actually said. `false` means the two counts above
+    /// are zero because nothing was reported, not because nothing was spent.
+    pub reported: bool,
+    /// RFC3339, UTC. When the turn finished.
+    pub at: String,
+}
+
+impl TurnCost {
+    /// A turn whose provider reported what it spent.
+    ///
+    /// The two counts are per turn, not per request: a turn that ran three
+    /// rounds of tool calls made three requests, and what is stored is their
+    /// sum, because the turn is the smallest thing a person asked for.
+    pub fn reported(turn_id: &str, prompt_tokens: u64, completion_tokens: u64) -> Self {
+        Self {
+            turn_id: turn_id.to_owned(),
+            prompt_tokens,
+            completion_tokens,
+            reported: true,
+            at: now(),
+        }
+    }
+
+    /// A turn whose provider said nothing about what it spent.
+    pub fn unreported(turn_id: &str) -> Self {
+        Self {
+            turn_id: turn_id.to_owned(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            reported: false,
+            at: now(),
+        }
+    }
+
+    /// Prompt plus completion.
+    pub const fn total(&self) -> u64 {
+        self.prompt_tokens + self.completion_tokens
+    }
+}
+
+/// Tokens spent over some set of turns (PLAN 7.3, Phase 17).
+///
+/// The unit the UI counts in. `unreported` is carried beside the totals rather
+/// than folded into them so a number can say how much of itself is missing: a
+/// session of ten turns where three providers stayed silent is *at least* this
+/// many tokens, and a board that could not say "at least" would be inventing
+/// precision it does not have.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct Cost {
+    /// How many turns were summed.
+    pub turns: u32,
+    /// Of those, how many reported nothing.
+    pub unreported: u32,
+    /// Tokens into the model.
+    #[ts(type = "number")]
+    pub prompt_tokens: u64,
+    /// Tokens out of it.
+    #[ts(type = "number")]
+    pub completion_tokens: u64,
+}
+
+impl Cost {
+    /// Sums the turns an iterator yields.
+    pub fn of<'a>(turns: impl IntoIterator<Item = &'a TurnCost>) -> Self {
+        turns.into_iter().fold(Self::default(), |mut cost, turn| {
+            cost.turns = cost.turns.saturating_add(1);
+            if turn.reported {
+                cost.prompt_tokens = cost.prompt_tokens.saturating_add(turn.prompt_tokens);
+                cost.completion_tokens = cost
+                    .completion_tokens
+                    .saturating_add(turn.completion_tokens);
+            } else {
+                cost.unreported = cost.unreported.saturating_add(1);
+            }
+            cost
+        })
+    }
+
+    /// Prompt plus completion.
+    pub const fn total(&self) -> u64 {
+        self.prompt_tokens + self.completion_tokens
+    }
+
+    /// Adds another sum into this one.
+    pub fn add(&mut self, other: Self) {
+        self.turns = self.turns.saturating_add(other.turns);
+        self.unreported = self.unreported.saturating_add(other.unreported);
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
+    }
+
+    /// Whether anything at all is known here.
+    ///
+    /// A board draws nothing rather than "0 tokens" for a run that never
+    /// reached a model.
+    pub const fn is_empty(&self) -> bool {
+        self.turns == 0
+    }
+}
+
 /// What `session_send` hands back (PLAN 2.1).
 ///
 /// The turn itself is reported through events; this is only the handle needed
@@ -422,6 +569,18 @@ struct StoredSession {
     /// which is exactly what it is — one nothing scheduled.
     #[serde(default)]
     scheduled: Option<Scheduled>,
+    /// What each finished turn spent, oldest first.
+    ///
+    /// A list rather than a running total because a *run* is rarely a whole
+    /// session: a runbook, or a brief, occupies some of a conversation's turns
+    /// and not others, and only the per-turn rows can answer what that part of
+    /// it cost. The audit line names the turn; this says what the turn spent.
+    ///
+    /// `#[serde(default)]` is the migration, for the fifth time: a session
+    /// written before Phase 17 reads back with none, which is what is known
+    /// about it — nothing was recorded, so nothing is claimed.
+    #[serde(default)]
+    costs: Vec<TurnCost>,
 }
 
 impl StoredSession {
@@ -442,6 +601,7 @@ impl StoredSession {
             state,
             delegated: self.delegated.clone(),
             scheduled: self.scheduled.clone(),
+            cost: Cost::of(&self.costs),
         }
     }
 }
@@ -599,6 +759,7 @@ impl SessionStore {
             compaction: None,
             delegated,
             scheduled,
+            costs: Vec::new(),
         };
         let created = session.to_summary(SessionState::Idle);
 
@@ -724,6 +885,48 @@ impl SessionStore {
         self.save(&sessions)?;
         tracing::info!(session_id = id, folded, force, "session compacted");
         Ok(Some(compaction))
+    }
+
+    /// Records what a turn spent (PLAN 7.3, Phase 17).
+    ///
+    /// Called once per finished turn, whatever the turn did and however it
+    /// ended — a cancelled turn spent the tokens it had already spent, and a
+    /// ledger that only counted the tidy endings would be one nobody could
+    /// reconcile.
+    ///
+    /// `updated_at` is deliberately not touched, for the reason
+    /// [`SessionStore::compact`] does not touch it: the turn that just ran has
+    /// already bumped it by appending its message, and stamping it a second
+    /// time would reorder the sidebar for a bookkeeping write.
+    ///
+    /// Charging the same turn twice replaces rather than adds. Nothing calls it
+    /// twice today; if something ever does, the second figure is a correction
+    /// of the first, never a second turn's worth of tokens.
+    pub fn charge(&self, id: &str, cost: TurnCost) -> AppResult<Cost> {
+        let mut sessions = self.sessions();
+        let session = Self::find_mut(&mut sessions, id)?;
+
+        match session
+            .costs
+            .iter_mut()
+            .find(|held| held.turn_id == cost.turn_id)
+        {
+            Some(held) => *held = cost,
+            None => session.costs.push(cost),
+        }
+        let total = Cost::of(&session.costs);
+
+        self.save(&sessions)?;
+        Ok(total)
+    }
+
+    /// What each of a session's turns spent, oldest first.
+    ///
+    /// The join a trace makes: given the turn ids on a run's audit lines, this
+    /// is what those turns cost ([`board::trace`](crate::board::trace)).
+    pub fn costs(&self, id: &str) -> AppResult<Vec<TurnCost>> {
+        let sessions = self.sessions();
+        Ok(Self::find(&sessions, id)?.costs.clone())
     }
 
     /// Which project a session belongs to.
@@ -998,6 +1201,136 @@ mod tests {
         fn reopen(&self) -> SessionStore {
             SessionStore::load(&self.data)
         }
+    }
+
+    #[test]
+    fn what_a_turn_spent_survives_a_restart_and_sums_on_the_row() {
+        let fx = Fixture::new();
+        let created = fx
+            .store
+            .create("p1", Some("Refactor"), DEFAULT_AGENT_ID)
+            .expect("create");
+
+        fx.store
+            .charge(&created.id, TurnCost::reported("t1", 900, 120))
+            .expect("charge");
+        fx.store
+            .charge(&created.id, TurnCost::reported("t2", 1_100, 80))
+            .expect("charge");
+
+        let reopened = fx.reopen();
+        let row = reopened
+            .summary(&created.id, SessionState::Idle)
+            .expect("row");
+        assert_eq!(row.cost.turns, 2);
+        assert_eq!(row.cost.prompt_tokens, 2_000);
+        assert_eq!(row.cost.completion_tokens, 200);
+        assert_eq!(row.cost.total(), 2_200);
+        assert_eq!(row.cost.unreported, 0);
+
+        let turns = reopened.costs(&created.id).expect("the per-turn rows");
+        assert_eq!(turns.len(), 2, "the join a trace makes is on the turn");
+        assert_eq!(turns[0].turn_id, "t1", "oldest first");
+    }
+
+    #[test]
+    fn a_turn_whose_provider_said_nothing_is_unknown_rather_than_free() {
+        let fx = Fixture::new();
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
+
+        fx.store
+            .charge(&created.id, TurnCost::reported("t1", 10, 5))
+            .expect("charge");
+        let total = fx
+            .store
+            .charge(&created.id, TurnCost::unreported("t2"))
+            .expect("charge");
+
+        assert_eq!(total.turns, 2);
+        assert_eq!(total.unreported, 1);
+        assert_eq!(
+            total.total(),
+            15,
+            "at least this many tokens were spent, and the row says how much of \
+             itself is missing"
+        );
+    }
+
+    #[test]
+    fn charging_a_turn_twice_corrects_it_rather_than_doubling_it() {
+        let fx = Fixture::new();
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
+
+        fx.store
+            .charge(&created.id, TurnCost::reported("t1", 10, 5))
+            .expect("charge");
+        let total = fx
+            .store
+            .charge(&created.id, TurnCost::reported("t1", 20, 5))
+            .expect("charge again");
+
+        assert_eq!(total.turns, 1);
+        assert_eq!(total.total(), 25);
+    }
+
+    #[test]
+    fn a_cost_does_not_reorder_the_sidebar() {
+        let fx = Fixture::new();
+        let created = fx
+            .store
+            .create("p1", Some("Refactor"), DEFAULT_AGENT_ID)
+            .expect("create");
+        let before = created.updated_at.clone();
+
+        fx.store
+            .charge(&created.id, TurnCost::reported("t1", 10, 5))
+            .expect("charge");
+
+        let row = fx
+            .store
+            .summary(&created.id, SessionState::Idle)
+            .expect("row");
+        assert_eq!(
+            row.updated_at, before,
+            "bookkeeping is not activity; the turn already bumped this"
+        );
+    }
+
+    #[test]
+    fn a_session_written_before_costs_existed_reads_back_with_none() {
+        let fx = Fixture::new();
+        let created = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
+
+        // The document as an earlier build wrote it: no `costs` key at all.
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(fx.document()).expect("read")).expect("parse");
+        document["sessions"][0]
+            .as_object_mut()
+            .expect("a session object")
+            .remove("costs");
+        fs::write(
+            fx.document(),
+            serde_json::to_vec_pretty(&document).expect("serialize"),
+        )
+        .expect("write");
+
+        let row = fx
+            .reopen()
+            .summary(&created.id, SessionState::Idle)
+            .expect("the older document still loads");
+        assert!(
+            row.cost.is_empty(),
+            "nothing was recorded, so nothing is claimed"
+        );
     }
 
     #[test]
@@ -1340,6 +1673,7 @@ mod tests {
                 state: SessionState::AwaitingApproval,
                 delegated: None,
                 scheduled: None,
+                cost: Cost::default(),
             },
             messages: vec![Message::assistant(
                 "done",
@@ -1400,6 +1734,7 @@ mod tests {
                 "state",
                 "delegated",
                 "scheduled",
+                "cost",
             ])
         );
         assert_eq!(

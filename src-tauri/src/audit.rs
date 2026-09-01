@@ -30,11 +30,21 @@
 //!   that evidence lives (`AuditLog::witnessed`).
 //!
 //! The entry shape is PLAN 2.1, "Settings and audit"; the decision vocabulary
-//! is PLAN 3.1's. It has grown twice since, both times by adding a field with
-//! a `serde` default rather than by changing one — `agent_id` in Phase 12,
-//! `skill` in Phase 13, `handoff` in Phase 15 and `routine` in Phase 16 —
-//! which is the property PLAN 7.1 asks the log to keep: a schema that can grow
+//! is PLAN 3.1's. It has grown four times since, every time by adding a field
+//! with a `serde` default rather than by changing one — `agent_id` in Phase 12,
+//! `skill` in Phase 13, `handoff` in Phase 15 and `routine` in Phase 16 — which
+//! is the property PLAN 7.1 asks the log to keep: a schema that can grow
 //! `agent_id`, `skill`, `tokens`, `handoff_id`.
+//!
+//! Four of those five ids are here. **`tokens` is not, and will not be.** Phase
+//! 17 is the phase that would have added it, and adding it would have been a
+//! lie: tokens are spent by a model round, not by a tool call, several calls
+//! come out of one round, and — the fact that settles it — a turn that called
+//! no tool at all still spends them. A counter built from this file would
+//! silently omit every reply that only talked. So cost is recorded on the
+//! session, per turn ([`TurnCost`](crate::store::TurnCost)), and joined to this
+//! file on the `turn_id` every line has carried since Phase 4. The extensible
+//! schema did its job; the field it was extended with belonged somewhere else.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
@@ -70,7 +80,13 @@ const REDACT_MAX_CHARS: usize = 96;
 /// These are what a person scanning the log is looking for: *which file*,
 /// *which folder*, *which program*. They are short by nature, and a truncated
 /// path is worse than useless — it reads like a different path.
-const KEPT_WHOLE: &[&str] = &["path", "cwd", "program", "display"];
+///
+/// `artefacts` joined them in Phase 17, and for exactly that reason: a report
+/// names what the work produced, a trace reads those names back off the line to
+/// say what a run left on disk, and a path cut at ninety-six characters names
+/// nothing. It is a list of paths under a different key, not a new kind of
+/// value.
+const KEPT_WHOLE: &[&str] = &["path", "cwd", "program", "display", "artefacts"];
 
 /// Argument keys replaced by their size rather than recorded.
 ///

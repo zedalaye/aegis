@@ -9,7 +9,9 @@
 //! shared-file convention inside a project's folder — from Phase 12 `agent`,
 //! the identities a session can be opened as, from Phase 13 `skill`, the
 //! runbooks those identities may run, and from Phase 14 `memory` — what one
-//! identity has learned, and the half of that a person owns.
+//! identity has learned, and the half of that a person owns, and from Phase 17
+//! `board` — the structured read of a project's status, and the runs its audit
+//! log folds into.
 //!
 //! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
 //! accept `camelCase` from JavaScript and rename it, so every command taking
@@ -19,6 +21,7 @@
 pub mod agent;
 pub mod approval;
 pub mod audit;
+pub mod board;
 pub mod memory;
 pub mod project;
 pub mod routine;

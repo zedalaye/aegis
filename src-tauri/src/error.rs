@@ -354,6 +354,18 @@ pub enum AppError {
         id: String,
     },
 
+    /// The board named a run the log can no longer see (PLAN 7.3, Phase 17).
+    ///
+    /// Not an anomaly. A run is folded out of the tail of `audit.jsonl`, and a
+    /// window that has been open while the agent worked is holding a list the
+    /// log has since scrolled past. Refetching the board is the fix, which is
+    /// what the UI does with it.
+    #[error("that run is no longer in the log")]
+    RunNotFound {
+        /// The reference that was looked up. Logged, not shown.
+        id: String,
+    },
+
     /// An identity was deleted while routines still fire as it.
     ///
     /// Refused rather than cascaded, for the reason [`AppError::AgentInUse`]
@@ -455,6 +467,7 @@ impl AppError {
             | Self::AgentInUse { .. }
             | Self::AgentHasRoutines { .. }
             | Self::RoutineNotFound { .. }
+            | Self::RunNotFound { .. }
             | Self::MemoryNotFound { .. }
             | Self::Internal { .. }
             | Self::Audit { .. }

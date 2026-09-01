@@ -5,6 +5,8 @@
  * Rust already canonical, so these functions never normalize, only display.
  */
 
+import type { Cost } from "../ipc/bindings";
+
 /** Matches a path separator on either platform family. */
 const SEPARATOR = /[\\/]+/;
 
@@ -138,4 +140,46 @@ export function formatTimeOfDay(value: string): string {
     return value;
   }
   return parsed.toLocaleTimeString(undefined, { timeStyle: "medium" });
+}
+
+/**
+ * A token count, short enough for a row.
+ *
+ * Thousands are what a turn costs and millions are what a month of them does,
+ * so those are the two steps. Exact below a thousand, because the difference
+ * between 40 and 900 tokens is the difference between a one-line reply and a
+ * paragraph, and rounding both to "0.0k" would hide it.
+ */
+export function formatTokens(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens < 0) {
+    return "—";
+  }
+  if (tokens < 1000) {
+    return String(Math.round(tokens));
+  }
+  if (tokens < 1_000_000) {
+    return `${(tokens / 1000).toFixed(1)}k`;
+  }
+  return `${(tokens / 1_000_000).toFixed(2)}M`;
+}
+
+/**
+ * What a {@link Cost} says, in one phrase.
+ *
+ * "At least" when some turn's provider never reported its usage: the number is
+ * a floor, not a total, and a counter that read as exact when it is not would
+ * be worse than one that said nothing. A cost with no turns at all renders as
+ * a dash — a run that never reached a model did not cost nothing, it cost
+ * nothing *measurable*, and those are different sentences.
+ */
+export function formatCost(cost: Cost): string {
+  if (cost.turns === 0) {
+    return "—";
+  }
+
+  const total = formatTokens(cost.prompt_tokens + cost.completion_tokens);
+  const turns = `${cost.turns} turn${cost.turns === 1 ? "" : "s"}`;
+  return cost.unreported > 0
+    ? `at least ${total} tokens · ${turns}`
+    : `${total} tokens · ${turns}`;
 }

@@ -1128,6 +1128,76 @@ UI for the CoS board (attention, in-flight, blocked). One run id over CoS + spec
 replay from the audit + artefacts. Token/cost counters. Exit: you can answer "who ran, what
 did it cost, why did it fail" without opening a chat.
 
+*Landed as:* `board/` beside `handoff/` and `schedule/`, split the same way — `mod.rs` is the
+board (the structured read of `/status`, and the three columns) and `trace.rs` is the fold of the
+log into runs. Both halves are pure functions over data, so a replay is exercisable with no
+application, no clock and no model; the composition that reaches four stores and a log is one
+method on `AppState`, where every other composition of this shape already lives.
+
+**The board is two halves and neither is enough.** `status/STATUS.md` is what somebody decided is
+true — the client who has not answered, the decision waiting on a meeting — and it is the half
+that can be wrong, because it is only as current as the last write. The runtime's half is what
+this process knows for certain: what is running, what a dialog is parked on, which clock stopped
+itself, which run came back `needs_you`. Both go into the same three columns and **every line
+says which it came from**, because they are equally true and not equally current. The read is
+structural rather than a rendering of the file: the three headings § 7.2 names and the seed
+already carries, bullets and prose both counting, indented examples and whole-line italics
+dropped — which is how "the CoS stays silent when empty" is enforced rather than asserted, since
+the seeded `_Nothing blocked._` is a placeholder and not an item. **Nothing writes.** There is no
+`board_write` and no "mark as done": correcting a status is an `fs_write` under the gate, on the
+audit log, exactly as § 7.6 says. `needs_you` is *Attention* and `blocked` is *Blocked*, because
+the only thing a board is read to find out is who has to move next.
+
+**A run is folded, never stored.** Nothing new is recorded to make the replay work — every id it
+groups on was put on the line by the phase that introduced it, which is what Phases 13, 15 and 16
+meant by *this cannot be reconstructed later*. `RunRef::of` reads them widest first, so every
+line belongs to exactly one run: `handoff` (the one id that spans sessions — the CoS's call and
+every specialist's, which is row 10's "one run id covering CoS + specialists"), then `routine`
+plus its session (a routine has many firings and each is one run), then `skill` plus its session,
+then the conversation. Three rules decide the word on a row. A report wins over a refusal inside
+it — a runbook that was denied a write, coped, and returned `done` is done, and the refusal is a
+number rather than a verdict, because re-reading it as a failure would be the runtime overruling
+the only thing in the loop that knew what the work needed. **A conversation cannot fail**: failure
+needs a promise and only three of the four kinds make one, so a denial in a chat — the person's
+own answer, with the turn carrying on by design (§ 3.1) — is not a failed conversation. And a
+brief, a runbook or a firing that ends without reporting *has* failed, because `COS.md` is explicit
+that a silence is not an answer — unless the session is still running, which is the one thing on
+the board that comes from this process rather than from the record, and the one that keeps work in
+flight from being called dead. The replay itself is the audit lines, oldest first, rendered by the
+drawer's own row: a record prettied up first is worth less than the file.
+
+**Tokens are not on the audit line, and that is the phase's one deliberate departure from § 7.1.**
+That list names `tokens` beside `agent_id`, `skill` and `handoff_id` as a field the log could
+grow, and the first three did. The fourth would have been a lie: tokens are spent by a model
+round, several calls come out of one round, and — the fact that settles it — a turn that called no
+tool at all still spends them. A counter built from the log would silently omit every reply that
+only talked, which is most of them. So cost is recorded where it is spent, as a `TurnCost` per
+finished turn on the session, and joined to the log on the `turn_id` every line has carried since
+Phase 4. The extensible schema did its job; the field it was to be extended with belonged
+somewhere else, and `audit.rs` says so where the next person will look.
+
+**It also corrected a Phase 8 guess, which is what running the thing found.** That phase left
+`stream_options.include_usage` off the request, reasoning that some compatible servers reject the
+extension and that most volunteer usage on the final chunk anyway. The second half is false — a
+streaming endpoint generally sends the usage chunk *only* when asked — and the first real session
+under this phase proved it: four turns against a live provider, four recorded as unmeasured, and a
+board reading "at least 0 tokens". The counters § 7.3 asks for could not have worked. The field is
+sent now; a server that refuses it fails loudly on the next message and by name under
+`settings_probe_provider`, which is a better failure than a counter that silently reads zero for
+ever. The honesty flag is what made the gap visible instead of plausible, which is the argument
+for having built it.
+
+Two properties come out of that, and both are tested. A turn whose provider sent no `usage` is
+still recorded as **unknown** rather than as zero — asking does not oblige a server to answer — so
+a total that is a floor reads *at least* instead of pretending to be exact. And every turn is
+charged to exactly one run, including the ones that called nothing, so **the runs of a session add
+up to the session**: a conversation that only talked still has a row.
+
+Scope is the ledger, not a filter. The fold is given the project's sessions with their turns, and
+a line whose session is not among them is dropped — which is why a deleted conversation leaves the
+board while staying in the log. The log is the record of what was done; the board is a view of one
+project's work, and it cannot invent a project for a session that no longer names one.
+
 **Phase 18 — MCP client for real**
 Fill in `mcp/mod.rs`. External servers register into the Phase 4 `ToolSpec` registry and
 inherit § 3. This is how GitHub/GitLab, Coolify, monitoring, mail, later WhatsApp/SMS, later

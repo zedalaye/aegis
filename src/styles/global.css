@@ -2534,3 +2534,416 @@ body {
 .chat__compact {
   font-size: 0.75rem;
 }
+
+/* --- Board (Phase 17) ------------------------------------------------------ */
+
+/*
+ * Uncapped, unlike Settings, and for the reason Settings is capped. That panel
+ * is a column of prose and form rows, where a line four hundred characters wide
+ * is harder to read than a narrow one. A board is columnar: three lists side by
+ * side, and rows carrying paths and reasons that wrap when they are squeezed.
+ * Width is what this content is short of, so it takes what the window has.
+ *
+ * The prose inside it is capped instead — the lede and the closing note are
+ * paragraphs, and they follow the same rule Settings does.
+ */
+.board {
+  padding: 1.5rem 2rem 3rem;
+  overflow-y: auto;
+}
+
+.board__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.board__title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.board__controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.board__lede {
+  margin: 0.75rem 0 0;
+  max-width: 46rem;
+  color: var(--muted);
+}
+
+.board__note {
+  margin: 2rem 0 0;
+  max-width: 46rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.board__section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 2rem 0 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.board__total {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/*
+ * `auto-fit` with a minimum rather than three fixed tracks: at a narrow window
+ * the columns stack instead of squeezing, which is the honest behaviour for
+ * content that is lines of prose.
+ */
+.board__columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.boardcol {
+  padding: 0.75rem 0.9rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.boardcol__title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.boardcol__count {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.boardcol__note {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.boardcol__empty {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+}
+
+.boardcol__list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.boarditem {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.boarditem__open,
+.boarditem__plain {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.boarditem__open {
+  cursor: pointer;
+}
+
+.boarditem__open:hover {
+  background: var(--selected);
+}
+
+.boarditem__text {
+  overflow-wrap: anywhere;
+}
+
+.boarditem__detail {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.boarditem__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.boarditem__source {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+/*
+ * The one badge that is coloured. A line the runtime measured is current; a
+ * line of the file is as current as the last time somebody wrote it, and that
+ * difference is the whole reason the badge exists.
+ */
+.boarditem__source--status {
+  border-color: var(--muted);
+}
+
+.boarditem__time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Runs ----------------------------------------------------------------- */
+
+.board__runs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/*
+ * The stripe down the left edge marks a run that stopped short or wants a
+ * person. The status word beside the label says the same thing — the stripe is
+ * for scanning, and is never the only place the outcome appears.
+ */
+.run {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.run--blocked,
+.run--failed {
+  border-left-color: var(--danger);
+}
+
+.run--needs_you {
+  border-left-color: var(--warning);
+}
+
+.run__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.run__head:hover {
+  background: var(--selected);
+}
+
+.run__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run__status {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.7rem;
+}
+
+.run__status--blocked,
+.run__status--failed {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.run__status--needs_you {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.run__kind,
+.run__cost,
+.run__time {
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.run__time {
+  font-variant-numeric: tabular-nums;
+}
+
+.run__reason {
+  margin: 0;
+  padding: 0 0.7rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.run__facts {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0;
+  padding: 0.5rem 0.7rem 0.7rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+
+.run__facts dt {
+  color: var(--muted);
+}
+
+.run__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.run__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+}
+
+.run__tool {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.run__caveat {
+  color: var(--muted);
+}
+
+.run__artefacts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run__artefact code {
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.run__sessions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.run__session {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.run__session:hover {
+  border-color: var(--muted);
+}
+
+/* --- One run's replay ------------------------------------------------------ */
+
+.trace {
+  margin-top: 1.5rem;
+  padding: 0.75rem 0.9rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.trace__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.trace__title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.trace__count {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+/*
+ * The rows are the audit drawer's, because they are the same lines; the list
+ * around them is not, because this one sits in a page that scrolls rather than
+ * in a column that owns its own height.
+ */
+.trace__list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  max-height: 32rem;
+  overflow-y: auto;
+}
+
+/*
+ * The session's running total, beside the model badge. Deliberately quiet: it
+ * is a fact worth having in view, not one worth interrupting the header for.
+ */
+.chat__cost {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

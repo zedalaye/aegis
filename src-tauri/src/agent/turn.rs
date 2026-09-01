@@ -74,6 +74,7 @@ use crate::skills::{self, SkillCtx};
 use crate::store::memories::{self, MemoryStore};
 use crate::store::{
     Agent, Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
+    TurnCost,
 };
 use crate::tools::handoff::HandoffCtx;
 use crate::tools::{self, NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult};
@@ -580,6 +581,32 @@ impl Turn<'_> {
                 turn_id = %plan.turn_id,
                 ?reason,
                 "a delegated turn ended without a handoff_return"
+            );
+        }
+
+        // What this turn spent, on the session, keyed by the turn id the audit
+        // lines already carry (PLAN 7.3, Phase 17). Recorded for every ending
+        // including a cancellation — the tokens were spent whether or not the
+        // reply arrived — and recorded as *unknown* rather than as zero when
+        // the provider said nothing, because a free turn and an unmeasured one
+        // are different facts.
+        //
+        // A failure here is a line and nothing more: a cost that could not be
+        // written is a gap in a counter, not a reason to fail a turn that has
+        // already happened. The commonest cause is a session deleted while its
+        // last turn was still running.
+        let charge = match usage {
+            Some(spent) => {
+                TurnCost::reported(&plan.turn_id, spent.prompt_tokens, spent.completion_tokens)
+            }
+            None => TurnCost::unreported(&plan.turn_id),
+        };
+        if let Err(err) = self.sessions.charge(&plan.session_id, charge) {
+            tracing::warn!(
+                %err,
+                session_id = %plan.session_id,
+                turn_id = %plan.turn_id,
+                "a turn's cost could not be recorded"
             );
         }
 

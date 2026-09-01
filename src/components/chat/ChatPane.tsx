@@ -12,7 +12,7 @@
 import { useProjects } from "../../state/projects";
 import { useApprovals } from "../../state/approvals";
 import { useSessions } from "../../state/sessions";
-import { formatTimestamp } from "../../lib/format";
+import { formatTimestamp, formatTokens } from "../../lib/format";
 
 import AgentBadge from "../agents/AgentBadge";
 import ApprovalDialog from "../approvals/ApprovalDialog";
@@ -49,6 +49,42 @@ function StatusLine() {
     <time className="chat__status" dateTime={session.updated_at}>
       {formatTimestamp(session.updated_at)}
     </time>
+  );
+}
+
+/**
+ * What this conversation has spent (PLAN 7.3, Phase 17).
+ *
+ * In the header beside the model, because that is where the question is asked:
+ * a person wondering what a long session is costing is looking at the session.
+ * The board is where the same number is asked *about* something — a run, a
+ * routine, the whole project.
+ *
+ * Absent rather than "0 tokens" until a turn has been charged, and the phrasing
+ * says "at least" when some provider reported no usage at all, because a total
+ * that read as exact when it is a floor would be worse than none.
+ */
+function CostBadge() {
+  const cost = useSessions((s) => s.detail?.session.cost ?? null);
+  if (cost === null || cost.turns === 0) {
+    return null;
+  }
+
+  const total = cost.prompt_tokens + cost.completion_tokens;
+  return (
+    <span
+      className="chat__cost"
+      title={`${cost.prompt_tokens} in, ${cost.completion_tokens} out, over ${cost.turns} turn${
+        cost.turns === 1 ? "" : "s"
+      }${
+        cost.unreported > 0
+          ? `. ${cost.unreported} of them reported no usage, so this is a floor.`
+          : ""
+      }`}
+    >
+      {cost.unreported > 0 ? "≥ " : ""}
+      {formatTokens(total)} tokens
+    </span>
   );
 }
 
@@ -155,6 +191,7 @@ export default function ChatPane() {
         <div className="chat__meta">
           <AgentBadge agentId={detail.session.agent_id} />
           <ModelBadge />
+          <CostBadge />
           <CompactButton />
           <StatusLine />
         </div>
