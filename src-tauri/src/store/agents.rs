@@ -52,6 +52,7 @@ use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 use crate::policy::tool;
 use crate::skills;
+use crate::store::connectors;
 use crate::tools;
 
 /// Name of the document under the application-data directory.
@@ -671,18 +672,31 @@ impl Valid {
                 tools.push((*name).to_owned());
             }
         }
-        if let Some(unknown) = draft
-            .tools
-            .iter()
-            .find(|granted| !tools.iter().any(|known| known == *granted))
-        {
-            return Err(AppError::Agent {
-                field: "tools",
-                reason: format!(
-                    "`{unknown}` is not a tool this build has. The tools are: {}",
-                    tools::names().join(", ")
-                ),
-            });
+        // Then the connectors' tools, in the order the form sent them
+        // (PLAN 7.3, Phase 18). Checked for *shape* and not for existence, the
+        // way a skill name is: a connector can be stopped, reconnected or
+        // installed on another machine, and an allow-list that dropped a grant
+        // because a process was down would silently narrow what somebody wrote
+        // — and silently widen it again when the file was next saved with the
+        // connector up. What holds is the other half: the model is only ever
+        // offered tools that are connected
+        // ([`Catalog::schemas_for`](crate::mcp::Catalog::schemas_for)), and
+        // policy refuses a name nothing answers to.
+        for granted in &draft.tools {
+            if tools.iter().any(|known| known == granted) {
+                continue;
+            }
+            if connectors::split_tool_name(granted).is_none() {
+                return Err(AppError::Agent {
+                    field: "tools",
+                    reason: format!(
+                        "`{granted}` is not a tool this build has. The tools are: {}. A \
+                         connector's tool is named `<connector>__<tool>`",
+                        tools::names().join(", ")
+                    ),
+                });
+            }
+            tools.push(granted.clone());
         }
 
         let mut skills: Vec<String> = Vec::new();

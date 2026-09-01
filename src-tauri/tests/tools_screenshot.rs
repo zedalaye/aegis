@@ -104,6 +104,7 @@ impl Fixture {
             },
             // Nothing here remembers anything either.
             memories: &self.memories,
+            connectors: aegis_lib::Connectors::none(),
             handoffs: HandoffCtx {
                 bus: None,
                 open: None,
@@ -155,6 +156,7 @@ impl Fixture {
             },
             // Nothing here remembers anything either.
             memories: &self.memories,
+            connectors: aegis_lib::Connectors::none(),
             handoffs: HandoffCtx {
                 bus: None,
                 open: None,

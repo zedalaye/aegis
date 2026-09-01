@@ -15,8 +15,9 @@
  * session can be opened as (PLAN 7.3, Phase 12), the runbooks those
  * identities may run (PLAN 7.3, Phase 13), what one identity has learned
  * (PLAN 7.3, Phase 14), the routines that fire a runbook on a clock
- * (PLAN 7.3, Phase 16), and the project's board and the runs its audit log
- * folds into (PLAN 7.3, Phase 17).
+ * (PLAN 7.3, Phase 16), the project's board and the runs its audit log folds
+ * into (PLAN 7.3, Phase 17), and the external MCP servers whose tools reach
+ * the model through the same gate as this build's own (PLAN 7.3, Phase 18).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -34,6 +35,8 @@ import type {
   AuditEntry,
   AuthKind,
   Board,
+  ConnectorDraft,
+  ConnectorView,
   Decision,
   Grant,
   MaskedSettings,
@@ -693,4 +696,74 @@ export function routineSetPaused(
  */
 export function routineRunNow(routineId: string): Promise<void> {
   return call<void>("routine_run_now", { routine_id: routineId });
+}
+
+// ---------------------------------------------------------------------------
+// Connectors (PLAN 7.3, Phase 18)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every connector, with what is measured about it right now.
+ *
+ * The state, the tools, the last lines the server printed and the environment
+ * variables it names but this process does not hold are measured on every
+ * call. Nothing about a running process is stored, so nothing here is cached.
+ */
+export function connectorList(): Promise<ConnectorView[]> {
+  return call<ConnectorView[]>("connector_list");
+}
+
+/**
+ * Creates a connector, or replaces one, and starts it.
+ *
+ * `connectorId` of `null` creates. The result is the row rather than an
+ * acknowledgement: a connector that would not start is a saved record and a
+ * sentence saying why, because the person who mistyped a package name needs to
+ * read the server's own output next to the field they have to change.
+ */
+export function connectorSave(
+  connectorId: string | null,
+  draft: ConnectorDraft,
+): Promise<ConnectorView> {
+  return call<ConnectorView>("connector_save", {
+    connector_id: connectorId,
+    draft,
+  });
+}
+
+/**
+ * Deletes a connector and stops its process.
+ *
+ * Identities that were granted its tools keep those names in their allow-lists
+ * — they simply stop resolving to anything. Rewriting somebody's allow-list
+ * because a row was deleted is a change nobody asked for.
+ */
+export function connectorDelete(connectorId: string): Promise<void> {
+  return call<void>("connector_delete", { connector_id: connectorId });
+}
+
+/** Starts or stops a connector without editing it. */
+export function connectorSetEnabled(
+  connectorId: string,
+  enabled: boolean,
+): Promise<ConnectorView> {
+  return call<ConnectorView>("connector_set_enabled", {
+    connector_id: connectorId,
+    enabled,
+  });
+}
+
+/**
+ * Starts a connector again after it failed or stopped.
+ *
+ * Nothing retries on its own, deliberately: a server that dies four seconds
+ * after every start would otherwise hide a broken configuration behind a
+ * respawn loop.
+ */
+export function connectorReconnect(
+  connectorId: string,
+): Promise<ConnectorView> {
+  return call<ConnectorView>("connector_reconnect", {
+    connector_id: connectorId,
+  });
 }

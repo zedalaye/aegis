@@ -2947,3 +2947,180 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/*
+ * Connectors (PLAN 7.3, Phase 18).
+ *
+ * A row is drawn like a routine's, because it is the same kind of object: a
+ * thing that runs whether or not this window is open, with a state you did not
+ * choose and have to be told. The one addition is the log — a `<details>` that
+ * is closed until somebody needs it, because the last lines of a server's
+ * stderr are the difference between "it would not start" and a fixable mistake,
+ * and they are noise every other minute of the day.
+ */
+.connector__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0 0 0.9rem;
+  padding: 0;
+  list-style: none;
+}
+
+.connector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+/* Not running is a state to notice, not one to hide: dashed like a paused
+   routine, for the same reason. */
+.connector--failed,
+.connector--off {
+  border-style: dashed;
+}
+
+.connector__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.connector__name {
+  font-weight: 600;
+}
+
+.connector__id {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.connector__badge {
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.connector__badge--ready {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.connector__badge--failed {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.connector__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
+.connector__command,
+.connector__server {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.connector__tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.15rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.76rem;
+}
+
+.connector__tools--none {
+  color: var(--muted);
+}
+
+.connector__tool {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.connector__toolnote {
+  color: var(--muted);
+}
+
+/* The server's own claim about its own tool, drawn as the aside it is. It
+   changes the sentence and never the question. */
+.connector__hint {
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.connector__problem {
+  margin: 0;
+  padding: 0.3rem 0.45rem;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.connector__log {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.connector__log pre {
+  max-height: 12rem;
+  margin: 0.3rem 0 0;
+  padding: 0.4rem 0.5rem;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.connectorform {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.connectorform__enabled {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.connectorform__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* A program, its arguments and a variable name are all things a person reads
+   character by character. */
+.field__input--mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+}

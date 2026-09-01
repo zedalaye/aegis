@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 17 (status board + trace/replay) — the MVP is
+> **Status: Phase 18 (MCP client) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -134,6 +134,18 @@ ever sent to it.
 > left on disk, and the audit lines it is replayed from. Nothing there writes: correcting the
 > board means editing `STATUS.md`, in your editor or through the same approval dialog as any
 > other change to your files. See *The board*.
+>
+> **And Aegis can now use tools it did not write.** A *connector* is an external MCP server — a
+> program on your machine that Aegis starts and asks for a list of tools. Those tools reach the
+> model as `<connector>__<tool>` and go through exactly the pipeline `fs_write` goes through:
+> offered only to identities that hold them, judged by the same table, audited on the same log.
+> The one row that is different is the one that matters — **every connector call is put to you**,
+> every time, with no auto-allow and no read-only exemption, because what a program somebody else
+> wrote does with its arguments is not something this runtime can check. Allowing one for the
+> session covers that one tool and nothing else the connector offers, including anything it adds
+> later. Adding a connector starts a program, so only you can do it: there is no tool that
+> installs one, and granting its tools to an identity is a second act, on the identity. See
+> *Connectors*.
 
 ---
 
@@ -248,6 +260,15 @@ No provider and no key needed — the scripted provider is enough to exercise th
     audit lines it is replayed from — the same rows the drawer draws, because they are the same
     lines. Nothing on that page can be edited, which is the point of it. See
     [The board](#the-board).
+15. **Give it a tool this build did not write.** Needs Node. *Settings → Connectors* → **Add
+    connector**: name it `Local files`, id `files`, program `npx`, and three arguments one per
+    line — `-y`, `@modelcontextprotocol/server-filesystem`, and a folder you do not mind it
+    seeing. Save it; the row goes *connected* and fills with the tools that server offers, each
+    under a name like `files__read_text_file`. A session opened as the built-in **Assistant** can
+    call them straight away; any other identity has to be granted them first, one at a time, under
+    *Identities*. Ask for one and the dialog names the connector, the tool, the server's own
+    description of it and the exact arguments — and it will ask again next time unless you allow
+    that one tool for the session. See [Connectors](#connectors).
 
 ## Point it at a model
 
@@ -305,10 +326,17 @@ see *Troubleshooting*.
 
 ```sh
 cd src-tauri && cargo test     # Rust: persistence, policy, tools, audit, wire protocol, turns,
-                               # skills, memory, compaction, handoffs, routines, the board
+                               # skills, memory, compaction, handoffs, routines, the board,
+                               # connectors
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 pnpm typecheck                 # TypeScript, strict
 ```
+
+The connector tests spawn a real MCP server over real pipes, and the server is the test binary
+itself: `tests/mcp.rs` carries an `#[ignore]`d test that speaks newline-delimited JSON-RPC on
+stdin and stdout, and the other tests in that file re-enter `current_exe()` with a filter that
+selects it. A Node or Python server would have made the suite depend on a runtime that is not on
+every machine; a second `[[bin]]` would have shipped a mock MCP server inside the application.
 
 Everything runs headless. The screen-capture tests are the one place that depends on the machine,
 and they are written so that either answer passes: a capture must produce exactly one PNG whose
@@ -336,9 +364,9 @@ tests before `pnpm typecheck` when you have touched an IPC type.
 
 ## Where your data lives
 
-Projects, sessions, identities, memories, routines and settings are stored as six small JSON
-documents — `projects.json`, `sessions.json`, `agents.json`, `memories.json`, `routines.json` and
-`settings.json` — under the application-data directory:
+Projects, sessions, identities, memories, routines, connectors and settings are stored as seven
+small JSON documents — `projects.json`, `sessions.json`, `agents.json`, `memories.json`,
+`routines.json`, `connectors.json` and `settings.json` — under the application-data directory:
 
 | | Path |
 | --- | --- |
@@ -355,10 +383,13 @@ each identity has learned, each record naming the identity it belongs to — del
 takes its memories with it, since nothing else can reach them. `routines.json` holds what is on a
 clock: which runbook, as which identity, in which project, what it was signed to do unattended,
 and how many of today's runs it has spent — the ledger is on disk because a scheduler that forgot
-what it had spent when the process died would have no ceiling at all. `settings.json` holds the
-base URL and the model id. **None of them holds a key**, and none records whether anything is
-*running*: a session interrupted by a crash or a power cut comes back idle, because there is no
-turn left to finish it.
+what it had spent when the process died would have no ceiling at all. `connectors.json` holds
+the external MCP servers you installed: the id, the program, its arguments and the *names* of the
+environment variables it needs — never their values, and never whether it was running.
+`settings.json` holds the base URL and the model id. **None of them holds a key**, and none
+records whether anything is *running*: a session interrupted by a crash or a power cut comes back
+idle, because there is no turn left to finish it, and a connector that was connected when the
+process died is not connected now.
 
 Your API key is not in this directory at all. It goes to the operating system's own credential
 store, under the service name **Aegis** and the account **provider-api-key** — Credential Manager
@@ -366,7 +397,7 @@ on Windows, Keychain on macOS, a Secret Service on Linux — where you can inspe
 without Aegis. Set `AEGIS_API_KEY` in the environment instead and Aegis uses that; the credential
 store wins when both are present.
 
-All six documents are meant to be readable and are safe to edit by hand while Aegis is closed.
+All seven documents are meant to be readable and are safe to edit by hand while Aegis is closed.
 A document Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` and the app starts
 with an empty list rather than refusing to open. Deleting a project forgets it and its sessions;
 the workspace folder itself is never touched.
@@ -1045,6 +1076,108 @@ no longer names one.
 
 ---
 
+## Connectors
+
+A **connector** is an external MCP server: a program on this machine that Aegis starts, speaks
+newline-delimited JSON-RPC to over its stdin and stdout, and asks for a list of tools. Those
+tools then reach the model in the same `tools` array as `fs_read` and `shell_exec`, under the
+name `<connector-id>__<tool>` — `files__read_text_file`, `git__status`.
+
+*Settings → Connectors* is the whole surface. **There is no tool that installs one**, and there
+will not be: adding a connector names a program to start, and a model that could name a program
+to start would have `shell_exec` with the dialog taken off it.
+
+### Adding one
+
+Give it a name you will recognize, an **id**, the **program**, and its **arguments one per
+line**. The id is a namespace rather than a label — it is the part before the `__` in every tool
+the connector offers — so it is lower-case letters, digits and hyphens, and never an underscore.
+
+There is no shell, so the program and its arguments are separate fields, exactly as they are for
+`shell_exec`. The filesystem server that the MCP project publishes looks like this:
+
+| Field | Value |
+| --- | --- |
+| Name | `Local files` |
+| Id | `files` |
+| Program | `npx` |
+| Arguments | `-y`, `@modelcontextprotocol/server-filesystem`, `/path/you/want/it/to/see` |
+
+Save it and it starts. The row then says whether it connected, what the server calls itself,
+which protocol version was agreed, and every tool it offers with the server's own description.
+If it did not start, the row says why — and carries the last lines the program wrote to its
+stderr under *What it printed*, which for a mistyped package name is the only place the real
+answer appears.
+
+Nothing retries on its own. A server that died stays dead and the row says so, with a
+**Reconnect** button beside it: a respawn loop would hide a broken configuration behind a
+connector that is up for four seconds at a time.
+
+A connector is not free. Its tool *descriptions* are written by the server and ride in every
+request the identities holding them make — the filesystem server above is fourteen tools and
+several kilobytes of prose. Narrowing an identity's list narrows its prompt as much as it narrows
+its reach, which is the argument for a specialist that holds three of those fourteen rather than a
+generalist that holds all of them (`PLAN.md` § 7.5).
+
+### Secrets, and what the program can read
+
+A connector names the **environment variables it needs, by name** — `GITHUB_TOKEN`, not its
+value. Aegis reads them out of its own environment when it starts the child. Nothing you type in
+this form is a secret, `connectors.json` never holds one, and there is nowhere in the form to put
+one: export the variable in the shell you launch Aegis from, or in your OS's environment, and the
+row tells you when one it names is not there.
+
+The child is given **only** those variables plus the platform's minimum — `PATH`, and the handful
+each OS needs to start a process at all. Not this process's whole environment. That is stricter
+than `shell_exec`, deliberately: a command is read and approved on the spot, and a connector is
+started once and answers for the rest of the session.
+
+### Granting its tools
+
+Installing a connector makes its tools *exist*. It grants them to nobody. Tick them on an
+identity under *Settings → Identities*, the same way you would grant it `shell_exec` — they
+appear there as their own list, one checkbox per tool, while the connector is running.
+
+They are granted **one at a time, by full name**. Holding `git__status` does not hold anything
+else the `git` connector offers, and does not hold a tool the server adds tomorrow. The built-in
+**Assistant** is the exception, and always has been: its allow-list is not a list somebody wrote,
+it is *every tool this build has*, and a connector you installed is one of those.
+
+### The gate
+
+**Every connector call asks.** There is no auto-allow row for one and there is no read-only
+exemption. The dialog names the connector, the tool, what the server says the tool does, and the
+arguments the model wrote — and it says plainly that those arguments go to the program as they
+are, because Aegis has never seen the tool's schema and the tool does not run here. That is less
+than the `fs_write` prompt can promise, and saying so is the point.
+
+Servers may annotate a tool as read-only. Aegis reads that annotation and shows it *attributed*
+— "the server calls this read-only" — because it is the thing being gated describing its own
+gate. It changes the sentence and never the question.
+
+**Allow for this session** covers that one tool, with any arguments. Not the connector: an MCP
+server may change its tool list while a session is open, and a grant that covered the connector
+would quietly cover something nobody read.
+
+### What is deliberately not implemented
+
+- **No `sampling`.** Aegis advertises no client capabilities at all in the handshake, so a
+  server cannot ask your model to generate anything. A server that could drive the model would
+  be a second agent loop with no session, no identity and no approval dialog in front of it. One
+  that asks anyway gets a JSON-RPC "method not found" — an answer, never a hang.
+- **No `roots`.** A connector is not told where your workspace is. If it needs a directory, you
+  pass it as an argument you can read.
+- **No resources and no prompts.** A connector is here for its tools. A resource pulled into a
+  prompt is a channel this phase has no gate for.
+- **No HTTP transport.** stdio only. A connector that listened on a socket is the shape
+  `PLAN.md` § 7.4 refuses.
+
+Images, audio and embedded resources that come back from a call are *described* rather than
+inlined — `[image, image/png, about 40000 bytes — not shown in this build]` — for the reason
+`screen_capture` returns a path and a hash: a megabyte of base64 in the transcript is a megabyte
+the model cannot use and the context window cannot spare. Text is capped at 64 KB, and the
+envelope says when it was cut.
+
 ## Layout
 
 ```
@@ -1052,15 +1185,18 @@ src/           React app — presentation and typed IPC glue only
   ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
   components/  layout, chat, sessions, approvals, projects, agents, skills, memory,
-               routines, board, settings, audit
+               routines, connectors, board, settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
     agent/     turn loop, wire protocol, providers (scripted, and OpenAI-compatible over SSE),
                event payloads, turn registry
     store/     projects.json, sessions.json, agents.json, memories.json,
-               routines.json and settings.json, behind one atomic write
-    tools/     fs, shell, screenshot, skill, memory, handoff — behind one ToolSpec registry
+               routines.json, connectors.json and settings.json, behind one atomic write
+    tools/     fs, shell, screenshot, skill, memory, handoff, connector — behind one
+               ToolSpec registry
+    mcp/       the MCP client: one stdio JSON-RPC connection per external server, and the
+               roster of what is running and what each one offers
     policy/    path containment, decision matrix, per-session grants
     skills/    the runbook format and the catalog: a line per skill in context, the body
                only when one is run
@@ -1143,6 +1279,19 @@ Read this before pointing Aegis at anything you care about.
 - **There is no sandbox.** Approved tools run as you, with your privileges and environment. The
   real boundary is that you read the exact path, program, arguments and working directory before
   approving. Treat every approval as if you were typing the command yourself.
+- **A connector is a program you installed, and Aegis cannot see inside it.** An external MCP
+  server runs as you, like every other tool, but with one difference that is worth stating: for
+  `fs_write` the runtime resolved the path itself and the dialog shows a fact, while for a
+  connector's tool it shows the tool's name, the server's own description of it and the arguments
+  the model wrote — and nothing more, because the schema is the server's and the work happens in
+  another process. That is why **every connector call prompts**, with no auto-allow row and no
+  read-only exemption; a server's `readOnlyHint` is shown attributed to the server and changes
+  nothing. A session grant covers one tool by name, never the connector, because a server may add
+  a tool while your session is open. Aegis advertises **no client capabilities** in the handshake,
+  so no server can ask your model to generate anything (`sampling`) or be told where your
+  workspace is (`roots`), and a server's tool *descriptions* reach your system prompt — treat a
+  connector the way you would treat a script you are about to run. Adding one is a human act in
+  Settings; there is no tool that can. See [Connectors](#connectors).
 - **Screen captures are never auto-allowed**, and there is no argument or grant state that makes
   one happen without a prompt. A capture can contain anything on your display — a password
   manager, a private conversation, someone else's face in a call — so the prompt names the
@@ -1183,7 +1332,8 @@ Read this before pointing Aegis at anything you care about.
   that local servers work, and it is worth reserving for a server on your own machine.
 - **Every tool call is audited**, allowed or denied, one JSON line each, with the identity that
   made it, the skill run it belonged to, the policy reason and the outcome — see *Where your data lives*. Arguments are recorded as a SHA-256 digest plus
-  a redacted copy that keeps paths and replaces file content with its size.
+  a redacted copy that keeps paths and replaces file content with its size. A connector's call is
+  one line like any other, under the name the model used (`git__status`).
 
 ## Troubleshooting
 
@@ -1224,6 +1374,11 @@ Read this before pointing Aegis at anything you care about.
   `pnpm` finds `pnpm.cmd`, and the launch goes through `cmd.exe` with the arguments escaped for
   `cmd`'s own parser by the Rust standard library. This is a launcher detail, not a shell: your
   arguments are still not a command line, and nothing splits or joins them.
+- **A connector that runs `npx` works, and that is not automatic.** `npx`, `uvx` and friends are
+  `.cmd` shims, which `CreateProcess` cannot launch directly. Aegis resolves a connector's program
+  through `PATHEXT` with the same function `shell_exec` uses, so `npx` finds `npx.cmd` and the
+  launch goes through `cmd.exe` with the arguments escaped by the Rust standard library. Your
+  arguments are still a vector, not a command line.
 - **`echo` and `dir` are not programs.** They are `cmd.exe` builtins, so `shell_exec` cannot find
   them on `PATH` and says so, naming the builtin. Run `cmd` with `["/c", "dir"]` if you want one —
   and note that `cmd` then parses those arguments itself, which the direct path does not.

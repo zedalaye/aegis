@@ -25,6 +25,14 @@
 //! with `ok: false` and `E_DENIED`, not an exception — the model reads it,
 //! explains itself and tries something else, and the turn keeps going.
 //!
+//! Since Phase 18 the registry has a second half it does not declare. An
+//! external connector's tools are named by the server that offers them, so
+//! they cannot be a `ToolSpec` in this file — but they are in the same `tools`
+//! array the model reads ([`schemas_for`]), they go through the same
+//! [`policy::decide`](crate::policy::decide), and they leave the same audit
+//! line. There is no "built-in versus MCP" branch anywhere below, which is
+//! PLAN 7.1's constraint on this module, stated as the absence of code.
+//!
 //! Every tool the MVP names is here: `fs_list`, `fs_read`, `fs_write`,
 //! `shell_exec` and, since Phase 9, `screen_capture`; since Phase 13,
 //! `skill_run` and `skill_return` beside them; since Phase 14, `memory_write`
@@ -57,6 +65,7 @@
 //! shows its own consent prompt, a round trip through a person — so it goes to
 //! a blocking thread rather than parking a runtime worker on it.
 
+pub mod connector;
 pub mod fs;
 pub mod handoff;
 pub mod memory;
@@ -75,6 +84,7 @@ use ts_rs::TS;
 
 use crate::audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 use crate::error::ErrorCode;
+use crate::mcp::{self, Connectors};
 use crate::policy::{tool, ResolvedCall};
 use crate::skills::SkillCtx;
 use crate::store::memories::MemoryStore;
@@ -537,7 +547,8 @@ pub fn registry() -> &'static [ToolSpec] {
     ]
 }
 
-/// The `tools` array for a model request (PLAN 4.1).
+/// The `tools` array for a model request (PLAN 4.1), for a build with no
+/// connectors.
 pub fn schemas() -> Vec<Value> {
     registry().iter().map(ToolSpec::to_schema).collect()
 }
@@ -555,12 +566,20 @@ pub fn schemas() -> Vec<Value> {
 ///
 /// Registry order is preserved rather than the allow-list's, so the order the
 /// model reads them in is the registry's regardless of how the list was typed.
-pub fn schemas_for(allowed: &[String]) -> Vec<Value> {
-    registry()
+/// The connectors' tools follow, in connector order, for the same reason and
+/// because "look, read, then change something" is a claim about this build's
+/// own tools that nobody can make about somebody else's.
+///
+/// One array, not two: the model is not told which of its tools run in this
+/// process (PLAN 7.1, Tools).
+pub fn schemas_for(allowed: &[String], catalog: &mcp::Catalog) -> Vec<Value> {
+    let mut schemas: Vec<Value> = registry()
         .iter()
         .filter(|spec| allowed.iter().any(|name| name == spec.name))
         .map(ToolSpec::to_schema)
-        .collect()
+        .collect();
+    schemas.extend(catalog.schemas_for(allowed));
+    schemas
 }
 
 /// Every tool name this build can run, in registry order.
@@ -651,6 +670,15 @@ pub struct ToolCtx<'a> {
     /// what makes one run replayable across the CoS and everyone under it
     /// (PLAN 7.2, row 10).
     pub handoffs: HandoffCtx<'a>,
+    /// The connectors this installation is running (PLAN 7.3, Phase 18).
+    ///
+    /// Held here for the reason the capture directory and the skill library
+    /// are: which programs the operator installed is a fact about the
+    /// installation, not about what the model asked for. The catalog policy
+    /// judged against is a *snapshot* of this same roster, taken once at the
+    /// top of the turn — which is why a tool call reaches the roster and a
+    /// decision reaches the snapshot, and not the other way round.
+    pub connectors: &'a Connectors,
     /// The routine whose run this is, or empty (PLAN 7.3, Phase 16).
     ///
     /// Held here for the reason the delegation's id is: which clock started
@@ -759,6 +787,13 @@ pub async fn run(
             handoff::delegate(plan, ctx.handoffs, ctx.cancel).await
         }
         ResolvedCall::HandoffReturn { report } => handoff::ret(report, ctx.handoffs),
+        // The one call in this table that leaves the process without being a
+        // child of it. Awaited here like the handoff, and for the same reason:
+        // the model asked a question, and a tool that answered before the
+        // answer existed would be lying to it.
+        ResolvedCall::Connector { name, args } => {
+            connector::call(ctx.connectors, name, args, ctx.cancel).await
+        }
     };
 
     // `as` saturates at `u64::MAX` here, which is 584 million years: the cast

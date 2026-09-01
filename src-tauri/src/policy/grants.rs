@@ -71,6 +71,24 @@ pub enum Grant {
     /// same table, under their own identities and with none of this session's
     /// grants (they run in sessions of their own).
     HandoffDelegate,
+    /// Call one tool of one connector for the rest of the session
+    /// (PLAN 7.3, Phase 18).
+    ///
+    /// Keyed on the whole tool name — `git__status`, not `git` — and that is
+    /// the decision of the phase rather than a detail of it. A connector's tool
+    /// list is the server's to change, and it may change while a session is
+    /// open (`notifications/tools/list_changed`). A grant that covered the
+    /// *connector* would then quietly cover a tool that did not exist when
+    /// somebody read the dialog. This one covers what was on the screen.
+    ///
+    /// Not scoped further than that, for the reason [`Grant::MemoryWrite`] is
+    /// not scoped to a sentence: the arguments belong to a schema this process
+    /// has never seen, and a grant keyed on them would be one that never
+    /// matched twice.
+    Connector {
+        /// The full tool name the dialog named.
+        tool: String,
+    },
 }
 
 impl Grant {
@@ -91,7 +109,10 @@ impl Grant {
     }
 
     /// The tool this grant can ever apply to.
-    pub const fn tool(&self) -> &'static str {
+    ///
+    /// Borrowed rather than `&'static str` since Phase 18: a connector's tools
+    /// are named by the server that offers them.
+    pub fn tool(&self) -> &str {
         match self {
             Self::FsReadLarge => "fs_read",
             Self::FsWrite => "fs_write",
@@ -99,6 +120,7 @@ impl Grant {
             Self::ScreenCapture => "screen_capture",
             Self::MemoryWrite => "memory_write",
             Self::HandoffDelegate => "handoff_delegate",
+            Self::Connector { tool } => tool,
         }
     }
 
@@ -134,6 +156,15 @@ impl Grant {
             Self::HandoffDelegate => {
                 "hand briefs to other identities, for the rest of this session — what each of                  them then does is still approved call by call"
                     .to_owned()
+            }
+            Self::Connector { tool } => {
+                let (connector, name) = crate::store::connectors::split_tool_name(tool)
+                    .unwrap_or((tool.as_str(), tool.as_str()));
+                format!(
+                    "call `{name}` on the `{connector}` connector, with any arguments, for the \
+                     rest of this session — no other tool of that connector, and nothing it adds \
+                     later"
+                )
             }
         }
     }

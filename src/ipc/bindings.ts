@@ -220,7 +220,31 @@ reviewer: string | null,
 /**
  * Where the briefs would be filed, when the workspace has a `briefs/`.
  */
-filed_in: string | null, };
+filed_in: string | null, } | { "kind": "connector", 
+/**
+ * The connector's id — the part before the `__`.
+ */
+connector: string, 
+/**
+ * The connector's name, as the person who installed it wrote it.
+ */
+connector_name: string, 
+/**
+ * The tool's own name, as the server spells it.
+ */
+tool: string, 
+/**
+ * What the server says the tool does. The server's words, not ours.
+ */
+description: string, 
+/**
+ * Whether the server claims the tool only reads. A claim, attributed.
+ */
+read_only_hint: boolean, 
+/**
+ * The arguments the model wrote, as indented JSON.
+ */
+arguments: string, };
 
 /**
  * One approval, as the dialog receives it (PLAN 2.1, `ApprovalRequest`).
@@ -608,6 +632,118 @@ state: string,
 at: string, };
 
 /**
+ * One external MCP server, as it is stored.
+ */
+export type Connector = { 
+/**
+ * Stable id, and the namespace its tools are offered under.
+ */
+id: string, 
+/**
+ * How it is named to a person. Never reaches a tool name.
+ */
+name: string, 
+/**
+ * The program to run. Looked up on PATH like any other.
+ */
+command: string, 
+/**
+ * Its arguments, passed as a vector — never through a shell.
+ */
+args: Array<string>, 
+/**
+ * Environment variables the server needs, by name.
+ *
+ * The values are read from Aegis' own environment when the child is
+ * spawned. A name that is not set there is reported on the row rather
+ * than passed as an empty string, because a server that reads an empty
+ * token usually fails in a way that is much harder to read.
+ */
+env: Array<string>, 
+/**
+ * Whether Aegis starts it at all.
+ */
+enabled: boolean, };
+
+/**
+ * A connector as a person typed it into the form.
+ */
+export type ConnectorDraft = { 
+/**
+ * Stable id, and the namespace its tools are offered under.
+ */
+id: string, 
+/**
+ * How it is named to a person.
+ */
+name: string, 
+/**
+ * The program to run.
+ */
+command: string, 
+/**
+ * Its arguments.
+ */
+args: Array<string>, 
+/**
+ * Environment variables it needs, by name.
+ */
+env: Array<string>, 
+/**
+ * Whether Aegis starts it.
+ */
+enabled: boolean, };
+
+/**
+ * A connector and everything measured about it right now.
+ *
+ * The record comes from [`ConnectorStore`](crate::store::ConnectorStore); the
+ * rest is measured on every read, which is why it is one struct rather than a
+ * document with a status column. A stored "connected" is exactly the lie
+ * [`store`](crate::store) refuses to hold.
+ */
+export type ConnectorView = { 
+/**
+ * The stored record.
+ */
+connector: Connector, 
+/**
+ * Where it is right now.
+ */
+state: State, 
+/**
+ * What it offers, when it is connected.
+ */
+tools: Array<ToolInfo>, 
+/**
+ * Why it is not connected, when it is not.
+ */
+error: string | null, 
+/**
+ * The last lines the server wrote to its stderr.
+ *
+ * The panel shows these because an `npx` that could not resolve a package
+ * says so there and nowhere else, and a row reading only "it would not
+ * start" is a row nobody can act on.
+ */
+log: Array<string>, 
+/**
+ * What the server said about itself, when it got that far.
+ */
+server: string | null, 
+/**
+ * The protocol version that was agreed.
+ */
+protocol: string | null, 
+/**
+ * Variables it names that are not in this application's environment.
+ *
+ * Measured, not stored: a token that was exported in the shell Aegis was
+ * started from is there for this process and gone for the next one.
+ */
+missing_env: Array<string>, };
+
+/**
  * Tokens spent over some set of turns (PLAN 7.3, Phase 17).
  *
  * The unit the UI counts in. `unreported` is carried beside the totals rather
@@ -684,7 +820,11 @@ export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "ki
 /**
  * The normalized program key — see [`Grant::shell`].
  */
-program: string, } | { "kind": "screen_capture" } | { "kind": "memory_write" } | { "kind": "handoff_delegate" };
+program: string, } | { "kind": "screen_capture" } | { "kind": "memory_write" } | { "kind": "handoff_delegate" } | { "kind": "connector", 
+/**
+ * The full tool name the dialog named.
+ */
+tool: string, };
 
 /**
  * One brief, as the approval dialog draws it.
@@ -1512,6 +1652,11 @@ problem: string | null, };
 export type SkillScope = "library" | "workspace";
 
 /**
+ * Where one connector is in its life.
+ */
+export type State = "off" | "starting" | "ready" | "failed";
+
+/**
  * How a delegated run — or a skill run — ended (`COS.md` *Handoff*).
  *
  * Three states and no fourth. "Partly done" is `needs_you` with the rest in
@@ -1666,6 +1811,42 @@ truncated: boolean,
  * re-read.
  */
 image_path: string | null, };
+
+/**
+ * One connector tool, as the rest of the runtime sees it.
+ */
+export type ToolInfo = { 
+/**
+ * The connector's id.
+ */
+connector: string, 
+/**
+ * The connector's human name, for the dialog and the panel.
+ */
+connector_name: string, 
+/**
+ * The tool's own name, as the server spells it.
+ */
+name: string, 
+/**
+ * The name the model is given: `<connector>__<tool>`.
+ *
+ * This is the string an identity's allow-list holds, the string a session
+ * grant is keyed on, and the string the audit line records. There is one
+ * spelling, and it is this one.
+ */
+full_name: string, 
+/**
+ * What the server says the tool does. Reaches the prompt verbatim.
+ */
+description: string, 
+/**
+ * Whether the server *claims* the tool only reads.
+ *
+ * Shown in the approval dialog, attributed to the server. Nothing in this
+ * runtime branches on it.
+ */
+read_only_hint: boolean, };
 
 /**
  * `tool:progress` — output from a tool that is still running.

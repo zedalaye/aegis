@@ -917,7 +917,13 @@ fn legacy_text(bytes: &[u8]) -> String {
 // Finding the program
 // ---------------------------------------------------------------------------
 
-/// Turns the program the model named into a path to spawn.
+/// Turns the program a caller named into a path to spawn.
+///
+/// Shared with [`mcp::client`](crate::mcp::client) since Phase 18, which needs
+/// exactly the same answer for exactly the same reason: on Windows `npx` is a
+/// `.cmd` and `CreateProcess` cannot launch one, so a connector configured the
+/// way every MCP host documents would simply never start. One resolver rather
+/// than two, so "which npx" cannot mean different things in two places.
 ///
 /// Resolved here rather than left to `Command`, which searches PATH relative
 /// to *this* process' working directory and not to `current_dir` — so a
@@ -925,7 +931,7 @@ fn legacy_text(bytes: &[u8]) -> String {
 /// read in the dialog, or nothing at all, depending on the platform. Doing it
 /// explicitly makes the answer the same everywhere and lets the failure say
 /// which of the two things went wrong.
-fn resolve(program: &str, cwd: &Path) -> Result<PathBuf, String> {
+pub(crate) fn resolve(program: &str, cwd: &Path) -> Result<PathBuf, String> {
     let program = program.trim();
     let named = Path::new(program);
 

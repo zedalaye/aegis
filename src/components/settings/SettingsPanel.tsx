@@ -16,18 +16,23 @@
  * the rail, so "which `inbox.triage` will run" is answerable in one place.
  * The memories of Phase 14 follow Identities for the same reason again: a
  * memory belongs to an identity and to nothing else, and this panel is the
- * only place a person can correct one. The routines of Phase 16 come last
- * because they stand on all three: a routine is a runbook, run as an identity,
+ * only place a person can correct one. The connectors of Phase 18 sit between
+ * Identities and Memory because they are the other half of the tools question:
+ * an identity is who may call a tool, and a connector is where a tool comes
+ * from when this build did not write it. The routines of Phase 16 come last
+ * because they stand on all of it: a routine is a runbook, run as an identity,
  * on a clock — and this is the only place a person can see what the machine
  * will do while they are not here.
  */
 
 import { useEffect } from "react";
 
+import { useConnectors } from "../../state/connectors";
 import { useRoutines } from "../../state/routines";
 import { effectiveBaseUrl, isConfigured, useSettings } from "../../state/settings";
 
 import AgentList from "../agents/AgentList";
+import ConnectorList from "../connectors/ConnectorList";
 import MemoryList from "../memory/MemoryList";
 import RoutineList from "../routines/RoutineList";
 import SkillList from "../skills/SkillList";
@@ -71,6 +76,7 @@ export default function SettingsPanel() {
   const closePanel = useSettings((s) => s.closePanel);
   const status = useSettings((s) => s.status);
   const loadRoutines = useRoutines((s) => s.load);
+  const loadConnectors = useConnectors((s) => s.load);
 
   // Re-measured when the panel opens. What is *wrong* with a routine — a skill
   // that was un-granted, a folder that was unplugged, a budget spent, a clock
@@ -80,6 +86,14 @@ export default function SettingsPanel() {
   useEffect(() => {
     void loadRoutines();
   }, [loadRoutines]);
+
+  // And the connectors, for the same reason and a stronger one: a connector's
+  // state is a process, measured on every list, and the panel is where somebody
+  // finds out that the one they installed last week has not been up since. The
+  // rows keep themselves current afterwards through `connector:updated`.
+  useEffect(() => {
+    void loadConnectors();
+  }, [loadConnectors]);
 
   return (
     <section className="settings" aria-labelledby="settings-title">
@@ -101,6 +115,9 @@ export default function SettingsPanel() {
       <h2 className="settings__section">Identities</h2>
       <AgentList />
 
+      <h2 className="settings__section">Connectors</h2>
+      <ConnectorList />
+
       <h2 className="settings__section">Memory</h2>
       <MemoryList />
 
@@ -115,7 +132,11 @@ export default function SettingsPanel() {
         The base URL and the model are written to <code>settings.json</code>{" "}
         beside your projects. Identities go in <code>agents.json</code> next to
         them, which is a file you can read and edit by hand. Memories go in{" "}
-        <code>memories.json</code>, beside both. Runbooks are
+        <code>memories.json</code>, beside both. Connectors go in{" "}
+        <code>connectors.json</code>, which holds the program and its arguments
+        and never a secret — a connector names the environment variables it
+        needs, and their values are read from this application&rsquo;s own
+        environment when it starts one. Runbooks are
         ordinary markdown in <code>skills/</code>, either beside those files or
         inside a workspace, where they travel with the repository. Routines and
         what they have spent today are in <code>routines.json</code>. The key is

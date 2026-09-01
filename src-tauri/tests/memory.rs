@@ -168,7 +168,7 @@ impl App {
                 unattended: false,
             },
             raw,
-            aegis_lib::tools::schemas_for(&agent.tools),
+            aegis_lib::tools::schemas_for(&agent.tools, &aegis_lib::ConnectorCatalog::empty()),
         )
     }
 
@@ -268,6 +268,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            connectors: aegis_lib::Connectors::none(),
             standing: Standing::Own(None),
             unattended: None,
         };

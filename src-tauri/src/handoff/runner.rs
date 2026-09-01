@@ -61,6 +61,7 @@ use crate::approval::ApprovalRegistry;
 use crate::audit::AuditLog;
 use crate::commands::session::WindowSink;
 use crate::handoff::{self, bus, Brief};
+use crate::mcp::Connectors;
 use crate::policy::GrantStore;
 use crate::state::AppState;
 use crate::store::{
@@ -104,6 +105,13 @@ pub struct Host<'a> {
     pub skills: &'a Path,
     /// Where memories live; the run reads and writes the owner's own.
     pub memories: &'a MemoryStore,
+    /// The connectors this installation is running (PLAN 7.3, Phase 18).
+    ///
+    /// The same roster the delegating session sees. A specialist is offered the
+    /// connector tools *its own* identity holds, and every call it makes stops
+    /// and asks in its own session — none of the CoS's grants travel with the
+    /// brief, and a connector's tool is no exception.
+    pub connectors: &'a Connectors,
     /// Which provider answers for an identity.
     ///
     /// A function rather than a provider, because the binding is per identity
@@ -256,6 +264,7 @@ impl Delegating {
             captures: host.captures,
             skills: host.skills,
             memories: host.memories,
+            connectors: host.connectors,
             // What makes this a delegated run rather than a session: no bus, so
             // it cannot re-delegate, and a cell for the report it owes.
             standing: Standing::Delegated(&open),
@@ -384,6 +393,7 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
                 captures: state.captures(),
                 skills: state.skills(),
                 memories: state.memories(),
+                connectors: state.connectors(),
                 provider: &provider,
             };
 

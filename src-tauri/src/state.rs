@@ -26,14 +26,15 @@ use crate::audit::{AuditEntry, AuditLog};
 use crate::board::trace::RunTrace;
 use crate::board::{self, trace};
 use crate::error::{AppError, AppResult};
+use crate::mcp::{ConnectorView, Connectors};
 use crate::oauth;
 use crate::policy::GrantStore;
 use crate::schedule::runner::Scheduler;
 use crate::secrets::{key_hint, SecretStore};
 use crate::store::{
-    Agent, AgentStore, AuthKind, MaskedSettings, Memory, MemoryDraft, MemoryStore, Routine,
-    RoutineStore, SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
-    DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    Agent, AgentStore, AuthKind, Connector, ConnectorStore, MaskedSettings, Memory, MemoryDraft,
+    MemoryStore, Routine, RoutineStore, SessionDetail, SessionState, SessionStore, SessionSummary,
+    SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
 /// How many audit lines a board is folded from (PLAN 7.3, Phase 17).
@@ -67,6 +68,17 @@ pub struct AppState {
     /// forever.
     scheduler: Scheduler,
     settings: SettingsStore,
+    /// The connectors somebody configured (PLAN 7.3, Phase 18).
+    connector_store: ConnectorStore,
+    /// The connectors that are actually running.
+    ///
+    /// Two fields rather than one because they answer different questions and
+    /// change at different rates. The document is what a person typed and it
+    /// survives a restart; the roster is processes, and a process that was up
+    /// when this one died is not up now. The Settings panel joins them
+    /// ([`AppState::connector_views`]), which is the composition this module
+    /// exists for.
+    connectors: Connectors,
     secrets: SecretStore,
     turns: TurnRegistry,
     grants: GrantStore,
@@ -100,6 +112,12 @@ impl AppState {
             routines: RoutineStore::load(data_dir),
             scheduler: Scheduler::new(),
             settings: SettingsStore::load(data_dir),
+            connector_store: ConnectorStore::load(data_dir),
+            // Empty at construction, on purpose: starting a program is async
+            // and `new` is not, and a window that waited on four `npx` runs
+            // before it appeared would be a worse first minute than four rows
+            // that fill in. `commands::connector::spawn` starts them.
+            connectors: Connectors::new(),
             secrets: SecretStore::new(),
             turns: TurnRegistry::new(),
             grants: GrantStore::new(),
@@ -390,6 +408,32 @@ impl AppState {
     /// The routine store: what is on a clock (PLAN 7.3, Phase 16).
     pub fn routines(&self) -> &RoutineStore {
         &self.routines
+    }
+
+    /// The connector document: what somebody configured (PLAN 7.3, Phase 18).
+    pub fn connector_store(&self) -> &ConnectorStore {
+        &self.connector_store
+    }
+
+    /// The connectors that are running, and what they offer.
+    pub fn connectors(&self) -> &Connectors {
+        &self.connectors
+    }
+
+    /// Every connector's row: the record, joined to what is measured about it.
+    ///
+    /// The composition this module exists for, on the connector side. The store
+    /// cannot say whether a process is up and the roster cannot say what
+    /// somebody typed, and a row that showed only one of the two would be
+    /// either a list of settings nobody can act on or a list of processes
+    /// nobody configured.
+    pub fn connector_views(&self) -> Vec<ConnectorView> {
+        self.connectors.views(&self.connector_store.list())
+    }
+
+    /// One connector's row.
+    pub fn connector_view(&self, connector: &Connector) -> ConnectorView {
+        self.connectors.view(connector)
     }
 
     /// Which routines are running right now.

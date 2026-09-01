@@ -158,7 +158,7 @@ impl App {
                 unattended: false,
             },
             &history,
-            aegis_lib::tools::schemas_for(&agent.tools),
+            aegis_lib::tools::schemas_for(&agent.tools, &aegis_lib::ConnectorCatalog::empty()),
         );
 
         let system = match request.messages.first() {
@@ -221,6 +221,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            connectors: aegis_lib::Connectors::none(),
             standing: Standing::Own(None),
             unattended: None,
         }
@@ -491,7 +492,7 @@ fn a_session_written_before_identities_is_the_assistant_it_always_was() {
             unattended: false,
         },
         &history,
-        aegis_lib::tools::schemas_for(&resolved.tools),
+        aegis_lib::tools::schemas_for(&resolved.tools, &aegis_lib::ConnectorCatalog::empty()),
     );
 
     let offered: Vec<&str> = request

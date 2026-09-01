@@ -37,6 +37,10 @@ export function grantLabel(grant: Grant): string {
       return "record memories as this identity";
     case "handoff_delegate":
       return "hand briefs to other identities";
+    case "connector":
+      // The whole tool name, not the connector's: a grant covers what the
+      // dialog named and nothing the server adds afterwards.
+      return `call ${grant.tool}`;
   }
 }
 

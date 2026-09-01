@@ -247,6 +247,7 @@ async fn run_turn<R: Runtime>(
         captures: state.captures(),
         skills: state.skills(),
         memories: state.memories(),
+        connectors: state.connectors(),
         standing: Standing::Own(bus.as_ref()),
         unattended: None,
     }

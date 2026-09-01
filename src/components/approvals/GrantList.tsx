@@ -43,12 +43,25 @@ function scopeLabel(grant: Grant): string {
       return "Remember things as this identity";
     case "handoff_delegate":
       return "Hand briefs to other identities";
+    case "connector":
+      // The whole tool name, because that is the scope: approving
+      // `git__status` approved `git__status`, not the `git` connector and not
+      // whatever it offers next week.
+      return `Call \`${grant.tool}\` with any arguments`;
   }
 }
 
 /** A stable key for a grant. The variant, plus what narrows it. */
 function grantKey(grant: Grant): string {
-  return grant.kind === "shell" ? `shell:${grant.program}` : grant.kind;
+  if (grant.kind === "shell") {
+    return `shell:${grant.program}`;
+  }
+  // Two connector grants differ by the tool they name, so the variant alone
+  // would collapse them into one row.
+  if (grant.kind === "connector") {
+    return `connector:${grant.tool}`;
+  }
+  return grant.kind;
 }
 
 export default function GrantList() {

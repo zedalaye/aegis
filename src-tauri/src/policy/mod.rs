@@ -51,6 +51,8 @@ use ts_rs::TS;
 
 use crate::error::ErrorCode;
 use crate::handoff;
+use crate::mcp;
+use crate::store::connectors;
 use crate::store::memories;
 
 pub use grants::{Grant, GrantStore};
@@ -204,6 +206,29 @@ pub enum ApprovalDetail {
         /// Where the briefs would be filed, when the workspace has a `briefs/`.
         filed_in: Option<String>,
     },
+    /// Calling a tool that lives in another process (PLAN 7.3, Phase 18).
+    ///
+    /// The one detail in this list that cannot say what would *happen*. For
+    /// every other row the runtime resolved the thing itself — the path, the
+    /// program, the working directory — so the dialog draws a fact. A
+    /// connector's tool is a program somebody else wrote: Aegis knows its name,
+    /// what the server says it is for, and the arguments the model wrote, and
+    /// it does not know which of those arguments is a path. So the dialog shows
+    /// exactly that, and says whose words each part is.
+    Connector {
+        /// The connector's id — the part before the `__`.
+        connector: String,
+        /// The connector's name, as the person who installed it wrote it.
+        connector_name: String,
+        /// The tool's own name, as the server spells it.
+        tool: String,
+        /// What the server says the tool does. The server's words, not ours.
+        description: String,
+        /// Whether the server claims the tool only reads. A claim, attributed.
+        read_only_hint: bool,
+        /// The arguments the model wrote, as indented JSON.
+        arguments: String,
+    },
 }
 
 /// One brief, as the approval dialog draws it.
@@ -230,7 +255,11 @@ pub struct HandoffRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskRequest {
     /// Which tool asked.
-    pub tool: &'static str,
+    ///
+    /// Owned rather than `&'static str` since Phase 18: a connector's tool is
+    /// named by the server that offers it, so the set of tool names is no
+    /// longer known when this binary is compiled.
+    pub tool: String,
     /// The badge.
     pub risk: Risk,
     /// The dialog's title: "Write file", "Run shell command".
@@ -256,7 +285,11 @@ pub struct AskRequest {
 }
 
 /// What policy decided.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq` but not `Eq` since Phase 18: a connector call carries the
+/// arguments the model wrote as a `serde_json::Value`, and JSON numbers are
+/// floats. Nothing keys a map on a decision, so the bound was never used.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     /// Run it without asking. Audited with `decision: "auto"`.
     Auto {
@@ -302,7 +335,13 @@ impl Decision {
 /// Produced only by [`decide`]. The tools in Phase 4 take this, never the raw
 /// arguments, which is what makes "policy resolved it, the tool ran something
 /// else" unrepresentable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The guarantee is narrower for a connector call, and the type says so: there
+/// is nothing in a connector's arguments this process can resolve, because it
+/// does not know the tool's schema and the tool does not run here. What is
+/// carried is what the model wrote, which is also exactly what the dialog
+/// showed.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedCall {
     /// `fs_list`, with the directory resolved.
     FsList {
@@ -403,6 +442,20 @@ pub enum ResolvedCall {
         /// The return, as `COS.md` writes one.
         report: Box<handoff::Report>,
     },
+    /// A tool of an external connector (PLAN 7.3, Phase 18).
+    ///
+    /// One field carries the identity of the call, and it is the name the model
+    /// used: `git__status`. That is the string the allow-list holds, the string
+    /// a session grant is keyed on and the string the audit line records, and
+    /// keeping one spelling is what stops those three disagreeing. The
+    /// connector and the tool are read back out of it with
+    /// [`connectors::split_tool_name`].
+    Connector {
+        /// The full name, `<connector>__<tool>`.
+        name: String,
+        /// The arguments as the model wrote them.
+        args: serde_json::Value,
+    },
 }
 
 impl ResolvedCall {
@@ -410,7 +463,10 @@ impl ResolvedCall {
     ///
     /// Read by dispatch and by the audit line, so a call cannot be executed
     /// under one name and logged under another.
-    pub const fn tool(&self) -> &'static str {
+    ///
+    /// Borrowed rather than `&'static str` since Phase 18, for the reason
+    /// [`AskRequest::tool`] is owned: a connector names its own tools.
+    pub fn tool(&self) -> &str {
         match self {
             Self::FsList { .. } => tool::FS_LIST,
             Self::FsRead { .. } => tool::FS_READ,
@@ -423,6 +479,7 @@ impl ResolvedCall {
             Self::MemorySearch { .. } => tool::MEMORY_SEARCH,
             Self::HandoffDelegate { .. } => tool::HANDOFF_DELEGATE,
             Self::HandoffReturn { .. } => tool::HANDOFF_RETURN,
+            Self::Connector { name, .. } => name,
         }
     }
 }
@@ -431,7 +488,7 @@ impl ResolvedCall {
 ///
 /// Public because it is the shape a caller can build directly in a test; in
 /// the runtime it only ever comes from [`ToolCall::parse`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ToolCall {
     /// `fs_list`.
     FsList {
@@ -509,11 +566,24 @@ pub enum ToolCall {
         /// The return, with its artefact paths still as the model wrote them.
         report: Box<handoff::Draft>,
     },
+    /// A tool of an external connector (PLAN 7.3, Phase 18).
+    ///
+    /// Recognized by the *shape* of the name — `<connector>__<tool>`, where the
+    /// first part is a legal connector id — and by nothing else. [`ToolCall::parse`]
+    /// holds no roster and should not: whether anything answers to `git` is a
+    /// question about this moment, and it is asked by the table, which does
+    /// hold the catalog.
+    Connector {
+        /// The full name, as the model wrote it.
+        name: String,
+        /// The arguments, unread: their schema belongs to the server.
+        args: serde_json::Value,
+    },
 }
 
 impl ToolCall {
     /// The tool this call names.
-    pub const fn tool(&self) -> &'static str {
+    pub fn tool(&self) -> &str {
         match self {
             Self::FsList { .. } => tool::FS_LIST,
             Self::FsRead { .. } => tool::FS_READ,
@@ -526,6 +596,7 @@ impl ToolCall {
             Self::MemorySearch { .. } => tool::MEMORY_SEARCH,
             Self::HandoffDelegate { .. } => tool::HANDOFF_DELEGATE,
             Self::HandoffReturn { .. } => tool::HANDOFF_RETURN,
+            Self::Connector { name, .. } => name,
         }
     }
 
@@ -642,7 +713,26 @@ impl ToolCall {
                     query: a.query.unwrap_or_default(),
                 })
             }
-            other => Err(format!("unknown tool `{other}`")),
+            // A name this build does not declare, shaped like a connector's.
+            // Nothing is parsed out of the arguments here, on purpose: the
+            // schema is the server's, this process has never seen it, and a
+            // parser that guessed would refuse calls that would have worked.
+            // The one thing that is checked is that they are an object, because
+            // that is what `tools/call` carries.
+            other => match connectors::split_tool_name(other) {
+                Some(_) if args.is_object() || args.is_null() => Ok(Self::Connector {
+                    name: other.to_owned(),
+                    args: if args.is_null() {
+                        serde_json::json!({})
+                    } else {
+                        args
+                    },
+                }),
+                Some(_) => Err(format!(
+                    "`{other}` takes an object of arguments, and that was not one"
+                )),
+                None => Err(format!("unknown tool `{other}`")),
+            },
         }
     }
 }
@@ -944,6 +1034,19 @@ pub struct PolicyCtx<'a> {
     /// is exactly what somebody signed onto the routine, and those arrive here
     /// as ordinary session grants, judged by the line above this one.
     pub unattended: bool,
+    /// What the connectors offer right now (PLAN 7.3, Phase 18).
+    ///
+    /// Supplied by the caller rather than read here, for the reason
+    /// [`PolicyCtx::screen`] is: policy stays a pure function of its inputs,
+    /// and the table stays testable with no child process behind it. It is a
+    /// snapshot taken once per turn, so the tools the model was offered and the
+    /// tools its calls are judged against are the same list even if somebody
+    /// reconnects a connector mid-turn.
+    ///
+    /// `None` is a build with no roster — every test written before this phase
+    /// — and it means a connector call has nothing to resolve against, which
+    /// the table refuses rather than asks about.
+    pub connectors: Option<&'a mcp::Catalog>,
     /// The identity the call is made under, and the tools it holds.
     ///
     /// `None` is "no identity is bound to this decision", which means every
@@ -963,6 +1066,7 @@ impl<'a> PolicyCtx<'a> {
             grants,
             self_exe: None,
             screen: None,
+            connectors: None,
             delegated: false,
             unattended: false,
             identity: None,
@@ -997,6 +1101,13 @@ impl<'a> PolicyCtx<'a> {
         self
     }
 
+    /// Supplies the connector catalog a connector call is judged against.
+    #[must_use]
+    pub const fn with_connectors(mut self, connectors: Option<&'a mcp::Catalog>) -> Self {
+        self.connectors = connectors;
+        self
+    }
+
     /// Names the identity the call is made under, and the tools it holds.
     #[must_use]
     pub const fn with_identity(mut self, identity: Identity<'a>) -> Self {
@@ -1025,7 +1136,10 @@ pub fn decide(ctx: &PolicyCtx<'_>, tool_name: &str, args: serde_json::Value) -> 
 
 /// [`decide`], for a call that is already parsed.
 pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
-    let tool_name = call.tool();
+    // Owned rather than borrowed since Phase 18: a connector call carries its
+    // own name, so the borrow would keep `call` alive past the point the table
+    // takes it.
+    let tool_name = call.tool().to_owned();
 
     // Before the workspace, because it does not depend on one: an identity that
     // holds no `fs_write` holds none whether or not a folder is mounted, and
@@ -1038,7 +1152,7 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
     // *here* rather than in the registry: a second enforcement point is a
     // second rule to keep in step with this one.
     if let Some(identity) = ctx.identity {
-        if !identity.allows(tool_name) {
+        if !identity.allows(&tool_name) {
             tracing::info!(
                 tool = tool_name,
                 identity = identity.name,

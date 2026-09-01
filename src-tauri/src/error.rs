@@ -354,6 +354,31 @@ pub enum AppError {
         id: String,
     },
 
+    /// A connector's field cannot be used, and somebody has to change it
+    /// (PLAN 7.3, Phase 18).
+    ///
+    /// The same shape as [`AppError::Agent`] and [`AppError::Routine`], for the
+    /// same reason: the form that raised it puts the message beside the input
+    /// that caused it. Adding a connector is the one act in this application
+    /// that names a program to run without a tool call in front of it, so the
+    /// refusals here are deliberately about the *record* — an id that could
+    /// collide with a tool name, a command nobody spelled — and never about
+    /// whether the program is a good idea.
+    #[error("that {field} cannot be used: {reason}")]
+    Connector {
+        /// Which field: "id", "name", "command", "args", "env".
+        field: &'static str,
+        /// What is wrong with it, and what a working value looks like.
+        reason: String,
+    },
+
+    /// No connector carries that id, so the UI is holding a stale list.
+    #[error("that connector no longer exists")]
+    ConnectorNotFound {
+        /// The id that was looked up. Logged, not shown.
+        id: String,
+    },
+
     /// The board named a run the log can no longer see (PLAN 7.3, Phase 17).
     ///
     /// Not an anomaly. A run is folded out of the tail of `audit.jsonl`, and a
@@ -454,7 +479,8 @@ impl AppError {
             Self::Settings { .. }
             | Self::Agent { .. }
             | Self::Memory { .. }
-            | Self::Routine { .. } => ErrorCode::InvalidSetting,
+            | Self::Routine { .. }
+            | Self::Connector { .. } => ErrorCode::InvalidSetting,
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
@@ -467,6 +493,7 @@ impl AppError {
             | Self::AgentInUse { .. }
             | Self::AgentHasRoutines { .. }
             | Self::RoutineNotFound { .. }
+            | Self::ConnectorNotFound { .. }
             | Self::RunNotFound { .. }
             | Self::MemoryNotFound { .. }
             | Self::Internal { .. }
@@ -502,7 +529,8 @@ impl AppError {
             Self::Settings { field, .. }
             | Self::Agent { field, .. }
             | Self::Memory { field, .. }
-            | Self::Routine { field, .. } => Some(field),
+            | Self::Routine { field, .. }
+            | Self::Connector { field, .. } => Some(field),
             _ => None,
         }
     }

@@ -1222,6 +1222,69 @@ X, enter the picture — as **separate processes**, not as crates in the runtime
 external MCP server (start with git or filesystem-over-MCP, not a social network) is callable
 under the same approval dialog as `fs_write`.
 
+*Landed as:* `mcp/` beside `handoff/` and `schedule/`, split the same way — `client.rs` is one
+connection (a child process, newline-delimited JSON-RPC on its pipes, the handshake) and `mod.rs`
+is the roster and the catalog. `store/connectors.rs` is the record, `commands/connector.rs` the
+five commands, `tools/connector.rs` the twenty lines that turn a `tools/call` result into an
+envelope. Every other file this phase touched, it touched by one or two lines.
+
+**The thing to notice is how little there is in `agent/turn.rs`.** § 7.1 forbids
+"special-case policy or the turn loop on built-in vs MCP", and what that turned into is a `tools`
+array the model reads without being told which of its functions run in this process:
+`tools::schemas_for` appends the catalog's schemas to the registry's and stops there. The turn
+loop gained two things and no branch — a snapshot of the catalog, taken once at the top of the
+turn for the reason the identity and the provider are resolved once, and a struct pairing it with
+the allow-list so the two cannot be resolved at different moments. There is no `if connector` in
+`policy::decide`, in `tools::run`, or in the audit line.
+
+**What is new is not a capability, it is a boundary, and the type system says so.** Every other
+`ResolvedCall` is a promise: policy resolved the path, so the tool cannot open a different one. A
+connector's arguments cannot be resolved — the schema belongs to the server, the work happens in
+another process — so `ResolvedCall::Connector` carries the JSON the model wrote and nothing else,
+`ResolvedCall` gave up its `Eq` to hold it, and the approval dialog shows that same text under a
+sentence saying whose words it is. **So the row always asks.** There is no auto-allow branch in
+it and no predicate that could produce one: "is this contained" has no meaning for a call whose
+effects are somewhere else, and what is left is the § 7.2 row 7 default — a new tool is an ask.
+
+**A server's `readOnlyHint` is read, shown, and never acted on.** It is the thing being gated
+describing its own gate. It changes the sentence in the dialog and the aside on the Settings row;
+it does not soften the badge and it does not skip the question. The same reasoning fixes the
+grant: `Grant::Connector` keys on the whole tool name rather than the connector, because MCP
+servers may change their tool list mid-session (`notifications/tools/list_changed`, which this
+client handles by re-listing) and a grant over the connector would silently cover a tool nobody
+read. An identity's allow-list keys on the same string for the same reason. Holding
+`git__status` holds `git__status`.
+
+**Four capabilities were not implemented, and that is the security half of the phase.** The
+`initialize` request carries an empty `capabilities` object: no `sampling`, so a server cannot
+ask our model to generate anything — that would be a second agent loop with no session, no
+identity and no dialog in front of it; no `roots`, so a server is not told where the workspace is
+and a directory it needs is an argument the operator can read; no `elicitation`. Resources and
+prompts are not read either. A server that asks anyway gets a JSON-RPC `-32601` rather than a
+hang, which is the difference between refusing something and deadlocking on it. The child is also
+given `env_clear()` plus the platform floor plus exactly the variables the operator named — the
+one place a connector is handled *more* carefully than `shell_exec` handles a command, because a
+command is read and approved on the spot and a connector is started once and answers all session.
+Nothing about a secret is in `connectors.json`: a connector names variables, and the values come
+from the environment Aegis was started in.
+
+**The built-in identity gains every connector, and no other identity gains anything.**
+`Agent::builtin` has never held a list somebody wrote; it holds the sentence *every tool this
+build has*, evaluated, and a connector the operator installed is one of those. An identity
+somebody named holds what they granted it, so installing a connector on Tuesday grants the
+Reviewer nothing — AGENTS.md's "granting it to an identity is a separate act", which is also why
+there is no command that grants and no tool that installs.
+
+**The exit condition is tested against a real process on real pipes**, and the server is the test
+binary: `tests/mcp.rs` carries an `#[ignore]`d test that speaks MCP on stdin and stdout, and the
+others re-enter `current_exe()` with a filter that selects it. A Node or Python server would have
+made the suite depend on a runtime that is not on every machine; a second `[[bin]]` would have
+shipped a mock MCP server inside the application. The transport is exercised for real either way,
+which is what caught the two things a hand-fed byte slice would not have: that `npx` on Windows is
+a `.cmd` (so the connector resolves its program through the same `PATHEXT` walk `shell_exec`
+uses, rather than through `Command::new`, which cannot launch one), and that a server sharing its
+first line with something else on stdout is a frame the client has to skip rather than choke on.
+
 **Phase 19 — Domain packs as skills, not runtime**
 One pack at a time, each a workspace + skills + the MCP servers it needs + a specialist
 identity. Suggested order, because each pack is allowed to fail without blocking the next:

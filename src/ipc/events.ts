@@ -24,6 +24,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ApprovalRequest,
   AuditEntry,
+  ConnectorView,
   MaskedSettings,
   Routine,
   SessionSummary,
@@ -97,6 +98,14 @@ export type EventPayloads = {
    * routine does its work.
    */
   "routine:updated": Routine;
+  /**
+   * A connector's row changed — it came up, it changed what it offers, or its
+   * process ended (PLAN 7.3, Phase 18). The second event that is not about a
+   * turn, and it arrives for the same reason the first one does: a connector
+   * settles a minute after the window did, and dies at an hour nobody is
+   * watching.
+   */
+  "connector:updated": ConnectorView;
   /** The tray brought the window forward. */
   "tray:activate": TrayActivate;
 };

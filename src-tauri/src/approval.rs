@@ -425,7 +425,7 @@ mod tests {
     /// The `AskRequest` a `fs_write` inside the workspace produces.
     fn write_ask() -> AskRequest {
         AskRequest {
-            tool: "fs_write",
+            tool: "fs_write".to_owned(),
             risk: Risk::Medium,
             title: "Write file",
             summary: "notes.md (12 B, new file)".to_owned(),

@@ -264,6 +264,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            connectors: aegis_lib::Connectors::none(),
             provider: &provider,
         };
 

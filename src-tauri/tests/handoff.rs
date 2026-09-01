@@ -161,6 +161,7 @@ impl App {
             captures: &self.captures,
             skills: &self.library,
             memories: &self.memories,
+            connectors: aegis_lib::Connectors::none(),
             provider,
         }
     }
@@ -705,6 +706,7 @@ async fn an_ordinary_session_is_not_offered_the_tool_that_closes_a_brief() {
         captures: &app.captures,
         skills: &app.library,
         memories: &app.memories,
+        connectors: aegis_lib::Connectors::none(),
         standing: Standing::Own(None),
         unattended: None,
     }

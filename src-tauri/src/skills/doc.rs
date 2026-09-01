@@ -223,14 +223,23 @@ fn front_matter(front: &str) -> Result<(String, Vec<String>), String> {
             tools.push((*name).to_owned());
         }
     }
-    if let Some(unknown) = declared
-        .iter()
-        .find(|wanted| !tools.iter().any(|known| known == *wanted))
-    {
-        return Err(format!(
-            "`{unknown}` is not a tool this build has. The tools are: {}",
-            tools::names().join(", ")
-        ));
+    // A runbook may also declare a connector's tool (PLAN 7.3, Phase 18),
+    // checked for shape rather than for existence — for the reason an
+    // identity's allow-list is: a runbook is a file that travels with a
+    // repository, and one that would not parse on a machine where the
+    // connector is not installed would be a runbook nobody could read.
+    for wanted in declared {
+        if tools.iter().any(|known| known == &wanted) {
+            continue;
+        }
+        if crate::store::connectors::split_tool_name(&wanted).is_none() {
+            return Err(format!(
+                "`{wanted}` is not a tool this build has. The tools are: {}. A connector's tool \
+                 is named `<connector>__<tool>`",
+                tools::names().join(", ")
+            ));
+        }
+        tools.push(wanted.clone());
     }
 
     Ok((version.to_owned(), tools))

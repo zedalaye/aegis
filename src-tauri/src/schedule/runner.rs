@@ -49,6 +49,7 @@ use crate::approval::ApprovalRegistry;
 use crate::audit::AuditLog;
 use crate::commands::session::WindowSink;
 use crate::error::{AppError, AppResult};
+use crate::mcp::Connectors;
 use crate::policy::GrantStore;
 use crate::skills::{self, Reported};
 use crate::state::AppState;
@@ -107,6 +108,13 @@ pub struct Host<'a> {
     pub skills: &'a Path,
     /// Where the identity's memories live.
     pub memories: &'a MemoryStore,
+    /// The connectors this installation is running (PLAN 7.3, Phase 18).
+    ///
+    /// A run nobody is watching may call one, and only under the same rule as
+    /// everything else it does: the routine's standing approvals are ordinary
+    /// session grants, and a connector's tool is covered only if somebody
+    /// signed for that tool by name when they saved the routine.
+    pub connectors: &'a Connectors,
     /// Which provider answers for an identity (PLAN 7.1, *Provider*).
     pub provider: &'a (dyn Fn(&Agent) -> Box<dyn Provider> + Send + Sync),
 }
@@ -359,6 +367,7 @@ async fn drive(
         captures: host.captures,
         skills: host.skills,
         memories: host.memories,
+        connectors: host.connectors,
         // No bus: a scheduled run does the work, it does not hand it out. See
         // the module note.
         standing: Standing::Own(None),
@@ -584,6 +593,7 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
         captures: state.captures(),
         skills: state.skills(),
         memories: state.memories(),
+        connectors: state.connectors(),
         provider: &provider,
     };
 

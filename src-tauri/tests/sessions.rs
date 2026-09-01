@@ -145,6 +145,7 @@ impl App {
             captures: &self.data.join("captures"),
             skills: &self.data.join("skills"),
             memories: &self.memories,
+            connectors: aegis_lib::Connectors::none(),
             standing: Standing::Own(None),
             unattended: None,
         }

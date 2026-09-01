@@ -51,13 +51,36 @@ function toolOf(grant: Grant): string {
       return "memory_write";
     case "handoff_delegate":
       return "handoff_delegate";
+    case "connector":
+      return grant.tool;
   }
 }
 
 /** Whether two grants are the same standing approval. */
 function same(one: Grant, other: Grant): boolean {
-  return one.kind === other.kind &&
-    (one.kind !== "shell" || one.program === (other as { program: string }).program);
+  if (one.kind !== other.kind) {
+    return false;
+  }
+  if (one.kind === "shell") {
+    return one.program === (other as { program: string }).program;
+  }
+  // A connector grant is one tool, so two of them differ by the tool they name
+  // — the variant alone would fold every connector approval into one.
+  if (one.kind === "connector") {
+    return one.tool === (other as { tool: string }).tool;
+  }
+  return true;
+}
+
+/** A stable key for one row of the list. */
+function grantKey(grant: Grant): string {
+  if (grant.kind === "shell") {
+    return `shell:${grant.program}`;
+  }
+  if (grant.kind === "connector") {
+    return `connector:${grant.tool}`;
+  }
+  return grant.kind;
 }
 
 /** The refusal that belongs under `field`, if the last save produced one. */
@@ -153,13 +176,26 @@ export default function RoutineForm({
   // What this routine could be signed for: declared by the runbook, held by the
   // identity. Both halves are checked again in Rust; showing only what would
   // pass is what keeps the form from offering an approval that cannot be saved.
-  const signable = SIGNABLE.filter((grant) => {
+  const signable: Grant[] = SIGNABLE.filter((grant) => {
     const tool = toolOf(grant);
     return (
       (chosen?.tools.includes(tool) ?? false) &&
       (identity?.tools.includes(tool) ?? false)
     );
   });
+
+  // Connector tools are not a fixed list — they are named by servers somebody
+  // installed — so the signable ones are derived from the same two halves as
+  // the rest: declared by the runbook, held by the identity. One approval per
+  // tool, because that is what the grant covers.
+  for (const tool of chosen?.tools ?? []) {
+    if (
+      tool.includes("__") &&
+      (identity?.tools.includes(tool) ?? false)
+    ) {
+      signable.push({ kind: "connector", tool });
+    }
+  }
 
   const toggleGrant = (grant: Grant, on: boolean) =>
     patch({
@@ -404,7 +440,7 @@ export default function RoutineForm({
         ) : (
           <ul className="routineform__grantlist">
             {signable.map((grant) => (
-              <li key={grant.kind}>
+              <li key={grantKey(grant)}>
                 <label className="routineform__grant">
                   <input
                     type="checkbox"

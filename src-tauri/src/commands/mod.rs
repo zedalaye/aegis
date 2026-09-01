@@ -11,7 +11,9 @@
 //! runbooks those identities may run, and from Phase 14 `memory` — what one
 //! identity has learned, and the half of that a person owns, and from Phase 17
 //! `board` — the structured read of a project's status, and the runs its audit
-//! log folds into.
+//! log folds into, and from Phase 18 `connector` — the external MCP servers
+//! this installation runs, which is the one command domain that names a
+//! program to start and is therefore the one with no tool behind it.
 //!
 //! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
 //! accept `camelCase` from JavaScript and rename it, so every command taking
@@ -22,6 +24,7 @@ pub mod agent;
 pub mod approval;
 pub mod audit;
 pub mod board;
+pub mod connector;
 pub mod memory;
 pub mod project;
 pub mod routine;

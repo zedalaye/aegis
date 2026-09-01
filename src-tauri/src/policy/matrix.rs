@@ -1,8 +1,9 @@
 //! The decision table of PLAN 3.
 //!
 //! Six rows over five tools, written out once, plus the two Phase 13 rows for
-//! `skill_run` and `skill_return` and the two Phase 14 rows for `memory_write`
-//! and `memory_search`. Every branch here answers one question — *auto, ask, or
+//! `skill_run` and `skill_return`, the two Phase 14 rows for `memory_write`
+//! and `memory_search`, the two Phase 15 rows for the handoff, and the one
+//! Phase 18 row that stands for every tool this build did not write. Every branch here answers one question — *auto, ask, or
 //! refuse* — and nothing else in the runtime is allowed to answer it, which is
 //! the point of the table being a single `match` rather than a check inside
 //! each tool.
@@ -26,6 +27,8 @@
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path};
+
+use crate::store::connectors;
 
 use super::path::{self, Resolved};
 use super::{
@@ -102,7 +105,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             Ok(ask(
                 call,
                 AskRequest {
-                    tool: tool::FS_LIST,
+                    tool: tool::FS_LIST.to_owned(),
                     risk: Risk::Medium,
                     title: "List folder",
                     summary: shown.clone(),
@@ -134,7 +137,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 return Ok(ask(
                     call,
                     AskRequest {
-                        tool: tool::FS_READ,
+                        tool: tool::FS_READ.to_owned(),
                         risk: Risk::High,
                         title: "Read file",
                         summary: summarize(&label, bytes),
@@ -153,7 +156,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 return Ok(ask(
                     call,
                     AskRequest {
-                        tool: tool::FS_READ,
+                        tool: tool::FS_READ.to_owned(),
                         risk: Risk::High,
                         title: "Read file",
                         summary: summarize(&label, bytes),
@@ -170,7 +173,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 return Ok(ask(
                     call,
                     AskRequest {
-                        tool: tool::FS_READ,
+                        tool: tool::FS_READ.to_owned(),
                         risk: Risk::Low,
                         title: "Read file",
                         summary: summarize(&label, bytes),
@@ -221,7 +224,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 return Ok(ask(
                     call,
                     AskRequest {
-                        tool: tool::FS_WRITE,
+                        tool: tool::FS_WRITE.to_owned(),
                         risk: Risk::High,
                         title: "Write file",
                         summary,
@@ -240,7 +243,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 return Ok(ask(
                     call,
                     AskRequest {
-                        tool: tool::FS_WRITE,
+                        tool: tool::FS_WRITE.to_owned(),
                         risk: Risk::High,
                         title: "Write file",
                         summary,
@@ -257,7 +260,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             Ok(ask(
                 call,
                 AskRequest {
-                    tool: tool::FS_WRITE,
+                    tool: tool::FS_WRITE.to_owned(),
                     // The sensitive-name rule raises the badge here too. It
                     // changes no gate — a contained write is asked about
                     // either way — but a user answering a prompt about
@@ -337,7 +340,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 return Ok(ask(
                     call,
                     AskRequest {
-                        tool: tool::SHELL_EXEC,
+                        tool: tool::SHELL_EXEC.to_owned(),
                         risk: Risk::High,
                         title: "Run shell command",
                         summary: line,
@@ -353,7 +356,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             Ok(ask(
                 call,
                 AskRequest {
-                    tool: tool::SHELL_EXEC,
+                    tool: tool::SHELL_EXEC.to_owned(),
                     risk: Risk::High,
                     title: "Run shell command",
                     summary: line,
@@ -385,7 +388,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             Ok(ask(
                 call,
                 AskRequest {
-                    tool: tool::SCREEN_CAPTURE,
+                    tool: tool::SCREEN_CAPTURE.to_owned(),
                     risk: Risk::Medium,
                     title: "Capture the screen",
                     summary: describe_screen(name, geometry),
@@ -476,7 +479,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                     source: source.clone(),
                 },
                 AskRequest {
-                    tool: tool::MEMORY_WRITE,
+                    tool: tool::MEMORY_WRITE.to_owned(),
                     // Durable and reversible, inside this application, touching
                     // nothing on the machine. The same badge a workspace write
                     // gets, for a change of about the same size.
@@ -566,7 +569,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             Ok(ask(
                 ResolvedCall::HandoffDelegate { plan: plan.clone() },
                 AskRequest {
-                    tool: tool::HANDOFF_DELEGATE,
+                    tool: tool::HANDOFF_DELEGATE.to_owned(),
                     // Not because a brief is dangerous — nothing in it runs
                     // unreviewed — but because this is the call that spends
                     // other identities' turns, and the badge is what makes a
@@ -600,6 +603,79 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 },
                 reason: "returning the brief this run was given",
             })
+        }
+
+        // The Phase 18 row, and the only one in this table that covers tools
+        // this build did not write. It **always asks**, and there is no branch
+        // in it that could ever not.
+        //
+        // Every other row can auto-allow because the runtime knows what the
+        // call will do: `fs_list` lists the directory policy resolved, and
+        // nothing else, because that is what the function does. A connector's
+        // tool is a program somebody else wrote, running as the user, with
+        // arguments whose schema this process has never seen. There is no
+        // predicate to write — "is this contained" has no meaning for a call
+        // whose effects are in another process — so what is left is the default
+        // of PLAN 7.2 row 7: a new tool is an ask.
+        //
+        // The server's `readOnlyHint` is read and shown, and it is shown
+        // *attributed*, because it is the thing being gated describing its own
+        // gate. Nothing here branches on it, and the badge does not soften for
+        // it either: a call that leaves this process is `High` by the same
+        // definition `shell_exec` is.
+        ToolCall::Connector { name, args } => {
+            // Refused rather than asked about, for the reason a path that will
+            // not resolve is: an approval for a tool nothing answers to could
+            // not mean anything. Reaching here means the name came out of a
+            // transcript written while the connector was up, or the model
+            // invented it — the schemas offered this round only ever name
+            // tools that are connected.
+            let Some(info) = ctx.connectors.and_then(|catalog| catalog.find(&name)) else {
+                let (connector, tool) =
+                    connectors::split_tool_name(&name).unwrap_or((name.as_str(), name.as_str()));
+                return Err(Decision::deny(
+                    ErrorCode::ToolFailed,
+                    format!(
+                        "nothing answers to `{tool}` right now: the `{connector}` connector is \
+                         not running, or does not offer it. Connectors are installed by the user \
+                         in Settings — you cannot start one. Say what you needed it for"
+                    ),
+                ));
+            };
+
+            // The arguments as the model wrote them, indented so a person can
+            // read them. Not "resolved": there is nothing here to resolve, and
+            // a dialog that pretended otherwise would be claiming a guarantee
+            // this phase does not have.
+            let arguments =
+                serde_json::to_string_pretty(&args).unwrap_or_else(|_| args.to_string());
+            let grant = Grant::Connector { tool: name.clone() };
+
+            Ok(ask(
+                ResolvedCall::Connector {
+                    name: name.clone(),
+                    args,
+                },
+                AskRequest {
+                    tool: name.clone(),
+                    risk: Risk::High,
+                    title: "Call a connector",
+                    summary: format!("{} · {}", info.connector_name, info.name),
+                    detail: ApprovalDetail::Connector {
+                        connector: info.connector.clone(),
+                        connector_name: info.connector_name.clone(),
+                        tool: info.name.clone(),
+                        description: info.description.clone(),
+                        read_only_hint: info.read_only_hint,
+                        arguments,
+                    },
+                    scope_label: scope_label(Some(&grant)),
+                    grant: Some(grant),
+                    reason: "this runs inside a program Aegis did not write, and nothing here \
+                             can check what it does with these arguments"
+                        .to_owned(),
+                },
+            ))
         }
     }
 }

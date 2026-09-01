@@ -702,6 +702,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         captures: &data.join("captures"),
         skills: &data.join("skills"),
         memories: &MemoryStore::load(&data),
+        connectors: aegis_lib::Connectors::none(),
         standing: Standing::Own(None),
         unattended: None,
     }

@@ -25,6 +25,7 @@ use ts_rs::TS;
 
 use crate::approval::{ApprovalRequest, Decision, ResolvedBy};
 use crate::audit::{AuditEntry, Outcome};
+use crate::mcp::ConnectorView;
 use crate::store::{Message, Routine, SessionSummary};
 use crate::tools::Stream;
 
@@ -60,6 +61,8 @@ pub mod name {
     pub const AUDIT_APPENDED: &str = "audit:appended";
     /// A routine's row changed.
     pub const ROUTINE_UPDATED: &str = "routine:updated";
+    /// A connector's row changed.
+    pub const CONNECTOR_UPDATED: &str = "connector:updated";
 }
 
 /// `turn:started`.
@@ -293,6 +296,14 @@ pub enum Event {
     /// poll for: a person who opens Settings wants to see what happened, not
     /// what was true when the panel was last drawn.
     RoutineUpdated(Box<Routine>),
+    /// `connector:updated` (PLAN 7.3, Phase 18).
+    ///
+    /// The second event that is not about a turn, and it is here for the same
+    /// reason the first one is: a connector comes up, or stops coming up,
+    /// while nobody is looking at Settings — at boot, or a minute later when
+    /// an `npx` finally resolved a package. A panel that could only poll would
+    /// show whatever was true when it was drawn.
+    ConnectorUpdated(Box<ConnectorView>),
 }
 
 impl Event {
@@ -313,6 +324,7 @@ impl Event {
             Self::SessionUpdated(_) => name::SESSION_UPDATED,
             Self::AuditAppended(_) => name::AUDIT_APPENDED,
             Self::RoutineUpdated(_) => name::ROUTINE_UPDATED,
+            Self::ConnectorUpdated(_) => name::CONNECTOR_UPDATED,
         }
     }
 
@@ -340,6 +352,10 @@ impl Event {
                 .last
                 .as_ref()
                 .map_or("", |last| last.session_id.as_str()),
+            // A connector belongs to the installation, not to a session. The
+            // empty id matches nothing, which is what a sink filtering by
+            // session should do with it.
+            Self::ConnectorUpdated(_) => "",
         }
     }
 
@@ -364,6 +380,7 @@ impl Event {
             Self::SessionUpdated(payload) => serde_json::to_value(payload),
             Self::AuditAppended(payload) => serde_json::to_value(payload),
             Self::RoutineUpdated(payload) => serde_json::to_value(payload),
+            Self::ConnectorUpdated(payload) => serde_json::to_value(payload),
         };
 
         rendered.unwrap_or_else(|err| {

@@ -12,6 +12,15 @@
  * catalogue; the skills come from the runbooks the runtime found on disk. Both
  * would drift if the UI kept a copy.
  *
+ * Since Phase 18 there is a third list under the first, and it is a different
+ * kind of thing: the tools of the connectors that are running. They are granted
+ * by full name — `git__status`, never `git` — because a server may add a tool
+ * at any time, and a grant that covered the connector would quietly cover
+ * something nobody read. Only live connectors are offered, since a checkbox for
+ * a tool nothing answers to is a grant nobody can act on; a name granted
+ * earlier and no longer offered stays on the identity, and is listed below the
+ * boxes rather than silently dropped.
+ *
  * The skills field stays a text input under those chips, because a workspace
  * runbook is only discoverable while that project is open, and an identity has
  * to be grantable a skill that is not in front of you right now.
@@ -29,6 +38,7 @@ import {
   draftOf,
   useAgents,
 } from "../../state/agents";
+import { liveTools, useConnectors } from "../../state/connectors";
 import { useSkills } from "../../state/skills";
 
 /** What each tool does, in the fewest words that distinguish it. */
@@ -55,6 +65,75 @@ const TOOL_SUMMARY: Record<string, string> = {
  * the difference between an affordance and an allow-list that grows by itself.
  */
 const SKILL_TOOLS = ["skill_run", "skill_return"] as const;
+
+/**
+ * The connector tools this identity holds, and the ones it could (Phase 18).
+ *
+ * Drawn as its own fieldset rather than mixed into the list above, because the
+ * two lists answer to different things. The tools above are this build's, and
+ * they are the same on every machine. These belong to programs the operator
+ * installed: they appear when a connector is up and go when it is not, and a
+ * name that is granted but no longer offered is still granted — the runtime
+ * keeps it and refuses it — which is why it is named here instead of vanishing.
+ */
+function ConnectorTools({
+  draft,
+  toggle,
+}: {
+  readonly draft: AgentDraft;
+  readonly toggle: (tool: string, granted: boolean) => void;
+}) {
+  const connectors = useConnectors((s) => s.connectors);
+  const live = liveTools(connectors);
+
+  const stranded = draft.tools.filter(
+    (name) =>
+      name.includes("__") && !live.some((tool) => tool.full_name === name),
+  );
+
+  if (live.length === 0 && stranded.length === 0) {
+    return null;
+  }
+
+  return (
+    <fieldset className="agentform__tools">
+      <legend className="field__label">Connector tools</legend>
+      <ul className="agentform__toollist">
+        {live.map((tool) => (
+          <li key={tool.full_name}>
+            <label className="agentform__tool">
+              <input
+                type="checkbox"
+                checked={draft.tools.includes(tool.full_name)}
+                onChange={(event) =>
+                  toggle(tool.full_name, event.target.checked)
+                }
+              />
+              <code>{tool.full_name}</code>
+              <span className="agentform__toolnote">{tool.description}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {stranded.length === 0 ? null : (
+        <p className="field__hint">
+          Granted but not offered right now:{" "}
+          {stranded.map((name) => (
+            <code key={name}>{name}</code>
+          ))}
+          . The connector is stopped or gone; the grant is kept, and a call to
+          it is refused until it comes back.
+        </p>
+      )}
+      <p className="field__hint">
+        Granted one at a time, by full name — holding <code>git__status</code>{" "}
+        does not hold anything else the <code>git</code> connector offers, and
+        does not hold a tool it adds tomorrow. Ticking one never skips the
+        dialog: every connector call is put to you before it runs.
+      </p>
+    </fieldset>
+  );
+}
 
 /** The tools this build has, taken from the identity that holds them all. */
 function catalogue(agents: readonly Agent[]): readonly string[] {
@@ -288,6 +367,8 @@ export default function AgentForm({
           </p>
         )}
       </fieldset>
+
+      <ConnectorTools draft={draft} toggle={toggleTool} />
 
       <Field
         id="agent-skills"

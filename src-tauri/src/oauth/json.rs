@@ -31,9 +31,8 @@ pub fn write_value(path: &Path, value: &Value) -> io::Result<()> {
         file.sync_all()?;
     }
 
-    fs::rename(&tmp, path).map_err(|err| {
+    fs::rename(&tmp, path).inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
-        err
     })?;
 
     #[cfg(unix)]

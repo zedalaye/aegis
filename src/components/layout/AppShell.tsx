@@ -22,6 +22,7 @@
 import { useEffect } from "react";
 
 import { useAgents } from "../../state/agents";
+import { attachConnectorEvents } from "../../state/connectors";
 import { attachRoutineEvents, useRoutines } from "../../state/routines";
 import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
@@ -190,6 +191,7 @@ export default function AppShell() {
       attachSettingsEvents(),
       attachAuditEvents(),
       attachRoutineEvents(),
+      attachConnectorEvents(),
       attachBoardEvents(),
     ];
     return () => {

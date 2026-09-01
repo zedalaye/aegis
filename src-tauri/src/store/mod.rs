@@ -1,10 +1,11 @@
 //! On-disk persistence.
 //!
-//! Six JSON documents under the OS application-data directory:
+//! Seven JSON documents under the OS application-data directory:
 //! `projects.json` ([`projects`]), `sessions.json` ([`sessions`]),
 //! `settings.json` ([`settings`]), from Phase 12 `agents.json` ([`agents`]),
-//! from Phase 14 `memories.json` ([`memories`]) and from Phase 16
-//! `routines.json` ([`routines`]). All of them are small,
+//! from Phase 14 `memories.json` ([`memories`]), from Phase 16
+//! `routines.json` ([`routines`]) and from Phase 18 `connectors.json`
+//! ([`connectors`]). All of them are small,
 //! human-readable and hand-editable on purpose — a user who has to recover from a bad state should be able to open
 //! the file and see why.
 //!
@@ -29,6 +30,7 @@
 //! migration to one has no business quarantining the others.
 
 pub mod agents;
+pub mod connectors;
 pub mod memories;
 pub mod projects;
 pub mod routines;
@@ -43,6 +45,7 @@ use std::time::Duration;
 use chrono::{SecondsFormat, Utc};
 
 pub use agents::{Agent, AgentDraft, AgentStore, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID};
+pub use connectors::{Connector, ConnectorDraft, ConnectorStore};
 pub use memories::{Memory, MemoryDraft, MemoryKind, MemoryStore};
 pub use projects::{canonical_workspace, Project, ProjectDetail, Store};
 pub use routines::{LastRun, Routine, RoutineDraft, RoutineStore, RunOutcome, Schedule};

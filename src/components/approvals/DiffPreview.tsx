@@ -14,6 +14,15 @@
  * what a user needs before allowing a write is the path, the size, whether it
  * overwrites, and a look at what is going in.
  *
+ * The `connector` case is the one that cannot show what would *happen*, and it
+ * says so. Every other detail here is a fact the runtime established — the
+ * resolved path, the program that was found on PATH, the working directory. A
+ * connector's tool is a program somebody else wrote: what is drawn is its name,
+ * the server's own description of it, and the arguments the model wrote, each
+ * labelled with whose words it is. That is less than the other rows offer, and
+ * pretending otherwise would be the dialog claiming a guarantee this build does
+ * not have.
+ *
  * `screen_capture` is the one case with no preview of its subject, and that is
  * the point rather than an omission: capturing the screen to illustrate a
  * question about capturing the screen would already have done the thing being
@@ -251,6 +260,38 @@ export default function DiffPreview({
             allowed for this session: whatever they want to write or run asks
             you again, in their own sessions. What comes back here is a status,
             an artefact list and any open questions, never their conversations.
+          </p>
+        </>
+      );
+
+    case "connector":
+      return (
+        <>
+          <dl className="detail">
+            <Field label="Connector">
+              {detail.connector_name} (<code>{detail.connector}</code>)
+            </Field>
+            <Field label="Tool" mono>
+              {detail.tool}
+            </Field>
+            <Field label="The server says">{detail.description}</Field>
+          </dl>
+          <figure className="preview">
+            <figcaption className="preview__caption">
+              What the model wrote as arguments
+            </figcaption>
+            <pre className="preview__body">{detail.arguments}</pre>
+          </figure>
+          <p className="detail__note">
+            This runs inside a program Aegis did not write. The arguments above
+            are sent to it exactly as they are — nothing here resolves a path or
+            checks what any of them mean, because the tool runs somewhere else
+            and this runtime has never seen its schema.
+            {detail.read_only_hint
+              ? " The server describes this tool as read-only. That is the server's own claim about itself, so it changes nothing about being asked."
+              : ""}{" "}
+            Allowing it for the session covers this one tool and nothing else
+            the connector offers — including anything it adds later.
           </p>
         </>
       );

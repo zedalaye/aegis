@@ -36,7 +36,12 @@
 //! why it is also the phase where policy stops asking and starts refusing —
 //! what an unattended run may do is exactly what a person signed onto the
 //! routine, and the tray process outliving the window is what makes any of it
-//! possible.
+//! possible. Phase 17 is the read of all of that — a board of what needs a
+//! person, and a run folded out of the audit log. Phase 18 fills in `mcp/`:
+//! external MCP servers, started by this process, whose tools reach the model
+//! through the same registry and the same approval dialog as `fs_write`. It
+//! is the first phase whose tools this repository did not write, which is why
+//! every one of them asks.
 
 pub mod agent;
 pub mod approval;
@@ -47,6 +52,7 @@ pub mod compact;
 mod display;
 mod error;
 pub mod handoff;
+pub mod mcp;
 pub mod oauth;
 pub mod policy;
 pub mod schedule;
@@ -73,17 +79,19 @@ pub use compact::Plan as CompactionPlan;
 pub use error::{AppError, AppResult, ErrorCode};
 pub use handoff::runner::{Delegating, Host as HandoffHost};
 pub use handoff::{Brief, Plan as HandoffPlan, Priority, ReturnFormat};
+pub use mcp::{Catalog as ConnectorCatalog, ConnectorView, Connectors, State as ConnectorState};
 pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
 pub use schedule::runner::Scheduler;
 pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use skills::{Reported, Returned, Skill, SkillCtx, SkillScope};
 pub use state::AppState;
 pub use store::{
-    Agent, AgentDraft, AgentStore, AuthKind, AuthPreset, Compaction, Cost, LastRun, MaskedSettings,
-    Memory, MemoryDraft, MemoryKind, MemoryStore, Message, Project, ProjectDetail,
-    ProviderSettings, Role, Routine, RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled,
-    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
-    ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    Agent, AgentDraft, AgentStore, AuthKind, AuthPreset, Compaction, Connector, ConnectorDraft,
+    ConnectorStore, Cost, LastRun, MaskedSettings, Memory, MemoryDraft, MemoryKind, MemoryStore,
+    Message, Project, ProjectDetail, ProviderSettings, Role, Routine, RoutineDraft, RoutineStore,
+    RunOutcome, Schedule, Scheduled, SessionDetail, SessionState, SessionStore, SessionSummary,
+    SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle, DEFAULT_AGENT_ID,
+    DEFAULT_PROVIDER_ID,
 };
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
@@ -210,6 +218,11 @@ pub fn run() {
             commands::routine::routine_delete,
             commands::routine::routine_set_paused,
             commands::routine::routine_run_now,
+            commands::connector::connector_list,
+            commands::connector::connector_save,
+            commands::connector::connector_delete,
+            commands::connector::connector_set_enabled,
+            commands::connector::connector_reconnect,
         ])
         .setup(|app| {
             // State is built here rather than on the builder because loading
@@ -277,6 +290,15 @@ pub fn run() {
             // no routines never notices it.
             schedule::runner::spawn(app.handle().clone());
 
+            // And the connectors, which are the other thing that acts without
+            // being asked — though only in the sense that a process is started.
+            // A connector answers questions; it never opens a session. Started
+            // last and in the background because an `npx` fetching a package on
+            // a cold cache is a minute nobody should wait for the window on,
+            // and a connector that never comes up costs a row in Settings
+            // rather than a boot.
+            commands::connector::spawn(app.handle().clone());
+
             tracing::debug!("setup complete");
             Ok(())
         })
@@ -312,6 +334,17 @@ pub fn run() {
             {
                 api.prevent_exit();
                 tracing::debug!("exit request without a code ignored; Aegis stays in the tray");
+            }
+        }
+        // The process is going. Connector children are spawned with
+        // `kill_on_drop`, but nothing drops `AppState` on the way out — the
+        // process simply ends — and on Windows a child outlives the parent that
+        // started it. So they are ended explicitly here, which is the
+        // difference between quitting Aegis and leaving four `node` processes
+        // behind. Bounded: killing a child is a syscall, not a wait.
+        RunEvent::Exit => {
+            if let Some(state) = app.try_state::<AppState>() {
+                tauri::async_runtime::block_on(state.connectors().shutdown());
             }
         }
         // Clicking the dock icon on macOS is the platform's "come back".

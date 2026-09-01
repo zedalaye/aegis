@@ -69,6 +69,7 @@ use crate::audit::{AuditDecision, AuditLog, Outcome};
 use crate::compact;
 use crate::error::ErrorCode;
 use crate::handoff::{self, bus};
+use crate::mcp::{self, Connectors};
 use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
 use crate::skills::{self, SkillCtx};
 use crate::store::memories::{self, MemoryStore};
@@ -185,7 +186,17 @@ pub struct Unattended<'a> {
 /// An ordinary session loses `handoff_return`, for the mirror reason: there is
 /// nothing there for it to close, so offering it is offering a call that can
 /// only fail.
-fn held(agent: &Agent, standing: &Standing<'_>) -> Vec<String> {
+///
+/// The **built-in identity** gains every connector tool (PLAN 7.3, Phase 18),
+/// and that is not the allow-list being widened either. `Agent::builtin` does
+/// not hold a list somebody wrote; it holds the sentence *every tool this build
+/// has*, evaluated — which is what it has meant since Phase 12, and a connector
+/// the operator installed is a tool this build has. Every identity somebody
+/// named holds exactly what they granted it, so a connector added on Tuesday is
+/// not retroactively in the hands of the Reviewer: granting it is a separate
+/// act, on the identity (AGENTS.md). The gate is unchanged either way — every
+/// connector call is put to a person, whoever makes it.
+fn held(agent: &Agent, standing: &Standing<'_>, connectors: &mcp::Catalog) -> Vec<String> {
     let (dropped, added) = match standing {
         Standing::Own(_) => (policy::tool::HANDOFF_RETURN, None),
         Standing::Delegated(_) => (
@@ -206,7 +217,31 @@ fn held(agent: &Agent, standing: &Standing<'_>) -> Vec<String> {
             held.push(added.to_owned());
         }
     }
+
+    if agent.builtin {
+        for name in connectors.names() {
+            if !held.contains(&name) {
+                held.push(name);
+            }
+        }
+    }
     held
+}
+
+/// What this turn offered the model.
+///
+/// One value rather than two arguments because it is one fact, read twice: the
+/// identity's effective allow-list and the connector catalog it was resolved
+/// against are settled together at the top of the turn
+/// ([`Turn::run`]), and they are read together again every time a call is
+/// judged. Passing them apart is what would let a later change resolve one
+/// freshly and leave the other stale.
+#[derive(Clone, Copy)]
+struct Offered<'a> {
+    /// The tools this identity holds, here.
+    held: &'a [String],
+    /// The connector tools that were callable when the turn began.
+    connectors: &'a mcp::Catalog,
 }
 
 /// What a turn needs to know about itself.
@@ -299,6 +334,14 @@ pub struct Turn<'a> {
     /// before that phase and every one a person opens. See [`Unattended`] for
     /// what being `Some` changes, and for why it is not a third [`Standing`].
     pub unattended: Option<Unattended<'a>>,
+    /// The connectors this installation is running (PLAN 7.3, Phase 18).
+    ///
+    /// Passed in for the reason the skill library is: which programs the
+    /// operator installed is a fact about the installation, and a loop that
+    /// went looking for them could not be driven in a test.
+    /// [`Connectors::new`] is a roster with nothing in it, which is the
+    /// behaviour of every phase before this one.
+    pub connectors: &'a Connectors,
 }
 
 /// The [`ProgressSink`] one tool call writes its live output to.
@@ -401,7 +444,18 @@ impl Turn<'_> {
         // `agent.tools` — the schemas the model is shown, the identity policy
         // judges against, and the fail-closed check a runbook gets — so the
         // three cannot disagree about whether this run can file a report.
-        let held = held(self.agent, &self.standing);
+        //
+        // The connector catalog is read here for the same reason and in the
+        // same breath: a person can reconnect a connector from Settings while a
+        // turn is in flight, and a turn that offered the model `git__status`
+        // and then judged the call against a roster where it had gone would be
+        // refusing a tool it had just described. One snapshot, one turn.
+        let connectors = self.connectors.catalog();
+        let held = held(self.agent, &self.standing, &connectors);
+        let offered = Offered {
+            held: &held,
+            connectors: &connectors,
+        };
 
         // Which runbook this turn is currently following, if any. A local, so
         // it cannot outlive the turn: the body was loaded into this turn and
@@ -485,7 +539,7 @@ impl Turn<'_> {
                 // is the refusal in `policy::decide_call`, which is what catches
                 // a call replayed out of a transcript written under a wider
                 // grant.
-                tools::schemas_for(&held),
+                tools::schemas_for(&held, &connectors),
             );
 
             let stream = self.provider.stream(request);
@@ -537,7 +591,7 @@ impl Turn<'_> {
                         break StopReason::Stop;
                     }
 
-                    self.execute(plan, &calls, &held, cancel, &progress_seq, &mut skill)
+                    self.execute(plan, &calls, offered, cancel, &progress_seq, &mut skill)
                         .await;
                     rounds += 1;
 
@@ -779,11 +833,12 @@ impl Turn<'_> {
         &self,
         plan: &TurnPlan,
         calls: &[AssembledCall],
-        held: &[String],
+        offered: Offered<'_>,
         cancel: &CancellationToken,
         progress_seq: &AtomicU32,
         skill: &mut Option<String>,
     ) {
+        let Offered { held, connectors } = offered;
         for call in calls {
             if cancel.is_cancelled() {
                 self.abandon(plan, call);
@@ -845,6 +900,7 @@ impl Turn<'_> {
                 },
                 memories: self.memories,
                 handoffs: self.standing.ctx(),
+                connectors: self.connectors,
                 routine: self.routine(),
             };
 
@@ -861,6 +917,7 @@ impl Turn<'_> {
                 PolicyCtx::new(&plan.session_id, plan.workspace.as_deref(), self.grants)
                     .with_self_exe(self.self_exe)
                     .with_screen(screen.as_ref())
+                    .with_connectors(Some(connectors))
                     .with_identity(Identity {
                         name: &self.agent.name,
                         tools: held,
@@ -1098,6 +1155,7 @@ impl Turn<'_> {
                 routine: self.routine(),
                 memories: self.memories,
                 handoffs: self.standing.ctx(),
+                connectors: self.connectors,
             };
             let outcome = tools::refuse(
                 &ctx,
@@ -1388,6 +1446,7 @@ mod tests {
         /// An empty memory store, for the same reason: what the loop does with
         /// one is that it reads it into the prompt and hands it to the tools.
         memories: MemoryStore,
+        connectors: Connectors,
         /// The identity every fixture turn runs as: the built-in one, which
         /// holds every tool, so these tests are about the loop and not about
         /// an allow-list.
@@ -1428,6 +1487,7 @@ mod tests {
                 captures,
                 library: data.join("skills"),
                 memories: MemoryStore::load(&data),
+                connectors: Connectors::new(),
                 agent: Agent::builtin(),
             }
         }
@@ -1454,6 +1514,7 @@ mod tests {
                 captures: &self.captures,
                 skills: &self.library,
                 memories: &self.memories,
+                connectors: &self.connectors,
                 standing: Standing::Own(None),
                 unattended: None,
             }
