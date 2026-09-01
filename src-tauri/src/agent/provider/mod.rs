@@ -13,25 +13,30 @@
 //! inside a `select!`, which is exactly what cancellation needs and what a
 //! `Stream` would have to be adapted back into.
 //!
-//! Two implementations. [`fake`] is what Phase 5 streams from and what a
+//! Three implementations. [`fake`] is what Phase 5 streams from and what a
 //! fresh install still answers with; [`openai`] speaks SSE to an
-//! OpenAI-compatible endpoint. Because the boundary is this trait, Phase 8
-//! added the second one without reopening `agent/turn.rs` — which is the whole
-//! claim the trait was introduced to make good on.
+//! OpenAI-compatible endpoint; [`motosan`] consumes a Claude Code or Codex
+//! CLI login already on this machine (Grok reuses [`openai`] after a token
+//! refresh). Because the boundary is this trait, those paths do not reopen
+//! `agent/turn.rs`.
 //!
 //! Which of the two answers a turn is decided per turn, from settings, in
 //! [`AppState::provider`](crate::state::AppState::provider). Nothing here is a
 //! singleton: a roster of providers later is a different choice at that one
 //! call site, not a change to this trait (PLAN 7.1).
 
+pub mod catalog;
 pub mod fake;
+pub mod motosan;
 pub mod openai;
 
 use tokio::sync::mpsc;
 
 use super::wire::{ModelEvent, ModelRequest};
 
+pub use catalog::ModelCatalog;
 pub use fake::FakeProvider;
+pub use motosan::SubscriptionProvider;
 pub use openai::{OpenAiProvider, ProviderProbe};
 
 /// How many events a provider may run ahead of the turn loop.

@@ -24,7 +24,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
 
 import type { Message } from "../../ipc/bindings";
 import { isVisible, useSessions } from "../../state/sessions";
-import { useSettings } from "../../state/settings";
+import { isConfigured, useSettings } from "../../state/settings";
 
 import CompactionNotice from "./CompactionNotice";
 import MessageBubble from "./MessageBubble";
@@ -37,8 +37,8 @@ const STICK_THRESHOLD = 64;
  *
  * The scripted provider understands three cues and a real model does not, so
  * naming them unconditionally would be advice that stops working the moment a
- * key is configured. The test mirrors `ProviderSettings::is_configured`, as
- * the badge in the header does.
+ * provider is configured. The test mirrors `ProviderSettings::is_configured`,
+ * as the badge in the header does.
  *
  * Settings not being loaded yet is its own case rather than a fall-through to
  * "no provider": that load resolves a frame or two after the window opens, and
@@ -47,10 +47,7 @@ const STICK_THRESHOLD = 64;
  */
 function EmptyTranscript() {
   const settings = useSettings((s) => s.settings);
-  const configured =
-    settings !== null &&
-    settings.base_url.length > 0 &&
-    settings.model.length > 0;
+  const configured = settings !== null && isConfigured(settings);
 
   const gate = (
     <>

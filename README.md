@@ -252,13 +252,19 @@ No provider and no key needed — the scripted provider is enough to exercise th
 ## Point it at a model
 
 Out of the box there is no provider, and replies come from a scripted one that reports what the
-runtime actually sent it. To use a real model, open **Settings** in the title bar and fill in:
+runtime actually sent it. To use a real model, open **Settings** in the title bar and pick how to
+authenticate:
 
 | | |
 | --- | --- |
-| **Base URL** | An OpenAI-compatible endpoint, stopping where `/chat/completions` would begin — `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1` for a local server, or whatever your gateway exposes. |
+| **Authentication** | An API key, or a login already written by **Claude Code**, **Codex CLI**, or **Grok CLI** on this machine (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.grok/auth.json`). |
+| **Base URL** | For an API key: an OpenAI-compatible endpoint, stopping where `/chat/completions` would begin — `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1` for a local server, or whatever your gateway exposes. For a CLI login, leave it empty unless you are overriding the CLI's own endpoint. |
 | **Model** | The model id, spelled the way that server spells it. |
-| **API key** | Saved to the OS credential store. Leave it empty to keep the one already there. |
+| **API key** | When authentication is "API key": saved to the OS credential store. Leave it empty to keep the one already there. |
+
+A CLI login is not an API key. Aegis reads the official file, refreshes the access token if it
+has expired, and writes the new bundle back so the CLI keeps working. It presents itself as that
+CLI; that is widely done and may sit outside the provider's terms.
 
 **Test connection** sends one sixteen-token completion to the endpoint Aegis actually uses and
 reports what came back — which tells a wrong address from a wrong key from a model that server

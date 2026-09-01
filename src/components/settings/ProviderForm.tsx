@@ -12,8 +12,24 @@
  * because the runtime says which field it was talking about.
  */
 
-import type { MaskedSettings } from "../../ipc/bindings";
+import { useEffect } from "react";
+
+import type { AuthKind, AuthPreset, MaskedSettings } from "../../ipc/bindings";
 import { ENV_API_KEY, useSettings } from "../../state/settings";
+
+const AUTH_LABELS: Readonly<Record<AuthKind, string>> = {
+  api_key: "API key (OpenAI-compatible)",
+  claude_cli: "Claude Code login on this machine",
+  codex_cli: "Codex CLI login on this machine",
+  grok_cli: "Grok CLI login on this machine",
+};
+
+function presetOf(
+  presets: ReadonlyArray<AuthPreset>,
+  kind: AuthKind,
+): AuthPreset | undefined {
+  return presets.find((item) => item.auth_kind === kind);
+}
 
 /** One labelled input, with the refusal that belongs to it. */
 function Field({
@@ -85,10 +101,58 @@ function KeyStatus({ settings }: { readonly settings: MaskedSettings }) {
     );
   }
 
+  if (settings.key_source === "claude_cli") {
+    return (
+      <CliStatus
+        found={settings.key_hint}
+        cli="claude"
+        file="~/.claude/.credentials.json"
+      />
+    );
+  }
+
+  if (settings.key_source === "codex_cli") {
+    return (
+      <CliStatus found={settings.key_hint} cli="codex login" file="~/.codex/auth.json" />
+    );
+  }
+
+  if (settings.key_source === "grok_cli") {
+    return (
+      <CliStatus found={settings.key_hint} cli="grok login" file="~/.grok/auth.json" />
+    );
+  }
+
   return (
     <p className="provider__note provider__note--warning">
       There is no key. A configured provider with no key answers every message
       with <code>E_NO_API_KEY</code>.
+    </p>
+  );
+}
+
+function CliStatus({
+  found,
+  cli,
+  file,
+}: {
+  readonly found: string | null;
+  readonly cli: string;
+  readonly file: string;
+}) {
+  if (found !== null) {
+    return (
+      <p className="provider__note">
+        Using the official CLI login on this machine ({found}). Aegis reads{" "}
+        <code>{file}</code> and never copies the token into the window.
+      </p>
+    );
+  }
+
+  return (
+    <p className="provider__note provider__note--warning">
+      No CLI login was found at <code>{file}</code>. Run <code>{cli}</code> once,
+      or switch back to an API key.
     </p>
   );
 }
@@ -143,6 +207,21 @@ export default function ProviderForm() {
   const edit = useSettings((s) => s.edit);
   const save = useSettings((s) => s.save);
   const runProbe = useSettings((s) => s.runProbe);
+  const loadModels = useSettings((s) => s.loadModels);
+  const models = useSettings((s) => s.models);
+  const modelsLive = useSettings((s) => s.modelsLive);
+  const modelsMessage = useSettings((s) => s.modelsMessage);
+  const modelsBusy = useSettings((s) => s.modelsBusy);
+
+  useEffect(() => {
+    if (settings === null) {
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void loadModels();
+    }, 400);
+    return () => window.clearTimeout(handle);
+  }, [draft.authKind, draft.baseUrl, loadModels, settings]);
 
   if (settings === null) {
     return <p className="provider__note">Loading settings…</p>;
@@ -150,6 +229,11 @@ export default function ProviderForm() {
 
   const errorFor = (field: string) =>
     fieldError?.field === field ? fieldError.message : null;
+
+  const cliAuth = draft.authKind !== "api_key";
+  const preset = presetOf(settings.presets, draft.authKind);
+  const defaultUrl = preset?.default_base_url ?? "";
+  const defaultModel = preset?.default_model ?? "";
 
   return (
     <form
@@ -159,45 +243,120 @@ export default function ProviderForm() {
         void save();
       }}
     >
+      <div className="field">
+        <label className="field__label" htmlFor="provider-auth">
+          Authentication
+        </label>
+        <select
+          id="provider-auth"
+          className="field__input"
+          value={draft.authKind}
+          disabled={busy}
+          onChange={(event) => {
+            const authKind = event.target.value as AuthKind;
+            const next = presetOf(settings.presets, authKind);
+            const previous = presetOf(settings.presets, draft.authKind);
+            const model =
+              draft.model.length === 0 ||
+              draft.model === previous?.default_model
+                ? (next?.default_model ?? draft.model)
+                : draft.model;
+            const baseUrl =
+              draft.baseUrl.length === 0 ||
+              draft.baseUrl === previous?.default_base_url
+                ? (next?.default_base_url ?? draft.baseUrl)
+                : draft.baseUrl;
+            edit({ authKind, model, baseUrl });
+          }}
+        >
+          {settings.presets.map((item) => (
+            <option key={item.auth_kind} value={item.auth_kind}>
+              {AUTH_LABELS[item.auth_kind]}
+            </option>
+          ))}
+        </select>
+        <p className="field__hint">
+          {cliAuth
+            ? "Reuses a login the official CLI already wrote on this machine. Aegis presents itself as that CLI. That is widely done and may be outside the provider's terms."
+            : "An API key stored in this machine's credential store, or AEGIS_API_KEY."}
+        </p>
+      </div>
+
       <Field
         id="provider-base-url"
         label="Base URL"
         value={draft.baseUrl}
-        placeholder="https://api.openai.com/v1"
+        placeholder={defaultUrl || "https://api.openai.com/v1"}
         error={errorFor("base URL")}
-        hint="Any OpenAI-compatible server. Aegis appends /chat/completions, so the URL stops at /v1. Over http:// the key crosses the network in clear text — use it only for a server on this machine."
+        hint={
+          cliAuth
+            ? `Leave empty to use ${defaultUrl || "the CLI's own endpoint"}. Change it to point at a proxy or another host.`
+            : "Any OpenAI-compatible server. Aegis appends /chat/completions, so the URL stops at /v1. Over http:// the key crosses the network in clear text — use it only for a server on this machine."
+        }
         onChange={(event) => edit({ baseUrl: event.target.value })}
         disabled={busy}
       />
 
-      <Field
-        id="provider-model"
-        label="Model"
-        value={draft.model}
-        placeholder="gpt-4o-mini"
-        error={errorFor("model")}
-        hint="Sent with every request, exactly as the server spells it."
-        onChange={(event) => edit({ model: event.target.value })}
-        disabled={busy}
-      />
+      <div className="field">
+        <label className="field__label" htmlFor="provider-model">
+          Model
+        </label>
+        <input
+          id="provider-model"
+          className={`field__input${errorFor("model") === null ? "" : " field__input--bad"}`}
+          list="provider-models"
+          spellCheck={false}
+          autoComplete="off"
+          value={draft.model}
+          placeholder={defaultModel || "gpt-4o-mini"}
+          aria-invalid={errorFor("model") !== null}
+          aria-describedby={
+            errorFor("model") === null ? undefined : "provider-model-error"
+          }
+          onChange={(event) => edit({ model: event.target.value })}
+          disabled={busy}
+        />
+        <datalist id="provider-models">
+          {models.map((id) => (
+            <option key={id} value={id} />
+          ))}
+        </datalist>
+        {errorFor("model") === null ? (
+          <p className="field__hint">
+            {modelsBusy
+              ? "Asking the provider which models it has…"
+              : modelsLive
+                ? `${models.length} models from the server. Pick one, or type an id it did not list.`
+                : modelsMessage.length === 0
+                  ? "Sent with every request, exactly as the server spells it."
+                  : `${modelsMessage} A built-in list is offered instead.`}
+          </p>
+        ) : (
+          <p className="field__error" id="provider-model-error" role="alert">
+            {errorFor("model")}
+          </p>
+        )}
+      </div>
 
-      <Field
-        id="provider-key"
-        label="API key"
-        type="password"
-        value={draft.apiKey}
-        placeholder={
-          settings.key_source === "none"
-            ? "Paste a key"
-            : "Leave empty to keep the current key"
-        }
-        error={null}
-        onChange={(event) => edit({ apiKey: event.target.value })}
-        disabled={busy || !settings.keyring_available}
-      />
+      {cliAuth ? null : (
+        <Field
+          id="provider-key"
+          label="API key"
+          type="password"
+          value={draft.apiKey}
+          placeholder={
+            settings.key_source === "none"
+              ? "Paste a key"
+              : "Leave empty to keep the current key"
+          }
+          error={null}
+          onChange={(event) => edit({ apiKey: event.target.value })}
+          disabled={busy || !settings.keyring_available}
+        />
+      )}
 
       <KeyStatus settings={settings} />
-      <KeyStorage settings={settings} />
+      {cliAuth ? null : <KeyStorage settings={settings} />}
 
       <div className="provider__actions">
         <button type="submit" className="button button--primary" disabled={busy}>
@@ -210,6 +369,14 @@ export default function ProviderForm() {
           disabled={busy || probing}
         >
           Test connection
+        </button>
+        <button
+          type="button"
+          className="button"
+          onClick={() => void loadModels()}
+          disabled={busy || modelsBusy}
+        >
+          Refresh models
         </button>
       </div>
 

@@ -17,11 +17,11 @@
 
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::agent::ProviderProbe;
+use crate::agent::{ModelCatalog, ProviderProbe};
 use crate::error::AppResult;
 use crate::secrets::ApiKey;
 use crate::state::AppState;
-use crate::store::MaskedSettings;
+use crate::store::{AuthKind, MaskedSettings};
 
 use super::window::MAIN_WINDOW;
 
@@ -53,8 +53,11 @@ pub fn settings_set<R: Runtime>(
     base_url: String,
     model: String,
     api_key: Option<String>,
+    auth_kind: Option<AuthKind>,
 ) -> AppResult<MaskedSettings> {
-    state.settings().set(&base_url, &model)?;
+    state
+        .settings()
+        .set(&base_url, &model, auth_kind.unwrap_or(AuthKind::ApiKey))?;
 
     if let Some(key) = api_key.as_deref().and_then(ApiKey::new) {
         state.secrets().store(&key)?;
@@ -88,6 +91,19 @@ pub fn settings_clear_key<R: Runtime>(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn settings_probe_provider(state: State<'_, AppState>) -> AppResult<ProviderProbe> {
     Ok(state.probe_provider().await)
+}
+
+/// Lists the models the chosen authentication can use.
+///
+/// Never fails as a command. A live list is preferred; if the server cannot
+/// be asked, the payload carries a fallback and a sentence saying why.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn settings_list_models(
+    state: State<'_, AppState>,
+    auth_kind: AuthKind,
+    base_url: String,
+) -> AppResult<ModelCatalog> {
+    Ok(state.list_models(auth_kind, &base_url).await)
 }
 
 /// Emits `settings:changed` and hands the payload back to the caller.

@@ -16,19 +16,23 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::agent::provider::openai;
-use crate::agent::{FakeProvider, OpenAiProvider, Provider, ProviderProbe, TurnRegistry};
+use crate::agent::provider::{catalog, motosan, openai};
+use crate::agent::{
+    FakeProvider, ModelCatalog, OpenAiProvider, Provider, ProviderProbe, SubscriptionProvider,
+    TurnRegistry,
+};
 use crate::approval::{ApprovalRegistry, ApprovalRequest, Decision, Resolution};
 use crate::audit::{AuditEntry, AuditLog};
 use crate::board::trace::RunTrace;
 use crate::board::{self, trace};
 use crate::error::{AppError, AppResult};
+use crate::oauth;
 use crate::policy::GrantStore;
 use crate::schedule::runner::Scheduler;
 use crate::secrets::{key_hint, SecretStore};
 use crate::store::{
-    Agent, AgentStore, MaskedSettings, Memory, MemoryDraft, MemoryStore, Routine, RoutineStore,
-    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+    Agent, AgentStore, AuthKind, MaskedSettings, Memory, MemoryDraft, MemoryStore, Routine,
+    RoutineStore, SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
     DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
@@ -162,6 +166,15 @@ impl AppState {
             return Box::new(FakeProvider::new());
         }
 
+        if settings.auth_kind.is_cli() {
+            return Box::new(SubscriptionProvider::new(
+                settings.auth_kind,
+                settings.model.clone(),
+                settings.base_url.clone(),
+                self.http.clone(),
+            ));
+        }
+
         Box::new(OpenAiProvider::new(
             self.http.clone(),
             &settings,
@@ -205,12 +218,31 @@ impl AppState {
         let provider = self.settings.get();
         let held = self.secrets.inspect();
 
+        let (key_source, key_hint) = if provider.auth_kind.is_cli() {
+            let source = match provider.auth_kind {
+                AuthKind::ClaudeCli => crate::secrets::KeySource::ClaudeCli,
+                AuthKind::CodexCli => crate::secrets::KeySource::CodexCli,
+                AuthKind::GrokCli => crate::secrets::KeySource::GrokCli,
+                AuthKind::ApiKey => crate::secrets::KeySource::None,
+            };
+            let hint =
+                oauth::peek(provider.auth_kind).map(|peek| key_hint(peek.access_token.expose()));
+            (source, hint)
+        } else {
+            (
+                held.source,
+                held.key.as_ref().map(|key| key_hint(key.expose())),
+            )
+        };
+
         MaskedSettings {
+            auth_kind: provider.auth_kind,
             base_url: provider.base_url,
             model: provider.model,
-            key_source: held.source,
-            key_hint: held.key.as_ref().map(|key| key_hint(key.expose())),
+            key_source,
+            key_hint,
             keyring_available: held.keyring_available,
+            presets: AuthKind::presets().to_vec(),
         }
     }
 
@@ -220,9 +252,33 @@ impl AppState {
     /// one of them owns: the settings, the key, and the shared HTTP client.
     pub async fn probe_provider(&self) -> ProviderProbe {
         let settings = self.settings.get();
-        let key = self.secrets.inspect().key;
 
+        if settings.auth_kind.is_cli() {
+            return motosan::probe(
+                settings.auth_kind,
+                &settings.model,
+                &settings.base_url,
+                self.http.as_ref(),
+            )
+            .await;
+        }
+
+        let key = self.secrets.inspect().key;
         openai::probe(self.http.as_ref(), &settings, key.as_ref()).await
+    }
+
+    /// Asks the current authentication kind which models it will accept.
+    ///
+    /// `base_url` is the one in the form, which may not have been saved yet —
+    /// changing the URL and refreshing the list should describe that URL.
+    pub async fn list_models(&self, kind: AuthKind, base_url: &str) -> ModelCatalog {
+        catalog::list(
+            kind,
+            base_url,
+            self.http.as_ref(),
+            self.secrets.inspect().key.as_ref(),
+        )
+        .await
     }
 
     /// The provider settings on disk.
@@ -969,7 +1025,11 @@ mod tests {
 
         state
             .settings()
-            .set("https://api.example.test/v1", "some-model")
+            .set(
+                "https://api.example.test/v1",
+                "some-model",
+                crate::store::AuthKind::ApiKey,
+            )
             .expect("accepted");
 
         assert_eq!(
@@ -989,9 +1049,13 @@ mod tests {
         let masked = state.masked_settings();
         assert_eq!(masked.base_url, "");
         assert_eq!(masked.model, "");
+        assert_eq!(masked.auth_kind, crate::store::AuthKind::ApiKey);
 
         let rendered = serde_json::to_string(&masked).expect("serializes");
-        assert!(!rendered.contains("api_key"), "{rendered}");
+        assert!(
+            !rendered.contains("\"api_key\":"),
+            "the payload must not have a key field: {rendered}"
+        );
     }
 
     /// Grants and the audit log are per-process, not per-store: a second

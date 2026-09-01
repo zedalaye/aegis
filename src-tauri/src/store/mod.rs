@@ -50,7 +50,7 @@ pub use sessions::{
     Compaction, Cost, Delegated, Message, Role, Scheduled, SessionDetail, SessionState,
     SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle,
 };
-pub use settings::{MaskedSettings, ProviderSettings, SettingsStore};
+pub use settings::{AuthKind, AuthPreset, MaskedSettings, ProviderSettings, SettingsStore};
 
 /// Rename attempts before a failed save gives up.
 ///

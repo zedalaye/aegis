@@ -82,6 +82,22 @@ reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "system-proxy",
 ] }
+# Claude Code OAuth (`sk-ant-oat01-*` + identity headers) and the ChatGPT
+# Codex Responses backend are not OpenAI-compatible chat/completions. The
+# crate detects the OAuth prefix and speaks those two dialects; Aegis still
+# owns reading `~/.claude`, `~/.codex` and `~/.grok` and still maps the
+# stream onto `ModelEvent`. CLI backends (`claude-code`, `codex-cli`) are
+# deliberately off: those shell out to a second agent.
+motosan-ai = { version = "0.27.1", default-features = false, features = [
+    "anthropic",
+    "chatgpt-codex",
+] }
+# `motosan-ai::Client::stream` is a futures `Stream`. The turn loop consumes
+# it with `select!` the same way it consumes the OpenAI SSE channel.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# JWT `exp` / `chatgpt_account_id` claims in a Codex access token, so a
+# refresh can happen before the first 401.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # `src/ipc/bindings.ts` is generated from the payload structs rather than
 # written twice (PLAN 1, "Notes on structure"). The export itself runs as a
 # `cargo test`, so nothing generates during a release build; the `TS` impls are

@@ -25,7 +25,7 @@
 import { useEffect } from "react";
 
 import { useRoutines } from "../../state/routines";
-import { useSettings } from "../../state/settings";
+import { effectiveBaseUrl, isConfigured, useSettings } from "../../state/settings";
 
 import AgentList from "../agents/AgentList";
 import MemoryList from "../memory/MemoryList";
@@ -36,10 +36,9 @@ import ProviderForm from "./ProviderForm";
 /**
  * Which provider will answer the next message.
  *
- * Mirrors `ProviderSettings::is_configured` in `store/settings.rs`: a base URL
- * and a model together are what make a real request possible. The runtime is
- * still the one that decides — this is the sentence, not the rule — and
- * "Test connection" is the authoritative answer when there is any doubt.
+ * Mirrors `ProviderSettings::is_configured` in `store/settings.rs`. The
+ * runtime is still the one that decides — this is the sentence, not the rule
+ * — and "Test connection" is the authoritative answer when there is any doubt.
  */
 function ActiveProvider() {
   const settings = useSettings((s) => s.settings);
@@ -47,15 +46,14 @@ function ActiveProvider() {
     return null;
   }
 
-  const configured =
-    settings.base_url.length > 0 && settings.model.length > 0;
+  const configured = isConfigured(settings);
+  const url = effectiveBaseUrl(settings);
 
   return (
     <p className="settings__lede">
       {configured ? (
         <>
-          Messages go to <code>{settings.base_url}</code> as{" "}
-          <code>{settings.model}</code>.
+          Messages go to <code>{url}</code> as <code>{settings.model}</code>.
         </>
       ) : (
         <>

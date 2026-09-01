@@ -1,10 +1,12 @@
 //! The settings document: `settings.json`.
 //!
-//! Two fields, and what is *not* here is the point: the base URL and the model
-//! name are stored, the API key is not. The key lives in the OS credential
-//! store or in the environment ([`secrets`](crate::secrets)); nothing this
-//! module writes to disk is a secret, which is what makes the document safe to
-//! open, hand-edit and copy between machines like the other two.
+//! Three fields, and what is *not* here is the point: the base URL, the model
+//! name and how to authenticate are stored, the API key is not. The key lives
+//! in the OS credential store, in the environment, or in a CLI login already
+//! on this machine ([`secrets`](crate::secrets), [`oauth`](crate::oauth));
+//! nothing this module writes to disk is a secret, which is what makes the
+//! document safe to open, hand-edit and copy between machines like the other
+//! two.
 //!
 //! Both fields start empty, and empty means something: until the user has
 //! named a base URL and a model, turns are answered by the scripted provider
@@ -51,6 +53,87 @@ const ENDPOINT_SUFFIX: &str = "/chat/completions";
 // IPC payloads (PLAN 2.1, "Settings and audit")
 // ---------------------------------------------------------------------------
 
+/// How a configured provider authenticates.
+///
+/// Persisted, not a secret: it names a *source*, never a token. `api_key` is
+/// the original path (keyring / `AEGIS_API_KEY`). The CLI variants reuse a
+/// login the official agent already wrote on this machine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
+pub enum AuthKind {
+    /// A key stored in the OS credential store or `AEGIS_API_KEY`.
+    #[default]
+    ApiKey,
+    /// Claude Code: `~/.claude/.credentials.json` / Keychain.
+    ClaudeCli,
+    /// OpenAI Codex CLI: `~/.codex/auth.json`.
+    CodexCli,
+    /// Grok CLI: `~/.grok/auth.json`.
+    GrokCli,
+}
+
+impl AuthKind {
+    /// Whether this kind reads a CLI login instead of an API key.
+    pub const fn is_cli(self) -> bool {
+        !matches!(self, Self::ApiKey)
+    }
+
+    /// The endpoint this kind talks to when the user has not overridden it.
+    pub const fn default_base_url(self) -> &'static str {
+        match self {
+            Self::ApiKey => "https://api.openai.com/v1",
+            Self::ClaudeCli => "https://api.anthropic.com",
+            Self::CodexCli => "https://chatgpt.com/backend-api/codex",
+            Self::GrokCli => "https://cli-chat-proxy.grok.com/v1",
+        }
+    }
+
+    /// A model id that kind will accept, used to prefill Settings.
+    pub const fn default_model(self) -> &'static str {
+        match self {
+            Self::ApiKey => "",
+            Self::ClaudeCli => "claude-sonnet-4-6",
+            Self::CodexCli => "gpt-5.5",
+            Self::GrokCli => "grok-4",
+        }
+    }
+
+    /// Every authentication kind, with the URL and model the form prefills.
+    pub fn presets() -> [AuthPreset; 4] {
+        [
+            Self::ApiKey.preset(),
+            Self::ClaudeCli.preset(),
+            Self::CodexCli.preset(),
+            Self::GrokCli.preset(),
+        ]
+    }
+
+    fn preset(self) -> AuthPreset {
+        AuthPreset {
+            auth_kind: self,
+            default_base_url: self.default_base_url().to_owned(),
+            default_model: self.default_model().to_owned(),
+        }
+    }
+}
+
+/// The URL and model Settings prefills for one [`AuthKind`].
+///
+/// Not a secret. The form uses this when the user switches authentication so
+/// the fields show the CLI's own endpoint instead of a leftover OpenAI URL.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct AuthPreset {
+    /// Which login this row describes.
+    pub auth_kind: AuthKind,
+    /// Endpoint used when the base URL field is left empty.
+    pub default_base_url: String,
+    /// Model id prefilled when the field is empty or still the previous kind's
+    /// default.
+    pub default_model: String,
+}
+
 /// Everything the WebView is allowed to know about the provider settings.
 ///
 /// The name is the contract. There is no unmasked counterpart and no command
@@ -58,6 +141,8 @@ const ENDPOINT_SUFFIX: &str = "/chat/completions";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct MaskedSettings {
+    /// How this provider authenticates.
+    pub auth_kind: AuthKind,
     /// The OpenAI-compatible base URL, normalized. Empty when unset.
     pub base_url: String,
     /// The model id sent with every request. Empty when unset.
@@ -72,6 +157,9 @@ pub struct MaskedSettings {
     /// `false` on headless Linux and on a locked keychain; the panel then
     /// explains the environment variable instead of offering to save a key.
     pub keyring_available: bool,
+    /// Prefill values for every authentication kind, so switching in the form
+    /// can fill the matching URL and model without a second round trip.
+    pub presets: Vec<AuthPreset>,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +180,14 @@ struct SettingsFile {
 /// beside it rather than a migration of every field (PLAN 7.1).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSettings {
+    /// How to authenticate. Missing in documents written before this field
+    /// existed, which serde treats as [`AuthKind::ApiKey`].
+    #[serde(default)]
+    pub auth_kind: AuthKind,
     /// The OpenAI-compatible base URL, without a trailing slash.
+    ///
+    /// Unused when [`AuthKind`] is a CLI login, unless the user overrode the
+    /// CLI's own endpoint (Grok).
     #[serde(default)]
     pub base_url: String,
     /// The model id.
@@ -107,8 +202,13 @@ impl ProviderSettings {
     /// must fail loudly — the user asked for a real model and did not get one
     /// — whereas an unconfigured one is a fresh install, where the scripted
     /// provider answering is the documented behaviour rather than a fault.
+    ///
+    /// A CLI login implies its own endpoint, so a model id is enough.
     pub fn is_configured(&self) -> bool {
-        !self.base_url.is_empty() && !self.model.is_empty()
+        if self.model.is_empty() {
+            return false;
+        }
+        self.auth_kind.is_cli() || !self.base_url.is_empty()
     }
 }
 
@@ -273,8 +373,14 @@ impl SettingsStore {
     /// Validation happens before the lock is taken and before anything is
     /// written, so a rejected base URL leaves the previous settings exactly as
     /// they were — a user correcting a typo does not lose their model name.
-    pub fn set(&self, base_url: &str, model: &str) -> AppResult<ProviderSettings> {
+    pub fn set(
+        &self,
+        base_url: &str,
+        model: &str,
+        auth_kind: AuthKind,
+    ) -> AppResult<ProviderSettings> {
         let next = ProviderSettings {
+            auth_kind,
             base_url: normalize_base_url(base_url)?,
             model: normalize_model(model)?,
         };
@@ -387,15 +493,15 @@ mod tests {
         let store = SettingsStore::load(dir.path());
 
         store
-            .set("https://api.openai.com/v1", "gpt-4o-mini")
+            .set("https://api.openai.com/v1", "gpt-4o-mini", AuthKind::ApiKey)
             .expect("accepted");
 
         let written = fs::read_to_string(store.path()).expect("the document");
         assert!(written.contains("api.openai.com"));
         assert!(written.contains("gpt-4o-mini"));
         assert!(
-            !written.to_lowercase().contains("key"),
-            "the settings document mentions a key: {written}"
+            !written.contains("sk-") && !written.contains("oat01"),
+            "the settings document contains a secret: {written}"
         );
     }
 
@@ -404,7 +510,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
 
         SettingsStore::load(dir.path())
-            .set("https://example.test/v1", "some-model")
+            .set("https://example.test/v1", "some-model", AuthKind::ApiKey)
             .expect("accepted");
 
         let reopened = SettingsStore::load(dir.path()).get();
@@ -422,9 +528,11 @@ mod tests {
         let store = SettingsStore::load(dir.path());
 
         store
-            .set("https://example.test/v1", "some-model")
+            .set("https://example.test/v1", "some-model", AuthKind::ApiKey)
             .expect("accepted");
-        store.set("not a url", "some-model").expect_err("refused");
+        store
+            .set("not a url", "some-model", AuthKind::ApiKey)
+            .expect_err("refused");
 
         assert_eq!(store.get().base_url, "https://example.test/v1");
     }
@@ -439,6 +547,42 @@ mod tests {
 
         provider.model = "gpt-4o-mini".to_owned();
         assert!(provider.is_configured());
+    }
+
+    #[test]
+    fn each_cli_kind_has_a_https_default_url() {
+        for kind in [AuthKind::ClaudeCli, AuthKind::CodexCli, AuthKind::GrokCli] {
+            let url = kind.default_base_url();
+            assert!(url.starts_with("https://"), "{kind:?} defaulted to {url}");
+            assert!(!kind.default_model().is_empty(), "{kind:?} has no model");
+        }
+        assert_eq!(AuthKind::presets().len(), 4);
+    }
+
+    #[test]
+    fn a_cli_login_is_configured_with_a_model_alone() {
+        let provider = ProviderSettings {
+            auth_kind: AuthKind::ClaudeCli,
+            base_url: String::new(),
+            model: "claude-sonnet-4-6".to_owned(),
+        };
+        assert!(provider.is_configured());
+    }
+
+    #[test]
+    fn an_old_document_without_auth_kind_is_an_api_key() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            br#"{"version":1,"provider":{"base_url":"https://x.test/v1","model":"m"}}"#,
+        )
+        .expect("write");
+
+        let loaded = SettingsStore::load(dir.path()).get();
+        assert_eq!(loaded.auth_kind, AuthKind::ApiKey);
+        assert_eq!(loaded.base_url, "https://x.test/v1");
+        assert!(loaded.is_configured());
     }
 
     /// A document from a future version is quarantined rather than guessed at,

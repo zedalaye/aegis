@@ -253,6 +253,7 @@ fn provider(base_url: &str) -> OpenAiProvider {
     OpenAiProvider::new(
         openai::client(),
         &ProviderSettings {
+            auth_kind: aegis_lib::AuthKind::ApiKey,
             base_url: base_url.to_owned(),
             model: "test-model".to_owned(),
         },
@@ -761,6 +762,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
 /// The settings the probe tests are run against.
 fn probe_settings(base_url: &str) -> ProviderSettings {
     ProviderSettings {
+        auth_kind: aegis_lib::AuthKind::ApiKey,
         base_url: base_url.to_owned(),
         model: "test-model".to_owned(),
     }

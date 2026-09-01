@@ -22,7 +22,7 @@
  */
 
 import { useSessions } from "../../state/sessions";
-import { useSettings } from "../../state/settings";
+import { effectiveBaseUrl, isConfigured, useSettings } from "../../state/settings";
 
 export default function ModelBadge() {
   const answering = useSessions((s) => s.streaming?.model ?? null);
@@ -44,9 +44,9 @@ export default function ModelBadge() {
     return null;
   }
 
-  // Mirrors `ProviderSettings::is_configured`: a base URL and a model together
-  // are what make a real request possible.
-  if (settings.base_url.length === 0 || settings.model.length === 0) {
+  // Mirrors `ProviderSettings::is_configured`: a CLI login implies its own
+  // endpoint, so an empty base URL is not "no provider".
+  if (!isConfigured(settings)) {
     return (
       <span
         className="model model--fake"
@@ -57,8 +57,9 @@ export default function ModelBadge() {
     );
   }
 
+  const url = effectiveBaseUrl(settings);
   return (
-    <span className="model" title={`Answers from ${settings.base_url}`}>
+    <span className="model" title={`Answers from ${url}`}>
       {settings.model}
     </span>
   );

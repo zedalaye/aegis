@@ -26,10 +26,16 @@
 
 import { create } from "zustand";
 
-import type { MaskedSettings, ProviderProbe } from "../ipc/bindings";
+import type {
+  AuthKind,
+  MaskedSettings,
+  ModelCatalog,
+  ProviderProbe,
+} from "../ipc/bindings";
 import {
   settingsClearKey,
   settingsGet,
+  settingsListModels,
   settingsProbeProvider,
   settingsSet,
 } from "../ipc/commands";
@@ -53,6 +59,7 @@ export const ENV_API_KEY = "AEGIS_API_KEY";
 
 /** What the user has typed but not yet saved. */
 export type Draft = {
+  readonly authKind: AuthKind;
   readonly baseUrl: string;
   readonly model: string;
   /** Write-only. Empty means "keep whatever key is stored". */
@@ -66,7 +73,12 @@ export type FieldError = {
   readonly message: string;
 };
 
-const EMPTY_DRAFT: Draft = { baseUrl: "", model: "", apiKey: "" };
+const EMPTY_DRAFT: Draft = {
+  authKind: "api_key",
+  baseUrl: "",
+  model: "",
+  apiKey: "",
+};
 
 export type SettingsState = {
   /** The saved settings, masked, or `null` before the first load. */
@@ -85,6 +97,14 @@ export type SettingsState = {
   readonly fieldError: FieldError | null;
   /** Any other failure. */
   readonly error: IpcError | null;
+  /** Model ids the picker can offer. Empty until the first fetch. */
+  readonly models: ReadonlyArray<string>;
+  /** Whether `models` came from the provider just now. */
+  readonly modelsLive: boolean;
+  /** Why a live list was not used, when it was not. */
+  readonly modelsMessage: string;
+  /** True while a models fetch is in flight. */
+  readonly modelsBusy: boolean;
 
   /** Loads the settings and fills the form from them. */
   load: () => Promise<void>;
@@ -100,15 +120,45 @@ export type SettingsState = {
   clearKey: () => Promise<void>;
   /** Asks the runtime to try the configured server. */
   runProbe: () => Promise<void>;
+  /** Asks the chosen authentication which models it will accept. */
+  loadModels: () => Promise<void>;
   /** Applies a `settings:changed` payload from elsewhere. */
   applyChanged: (settings: MaskedSettings) => void;
   /** Clears the last error. */
   dismissError: () => void;
 };
 
+/**
+ * Whether these settings name a real provider.
+ *
+ * Mirrors `ProviderSettings::is_configured`: a CLI login implies its own
+ * endpoint, so a model id is enough. An API key still needs a URL and a model.
+ */
+export function isConfigured(settings: MaskedSettings): boolean {
+  if (settings.model.length === 0) {
+    return false;
+  }
+  return settings.auth_kind !== "api_key" || settings.base_url.length > 0;
+}
+
+/**
+ * The URL a request would actually hit: the saved one, or the CLI default
+ * when the field was left empty.
+ */
+export function effectiveBaseUrl(settings: MaskedSettings): string {
+  if (settings.base_url.length > 0) {
+    return settings.base_url;
+  }
+  const preset = settings.presets.find(
+    (item) => item.auth_kind === settings.auth_kind,
+  );
+  return preset?.default_base_url ?? "";
+}
+
 /** The form as it should look for these saved settings. */
 function draftOf(settings: MaskedSettings): Draft {
   return {
+    authKind: settings.auth_kind,
     baseUrl: settings.base_url,
     model: settings.model,
     // Never the key: there is nothing to prefill it with, and an empty field
@@ -170,6 +220,10 @@ export const useSettings = create<SettingsState>((set, get) => {
     probing: false,
     fieldError: null,
     error: null,
+    models: [],
+    modelsLive: false,
+    modelsMessage: "",
+    modelsBusy: false,
 
     load: async () => {
       set({ status: "loading" });
@@ -191,9 +245,9 @@ export const useSettings = create<SettingsState>((set, get) => {
     edit: (patch) => set({ draft: { ...get().draft, ...patch } }),
 
     save: async () => {
-      const { baseUrl, model, apiKey } = get().draft;
+      const { authKind, baseUrl, model, apiKey } = get().draft;
       const saved = await guard("settings_set", () =>
-        settingsSet(baseUrl, model, apiKey),
+        settingsSet(baseUrl, model, apiKey, authKind),
       );
 
       // A stale result from the last configuration would be worse than none:
@@ -219,10 +273,39 @@ export const useSettings = create<SettingsState>((set, get) => {
       }
     },
 
+    loadModels: async () => {
+      const { authKind, baseUrl } = get().draft;
+      set({ modelsBusy: true, modelsMessage: "" });
+      try {
+        const catalog: ModelCatalog = await settingsListModels(authKind, baseUrl);
+        const current = get().draft.model;
+        const first = catalog.models[0];
+        const nextModel =
+          current.length === 0 && first !== undefined ? first : current;
+        set({
+          models: catalog.models,
+          modelsLive: catalog.live,
+          modelsMessage: catalog.message,
+          ...(nextModel === current
+            ? {}
+            : { draft: { ...get().draft, model: nextModel } }),
+        });
+      } catch (cause) {
+        set({
+          modelsLive: false,
+          modelsMessage: toIpcError(cause, "settings_list_models").message,
+        });
+      } finally {
+        set({ modelsBusy: false });
+      }
+    },
+
     applyChanged: (settings) => {
       // The form is only refilled when the user is not in the middle of
       // editing it: an event arriving mid-typing must not take the text away.
-      const untouched = get().draft.apiKey.length === 0;
+      const untouched =
+        get().draft.apiKey.length === 0 &&
+        get().draft.authKind === get().settings?.auth_kind;
       set({
         settings,
         status: "ready",

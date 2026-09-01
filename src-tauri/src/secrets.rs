@@ -65,6 +65,12 @@ pub enum KeySource {
     Keyring,
     /// The [`ENV_API_KEY`] environment variable of this process.
     Env,
+    /// Claude Code's own login on this machine.
+    ClaudeCli,
+    /// The Codex CLI's own login on this machine.
+    CodexCli,
+    /// The Grok CLI's own login on this machine.
+    GrokCli,
     /// Neither. No request can be sent until one of them holds a key.
     None,
 }

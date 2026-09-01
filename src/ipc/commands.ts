@@ -32,10 +32,12 @@ import type {
   AgentDraft,
   ApprovalRequest,
   AuditEntry,
+  AuthKind,
   Board,
   Decision,
   Grant,
   MaskedSettings,
+  ModelCatalog,
   Memory,
   MemoryDraft,
   Project,
@@ -441,11 +443,30 @@ export function settingsSet(
   baseUrl: string,
   model: string,
   apiKey?: string,
+  authKind?: AuthKind,
 ): Promise<MaskedSettings> {
   return call<MaskedSettings>("settings_set", {
     base_url: baseUrl,
     model,
     api_key: apiKey ?? null,
+    auth_kind: authKind ?? "api_key",
+  });
+}
+
+/**
+ * Lists the models the chosen authentication can use.
+ *
+ * `baseUrl` is the one currently in the form, which may not have been saved.
+ * A live list is preferred; if the server cannot be asked the payload still
+ * carries a fallback and a sentence saying why.
+ */
+export function settingsListModels(
+  authKind: AuthKind,
+  baseUrl: string,
+): Promise<ModelCatalog> {
+  return call<ModelCatalog>("settings_list_models", {
+    auth_kind: authKind,
+    base_url: baseUrl,
   });
 }
 

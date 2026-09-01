@@ -160,6 +160,17 @@ pub async fn probe(
     settings: &ProviderSettings,
     key: Option<&ApiKey>,
 ) -> ProviderProbe {
+    probe_with_headers(client, settings, key, &[]).await
+}
+
+/// As [`probe`], with extra headers (the Grok CLI proxy wants an identity
+/// header on top of the bearer token).
+pub async fn probe_with_headers(
+    client: Option<&Client>,
+    settings: &ProviderSettings,
+    key: Option<&ApiKey>,
+    extra_headers: &[(String, String)],
+) -> ProviderProbe {
     let unreachable = |message: String| ProviderProbe {
         ok: false,
         status: None,
@@ -204,6 +215,15 @@ pub async fn probe(
         match authorization(key) {
             Ok(header) => request = request.header(AUTHORIZATION, header),
             Err(reason) => return unreachable(reason),
+        }
+    }
+    for (name, value) in extra_headers {
+        match HeaderValue::from_str(value) {
+            Ok(header) => request = request.header(name.as_str(), header),
+            Err(_) => return unreachable(
+                "A request header could not be sent. The CLI login on this machine looks damaged."
+                    .to_owned(),
+            ),
         }
     }
 
@@ -286,6 +306,7 @@ struct Ready {
     client: Client,
     endpoint: Url,
     key: ApiKey,
+    extra_headers: Vec<(String, String)>,
 }
 
 /// Why no request can be sent, in the shape the turn loop reports.
@@ -316,7 +337,20 @@ impl OpenAiProvider {
     /// a session reuses the connection and its TLS session instead of paying
     /// for a new handshake.
     pub fn new(client: Option<Client>, settings: &ProviderSettings, key: Option<ApiKey>) -> Self {
-        let ready = Self::prepare(client, settings, key);
+        Self::with_extra_headers(client, settings, key, Vec::new())
+    }
+
+    /// As [`Self::new`], attaching extra headers to every request.
+    ///
+    /// Grok's CLI proxy is OpenAI-compatible except for an identity header.
+    /// Putting that here keeps the SSE loop in one place.
+    pub fn with_extra_headers(
+        client: Option<Client>,
+        settings: &ProviderSettings,
+        key: Option<ApiKey>,
+        extra_headers: Vec<(String, String)>,
+    ) -> Self {
+        let ready = Self::prepare(client, settings, key, extra_headers);
 
         if let Err(unusable) = &ready {
             tracing::warn!(code = unusable.code, "the provider cannot send a request");
@@ -333,6 +367,7 @@ impl OpenAiProvider {
         client: Option<Client>,
         settings: &ProviderSettings,
         key: Option<ApiKey>,
+        extra_headers: Vec<(String, String)>,
     ) -> Result<Ready, Unusable> {
         let Some(client) = client else {
             return Err(Unusable {
@@ -366,6 +401,7 @@ impl OpenAiProvider {
             client,
             endpoint,
             key,
+            extra_headers,
         })
     }
 }
@@ -414,15 +450,32 @@ async fn run(ready: Ready, request: ModelRequest, tx: mpsc::Sender<ModelEvent>) 
         }
     };
 
-    let sending = ready
+    let mut sending = ready
         .client
         .post(ready.endpoint.clone())
         .header(AUTHORIZATION, authorization)
         // Some gateways serve a buffered JSON body unless the stream is asked
         // for by content type as well as by the `stream` flag in the body.
-        .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
-        .json(&request.to_body())
-        .send();
+        .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
+
+    for (name, value) in &ready.extra_headers {
+        match HeaderValue::from_str(value) {
+            Ok(header) => sending = sending.header(name.as_str(), header),
+            Err(_) => {
+                fail(
+                    &tx,
+                    ErrorCode::ProviderHttp,
+                    "A request header could not be sent. The CLI login on this machine looks damaged."
+                        .to_owned(),
+                    false,
+                )
+                .await;
+                return;
+            }
+        }
+    }
+
+    let sending = sending.json(&request.to_body()).send();
 
     let mut response = tokio::select! {
         biased;
@@ -1353,6 +1406,7 @@ mod tests {
 
     fn settings() -> ProviderSettings {
         ProviderSettings {
+            auth_kind: crate::store::AuthKind::ApiKey,
             base_url: "https://api.example.test/v1".to_owned(),
             model: "some-model".to_owned(),
         }
@@ -1384,6 +1438,7 @@ mod tests {
     #[tokio::test]
     async fn a_provider_with_an_unusable_base_url_says_so() {
         let broken = ProviderSettings {
+            auth_kind: crate::store::AuthKind::ApiKey,
             base_url: "not a url".to_owned(),
             model: "m".to_owned(),
         };
@@ -1425,6 +1480,7 @@ mod tests {
     #[tokio::test]
     async fn a_probe_with_no_model_says_so_without_sending_anything() {
         let half_configured = ProviderSettings {
+            auth_kind: crate::store::AuthKind::ApiKey,
             base_url: "https://api.example.test/v1".to_owned(),
             model: String::new(),
         };

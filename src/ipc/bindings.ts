@@ -463,6 +463,36 @@ error_code: string | null,
 artifact: AuditArtifact | null, };
 
 /**
+ * How a configured provider authenticates.
+ *
+ * Persisted, not a secret: it names a *source*, never a token. `api_key` is
+ * the original path (keyring / `AEGIS_API_KEY`). The CLI variants reuse a
+ * login the official agent already wrote on this machine.
+ */
+export type AuthKind = "api_key" | "claude_cli" | "codex_cli" | "grok_cli";
+
+/**
+ * The URL and model Settings prefills for one [`AuthKind`].
+ *
+ * Not a secret. The form uses this when the user switches authentication so
+ * the fields show the CLI's own endpoint instead of a leftover OpenAI URL.
+ */
+export type AuthPreset = { 
+/**
+ * Which login this row describes.
+ */
+auth_kind: AuthKind, 
+/**
+ * Endpoint used when the base URL field is left empty.
+ */
+default_base_url: string, 
+/**
+ * Model id prefilled when the field is empty or still the previous kind's
+ * default.
+ */
+default_model: string, };
+
+/**
  * The board of one project.
  */
 export type Board = { 
@@ -684,7 +714,7 @@ inputs: number, };
 /**
  * Where the key in use came from (PLAN 2.1, `MaskedSettings`).
  */
-export type KeySource = "keyring" | "env" | "none";
+export type KeySource = "keyring" | "env" | "claude_cli" | "codex_cli" | "grok_cli" | "none";
 
 /**
  * What became of the last run.
@@ -719,6 +749,10 @@ detail: string, };
  */
 export type MaskedSettings = { 
 /**
+ * How this provider authenticates.
+ */
+auth_kind: AuthKind, 
+/**
  * The OpenAI-compatible base URL, normalized. Empty when unset.
  */
 base_url: string, 
@@ -741,7 +775,12 @@ key_hint: string | null,
  * `false` on headless Linux and on a locked keychain; the panel then
  * explains the environment variable instead of offering to save a key.
  */
-keyring_available: boolean, };
+keyring_available: boolean, 
+/**
+ * Prefill values for every authentication kind, so switching in the form
+ * can fill the matching URL and model without a second round trip.
+ */
+presets: Array<AuthPreset>, };
 
 /**
  * One memory, as the UI and the runtime see it.
@@ -833,6 +872,23 @@ tool_call_id: string | null,
  * RFC3339, UTC.
  */
 created_at: string, };
+
+/**
+ * What [`list`] found.
+ */
+export type ModelCatalog = { 
+/**
+ * Model ids the picker can offer, live ones first when the server answered.
+ */
+models: Array<string>, 
+/**
+ * Whether `models` came from the provider just now.
+ */
+live: boolean, 
+/**
+ * Empty on a live list. Otherwise why the fallback was used.
+ */
+message: string, };
 
 /**
  * How a tool call ended (PLAN 2.1, `AuditEntry.outcome`).

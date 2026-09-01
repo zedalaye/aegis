@@ -47,6 +47,7 @@ pub mod compact;
 mod display;
 mod error;
 pub mod handoff;
+pub mod oauth;
 pub mod policy;
 pub mod schedule;
 pub mod secrets;
@@ -58,8 +59,9 @@ mod tray;
 pub mod workspace;
 
 pub use agent::{
-    Event, EventSink, FakeProvider, ModelEvent, ModelRequest, OpenAiProvider, Provider,
-    ProviderProbe, Standing, StopReason, Turn, TurnPlan, TurnRegistry, Unattended, Usage,
+    Event, EventSink, FakeProvider, ModelCatalog, ModelEvent, ModelRequest, OpenAiProvider,
+    Provider, ProviderProbe, Standing, StopReason, SubscriptionProvider, Turn, TurnPlan,
+    TurnRegistry, Unattended, Usage,
 };
 pub use approval::{
     Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
@@ -77,11 +79,11 @@ pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use skills::{Reported, Returned, Skill, SkillCtx, SkillScope};
 pub use state::AppState;
 pub use store::{
-    Agent, AgentDraft, AgentStore, Compaction, Cost, LastRun, MaskedSettings, Memory, MemoryDraft,
-    MemoryKind, MemoryStore, Message, Project, ProjectDetail, ProviderSettings, Role, Routine,
-    RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled, SessionDetail, SessionState,
-    SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnCost,
-    TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    Agent, AgentDraft, AgentStore, AuthKind, AuthPreset, Compaction, Cost, LastRun, MaskedSettings,
+    Memory, MemoryDraft, MemoryKind, MemoryStore, Message, Project, ProjectDetail,
+    ProviderSettings, Role, Routine, RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled,
+    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+    ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
@@ -196,6 +198,7 @@ pub fn run() {
             commands::settings::settings_set,
             commands::settings::settings_clear_key,
             commands::settings::settings_probe_provider,
+            commands::settings::settings_list_models,
             commands::workspace::workspace_layout,
             commands::workspace::workspace_scaffold,
             commands::skill::skill_list,
