@@ -333,6 +333,11 @@ async fn the_request_is_the_documented_shape() {
     let body = sent.json();
     assert_eq!(body["model"], "test-model");
     assert_eq!(body["stream"], true);
+    assert_eq!(
+        body["stream_options"]["include_usage"], true,
+        "usage has to be asked for on the wire, or every turn comes back \
+         unmeasured and the board has nothing to count"
+    );
     assert_eq!(body["messages"][0]["role"], "system");
     assert_eq!(body["messages"][1]["content"], "hello");
     assert_eq!(body["tools"][0]["function"]["name"], "fs_list");

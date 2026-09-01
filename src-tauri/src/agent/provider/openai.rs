@@ -682,12 +682,15 @@ fn stop_reason(reason: &str) -> StopReason {
     }
 }
 
-/// Token usage, when the server volunteers it.
+/// Token usage, from the chunk the server sends at the end of a stream.
 ///
-/// Aegis does not ask for it: `stream_options` is an OpenAI extension that
-/// some compatible servers reject outright, and a request that fails for a
-/// counter is a bad trade. Servers that send usage anyway — most do, on the
-/// final chunk — are believed.
+/// Aegis asks for it — `stream_options.include_usage` in
+/// [`ModelRequest::to_body`](crate::agent::ModelRequest::to_body), which says
+/// why. This function stays as forgiving as it was when nothing asked: a
+/// server that sends no usage at all is not an error, it is a turn recorded as
+/// unmeasured ([`TurnCost::unreported`](crate::store::TurnCost::unreported)),
+/// and a `usage` object missing a field counts it as zero rather than refusing
+/// the whole frame.
 fn usage_of(frame: &Value) -> Option<Usage> {
     let usage = frame.get("usage").filter(|usage| !usage.is_null())?;
     let count = |field: &str| usage.get(field).and_then(Value::as_u64).unwrap_or(0);

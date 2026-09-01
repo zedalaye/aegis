@@ -52,10 +52,24 @@ impl ModelRequest {
     /// offer: some OpenAI-compatible servers reject an empty `tools` array
     /// rather than treating it as "no tools", and an absent key is what every
     /// implementation agrees on.
+    ///
+    /// `stream_options.include_usage` **is** sent, and that is a correction of
+    /// a Phase 8 guess rather than a new feature (PLAN 7.3, Phase 17). That
+    /// phase left it out on the reasoning that some compatible servers reject
+    /// the extension and that most volunteer usage on the final chunk anyway.
+    /// The second half is false: a streaming endpoint generally sends a usage
+    /// chunk *only* when asked, so every turn came back unmeasured, and the
+    /// token counters this phase is judged on had nothing to count. The first
+    /// half is a risk worth taking now — the field is near-universal, servers
+    /// that do not know it almost always ignore unknown keys, and one that
+    /// refuses fails loudly on the next message and by name under
+    /// `settings_probe_provider`, which is a far better failure than a counter
+    /// that silently reads zero forever.
     pub fn to_body(&self) -> Value {
         let mut body = json!({
             "model": self.model,
             "stream": true,
+            "stream_options": { "include_usage": true },
             "messages": self.messages,
         });
 
@@ -378,6 +392,11 @@ mod tests {
         assert_eq!(body["model"], "gpt-4o-mini");
         assert_eq!(body["stream"], true);
         assert_eq!(body["tool_choice"], "auto");
+        assert_eq!(
+            body["stream_options"]["include_usage"], true,
+            "a streaming endpoint sends usage only when it is asked, and a \
+             counter with nothing to count is what not asking produces"
+        );
 
         let messages = &body["messages"];
         assert_eq!(messages[0]["role"], "system");
