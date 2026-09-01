@@ -139,6 +139,11 @@ export default function AppShell() {
   const settingsOpen = useSettings((s) => s.open);
   const loadAgents = useAgents((s) => s.load);
   const loadRoutines = useRoutines((s) => s.load);
+  // The *set* of projects, as a value that only changes when one is added or
+  // removed — not on every refetch, which hands back a new array each time.
+  const projectIds = useProjects((s) =>
+    s.projects.map((project) => project.id).join(" "),
+  );
 
   // One load on mount. Under StrictMode this runs twice in development: the
   // only write it performs is re-stamping `last_opened_at` on the project it
@@ -156,12 +161,21 @@ export default function AppShell() {
     // both need them before anything is opened, and a session created without
     // the list would silently be created as the built-in identity.
     void loadAgents();
-    // And the routines, for the reason the identities are: the clock is
-    // already running in the runtime whether or not this window is open, and a
-    // panel that only learned what was scheduled when somebody opened Settings
-    // would be the last place to find out a routine had paused itself.
+  }, [load, loadSettings, loadAgents]);
+
+  // The routines are loaded on mount for the reason the identities are — the
+  // clock is already running in the runtime whether or not this window is open,
+  // and a panel that only learned what was scheduled when somebody opened
+  // Settings would be the last place to find out a routine had paused itself.
+  //
+  // And they are re-measured whenever the set of projects changes, because a
+  // routine belongs to one: deleting a project deletes its routines in the
+  // runtime (`commands/project.rs`), and nothing announces that. Without this
+  // the panel keeps drawing a clock that no longer exists — and one that cannot
+  // even be opened, since the project it named is gone from the picker.
+  useEffect(() => {
     void loadRoutines();
-  }, [load, loadSettings, loadAgents, loadRoutines]);
+  }, [projectIds, loadRoutines]);
 
   // One listener set per store for the app. The attach is asynchronous, so the
   // cleanup has to wait for it rather than assume it has finished —

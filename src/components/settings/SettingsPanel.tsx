@@ -22,6 +22,9 @@
  * will do while they are not here.
  */
 
+import { useEffect } from "react";
+
+import { useRoutines } from "../../state/routines";
 import { useSettings } from "../../state/settings";
 
 import AgentList from "../agents/AgentList";
@@ -69,6 +72,16 @@ function ActiveProvider() {
 export default function SettingsPanel() {
   const closePanel = useSettings((s) => s.closePanel);
   const status = useSettings((s) => s.status);
+  const loadRoutines = useRoutines((s) => s.load);
+
+  // Re-measured when the panel opens. What is *wrong* with a routine — a skill
+  // that was un-granted, a folder that was unplugged, a budget spent, a clock
+  // the scheduler paused while this was closed — is measured in the runtime and
+  // announced by nothing, so the moment somebody comes to look is the moment to
+  // ask again. The list itself keeps up on its own through `routine:updated`.
+  useEffect(() => {
+    void loadRoutines();
+  }, [loadRoutines]);
 
   return (
     <section className="settings" aria-labelledby="settings-title">
