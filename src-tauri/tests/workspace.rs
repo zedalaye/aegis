@@ -132,6 +132,7 @@ impl App {
                 skills: None,
                 shared: shared.as_deref(),
                 compacted: None,
+                unattended: false,
             },
             &history,
             Vec::new(),
@@ -181,6 +182,7 @@ impl App {
             skills: &self.library,
             memories: &self.memories,
             standing: Standing::Own(None),
+            unattended: None,
         };
 
         let running = turn.run(&plan, &cancel);

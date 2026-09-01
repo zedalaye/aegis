@@ -470,6 +470,7 @@ mod tests {
                 message_count: 3,
                 state: SessionState::AwaitingApproval,
                 delegated: None,
+                scheduled: None,
             }],
         };
 
@@ -517,6 +518,7 @@ mod tests {
                 "message_count",
                 "state",
                 "delegated",
+                "scheduled",
             ])
         );
 

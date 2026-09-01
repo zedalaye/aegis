@@ -97,6 +97,21 @@ const INSTRUCTIONS_MAX_CHARS: usize = 2000;
 /// Most skills one identity may be granted.
 const SKILLS_MAX: usize = 64;
 
+/// Most scheduled runs one identity may make in a day.
+///
+/// The per-agent half of "budget per agent and per routine" (`COS.md`), and the
+/// reason it lives on the identity rather than on the routines: a rotten role
+/// is a role, not one clock. Three routines that each behave within their own
+/// budget can still add up to an identity spending the night writing, and the
+/// ceiling that catches that is the one a person set on *who* is doing it.
+///
+/// It counts scheduled runs only. A person typing is not budgeted — the person
+/// is the budget.
+pub const AGENT_RUNS_PER_DAY_MAX: u32 = 200;
+
+/// What a new identity's daily ceiling starts at.
+pub const AGENT_RUNS_PER_DAY_DEFAULT: u32 = 48;
+
 // ---------------------------------------------------------------------------
 // IPC payloads (PLAN 7.3, Phase 12)
 // ---------------------------------------------------------------------------
@@ -135,6 +150,13 @@ pub struct Agent {
     /// Empty for the built-in identity, which is what it was before this phase
     /// and stays: a skill is always something someone granted.
     pub skills: Vec<String>,
+    /// Most scheduled runs it may make in a day (PLAN 7.3, Phase 16).
+    ///
+    /// Counted across every routine that fires as this identity, and spent
+    /// before a run opens a session. Zero is an identity nothing may schedule,
+    /// which is a real thing to want: a Chief of Staff you talk to and never
+    /// put on a clock.
+    pub runs_per_day: u32,
     /// Whether this is the built-in identity, which cannot be edited or
     /// deleted. Derived, never stored.
     pub builtin: bool,
@@ -159,6 +181,10 @@ impl Agent {
                 .map(|name| (*name).to_owned())
                 .collect(),
             skills: Vec::new(),
+            // It holds no skills, so nothing can schedule it anyway (a routine
+            // names a granted skill). The default is written out rather than
+            // zeroed so that the number means the same thing on every row.
+            runs_per_day: AGENT_RUNS_PER_DAY_DEFAULT,
             builtin: true,
         }
     }
@@ -180,6 +206,7 @@ impl Agent {
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
             tools: Vec::new(),
             skills: Vec::new(),
+            runs_per_day: 0,
             builtin: false,
         }
     }
@@ -224,6 +251,18 @@ pub struct AgentDraft {
     /// The runbooks it may run. Requires `skill_run` and `skill_return` in
     /// [`AgentDraft::tools`] when it is not empty.
     pub skills: Vec<String>,
+    /// Most scheduled runs a day, capped at [`AGENT_RUNS_PER_DAY_MAX`].
+    ///
+    /// `#[serde(default)]` so a caller written before Phase 16 — and the
+    /// tests that were — still send a valid draft; the default is the same
+    /// ceiling a new identity gets.
+    #[serde(default = "default_runs_per_day")]
+    pub runs_per_day: u32,
+}
+
+/// The ceiling a draft that names none carries.
+const fn default_runs_per_day() -> u32 {
+    AGENT_RUNS_PER_DAY_DEFAULT
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +290,11 @@ struct StoredAgent {
     tools: Vec<String>,
     #[serde(default)]
     skills: Vec<String>,
+    /// `#[serde(default)]` is the migration: an identity written before Phase
+    /// 16 reads back with the same ceiling a new one gets, and nothing could
+    /// have scheduled it before there were routines.
+    #[serde(default = "default_runs_per_day")]
+    runs_per_day: u32,
     created_at: String,
     updated_at: String,
 }
@@ -266,6 +310,7 @@ impl StoredAgent {
             provider_id: self.provider_id.clone(),
             tools: self.tools.clone(),
             skills: self.skills.clone(),
+            runs_per_day: self.runs_per_day,
             builtin: false,
         }
     }
@@ -405,6 +450,7 @@ impl AgentStore {
             provider_id: valid.provider_id,
             tools: valid.tools,
             skills: valid.skills,
+            runs_per_day: valid.runs_per_day,
             created_at: stamp.clone(),
             updated_at: stamp,
         };
@@ -438,6 +484,7 @@ impl AgentStore {
         stored.provider_id = valid.provider_id;
         stored.tools = valid.tools;
         stored.skills = valid.skills;
+        stored.runs_per_day = valid.runs_per_day;
         stored.updated_at = now();
         let updated = stored.to_agent();
 
@@ -529,6 +576,7 @@ struct Valid {
     provider_id: String,
     tools: Vec<String>,
     skills: Vec<String>,
+    runs_per_day: u32,
 }
 
 impl Valid {
@@ -690,6 +738,17 @@ impl Valid {
             }
         }
 
+        if draft.runs_per_day > AGENT_RUNS_PER_DAY_MAX {
+            return Err(AppError::Agent {
+                field: "runs_per_day",
+                reason: format!(
+                    "at most {AGENT_RUNS_PER_DAY_MAX} scheduled runs a day for one identity. \
+                     This is the ceiling on the role, not on any one routine — each of those \
+                     has a budget of its own"
+                ),
+            });
+        }
+
         Ok(Self {
             name: name.to_owned(),
             role: role.to_owned(),
@@ -697,6 +756,7 @@ impl Valid {
             provider_id: provider_id.to_owned(),
             tools,
             skills,
+            runs_per_day: draft.runs_per_day,
         })
     }
 }
@@ -725,6 +785,7 @@ mod tests {
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
             tools: vec![tool::FS_READ.to_owned(), tool::FS_LIST.to_owned()],
             skills: Vec::new(),
+            runs_per_day: AGENT_RUNS_PER_DAY_DEFAULT,
         }
     }
 

@@ -108,6 +108,7 @@ impl Fixture {
                 bus: None,
                 open: None,
             },
+            routine: "",
         };
 
         match self.judge(args.clone()) {
@@ -158,6 +159,7 @@ impl Fixture {
                 bus: None,
                 open: None,
             },
+            routine: "",
         };
 
         tools::refuse(

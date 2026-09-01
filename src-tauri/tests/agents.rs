@@ -125,6 +125,7 @@ impl App {
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
                 tools: vec![tool::FS_LIST.to_owned(), tool::FS_READ.to_owned()],
                 skills: Vec::new(),
+                runs_per_day: 24,
             })
             .expect("the identity is accepted")
     }
@@ -154,6 +155,7 @@ impl App {
                 skills: None,
                 shared: None,
                 compacted: None,
+                unattended: false,
             },
             &history,
             aegis_lib::tools::schemas_for(&agent.tools),
@@ -220,6 +222,7 @@ impl App {
             skills: &self.library,
             memories: &self.memories,
             standing: Standing::Own(None),
+            unattended: None,
         }
         .run(&plan, &cancel)
         .await;
@@ -485,6 +488,7 @@ fn a_session_written_before_identities_is_the_assistant_it_always_was() {
             skills: None,
             shared: None,
             compacted: None,
+            unattended: false,
         },
         &history,
         aegis_lib::tools::schemas_for(&resolved.tools),
@@ -522,6 +526,7 @@ fn an_identity_cannot_be_deleted_while_a_session_still_runs_as_it() {
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
             tools: vec![tool::FS_READ.to_owned()],
             skills: Vec::new(),
+            runs_per_day: 24,
         })
         .expect("created");
     let session = state
@@ -590,6 +595,7 @@ fn an_identity_and_its_sessions_survive_a_restart_of_the_runtime() {
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
             tools: vec![tool::FS_READ.to_owned()],
             skills: Vec::new(),
+            runs_per_day: 24,
         })
         .expect("created");
     let session = first

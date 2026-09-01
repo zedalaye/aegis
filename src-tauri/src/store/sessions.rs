@@ -254,6 +254,13 @@ pub struct SessionSummary {
     /// this phase. The sidebar draws it as a badge rather than hiding the row:
     /// work done on your behalf should be as visible as work you asked for.
     pub delegated: Option<Delegated>,
+    /// The routine that opened this session, when one did (PLAN 7.3, Phase 16).
+    ///
+    /// The other way a session comes to exist without anybody typing. It is a
+    /// second field rather than a variant beside [`SessionSummary::delegated`]
+    /// because the two are different facts and a session could one day be both
+    /// — a routine's run is not a brief, and a brief is not on a clock.
+    pub scheduled: Option<Scheduled>,
 }
 
 /// A session and its transcript.
@@ -306,6 +313,25 @@ pub struct Delegated {
     /// `None` when the workspace has no `briefs/` — the brief then lives only
     /// in the first message of this transcript, which is still a record of it.
     pub brief: Option<String>,
+}
+
+/// Why a session exists, when a clock opened it (PLAN 7.3, Phase 16).
+///
+/// The routine's record on the run, and the mirror of [`Delegated`]: a
+/// scheduled run is an ordinary session in every way that matters, and this is
+/// the difference. The routine's *name* is copied rather than only its id, so a
+/// row still says what fired it after the routine has been renamed or deleted —
+/// a transcript is a record of something that happened, and it should not stop
+/// explaining itself because a document moved on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct Scheduled {
+    /// The routine that fired it. Shared with the audit lines the run writes.
+    pub routine_id: String,
+    /// Its name when it fired.
+    pub routine_name: String,
+    /// The runbook it was fired to run.
+    pub skill: String,
 }
 
 /// What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
@@ -389,6 +415,13 @@ struct StoredSession {
     /// which is exactly what it is — one somebody opened themselves.
     #[serde(default)]
     delegated: Option<Delegated>,
+    /// The routine that opened this session, when one did.
+    ///
+    /// `#[serde(default)]` is the migration, for the fourth time and for the
+    /// same reason: a session written before Phase 16 reads back with none,
+    /// which is exactly what it is — one nothing scheduled.
+    #[serde(default)]
+    scheduled: Option<Scheduled>,
 }
 
 impl StoredSession {
@@ -408,6 +441,7 @@ impl StoredSession {
             message_count: u32::try_from(self.messages.len()).unwrap_or(u32::MAX),
             state,
             delegated: self.delegated.clone(),
+            scheduled: self.scheduled.clone(),
         }
     }
 }
@@ -508,7 +542,7 @@ impl SessionStore {
         title: Option<&str>,
         agent_id: &str,
     ) -> AppResult<SessionSummary> {
-        self.open_session(project_id, title, agent_id, None)
+        self.open_session(project_id, title, agent_id, None, None)
     }
 
     /// Creates the session a brief opens (PLAN 7.3, Phase 15).
@@ -523,7 +557,22 @@ impl SessionStore {
         agent_id: &str,
         delegated: Delegated,
     ) -> AppResult<SessionSummary> {
-        self.open_session(project_id, title, agent_id, Some(delegated))
+        self.open_session(project_id, title, agent_id, Some(delegated), None)
+    }
+
+    /// Creates the session a routine opens (PLAN 7.3, Phase 16).
+    ///
+    /// The same call again, with a [`Scheduled`] on it, and for the same
+    /// reason: a run nobody watched should be as readable afterwards as one
+    /// somebody sat through.
+    pub fn create_scheduled(
+        &self,
+        project_id: &str,
+        title: Option<&str>,
+        agent_id: &str,
+        scheduled: Scheduled,
+    ) -> AppResult<SessionSummary> {
+        self.open_session(project_id, title, agent_id, None, Some(scheduled))
     }
 
     /// The one place a session record is built.
@@ -533,6 +582,7 @@ impl SessionStore {
         title: Option<&str>,
         agent_id: &str,
         delegated: Option<Delegated>,
+        scheduled: Option<Scheduled>,
     ) -> AppResult<SessionSummary> {
         let stamp = now();
         let session = StoredSession {
@@ -548,6 +598,7 @@ impl SessionStore {
             messages: Vec::new(),
             compaction: None,
             delegated,
+            scheduled,
         };
         let created = session.to_summary(SessionState::Idle);
 
@@ -1288,6 +1339,7 @@ mod tests {
                 message_count: 3,
                 state: SessionState::AwaitingApproval,
                 delegated: None,
+                scheduled: None,
             },
             messages: vec![Message::assistant(
                 "done",
@@ -1347,6 +1399,7 @@ mod tests {
                 "message_count",
                 "state",
                 "delegated",
+                "scheduled",
             ])
         );
         assert_eq!(

@@ -21,6 +21,7 @@ pub mod approval;
 pub mod audit;
 pub mod memory;
 pub mod project;
+pub mod routine;
 pub mod session;
 pub mod settings;
 pub mod skill;

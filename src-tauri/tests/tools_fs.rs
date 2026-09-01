@@ -119,6 +119,7 @@ impl Fixture {
                 bus: None,
                 open: None,
             },
+            routine: "",
         };
 
         match decide(&ctx, tool_name, args.clone()) {

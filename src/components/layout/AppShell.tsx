@@ -22,6 +22,7 @@
 import { useEffect } from "react";
 
 import { useAgents } from "../../state/agents";
+import { attachRoutineEvents, useRoutines } from "../../state/routines";
 import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachAuditEvents } from "../../state/audit";
@@ -137,6 +138,7 @@ export default function AppShell() {
   const loadSettings = useSettings((s) => s.load);
   const settingsOpen = useSettings((s) => s.open);
   const loadAgents = useAgents((s) => s.load);
+  const loadRoutines = useRoutines((s) => s.load);
 
   // One load on mount. Under StrictMode this runs twice in development: the
   // only write it performs is re-stamping `last_opened_at` on the project it
@@ -154,7 +156,12 @@ export default function AppShell() {
     // both need them before anything is opened, and a session created without
     // the list would silently be created as the built-in identity.
     void loadAgents();
-  }, [load, loadSettings, loadAgents]);
+    // And the routines, for the reason the identities are: the clock is
+    // already running in the runtime whether or not this window is open, and a
+    // panel that only learned what was scheduled when somebody opened Settings
+    // would be the last place to find out a routine had paused itself.
+    void loadRoutines();
+  }, [load, loadSettings, loadAgents, loadRoutines]);
 
   // One listener set per store for the app. The attach is asynchronous, so the
   // cleanup has to wait for it rather than assume it has finished —
@@ -165,6 +172,7 @@ export default function AppShell() {
       attachApprovalEvents(),
       attachSettingsEvents(),
       attachAuditEvents(),
+      attachRoutineEvents(),
     ];
     return () => {
       for (const pending of attaching) {

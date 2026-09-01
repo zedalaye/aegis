@@ -16,13 +16,17 @@
  * the rail, so "which `inbox.triage` will run" is answerable in one place.
  * The memories of Phase 14 follow Identities for the same reason again: a
  * memory belongs to an identity and to nothing else, and this panel is the
- * only place a person can correct one.
+ * only place a person can correct one. The routines of Phase 16 come last
+ * because they stand on all three: a routine is a runbook, run as an identity,
+ * on a clock — and this is the only place a person can see what the machine
+ * will do while they are not here.
  */
 
 import { useSettings } from "../../state/settings";
 
 import AgentList from "../agents/AgentList";
 import MemoryList from "../memory/MemoryList";
+import RoutineList from "../routines/RoutineList";
 import SkillList from "../skills/SkillList";
 import ProviderForm from "./ProviderForm";
 
@@ -92,6 +96,9 @@ export default function SettingsPanel() {
       <h2 className="settings__section">Skills</h2>
       <SkillList />
 
+      <h2 className="settings__section">Routines</h2>
+      <RoutineList />
+
       <h2 className="settings__section">Where things are kept</h2>
       <p className="settings__note">
         The base URL and the model are written to <code>settings.json</code>{" "}
@@ -99,7 +106,8 @@ export default function SettingsPanel() {
         them, which is a file you can read and edit by hand. Memories go in{" "}
         <code>memories.json</code>, beside both. Runbooks are
         ordinary markdown in <code>skills/</code>, either beside those files or
-        inside a workspace, where they travel with the repository. The key is
+        inside a workspace, where they travel with the repository. Routines and
+        what they have spent today are in <code>routines.json</code>. The key is
         not: it
         goes to this machine's own
         credential store — Credential Manager, Keychain, or a Secret Service —

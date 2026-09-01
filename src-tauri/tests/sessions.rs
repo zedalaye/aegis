@@ -146,6 +146,7 @@ impl App {
             skills: &self.data.join("skills"),
             memories: &self.memories,
             standing: Standing::Own(None),
+            unattended: None,
         }
         .run(&plan, &cancel)
         .await;
@@ -447,6 +448,7 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
             skills: None,
             shared: None,
             compacted: None,
+            unattended: false,
         },
         &history,
         Vec::new(),

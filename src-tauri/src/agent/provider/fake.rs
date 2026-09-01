@@ -243,6 +243,14 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         return skill_turn(request);
     }
 
+    // A run a routine fired follows its runbook and returns, whatever is in
+    // the message: it is the only kind of turn here that nobody typed into,
+    // and the opening it was given is the whole of what it was asked for
+    // (PLAN 7.3, Phase 16).
+    if said.contains(crate::schedule::OPENING_MARKER) {
+        return routine_turn(request, &said);
+    }
+
     // A run a brief opened answers with a `handoff_return` and nothing else,
     // whatever was typed into it: the only thing the identity that briefed it
     // will ever see is that call (PLAN 7.3, Phase 15).
@@ -527,6 +535,123 @@ fn skill_turn(request: &ModelRequest) -> Vec<ModelEvent> {
             ),
         },
     }
+}
+
+/// The three rounds a scheduled run takes without a model behind it.
+///
+/// Load the runbook the routine named, write a line into `status/`, close with
+/// a return. It is the one script here that carries a job *out* rather than
+/// stopping at the gate, and that is deliberate: what the Phase 16 walkthrough
+/// has to show is a run happening with the window shut — the write going
+/// through because a person signed the routine for it, or being refused because
+/// they did not, with nobody asked either way.
+fn routine_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
+    let answers = answers_this_turn(request);
+
+    let Some(name) = skill_named(said) else {
+        return say(
+            "The opening message named no runbook, which is a bug in the scheduler rather than              in this reply.",
+        );
+    };
+
+    // Third round: the write has come back, one way or the other. Either way
+    // the run owes a return, and it says which happened.
+    if let Some(body) = answers
+        .iter()
+        .rev()
+        .find(|body| body.contains(r#""tool":"fs_write""#))
+    {
+        return close_the_run(&name, body.contains(r#""ok":true"#));
+    }
+
+    // Second round: the runbook loaded, so there is something to do.
+    match answers
+        .iter()
+        .rev()
+        .find(|body| body.contains(r#""tool":"skill_run""#))
+    {
+        Some(body) if body.contains(r#""ok":true"#) => write_the_status(&name),
+        Some(_) => close_the_run(&name, false),
+        None => ask_to_load(&name),
+    }
+}
+
+/// The write a watch routine exists to make.
+fn write_the_status(name: &str) -> Vec<ModelEvent> {
+    let stamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let arguments = serde_json::json!({
+        "path": format!("status/{name}.md"),
+        "content": format!(
+            "# {name}
+
+Last scheduled run: {stamp}
+
+There is no model behind this run —              the scripted provider wrote this line to show that a routine can reach the disk              while the window is shut, and only as far as it was signed for.
+"
+        ),
+        "create_dirs": true,
+    })
+    .to_string();
+
+    vec![
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::FS_WRITE.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// The return a scheduled run finishes with, whichever way the write went.
+fn close_the_run(name: &str, wrote: bool) -> Vec<ModelEvent> {
+    let arguments = if wrote {
+        serde_json::json!({
+            "status": "done",
+            "summary": format!("Ran {name} on its schedule and wrote status/{name}.md."),
+            "artefacts": [format!("status/{name}.md")],
+        })
+    } else {
+        serde_json::json!({
+            "status": "blocked",
+            "summary": format!(
+                "Ran {name} on its schedule. The status file could not be written — nobody is                  watching this run, so the write was refused rather than put to anyone."
+            ),
+            "open_questions": ["Should this routine be signed for writes inside the workspace?"],
+        })
+    }
+    .to_string();
+
+    vec![
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(format!("call_{}", uuid::Uuid::new_v4())),
+            name: Some(crate::policy::tool::SKILL_RETURN.to_owned()),
+            args_delta: arguments,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// The runbook a scheduled run's opening message names.
+///
+/// Read out of the message rather than guessed from the catalog, because the
+/// routine named one: a scheduled run that ran whatever happened to be first in
+/// the list would be demonstrating the wrong thing entirely.
+fn skill_named(said: &str) -> Option<String> {
+    let at = said.find("skill:")? + "skill:".len();
+    let rest = &said[at..];
+    let end = rest.find('`')?;
+    let name = rest[..end].trim();
+
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// A turn that loads one runbook, and nothing else.
@@ -987,6 +1112,7 @@ mod tests {
                 skills: None,
                 shared: None,
                 compacted: None,
+                unattended: false,
             },
             &[crate::store::Message::user(text)],
             crate::tools::schemas(),
@@ -1034,6 +1160,7 @@ mod tests {
                 skills: None,
                 shared: None,
                 compacted: None,
+                unattended: false,
             },
             &[],
             Vec::new(),

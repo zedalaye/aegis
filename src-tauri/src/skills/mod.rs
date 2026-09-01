@@ -423,6 +423,94 @@ impl SkillCtx<'_> {
 /// it from the call would be a second copy of that decision.
 pub const META_SKILL: &str = "skill";
 
+/// The status a `skill_return` recorded, in [`ToolResult::meta`].
+pub const META_STATUS: &str = "status";
+
+/// The summary a `skill_return` recorded, in [`ToolResult::meta`].
+pub const META_SUMMARY: &str = "summary";
+
+/// What a run reported, for whoever started the turn (PLAN 7.3, Phase 16).
+///
+/// The three fields of a `skill_return` anybody outside the turn has any use
+/// for: which runbook, how it ended, and what it said. A scheduled run's row is
+/// built from this, and nothing else in the process reads it — a session
+/// somebody is watching reports by being watched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Returned {
+    /// The runbook that returned.
+    pub skill: String,
+    /// `done`, `blocked` or `needs_you`.
+    pub status: String,
+    /// The summary, as the return carried it.
+    pub summary: String,
+}
+
+/// Where a turn leaves what its last run returned.
+///
+/// A cell, and the same one Phase 15 wrote for a delegated run
+/// ([`handoff::Open`](crate::handoff::Open)): the caller creates it, lends it to
+/// the turn, and reads it once the turn is over. Nothing here survives the
+/// turn, which is the scope a run has anyway.
+///
+/// The mutex is not contention — a turn runs its tool calls one at a time — it
+/// is there because the cell is reached through a shared reference from inside
+/// the loop.
+#[derive(Debug, Default)]
+pub struct Reported {
+    returned: std::sync::Mutex<Option<Returned>>,
+}
+
+impl Reported {
+    /// A cell with nothing in it.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records a return. The last one wins, which is a model correcting itself.
+    pub fn close(&self, returned: Returned) {
+        *self.lock() = Some(returned);
+    }
+
+    /// Takes what was returned, leaving the cell empty.
+    pub fn take(&self) -> Option<Returned> {
+        self.lock().take()
+    }
+
+    /// Locks the cell, recovering from a poisoned mutex.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Returned>> {
+        self.returned
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Reads a tool result as the return it recorded, if it is one.
+///
+/// Out of the envelope rather than out of the arguments, for the reason
+/// [`track`] is: what was recorded is what the tool decided, and a caller that
+/// re-derived it from the call would be a second copy of that decision — one
+/// that would happily report a return the tool had refused.
+pub fn returned(tool: &str, result: &ToolResult) -> Option<Returned> {
+    if tool != crate::policy::tool::SKILL_RETURN || !result.ok {
+        return None;
+    }
+
+    let text = |key: &str| {
+        result
+            .meta
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    Some(Returned {
+        skill: text(META_SKILL),
+        status: text(META_STATUS),
+        summary: text(META_SUMMARY),
+    })
+}
+
 /// Follows a turn's skill run across the tool calls of one round.
 ///
 /// A run is a span *within a turn* and not a session-long state machine. That

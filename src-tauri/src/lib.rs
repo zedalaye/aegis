@@ -30,7 +30,13 @@
 //! identity hands briefs to others and reads back a board of statuses instead
 //! of their conversations. A delegated run is an ordinary session under the
 //! owner's own identity, driven by the same turn loop and gated by the same
-//! matrix — there is no second agent loop here, and that is the design.
+//! matrix — there is no second agent loop here, and that is the design. Phase
+//! 16 puts a clock on that same loop: a routine fires a granted skill on a
+//! schedule or when a folder changes, in a session nobody is watching, which is
+//! why it is also the phase where policy stops asking and starts refusing —
+//! what an unattended run may do is exactly what a person signed onto the
+//! routine, and the tray process outliving the window is what makes any of it
+//! possible.
 
 pub mod agent;
 pub mod approval;
@@ -41,6 +47,7 @@ mod display;
 mod error;
 pub mod handoff;
 pub mod policy;
+pub mod schedule;
 pub mod secrets;
 pub mod skills;
 mod state;
@@ -51,7 +58,7 @@ pub mod workspace;
 
 pub use agent::{
     Event, EventSink, FakeProvider, ModelEvent, ModelRequest, OpenAiProvider, Provider,
-    ProviderProbe, Standing, StopReason, Turn, TurnPlan, TurnRegistry, Usage,
+    ProviderProbe, Standing, StopReason, Turn, TurnPlan, TurnRegistry, Unattended, Usage,
 };
 pub use approval::{
     Answer, ApprovalRegistry, ApprovalRequest, Decision as ApprovalDecision, Resolution, ResolvedBy,
@@ -62,14 +69,16 @@ pub use error::{AppError, AppResult, ErrorCode};
 pub use handoff::runner::{Delegating, Host as HandoffHost};
 pub use handoff::{Brief, Plan as HandoffPlan, Priority, ReturnFormat};
 pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
+pub use schedule::runner::Scheduler;
 pub use secrets::{ApiKey, KeySource, SecretStore};
-pub use skills::{Skill, SkillCtx, SkillScope};
+pub use skills::{Reported, Returned, Skill, SkillCtx, SkillScope};
 pub use state::AppState;
 pub use store::{
-    Agent, AgentDraft, AgentStore, Compaction, MaskedSettings, Memory, MemoryDraft, MemoryKind,
-    MemoryStore, Message, Project, ProjectDetail, ProviderSettings, Role, SessionDetail,
-    SessionState, SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord,
-    ToolCallStatus, TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    Agent, AgentDraft, AgentStore, Compaction, LastRun, MaskedSettings, Memory, MemoryDraft,
+    MemoryKind, MemoryStore, Message, Project, ProjectDetail, ProviderSettings, Role, Routine,
+    RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled, SessionDetail, SessionState,
+    SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnHandle,
+    DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
@@ -188,6 +197,11 @@ pub fn run() {
             commands::memory::memory_list,
             commands::memory::memory_save,
             commands::memory::memory_forget,
+            commands::routine::routine_list,
+            commands::routine::routine_save,
+            commands::routine::routine_delete,
+            commands::routine::routine_set_paused,
+            commands::routine::routine_run_now,
         ])
         .setup(|app| {
             // State is built here rather than on the builder because loading
@@ -247,6 +261,14 @@ pub fn run() {
             if let Ok(window) = commands::window::main_window(app.handle()) {
                 display::describe_main(&window);
             }
+            // Last, so it starts against a state that is fully built and a tray
+            // that has already had its chance to install. It is the one part of
+            // the runtime that acts without being asked (PLAN 7.3, Phase 16):
+            // one task, woken every half minute, that fires a routine when one
+            // is due and does nothing at all the rest of the time. A build with
+            // no routines never notices it.
+            schedule::runner::spawn(app.handle().clone());
+
             tracing::debug!("setup complete");
             Ok(())
         })

@@ -248,6 +248,7 @@ async fn run_turn<R: Runtime>(
         skills: state.skills(),
         memories: state.memories(),
         standing: Standing::Own(bus.as_ref()),
+        unattended: None,
     }
     .run(&plan, &cancel)
     .await;

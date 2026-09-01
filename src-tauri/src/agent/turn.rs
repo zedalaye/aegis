@@ -47,6 +47,14 @@
 //! moment a report is filed — and no fourth. There is deliberately no second
 //! loop for delegated work: a specialist's turn is this turn, under its own
 //! identity, through the same gate and onto the same audit log.
+//!
+//! **And whether anybody is in front of it.** Phase 16 adds the second such
+//! flag, [`Unattended`], and it is a separate one because it answers a
+//! different question: a run a clock started is nobody's specialist
+//! (`Standing::Own`) and still has no one to answer a dialog. It reaches three
+//! places of its own — a line in the system message, an *ask* that policy turns
+//! into a refusal, and the routine's id on every audit line — and carries the
+//! cell the run's report is left in. There is no third loop either.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -134,6 +142,29 @@ impl Standing<'_> {
             },
         }
     }
+}
+
+/// The routine a turn is running for, when a clock started it
+/// (PLAN 7.3, Phase 16).
+///
+/// Attendance is orthogonal to [`Standing`], which is why it is a field of its
+/// own rather than a third variant: standing says where a turn sits in the
+/// Chef-de-Cabinet graph, and this says whether there is a person in front of
+/// it. A run a routine fired is `Standing::Own` — it is nobody's specialist —
+/// and it is unattended, which is a different fact with different consequences.
+///
+/// Like `Standing` it reaches three places and no fourth: what the system
+/// message says (nobody is watching, so a call that would ask is refused), what
+/// [`policy`] does with an *ask*, and what the audit line records. The cell is
+/// the fourth thing it carries and the only one that travels back out: it is
+/// how the scheduler learns what the run returned, without reading a
+/// transcript.
+#[derive(Debug, Clone, Copy)]
+pub struct Unattended<'a> {
+    /// The routine's id. Reaches every audit line the run writes.
+    pub routine: &'a str,
+    /// Where the run's `skill_return` is left for whoever started it.
+    pub reported: &'a skills::Reported,
 }
 
 /// The tools this turn's identity actually holds.
@@ -260,6 +291,13 @@ pub struct Turn<'a> {
     /// change its mind halfway through would offer the model one set of tools
     /// and judge its calls against another.
     pub standing: Standing<'a>,
+    /// The routine this turn is running for, when a clock started it
+    /// (PLAN 7.3, Phase 16).
+    ///
+    /// `None` is a session with somebody in front of it, which is every session
+    /// before that phase and every one a person opens. See [`Unattended`] for
+    /// what being `Some` changes, and for why it is not a third [`Standing`].
+    pub unattended: Option<Unattended<'a>>,
 }
 
 /// The [`ProgressSink`] one tool call writes its live output to.
@@ -320,6 +358,14 @@ enum Streamed {
 }
 
 impl Turn<'_> {
+    /// The routine this run belongs to, as an audit line spells it.
+    ///
+    /// Empty for a session somebody opened, which is what every line written
+    /// before Phase 16 carries.
+    fn routine(&self) -> &str {
+        self.unattended.map_or("", |run| run.routine)
+    }
+
     /// Runs a turn to completion and reports how it ended.
     ///
     /// Never returns an `Err`. Everything that can go wrong is either a tool
@@ -429,6 +475,7 @@ impl Turn<'_> {
                     skills: skill_block.as_deref(),
                     shared: shared.as_deref(),
                     compacted: compaction.as_ref().map(|held| held.state.as_str()),
+                    unattended: self.unattended.is_some(),
                 },
                 raw,
                 // Half of the tool ACL, and the half the model can see: an
@@ -771,6 +818,7 @@ impl Turn<'_> {
                 },
                 memories: self.memories,
                 handoffs: self.standing.ctx(),
+                routine: self.routine(),
             };
 
             // Measured for the one tool whose prompt names a display, and for
@@ -795,7 +843,8 @@ impl Turn<'_> {
                 policy_ctx.delegated()
             } else {
                 policy_ctx
-            };
+            }
+            .unattended(self.unattended.is_some());
 
             let judged = match policy::decide(&policy_ctx, &call.name, args.clone()) {
                 Decision::Auto {
@@ -850,6 +899,16 @@ impl Turn<'_> {
             // Before the transcript is touched, so the next call of this same
             // round is already inside the run a `skill_run` just opened.
             skills::track(skill, &call.name, &outcome.result);
+
+            // What a scheduled run answers with. Read out of the envelope the
+            // tool produced rather than out of the transcript, and only when
+            // somebody is waiting for it: a session a person is watching
+            // reports by being watched (PLAN 7.3, Phase 16).
+            if let Some(unattended) = self.unattended {
+                if let Some(returned) = skills::returned(&call.name, &outcome.result) {
+                    unattended.reported.close(returned);
+                }
+            }
 
             // Keyed on what was audited rather than on `ok` alone, so a call
             // that was refused reads as refused in the transcript instead of
@@ -1009,6 +1068,7 @@ impl Turn<'_> {
                     // the refusals it produces belong to that run.
                     active: skill,
                 },
+                routine: self.routine(),
                 memories: self.memories,
                 handoffs: self.standing.ctx(),
             };
@@ -1368,6 +1428,7 @@ mod tests {
                 skills: &self.library,
                 memories: &self.memories,
                 standing: Standing::Own(None),
+                unattended: None,
             }
         }
 

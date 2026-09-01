@@ -25,6 +25,7 @@ import type {
   ApprovalRequest,
   AuditEntry,
   MaskedSettings,
+  Routine,
   SessionSummary,
   ToolApprovalResolved,
   ToolFinished,
@@ -89,6 +90,13 @@ export type EventPayloads = {
    * change made in another cannot disagree.
    */
   "settings:changed": MaskedSettings;
+  /**
+   * A routine's row changed — a run ended, or the scheduler paused it after
+   * two that never reported (PLAN 7.3, Phase 16). The one event that is not
+   * about a turn: it arrives while nobody is looking, which is exactly when a
+   * routine does its work.
+   */
+  "routine:updated": Routine;
   /** The tray brought the window forward. */
   "tray:activate": TrayActivate;
 };

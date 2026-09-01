@@ -259,6 +259,7 @@ impl Delegating {
             // What makes this a delegated run rather than a session: no bus, so
             // it cannot re-delegate, and a cell for the report it owes.
             standing: Standing::Delegated(&open),
+            unattended: None,
         }
         .run(&plan, &own_cancel)
         .await;

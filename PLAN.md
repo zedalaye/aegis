@@ -1067,6 +1067,62 @@ rewind, "fire" a role, clone a role without cloning its rotten memory. A routine
 a chat, never a `PROPOSAL.md` (§ 7.13). Exit: a watch routine runs while the window is
 hidden, writes `/status`, and does not ping unless the skill says to.
 
+*Landed as:* `schedule/` beside `handoff/`, split the same way and for the same reason — `mod.rs`
+is the policy (which routine may exist, when one is due, what its run is told) and `runner.rs` is
+the machinery (the tick, the session, the deadline, the row written afterwards). Everything in the
+first half is arithmetic and refusals, exercisable with no application, no clock and no model.
+
+`Routine { name, project, agent, skill, schedule, grants[], runs_per_day, paused, armed_at, last }`
+in a sixth document, `routines.json`. **It has no prompt field, and there is nowhere to put one**
+— that is § 7.6's "never automate a still-fuzzy workflow" expressed as a shape rather than a
+warning: a routine is a runbook's name, and the run's opening message is written by the runtime
+from that name. `Schedule` is `Every { minutes }`, `DailyAt { hour, minute }` (local, so 07:00
+survives a daylight-saving change) and one trigger, `OnChange { dir }` — a directory inside the
+workspace, polled on the tick the scheduler already wakes for rather than watched by a thread. The
+sources of truth a routine would rather watch are Phase 18 connectors; a folder is what this
+process can already see change.
+
+**The door is checked against the audit log.** § 7.13's rule — a live skill, already granted,
+already run under watch at least once — needed a third check with evidence, and the evidence
+already existed: `AuditLog::witnessed` looks for a `skill_return` this identity made for this
+skill. That is the payoff for § 7.6's *audit names the skill*, and it is the only place the
+runtime reads its own log to decide something. Write the seven headings, run it once and watch,
+*then* put it on a clock — with no way round it in the UI, because it is not enforced in the UI.
+
+**A run is unattended, and that is a policy fact rather than a window fact.** `Run now` takes the
+same path as the clock, deliberately: a run that behaved differently depending on where the window
+was would be one nobody could reproduce. `PolicyCtx::unattended` turns every *ask* into a refusal —
+a prompt nobody can see is a turn parked for five minutes per call, and a refusal the model can
+report as `blocked` is a better answer. What a run may do beyond reading is the list of `Grant`s a
+person signed on the routine: the same values the dialog creates, seeded into the run's session and
+dropped with it, bounded twice at save time by what the runbook declares and what the identity
+holds. Nothing outside the workspace and nothing under `.git/` can be signed for, because those
+rows offer no grant to match — the property § 3.1 already had.
+
+The run itself is an ordinary session under the ordinary `Turn`, with a `Scheduled` on its record
+and a `routine` badge in the sidebar, so "what did it do at seven this morning" is a click. One
+flag reaches three places and no fourth (`Unattended { routine, reported }`): what the system
+message says, what policy does with an ask, and the `routine` field the audit line grows beside
+`agent_id`, `skill` and `handoff`. The fourth thing it carries is the cell the run's `skill_return`
+lands in, which is how the scheduler learns what happened without reading a transcript.
+
+**A scheduled run does not start other agents** — `Standing::Own` with no bus, so
+`handoff_delegate` is not offered. A fan-out under a clock would be several unattended sessions
+nobody signed for, each holding none of the routine's approvals and each therefore returning
+`blocked`. A CoS routes when somebody is there to read the board.
+
+Budgets are spend, so they are persisted: per routine, and per identity across every routine that
+fires as it, charged under the store's own lock before a session is opened so two ticks cannot both
+fire the last one. A run that ends *without returning at all* is a silence; two running and the
+routine pauses itself with the reason on its row (escalate after two, `COS.md` *Loop*) — a
+`blocked` is not one, because the runbook answered. Runs are cut off at fifteen minutes through the
+turn's own cancellation, and at most two are in flight at once. "Fire a role" is a refusal that
+names how many routines still fire as it rather than a silent cascade; "clone a role without its
+rotten memory" is *Duplicate* on an identity — same perimeter, new id, and memories are keyed on
+the id. **Rewind is not here.** A routine's row says what its last run did and links the session
+it did it in; replaying one from the audit and the artefacts is Phase 17, and the `routine` field
+on every line this phase writes is what that will be replayed from.
+
 **Phase 17 — Status board + trace/replay**
 UI for the CoS board (attention, in-flight, blocked). One run id over CoS + specialists;
 replay from the audit + artefacts. Token/cost counters. Exit: you can answer "who ran, what

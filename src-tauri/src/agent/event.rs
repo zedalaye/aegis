@@ -25,7 +25,7 @@ use ts_rs::TS;
 
 use crate::approval::{ApprovalRequest, Decision, ResolvedBy};
 use crate::audit::{AuditEntry, Outcome};
-use crate::store::{Message, SessionSummary};
+use crate::store::{Message, Routine, SessionSummary};
 use crate::tools::Stream;
 
 use super::wire::{StopReason, Usage};
@@ -58,6 +58,8 @@ pub mod name {
     pub const SESSION_UPDATED: &str = "session:updated";
     /// A line was appended to the audit log.
     pub const AUDIT_APPENDED: &str = "audit:appended";
+    /// A routine's row changed.
+    pub const ROUTINE_UPDATED: &str = "routine:updated";
 }
 
 /// `turn:started`.
@@ -283,6 +285,14 @@ pub enum Event {
     SessionUpdated(SessionSummary),
     /// `audit:appended`.
     AuditAppended(Box<AuditEntry>),
+    /// `routine:updated` (PLAN 7.3, Phase 16).
+    ///
+    /// The one event that is not about a turn. A routine's row changes when a
+    /// run of it ends — including at four in the morning with no window open,
+    /// which is why it is an event at all rather than something the panel could
+    /// poll for: a person who opens Settings wants to see what happened, not
+    /// what was true when the panel was last drawn.
+    RoutineUpdated(Box<Routine>),
 }
 
 impl Event {
@@ -302,6 +312,7 @@ impl Event {
             Self::ToolFinished(_) => name::TOOL_FINISHED,
             Self::SessionUpdated(_) => name::SESSION_UPDATED,
             Self::AuditAppended(_) => name::AUDIT_APPENDED,
+            Self::RoutineUpdated(_) => name::ROUTINE_UPDATED,
         }
     }
 
@@ -321,6 +332,14 @@ impl Event {
             Self::ToolFinished(payload) => &payload.session_id,
             Self::SessionUpdated(payload) => &payload.id,
             Self::AuditAppended(payload) => &payload.session_id,
+            // The only payload that is not about one session. The nearest thing
+            // it has is the session its last run opened, which is what a sink
+            // filtering by session would want to route it to; a routine that
+            // has never run has none, and an empty id matches nothing.
+            Self::RoutineUpdated(payload) => payload
+                .last
+                .as_ref()
+                .map_or("", |last| last.session_id.as_str()),
         }
     }
 
@@ -344,6 +363,7 @@ impl Event {
             Self::ToolFinished(payload) => serde_json::to_value(payload),
             Self::SessionUpdated(payload) => serde_json::to_value(payload),
             Self::AuditAppended(payload) => serde_json::to_value(payload),
+            Self::RoutineUpdated(payload) => serde_json::to_value(payload),
         };
 
         rendered.unwrap_or_else(|err| {

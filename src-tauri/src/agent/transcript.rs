@@ -106,6 +106,14 @@ pub struct Context<'a> {
     /// What this session's older turns folded into (PLAN 7.3, Phase 14), or
     /// `None` for a session that has never been compacted.
     pub compacted: Option<&'a str>,
+    /// Whether a routine started this run, with nobody in front of it
+    /// (PLAN 7.3, Phase 16).
+    ///
+    /// Said in the system message for the reason a missing workspace is: the
+    /// model is better off being told than discovering it one refusal at a
+    /// time. The routine's own opening message says it too, and this is what
+    /// keeps it true in round five of a run whose first message has folded.
+    pub unattended: bool,
 }
 
 /// The system message for a session: who it is, what it knows, where it is,
@@ -366,6 +374,7 @@ mod tests {
             skills: None,
             shared: None,
             compacted: None,
+            unattended: false,
         }
     }
 
@@ -494,6 +503,7 @@ mod tests {
             skills: Some("Skills you may run.\n\n- `inbox.triage`"),
             shared: Some("status/STATUS.md:\nquiet"),
             compacted: Some("Earlier in this session, folded to state."),
+            unattended: false,
             ..ctx(&reviewer, Some(&root))
         });
 

@@ -930,6 +930,20 @@ pub struct PolicyCtx<'a> {
     /// a CoS in one session and a specialist in the next, and its tool list does
     /// not change between them.
     pub delegated: bool,
+    /// Whether there is nobody to ask (PLAN 7.3, Phase 16).
+    ///
+    /// True inside a run a routine fired, false in a session somebody could
+    /// answer a dialog in. Like [`PolicyCtx::delegated`] it is a fact about the
+    /// *run* rather than about the identity — the same identity is asked in one
+    /// session and unasked in the next — and it changes exactly one thing: an
+    /// [`Decision::Ask`] becomes a refusal, because a prompt nobody can see is
+    /// a turn parked until it times out, and a five-minute stall per call is a
+    /// worse answer than a refusal the model can report in a status.
+    ///
+    /// It never *widens* anything. What an unattended run may do beyond reading
+    /// is exactly what somebody signed onto the routine, and those arrive here
+    /// as ordinary session grants, judged by the line above this one.
+    pub unattended: bool,
     /// The identity the call is made under, and the tools it holds.
     ///
     /// `None` is "no identity is bound to this decision", which means every
@@ -950,6 +964,7 @@ impl<'a> PolicyCtx<'a> {
             self_exe: None,
             screen: None,
             delegated: false,
+            unattended: false,
             identity: None,
         }
     }
@@ -958,6 +973,13 @@ impl<'a> PolicyCtx<'a> {
     #[must_use]
     pub const fn delegated(mut self) -> Self {
         self.delegated = true;
+        self
+    }
+
+    /// Marks this as a call made with nobody there to answer a dialog.
+    #[must_use]
+    pub const fn unattended(mut self, unattended: bool) -> Self {
+        self.unattended = unattended;
         self
     }
 
@@ -1093,8 +1115,50 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
             tracing::debug!(tool = tool_name, "covered by a session grant");
             Decision::Auto {
                 call,
-                reason: "allowed for this session by an earlier approval",
+                // Said differently for a scheduled run, because it is a
+                // different fact: nobody clicked anything here, and an audit
+                // line reading "an earlier approval" would point at a dialog
+                // that never opened. What allowed it is the routine's standing
+                // approval, signed once, when it was saved.
+                reason: if ctx.unattended {
+                    "allowed by the routine's standing approval"
+                } else {
+                    "allowed for this session by an earlier approval"
+                },
             }
+        }
+        // Nobody can answer, so nobody is asked (PLAN 7.3, Phase 16). This is
+        // last on purpose: the identity's allow-list, the table and the grants
+        // have all had their say, so what is refused here is precisely a call
+        // that *would* have opened a dialog — and the refusal says which
+        // approval would have covered it, because that is the fix.
+        _ if ctx.unattended => {
+            tracing::info!(tool = tool_name, "an unattended run asked to ask");
+            Decision::deny(
+                ErrorCode::Denied,
+                match &request.grant {
+                    // A row somebody could have signed for, and did not. The
+                    // call is named rather than the grant's own wording, which
+                    // is written as a promise about a *session* and would read
+                    // as nonsense in a run nobody opened.
+                    Some(_) => format!(
+                        "nobody is watching this run, and this routine was not signed for \
+                         `{tool_name}` ({}). Do what you can without it, then return `blocked` \
+                         and say what you needed",
+                        request.summary
+                    ),
+                    // A row nothing can sign for in advance (PLAN 3.1): outside
+                    // the workspace, a `.git/` write. Saying so is the point —
+                    // the model should stop looking for a way through rather
+                    // than trying a second path.
+                    None => format!(
+                        "nobody is watching this run, and `{tool_name}` here is put to a person \
+                         every time it is asked ({}), which no routine can be signed for in \
+                         advance. Return `blocked` and say what you needed",
+                        request.reason
+                    ),
+                },
+            )
         }
         _ => Decision::Ask { call, request },
     }

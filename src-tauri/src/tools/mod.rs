@@ -651,6 +651,14 @@ pub struct ToolCtx<'a> {
     /// what makes one run replayable across the CoS and everyone under it
     /// (PLAN 7.2, row 10).
     pub handoffs: HandoffCtx<'a>,
+    /// The routine whose run this is, or empty (PLAN 7.3, Phase 16).
+    ///
+    /// Held here for the reason the delegation's id is: which clock started
+    /// this run is a fact about the turn, not about what the model asked for,
+    /// and it belongs on *every* audit line the run writes rather than only on
+    /// the ones a skill tool makes. It is what makes "what did the machine do
+    /// last night, and what did it cost" a question the log answers.
+    pub routine: &'a str,
 }
 
 // Written out rather than derived: `&dyn ProgressSink` has no `Debug`, and
@@ -666,6 +674,7 @@ impl fmt::Debug for ToolCtx<'_> {
             .field("captures", &self.captures)
             .field("skill", &self.skills.active)
             .field("handoff", &self.handoffs.id())
+            .field("routine", &self.routine)
             .field("cancelled", &self.cancel.is_cancelled())
             .finish_non_exhaustive()
     }
@@ -779,6 +788,7 @@ pub async fn run(
             .handoff
             .as_deref()
             .unwrap_or_else(|| ctx.handoffs.id()),
+        routine: ctx.routine,
         decision,
         policy_reason: reason,
         args: ctx.args,
@@ -837,6 +847,7 @@ pub fn refuse(
         // same holds for a brief.
         skill: ctx.skills.active.unwrap_or(""),
         handoff: ctx.handoffs.id(),
+        routine: ctx.routine,
         decision,
         policy_reason: reason,
         args: ctx.args,

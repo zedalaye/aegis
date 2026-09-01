@@ -13,8 +13,9 @@
  * the audit log and the provider settings (PLAN 2.1, "Settings and audit"),
  * the shared-workspace convention (PLAN 7.3, Phase 11), the identities a
  * session can be opened as (PLAN 7.3, Phase 12), the runbooks those
- * identities may run (PLAN 7.3, Phase 13), and what one identity has learned
- * (PLAN 7.3, Phase 14).
+ * identities may run (PLAN 7.3, Phase 13), what one identity has learned
+ * (PLAN 7.3, Phase 14), and the routines that fire a runbook on a clock
+ * (PLAN 7.3, Phase 16).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -38,6 +39,8 @@ import type {
   Project,
   ProjectDetail,
   ProviderProbe,
+  Routine,
+  RoutineDraft,
   ScaffoldReport,
   SessionDetail,
   SessionSummary,
@@ -560,4 +563,78 @@ export function memoryForget(
  */
 export function sessionCompact(sessionId: string): Promise<SessionDetail> {
   return call<SessionDetail>("session_compact", { session_id: sessionId });
+}
+
+/**
+ * Every routine, each carrying whatever is wrong with it right now
+ * (PLAN 7.3, Phase 16).
+ *
+ * `problem` is measured on every call, never stored: a skill that was
+ * un-granted, a folder that was unplugged, a budget that is spent. A row that
+ * carries one is a row that will not fire, and the panel says so rather than
+ * drawing a clock that has quietly stopped.
+ */
+export function routineList(): Promise<Routine[]> {
+  return call<Routine[]>("routine_list");
+}
+
+/**
+ * Creates a routine, or replaces one.
+ *
+ * `routineId` of `null` creates; otherwise that routine is updated, keeping its
+ * id and today's ledger.
+ *
+ * The runtime enforces the door here: the skill has to be live, granted to the
+ * identity, and already run under watch at least once — evidence it reads from
+ * the audit log. A refusal rejects with `E_INVALID_SETTING` and an
+ * `error.field` naming the input, the same shape the identity and provider
+ * forms use.
+ */
+export function routineSave(
+  routineId: string | null,
+  draft: RoutineDraft,
+): Promise<Routine> {
+  return call<Routine>("routine_save", {
+    routine_id: routineId,
+    draft,
+  });
+}
+
+/**
+ * Deletes a routine. The sessions its runs opened are left alone — they are
+ * transcripts of things that happened.
+ */
+export function routineDelete(routineId: string): Promise<void> {
+  return call<void>("routine_delete", { routine_id: routineId });
+}
+
+/**
+ * Stops or restarts a routine's clock.
+ *
+ * Un-pausing re-arms it, so a routine stopped for a fortnight does not
+ * immediately fire for a window nobody was there for, and it clears the reason
+ * — including one the scheduler wrote itself after two runs that never
+ * reported.
+ */
+export function routineSetPaused(
+  routineId: string,
+  paused: boolean,
+): Promise<Routine> {
+  return call<Routine>("routine_set_paused", {
+    routine_id: routineId,
+    paused,
+  });
+}
+
+/**
+ * Fires a routine now, exactly as the clock would.
+ *
+ * Resolves as soon as the run has started; the session, the row and the
+ * transcript arrive as `session:updated`, `routine:updated` and `turn:*`
+ * events. The run is unattended like any other, so a call the routine was not
+ * signed for is refused here just as it would be at four in the morning —
+ * which is the point of pressing it.
+ */
+export function routineRunNow(routineId: string): Promise<void> {
+  return call<void>("routine_run_now", { routine_id: routineId });
 }

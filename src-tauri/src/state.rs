@@ -22,11 +22,12 @@ use crate::approval::{ApprovalRegistry, ApprovalRequest, Decision, Resolution};
 use crate::audit::AuditLog;
 use crate::error::{AppError, AppResult};
 use crate::policy::GrantStore;
+use crate::schedule::runner::Scheduler;
 use crate::secrets::{key_hint, SecretStore};
 use crate::store::{
-    Agent, AgentStore, MaskedSettings, Memory, MemoryDraft, MemoryStore, SessionDetail,
-    SessionState, SessionStore, SessionSummary, SettingsStore, Store, DEFAULT_AGENT_ID,
-    DEFAULT_PROVIDER_ID,
+    Agent, AgentStore, MaskedSettings, Memory, MemoryDraft, MemoryStore, Routine, RoutineStore,
+    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+    DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
 /// Shared state, registered with `Manager::manage` and read from commands via
@@ -43,6 +44,12 @@ pub struct AppState {
     sessions: SessionStore,
     agents: AgentStore,
     memories: MemoryStore,
+    routines: RoutineStore,
+    /// Which routines are running right now, so nothing fires twice
+    /// (PLAN 7.3, Phase 16). In memory only: a routine is not running after a
+    /// crash, and a persisted flag saying it was is what would stop a clock
+    /// forever.
+    scheduler: Scheduler,
     settings: SettingsStore,
     secrets: SecretStore,
     turns: TurnRegistry,
@@ -74,6 +81,8 @@ impl AppState {
             sessions: SessionStore::load(data_dir),
             agents: AgentStore::load(data_dir),
             memories: MemoryStore::load(data_dir),
+            routines: RoutineStore::load(data_dir),
+            scheduler: Scheduler::new(),
             settings: SettingsStore::load(data_dir),
             secrets: SecretStore::new(),
             turns: TurnRegistry::new(),
@@ -288,6 +297,14 @@ impl AppState {
         if bound > 0 {
             return Err(AppError::AgentInUse { count: bound });
         }
+        // A clock pointing at nobody is worse than a refusal: it would keep a
+        // routine on the panel that can never run again, and the person who
+        // deleted the identity is the one who knows whether the routine should
+        // move or go (PLAN 7.3, Phase 16).
+        let fired_by = self.routines.count_for_agent(agent_id);
+        if fired_by > 0 {
+            return Err(AppError::AgentHasRoutines { count: fired_by });
+        }
 
         self.agents.delete(agent_id)?;
 
@@ -300,6 +317,71 @@ impl AppState {
     /// Where this installation's memories are kept (PLAN 7.3, Phase 14).
     pub fn memories(&self) -> &MemoryStore {
         &self.memories
+    }
+
+    /// The routine store: what is on a clock (PLAN 7.3, Phase 16).
+    pub fn routines(&self) -> &RoutineStore {
+        &self.routines
+    }
+
+    /// Which routines are running right now.
+    pub fn scheduler(&self) -> &Scheduler {
+        &self.scheduler
+    }
+
+    /// Every routine, each carrying whatever is wrong with it right now.
+    ///
+    /// The measuring is here because it is the composition no single store can
+    /// do: the identity is in one document, the folder in another, the runbook
+    /// on disk, and the answer changes without the routine being touched.
+    pub fn routine_list(&self) -> Vec<Routine> {
+        self.routines
+            .list()
+            .into_iter()
+            .map(|mut routine| {
+                routine.problem = self.routine_problem(&routine);
+                routine
+            })
+            .collect()
+    }
+
+    /// One routine with its problem measured, as a command hands it back.
+    pub fn routine_with_problem(&self, mut routine: Routine) -> Routine {
+        routine.problem = self.routine_problem(&routine);
+        routine
+    }
+
+    /// Why this routine cannot fire as it stands, or `None` when it can.
+    ///
+    /// Read by the panel on every list and by the scheduler on every tick, so
+    /// a routine that is drawn as runnable is one that would actually run.
+    pub fn routine_problem(&self, routine: &Routine) -> Option<String> {
+        let agent = self.agents.get(&routine.agent_id).ok();
+        let workspace = self.workspace_for_project(&routine.project_id);
+        let catalog = self.skill_catalog(workspace.as_deref());
+        let skill = crate::skills::find(&catalog, &routine.skill).cloned();
+
+        crate::schedule::inspect(
+            routine,
+            agent.as_ref(),
+            workspace.as_deref(),
+            skill.as_ref(),
+            self.routines.runs_today_for_agent(&routine.agent_id),
+        )
+    }
+
+    /// A project's workspace folder, when it is there right now.
+    ///
+    /// The project-shaped half of [`AppState::workspace_of`], which answers the
+    /// same question for a session. A routine names a project rather than a
+    /// session — its runs each open one — so it needs this one.
+    pub fn workspace_for_project(&self, project_id: &str) -> Option<PathBuf> {
+        self.store
+            .list()
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .filter(|project| project.workspace_exists)
+            .map(|project| PathBuf::from(project.workspace_path))
     }
 
     /// One identity's memories, most recently touched first.
@@ -682,6 +764,7 @@ mod tests {
             tool: "fs_list",
             skill: "",
             handoff: "",
+            routine: "",
             decision: crate::audit::AuditDecision::Auto,
             policy_reason: "a read-only listing inside the workspace",
             args: &serde_json::json!({ "path": "." }),
@@ -760,6 +843,7 @@ mod tests {
             tool: "fs_write",
             skill: "",
             handoff: "",
+            routine: "",
             decision: crate::audit::AuditDecision::AllowOnce,
             policy_reason: "this creates a file in the workspace",
             args: &serde_json::json!({ "path": "a.txt", "content": "x" }),

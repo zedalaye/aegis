@@ -193,6 +193,7 @@ impl App {
             skills: &self.library,
             memories: &self.memories,
             standing: Standing::Own(None),
+            unattended: None,
         }
     }
 

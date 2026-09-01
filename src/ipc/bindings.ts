@@ -49,6 +49,15 @@ tools: Array<string>,
  */
 skills: Array<string>, 
 /**
+ * Most scheduled runs it may make in a day (PLAN 7.3, Phase 16).
+ *
+ * Counted across every routine that fires as this identity, and spent
+ * before a run opens a session. Zero is an identity nothing may schedule,
+ * which is a real thing to want: a Chief of Staff you talk to and never
+ * put on a clock.
+ */
+runs_per_day: number, 
+/**
  * Whether this is the built-in identity, which cannot be edited or
  * deleted. Derived, never stored.
  */
@@ -87,7 +96,15 @@ tools: Array<string>,
  * The runbooks it may run. Requires `skill_run` and `skill_return` in
  * [`AgentDraft::tools`] when it is not empty.
  */
-skills: Array<string>, };
+skills: Array<string>, 
+/**
+ * Most scheduled runs a day, capped at [`AGENT_RUNS_PER_DAY_MAX`].
+ *
+ * `#[serde(default)]` so a caller written before Phase 16 — and the
+ * tests that were — still send a valid draft; the default is the same
+ * ceiling a new identity gets.
+ */
+runs_per_day: number, };
 
 /**
  * The structured half of an approval request: what the dialog draws.
@@ -381,6 +398,22 @@ skill: string,
  */
 handoff: string, 
 /**
+ * The routine whose run this call was part of (PLAN 7.3, Phase 16).
+ *
+ * The third id over a run, beside `agent_id` and `skill`, and the one that
+ * answers a question only this phase can raise: *what did the machine do
+ * while nobody was here*. Every call a scheduled run makes carries it, so
+ * a week of a watch routine is one grep — and so is the budget it spent,
+ * which is the "cannot be budgeted or replayed" of `COS.md` applied to the
+ * only runs nobody watched.
+ *
+ * Empty outside a routine's run, and on every line written before this
+ * phase. `#[serde(default)]` for the reason the three before it carry one:
+ * the file is its own wire format, and a reader that refused the older
+ * lines would lose the history the log is kept for.
+ */
+routine: string, 
+/**
  * Auto-allowed, approved, or refused.
  */
 decision: AuditDecision, 
@@ -538,6 +571,31 @@ inputs: number, };
  * Where the key in use came from (PLAN 2.1, `MaskedSettings`).
  */
 export type KeySource = "keyring" | "env" | "none";
+
+/**
+ * What became of the last run.
+ */
+export type LastRun = { 
+/**
+ * When it started, RFC3339, UTC.
+ *
+ * The start rather than the end, because it is also what the next fire is
+ * counted from: a run that took ten minutes must not be followed by one
+ * starting the moment it finishes.
+ */
+at: string, 
+/**
+ * The session it ran in, so the transcript is one click away.
+ */
+session_id: string, 
+/**
+ * How it ended.
+ */
+outcome: RunOutcome, 
+/**
+ * The run's own words: a return's summary, or what went wrong.
+ */
+detail: string, };
 
 /**
  * Everything the WebView is allowed to know about the provider settings.
@@ -770,6 +828,133 @@ export type Risk = "low" | "medium" | "high";
 export type Role = "user" | "assistant" | "tool" | "system";
 
 /**
+ * A routine, as the UI and the scheduler see it.
+ */
+export type Routine = { 
+/**
+ * UUID v4.
+ */
+id: string, 
+/**
+ * Display name: "Morning watch".
+ */
+name: string, 
+/**
+ * The project whose workspace it runs in.
+ */
+project_id: string, 
+/**
+ * The identity it runs as.
+ */
+agent_id: string, 
+/**
+ * The skill it fires — a live `SKILL.md`, never a chat and never a
+ * proposal (PLAN 7.13, *Phase 16's door*).
+ */
+skill: string, 
+/**
+ * When it fires.
+ */
+schedule: Schedule, 
+/**
+ * What its runs may do with nobody there to ask.
+ */
+grants: Array<Grant>, 
+/**
+ * Most runs it may make in one day.
+ */
+runs_per_day: number, 
+/**
+ * How many it has made today.
+ */
+runs_today: number, 
+/**
+ * Whether the clock is stopped.
+ */
+paused: boolean, 
+/**
+ * Why it was stopped, when the scheduler stopped it rather than a person.
+ */
+paused_reason: string, 
+/**
+ * When it started counting.
+ *
+ * Set when the routine is created, and again whenever its schedule changes
+ * or somebody un-pauses it. Windows before it do not fire: a routine saved
+ * at three in the afternoon and set to run at seven does not immediately
+ * decide it is late (see [`crate::schedule::due`]).
+ */
+armed_at: string, 
+/**
+ * What became of the last run, if it has run.
+ */
+last: LastRun | null, 
+/**
+ * Why this routine cannot fire as it stands.
+ *
+ * Derived, never stored — the property [`store`](super) holds every
+ * document to, and the one that matters most here. A skill that was
+ * un-granted, a folder that was unplugged, an identity that was deleted:
+ * all facts about *right now*, and a stored copy of any of them is exactly
+ * what would let a clock keep firing at a runbook nobody may run. Filled
+ * by [`crate::schedule::inspect`].
+ */
+problem: string | null, 
+/**
+ * RFC3339, UTC.
+ */
+created_at: string, 
+/**
+ * RFC3339, UTC.
+ */
+updated_at: string, };
+
+/**
+ * What a create or an update carries.
+ */
+export type RoutineDraft = { 
+/**
+ * Display name.
+ */
+name: string, 
+/**
+ * The project whose workspace it runs in.
+ */
+project_id: string, 
+/**
+ * The identity it runs as.
+ */
+agent_id: string, 
+/**
+ * The skill it fires.
+ */
+skill: string, 
+/**
+ * When it fires.
+ */
+schedule: Schedule, 
+/**
+ * What its runs may do unattended. May be empty — a routine that only
+ * reads is the safest thing this document can hold.
+ */
+grants: Array<Grant>, 
+/**
+ * Most runs a day. Capped at [`RUNS_PER_DAY_MAX`].
+ */
+runs_per_day: number, };
+
+/**
+ * How a run ended, as the routine list draws it.
+ *
+ * The first three are the statuses a `skill_return` carries (`COS.md`
+ * *Handoff*), which is the whole vocabulary a finished run has. The fourth is
+ * what the runtime saw when there was no return at all — a separate value
+ * rather than a fourth status, because a `blocked` is an answer and a silence
+ * is not (PLAN 7.3, Phase 15, *When nobody answers*).
+ */
+export type RunOutcome = "done" | "blocked" | "needs_you" | "failed";
+
+/**
  * What one scaffolding run did.
  *
  * Two lists rather than a count: the point of the report is that the user can
@@ -790,6 +975,59 @@ created: Array<string>,
  * Files that were already there and were left exactly as they were.
  */
 kept: Array<string>, };
+
+/**
+ * When a routine fires.
+ *
+ * Three shapes, and the third is the "or a trigger" of PLAN 7.3, Phase 16. It
+ * is deliberately the *only* trigger: the sources of truth a routine would
+ * really like to watch — mail, a ticket queue, a pull request — arrive as MCP
+ * connectors in Phase 18, and a trigger invented here for one of them would be
+ * a domain inside the runtime (PLAN 7.5). A folder in the workspace is the one
+ * thing this process can already see change.
+ */
+export type Schedule = { "kind": "every", 
+/**
+ * Minutes between runs, from [`EVERY_MIN_MINUTES`] to
+ * [`EVERY_MAX_MINUTES`].
+ */
+minutes: number, } | { "kind": "daily_at", 
+/**
+ * Hour of the local day, 0–23.
+ */
+hour: number, 
+/**
+ * Minute, 0–59.
+ */
+minute: number, } | { "kind": "on_change", 
+/**
+ * The directory, relative to the workspace root: `briefs`, `inbox`.
+ */
+dir: string, };
+
+/**
+ * Why a session exists, when a clock opened it (PLAN 7.3, Phase 16).
+ *
+ * The routine's record on the run, and the mirror of [`Delegated`]: a
+ * scheduled run is an ordinary session in every way that matters, and this is
+ * the difference. The routine's *name* is copied rather than only its id, so a
+ * row still says what fired it after the routine has been renamed or deleted —
+ * a transcript is a record of something that happened, and it should not stop
+ * explaining itself because a document moved on.
+ */
+export type Scheduled = { 
+/**
+ * The routine that fired it. Shared with the audit lines the run writes.
+ */
+routine_id: string, 
+/**
+ * Its name when it fired.
+ */
+routine_name: string, 
+/**
+ * The runbook it was fired to run.
+ */
+skill: string, };
 
 /**
  * A session and its transcript.
@@ -882,7 +1120,16 @@ state: SessionState,
  * this phase. The sidebar draws it as a badge rather than hiding the row:
  * work done on your behalf should be as visible as work you asked for.
  */
-delegated: Delegated | null, };
+delegated: Delegated | null, 
+/**
+ * The routine that opened this session, when one did (PLAN 7.3, Phase 16).
+ *
+ * The other way a session comes to exist without anybody typing. It is a
+ * second field rather than a variant beside [`SessionSummary::delegated`]
+ * because the two are different facts and a session could one day be both
+ * — a routine's run is not a brief, and a brief is not on a clock.
+ */
+scheduled: Scheduled | null, };
 
 /**
  * One catalog entry.

@@ -197,7 +197,12 @@ pub(crate) fn ret(report: &handoff::Report, ctx: SkillCtx<'_>) -> Produced {
                 false,
                 json!({
                     META_SKILL: active,
-                    "status": report.status.as_str(),
+                    skills::META_STATUS: report.status.as_str(),
+                    // Carried so that a run nobody watched can still say what it
+                    // did on its routine's row (PLAN 7.3, Phase 16). It is the
+                    // model's own summary, already checked by `handoff::check`
+                    // and already in the rendered content below it.
+                    skills::META_SUMMARY: report.summary.trim(),
                     "artefacts": report.artefacts.len(),
                 }),
             )

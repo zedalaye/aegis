@@ -329,6 +329,44 @@ pub enum AppError {
         action: &'static str,
     },
 
+    /// A routine's field cannot be used, and somebody has to change it.
+    ///
+    /// The same shape as [`AppError::Agent`] and for the same reason: the form
+    /// that raised it can put the message beside the input that caused it. It
+    /// carries the four refusals of the door as well as the shape checks —
+    /// a skill nobody granted, one that will not parse, one nobody has run
+    /// under watch, a standing approval the runbook never asked for — because
+    /// to the person typing they are all "this field is wrong, and here is
+    /// why" (PLAN 7.3, Phase 16).
+    #[error("that {field} cannot be used: {reason}")]
+    Routine {
+        /// Which field: "name", "schedule", "skill", "grants", "budget",
+        /// "run".
+        field: &'static str,
+        /// What is wrong with it, and what a working value looks like.
+        reason: String,
+    },
+
+    /// No routine carries that id, so the UI is holding a stale list.
+    #[error("that routine no longer exists")]
+    RoutineNotFound {
+        /// The id that was looked up. Logged, not shown.
+        id: String,
+    },
+
+    /// An identity was deleted while routines still fire as it.
+    ///
+    /// Refused rather than cascaded, for the reason [`AppError::AgentInUse`]
+    /// is: a routine is a standing instruction somebody wrote, and silently
+    /// deleting one because an identity went away would take a clock off the
+    /// wall without saying so. Repoint them or delete them first — which is
+    /// also how you fire a role without losing what it was doing.
+    #[error("this identity cannot be deleted while routines still fire as it ({count} do)")]
+    AgentHasRoutines {
+        /// How many routines name it.
+        count: usize,
+    },
+
     /// An identity was deleted while sessions still run as it.
     ///
     /// Refused rather than cascaded. Reassigning those sessions to another
@@ -401,9 +439,10 @@ impl AppError {
             Self::TurnBusy { .. } => ErrorCode::TurnBusy,
             Self::ApprovalStale { .. } => ErrorCode::ApprovalStale,
             Self::GrantNotAllowed { .. } => ErrorCode::GrantNotAllowed,
-            Self::Settings { .. } | Self::Agent { .. } | Self::Memory { .. } => {
-                ErrorCode::InvalidSetting
-            }
+            Self::Settings { .. }
+            | Self::Agent { .. }
+            | Self::Memory { .. }
+            | Self::Routine { .. } => ErrorCode::InvalidSetting,
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
@@ -414,6 +453,8 @@ impl AppError {
             | Self::AgentNotFound { .. }
             | Self::AgentBuiltin { .. }
             | Self::AgentInUse { .. }
+            | Self::AgentHasRoutines { .. }
+            | Self::RoutineNotFound { .. }
             | Self::MemoryNotFound { .. }
             | Self::Internal { .. }
             | Self::Audit { .. }
@@ -447,7 +488,8 @@ impl AppError {
         match self {
             Self::Settings { field, .. }
             | Self::Agent { field, .. }
-            | Self::Memory { field, .. } => Some(field),
+            | Self::Memory { field, .. }
+            | Self::Routine { field, .. } => Some(field),
             _ => None,
         }
     }

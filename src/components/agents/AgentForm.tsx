@@ -138,19 +138,22 @@ export default function AgentForm({
   const cancel = useAgents((s) => s.cancelEdit);
   const toolsError = useFieldError("tools");
   const known = useSkills((s) => s.skills);
+  // What a *new* identity opens filled in with: a duplicate's fields, or
+  // nothing. Read once, with the draft below, for the same reason.
+  const seed = useAgents((s) => s.seed);
 
   // Seeded once, from whatever the form was opened on. Re-seeding on every
   // render would throw away what the user is typing; the store closes the form
   // on a successful save, which unmounts this and takes the draft with it.
   const [draft, setDraft] = useState<AgentDraft>(() =>
-    editing === null ? blankDraft() : draftOf(editing),
+    editing === null ? (seed ?? blankDraft()) : draftOf(editing),
   );
 
   // Held as the text that was typed, parsed only on submit. Parsing on every
   // keystroke and rendering the result back would eat the comma the moment it
   // was typed, because a trailing empty name is dropped.
   const [skillsText, setSkillsText] = useState(() =>
-    (editing?.skills ?? []).join(", "),
+    (editing?.skills ?? seed?.skills ?? []).join(", "),
   );
 
   const patch = (change: Partial<AgentDraft>) =>
@@ -335,6 +338,33 @@ export default function AgentForm({
               aria-describedby={describedBy}
             />
           </>
+        )}
+      </Field>
+
+      <Field
+        id="agent-runs"
+        label="Scheduled runs a day"
+        field="runs_per_day"
+        // The ceiling on the *role*, said where the role is edited. Three
+        // well-behaved routines on one identity can still spend a night
+        // writing, and this is the number that catches that (PLAN 7.3,
+        // Phase 16).
+        hint="A ceiling on what a clock may start as this identity, across every routine that fires as it. Each routine has a budget of its own as well. Sessions you type into are not counted — you are the budget."
+      >
+        {({ id, invalid, describedBy }) => (
+          <input
+            id={id}
+            type="number"
+            className={`field__input field__input--number${invalid ? " field__input--bad" : ""}`}
+            min={0}
+            max={200}
+            value={draft.runs_per_day}
+            onChange={(event) =>
+              patch({ runs_per_day: Number(event.target.value) })
+            }
+            aria-invalid={invalid}
+            aria-describedby={describedBy}
+          />
         )}
       </Field>
 

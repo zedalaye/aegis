@@ -58,8 +58,34 @@ export function blankDraft(): AgentDraft {
     provider_id: DEFAULT_PROVIDER_ID,
     tools: [],
     skills: [],
+    runs_per_day: DEFAULT_RUNS_PER_DAY,
   };
 }
+
+/**
+ * A new identity shaped like an existing one (PLAN 7.3, Phase 16).
+ *
+ * "Clone a role without cloning its rotten memory" (`COS.md`). What is copied
+ * is the perimeter — the role, the instructions, the two allow-lists, the
+ * budget. What is not copied is everything the copy would have to *earn*: its
+ * memories, which belong to an identity and are keyed on its id, and the fact
+ * that somebody has watched it run a runbook. A clone starts with a clean
+ * record on purpose; that is the whole point of making one.
+ */
+export function cloneDraft(agent: Agent): AgentDraft {
+  return {
+    ...draftOf(agent),
+    name: `${agent.name} copy`,
+  };
+}
+
+/**
+ * The scheduled runs a new identity is allowed in a day.
+ *
+ * Mirrors `AGENT_RUNS_PER_DAY_DEFAULT` in `store/agents.rs`. It bounds only
+ * what a clock may start as this identity; a person typing is not budgeted.
+ */
+const DEFAULT_RUNS_PER_DAY = 48;
 
 /** The form filled in from an existing identity. */
 export function draftOf(agent: Agent): AgentDraft {
@@ -70,6 +96,7 @@ export function draftOf(agent: Agent): AgentDraft {
     provider_id: agent.provider_id,
     tools: [...agent.tools],
     skills: [...agent.skills],
+    runs_per_day: agent.runs_per_day,
   };
 }
 
@@ -84,6 +111,11 @@ export type AgentsState = {
    * when the form is closed.
    */
   readonly editing: string | null;
+  /**
+   * What the form should open filled in with, when it is not opening on an
+   * existing identity: a clone's fields, or `null` for a blank one.
+   */
+  readonly seed: AgentDraft | null;
   /** What the runtime refused, and which input it was about. */
   readonly fieldError: { readonly field: string; readonly message: string } | null;
   /** A failure that is not about a form field. */
@@ -93,6 +125,8 @@ export type AgentsState = {
   load: () => Promise<void>;
   /** Opens the form on a new identity. */
   startNew: () => void;
+  /** Opens the form on a new identity shaped like an existing one. */
+  startClone: (agent: Agent) => void;
   /** Opens the form on an existing one. */
   startEdit: (agentId: string) => void;
   /** Closes the form, discarding whatever was typed. */
@@ -130,6 +164,7 @@ export const useAgents = create<AgentsState>((set, get) => ({
   status: "idle",
   busy: false,
   editing: null,
+  seed: null,
   fieldError: null,
   error: null,
 
@@ -142,9 +177,12 @@ export const useAgents = create<AgentsState>((set, get) => ({
     }
   },
 
-  startNew: () => set({ editing: "new", fieldError: null }),
-  startEdit: (agentId) => set({ editing: agentId, fieldError: null }),
-  cancelEdit: () => set({ editing: null, fieldError: null }),
+  startNew: () => set({ editing: "new", seed: null, fieldError: null }),
+  startClone: (agent) =>
+    set({ editing: "new", seed: cloneDraft(agent), fieldError: null }),
+  startEdit: (agentId) =>
+    set({ editing: agentId, seed: null, fieldError: null }),
+  cancelEdit: () => set({ editing: null, seed: null, fieldError: null }),
 
   save: async (draft) => {
     const editing = get().editing;
@@ -161,7 +199,12 @@ export const useAgents = create<AgentsState>((set, get) => ({
         await agentUpdate(editing, draft);
       }
       // Refetched rather than patched: the runtime normalizes what it stores.
-      set({ agents: await agentList(), status: "ready", editing: null });
+      set({
+        agents: await agentList(),
+        status: "ready",
+        editing: null,
+        seed: null,
+      });
       return true;
     } catch (cause) {
       set(landing(cause, creating ? "agent_create" : "agent_update"));
@@ -178,7 +221,7 @@ export const useAgents = create<AgentsState>((set, get) => ({
       set({ agents: await agentList(), status: "ready" });
       // The form may have been open on what just went.
       if (get().editing === agentId) {
-        set({ editing: null, fieldError: null });
+        set({ editing: null, seed: null, fieldError: null });
       }
     } catch (cause) {
       set({ error: toIpcError(cause, "agent_delete") });

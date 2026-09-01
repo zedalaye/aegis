@@ -697,6 +697,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         skills: &data.join("skills"),
         memories: &MemoryStore::load(&data),
         standing: Standing::Own(None),
+        unattended: None,
     }
     .run(&plan, &cancel)
     .await;

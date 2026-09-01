@@ -120,6 +120,7 @@ impl App {
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
                 tools,
                 skills: Vec::new(),
+                runs_per_day: 24,
             })
             .expect("the identity is accepted")
     }
@@ -705,6 +706,7 @@ async fn an_ordinary_session_is_not_offered_the_tool_that_closes_a_brief() {
         skills: &app.library,
         memories: &app.memories,
         standing: Standing::Own(None),
+        unattended: None,
     }
     .run(
         &TurnPlan {

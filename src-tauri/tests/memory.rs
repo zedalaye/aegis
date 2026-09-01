@@ -124,6 +124,7 @@ impl App {
                     tool::MEMORY_SEARCH.to_owned(),
                 ],
                 skills: Vec::new(),
+                runs_per_day: 24,
             })
             .expect("the identity is accepted")
     }
@@ -164,6 +165,7 @@ impl App {
                 skills: None,
                 shared: shared.as_deref(),
                 compacted: compaction.as_ref().map(|held| held.state.as_str()),
+                unattended: false,
             },
             raw,
             aegis_lib::tools::schemas_for(&agent.tools),
@@ -267,6 +269,7 @@ impl App {
             skills: &self.library,
             memories: &self.memories,
             standing: Standing::Own(None),
+            unattended: None,
         };
         let running = turn.run(&plan, &cancel);
 

@@ -153,6 +153,7 @@ impl App {
                     tool::SKILL_RETURN.to_owned(),
                 ],
                 skills: vec!["inbox.triage".to_owned(), skills::REVIEW_SKILL.to_owned()],
+                runs_per_day: 24,
             })
             .expect("the identity is accepted")
     }
@@ -187,6 +188,7 @@ impl App {
                 skills: block.as_deref(),
                 shared: shared.as_deref(),
                 compacted: None,
+                unattended: false,
             },
             &history,
             aegis_lib::tools::schemas_for(&agent.tools),
@@ -253,6 +255,7 @@ impl App {
             skills: &self.library,
             memories: &self.memories,
             standing: Standing::Own(None),
+            unattended: None,
         }
         .run(&plan, &cancel)
         .await;
@@ -609,6 +612,7 @@ async fn a_skill_outside_the_allow_list_never_reaches_the_library() {
                 tool::SKILL_RETURN.to_owned(),
             ],
             skills: vec![skills::REVIEW_SKILL.to_owned()],
+            runs_per_day: 24,
         })
         .expect("the identity is accepted");
 
@@ -657,6 +661,7 @@ async fn a_runbook_the_identity_cannot_carry_out_fails_closed() {
                 tool::SKILL_RETURN.to_owned(),
             ],
             skills: vec!["inbox.triage".to_owned()],
+            runs_per_day: 24,
         })
         .expect("the identity is accepted");
 

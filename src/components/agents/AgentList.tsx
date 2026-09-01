@@ -41,6 +41,7 @@ function Tools({ agent }: { readonly agent: Agent }) {
 function Row({ agent }: { readonly agent: Agent }) {
   const busy = useAgents((s) => s.busy);
   const startEdit = useAgents((s) => s.startEdit);
+  const startClone = useAgents((s) => s.startClone);
   const remove = useAgents((s) => s.remove);
 
   return (
@@ -48,12 +49,25 @@ function Row({ agent }: { readonly agent: Agent }) {
       <div className="agent__head">
         <span className="agent__name">{agent.name}</span>
         {agent.builtin ? (
-          <span
-            className="agent__badge"
-            title="The identity a session gets when none is chosen. It holds every tool and no skill — it is what Aegis was before either allow-list existed, which is why it cannot be edited or removed."
-          >
-            built in
-          </span>
+          <>
+            <span
+              className="agent__badge"
+              title="The identity a session gets when none is chosen. It holds every tool and no skill — it is what Aegis was before either allow-list existed, which is why it cannot be edited or removed."
+            >
+              built in
+            </span>
+            <span className="agent__actions">
+              <button
+                type="button"
+                className="link"
+                title="Opens a new identity shaped like this one. The built-in identity cannot be edited; a copy of it can, which is the usual way to make a narrower one."
+                onClick={() => startClone(agent)}
+                disabled={busy}
+              >
+                Duplicate
+              </button>
+            </span>
+          </>
         ) : (
           <span className="agent__actions">
             <button
@@ -63,6 +77,18 @@ function Row({ agent }: { readonly agent: Agent }) {
               disabled={busy}
             >
               Edit
+            </button>
+            <button
+              type="button"
+              className="link"
+              // `COS.md`: clone a role without cloning its rotten memory. The
+              // copy is a new identity, so it starts with none of the first
+              // one's — and none of its record either.
+              title="Opens a new identity with the same perimeter: role, instructions, tools, runbooks, budget. Its memories are not copied — they belong to the identity that learned them."
+              onClick={() => startClone(agent)}
+              disabled={busy}
+            >
+              Duplicate
             </button>
             <button
               type="button"

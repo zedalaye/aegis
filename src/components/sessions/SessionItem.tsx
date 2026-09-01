@@ -6,6 +6,12 @@
  * rename button, turns the label into an input; Enter commits, Escape
  * abandons, and blur commits — losing an edit because the user clicked
  * elsewhere is the more annoying of the two failure modes.
+ *
+ * A row may also say why it exists when nobody typed it: a `brief` badge for a
+ * session a delegation opened (Phase 15), a `routine` badge for one a clock
+ * did (Phase 16). Work the machine did on your behalf is listed beside the work
+ * you asked for, never hidden — reading what happened overnight should be a
+ * click.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -71,6 +77,7 @@ export default function SessionItem({
 
   const badge = STATE_LABEL[session.state];
   const delegated = session.delegated !== null;
+  const scheduled = session.scheduled;
 
   if (editing) {
     return (
@@ -92,7 +99,7 @@ export default function SessionItem({
     <li
       className={`session${open ? " session--open" : ""}${
         delegated ? " session--delegated" : ""
-      }`}
+      }${scheduled === null ? "" : " session--scheduled"}`}
     >
       <button
         type="button"
@@ -111,6 +118,14 @@ export default function SessionItem({
               brief
             </span>
           ) : null}
+          {scheduled === null ? null : (
+            <span
+              className="session__badge session__badge--scheduled"
+              title={`Opened by the routine ${scheduled.routine_name}, to run ${scheduled.skill}. Nobody was watching: anything it was not signed for was refused rather than put to you.`}
+            >
+              routine
+            </span>
+          )}
           {session.message_count === 0
             ? "empty"
             : `${session.message_count} message${session.message_count === 1 ? "" : "s"}`}

@@ -24,14 +24,17 @@
 //!   unwritable log is loud in the tracing output, and the entry still reaches
 //!   the UI.
 //! * **Reading is bounded.** [`AuditLog::tail`] reads from the end of the
-//!   file, so a log that has grown for months still answers instantly.
+//!   file, so a log that has grown for months still answers instantly. It is
+//!   also read *by the runtime* from Phase 16: a routine may only name a skill
+//!   its identity has already carried to a `skill_return`, and this is where
+//!   that evidence lives (`AuditLog::witnessed`).
 //!
 //! The entry shape is PLAN 2.1, "Settings and audit"; the decision vocabulary
 //! is PLAN 3.1's. It has grown twice since, both times by adding a field with
 //! a `serde` default rather than by changing one — `agent_id` in Phase 12,
-//! `skill` in Phase 13 and `handoff` in Phase 15 — which is the property
-//! PLAN 7.1 asks the log to keep: a schema that can grow `agent_id`, `skill`,
-//! `tokens`, `handoff_id`.
+//! `skill` in Phase 13, `handoff` in Phase 15 and `routine` in Phase 16 —
+//! which is the property PLAN 7.1 asks the log to keep: a schema that can grow
+//! `agent_id`, `skill`, `tokens`, `handoff_id`.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
@@ -191,6 +194,21 @@ pub struct AuditEntry {
     /// older lines would lose the history the log is kept for.
     #[serde(default)]
     pub handoff: String,
+    /// The routine whose run this call was part of (PLAN 7.3, Phase 16).
+    ///
+    /// The third id over a run, beside `agent_id` and `skill`, and the one that
+    /// answers a question only this phase can raise: *what did the machine do
+    /// while nobody was here*. Every call a scheduled run makes carries it, so
+    /// a week of a watch routine is one grep — and so is the budget it spent,
+    /// which is the "cannot be budgeted or replayed" of `COS.md` applied to the
+    /// only runs nobody watched.
+    ///
+    /// Empty outside a routine's run, and on every line written before this
+    /// phase. `#[serde(default)]` for the reason the three before it carry one:
+    /// the file is its own wire format, and a reader that refused the older
+    /// lines would lose the history the log is kept for.
+    #[serde(default)]
+    pub routine: String,
     /// Auto-allowed, approved, or refused.
     pub decision: AuditDecision,
     /// Why policy decided that, in the words the user was shown.
@@ -246,6 +264,8 @@ pub struct AuditRecord<'a> {
     pub skill: &'a str,
     /// The delegation this call was part of; empty outside one.
     pub handoff: &'a str,
+    /// The routine whose run this call was part of; empty outside one.
+    pub routine: &'a str,
     /// Auto-allowed, approved, or refused.
     pub decision: AuditDecision,
     /// Why, in the words the user was shown.
@@ -279,6 +299,7 @@ impl AuditRecord<'_> {
             tool: self.tool.to_owned(),
             skill: self.skill.to_owned(),
             handoff: self.handoff.to_owned(),
+            routine: self.routine.to_owned(),
             decision: self.decision,
             policy_reason: self.policy_reason.to_owned(),
             args_digest: digest(self.args),
@@ -435,6 +456,45 @@ impl AuditLog {
         Ok(out)
     }
 
+    /// Whether this identity has already carried this skill to a
+    /// `skill_return` (PLAN 7.13, *Phase 16's door*).
+    ///
+    /// The one place the runtime *reads* its own log to decide something, and
+    /// it is deliberate: "run it under watch, then put it on a clock" is a rule
+    /// about something that has already happened, and the log is where what has
+    /// happened is written down. It is also the payoff for PLAN 7.6's *audit
+    /// names the skill* — without the name on the line there would be no way to
+    /// ask this question at all.
+    ///
+    /// A **return** rather than a run, because that is the half that means the
+    /// runbook reached its end: a `skill_run` says somebody opened the file.
+    /// Any status counts — a `blocked` is a runbook doing its job.
+    ///
+    /// Bounded by [`TAIL_WINDOW_BYTES`] like every other read of this file, so
+    /// a run from long enough ago has scrolled out of the window and the answer
+    /// is `false`. That is the safe direction, and the fix is to run it once
+    /// more and watch it, which is the thing the rule is asking for anyway.
+    pub fn witnessed(&self, agent_id: &str, skill: &str) -> bool {
+        let Ok((bytes, partial_first)) = self.read_tail() else {
+            return false;
+        };
+
+        let text = String::from_utf8_lossy(&bytes);
+        let mut lines = text.lines();
+        if partial_first {
+            lines.next();
+        }
+
+        lines
+            .filter_map(|line| serde_json::from_str::<AuditEntry>(line.trim()).ok())
+            .any(|entry| {
+                entry.tool == crate::policy::tool::SKILL_RETURN
+                    && entry.skill == skill
+                    && entry.agent_id == agent_id
+                    && entry.outcome == Outcome::Ok
+            })
+    }
+
     /// Reads at most the last [`TAIL_WINDOW_BYTES`] of the log.
     ///
     /// The flag says whether the window started mid-file, and therefore
@@ -542,6 +602,7 @@ mod tests {
             tool: "fs_read",
             skill: "",
             handoff: "",
+            routine: "",
             decision: AuditDecision::Auto,
             policy_reason: "an ordinary read inside the workspace",
             args,

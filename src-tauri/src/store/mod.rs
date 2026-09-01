@@ -1,9 +1,10 @@
 //! On-disk persistence.
 //!
-//! Five JSON documents under the OS application-data directory:
+//! Six JSON documents under the OS application-data directory:
 //! `projects.json` ([`projects`]), `sessions.json` ([`sessions`]),
-//! `settings.json` ([`settings`]), from Phase 12 `agents.json` ([`agents`])
-//! and from Phase 14 `memories.json` ([`memories`]). All of them are small,
+//! `settings.json` ([`settings`]), from Phase 12 `agents.json` ([`agents`]),
+//! from Phase 14 `memories.json` ([`memories`]) and from Phase 16
+//! `routines.json` ([`routines`]). All of them are small,
 //! human-readable and hand-editable on purpose — a user who has to recover from a bad state should be able to open
 //! the file and see why.
 //!
@@ -30,6 +31,7 @@
 pub mod agents;
 pub mod memories;
 pub mod projects;
+pub mod routines;
 pub mod sessions;
 pub mod settings;
 
@@ -43,8 +45,9 @@ use chrono::{SecondsFormat, Utc};
 pub use agents::{Agent, AgentDraft, AgentStore, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID};
 pub use memories::{Memory, MemoryDraft, MemoryKind, MemoryStore};
 pub use projects::{canonical_workspace, Project, ProjectDetail, Store};
+pub use routines::{LastRun, Routine, RoutineDraft, RoutineStore, RunOutcome, Schedule};
 pub use sessions::{
-    Compaction, Delegated, Message, Role, SessionDetail, SessionState, SessionStore,
+    Compaction, Delegated, Message, Role, Scheduled, SessionDetail, SessionState, SessionStore,
     SessionSummary, ToolCallRecord, ToolCallStatus, TurnHandle,
 };
 pub use settings::{MaskedSettings, ProviderSettings, SettingsStore};

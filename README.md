@@ -210,7 +210,16 @@ No provider and no key needed — the scripted provider is enough to exercise th
     run at the same time. What comes back into your transcript is a board of statuses, not their
     conversations, and both of their sessions are in the sidebar with a `brief` badge if you want
     to read them. See [Handoffs](#handoffs).
-12. **Fold a long session.** Press **Compact** in the session header. Once a conversation has
+12. **Put something on a clock.** *Settings → Identities*: give an identity `fs_read`, `fs_write`
+    and a runbook — `never-send-without-review` will do. Open a session as it and send `/skill`
+    once, and watch the run: that watching is what the next step checks for. Now *Settings →
+    Routines* → **New routine**, pick that identity and that runbook, every 5 minutes, tick *write
+    files inside the workspace*, and save. Press **Run now**: a session opens with a `routine`
+    badge, the runbook is loaded, a line is written into `status/`, and the run closes with a
+    status — with no dialog, because you signed for that write when you saved. Untick the approval
+    and run it again: the write is refused instead of queued, and the row says `blocked`. Close the
+    window; it keeps firing. See [Routines](#routines).
+13. **Fold a long session.** Press **Compact** in the session header. Once a conversation has
     more than a few turns, the older ones become a few lines of state — goal, files, decisions,
     blockers — marked in place with *What it kept* beside it. Your transcript is untouched; only
     what the model carries changes. See [Compaction](#compaction).
@@ -296,9 +305,9 @@ tests before `pnpm typecheck` when you have touched an IPC type.
 
 ## Where your data lives
 
-Projects, sessions, identities, memories and settings are stored as five small JSON documents —
-`projects.json`, `sessions.json`, `agents.json`, `memories.json` and `settings.json` — under the
-application-data directory:
+Projects, sessions, identities, memories, routines and settings are stored as six small JSON
+documents — `projects.json`, `sessions.json`, `agents.json`, `memories.json`, `routines.json` and
+`settings.json` — under the application-data directory:
 
 | | Path |
 | --- | --- |
@@ -311,7 +320,10 @@ messages you sent, the replies, the tool calls each turn made, and which identit
 runs as. `agents.json` holds the identities you have made; the built-in one is not in it, because
 it is a constant in the runtime rather than a record you could delete. `memories.json` holds what
 each identity has learned, each record naming the identity it belongs to — deleting an identity
-takes its memories with it, since nothing else can reach them. `settings.json` holds the
+takes its memories with it, since nothing else can reach them. `routines.json` holds what is on a
+clock: which runbook, as which identity, in which project, what it was signed to do unattended,
+and how many of today's runs it has spent — the ledger is on disk because a scheduler that forgot
+what it had spent when the process died would have no ceiling at all. `settings.json` holds the
 base URL and the model id. **None of them holds a key**, and none records whether anything is
 *running*: a session interrupted by a crash or a power cut comes back idle, because there is no
 turn left to finish it.
@@ -322,7 +334,7 @@ on Windows, Keychain on macOS, a Secret Service on Linux — where you can inspe
 without Aegis. Set `AEGIS_API_KEY` in the environment instead and Aegis uses that; the credential
 store wins when both are present.
 
-All five documents are meant to be readable and are safe to edit by hand while Aegis is closed.
+All six documents are meant to be readable and are safe to edit by hand while Aegis is closed.
 A document Aegis cannot parse is renamed to `<name>.corrupt-<timestamp>.json` and the app starts
 with an empty list rather than refusing to open. Deleting a project forgets it and its sessions;
 the workspace folder itself is never touched.
@@ -343,7 +355,8 @@ scoped to it at startup — the WebView has no filesystem permission of any kind
 Beside it, `audit.jsonl` records one JSON line per tool call — every call, whether it ran, was
 refused or failed. It is append-only and plain text, so `tail -f` works and you do not need Aegis
 running to read it. Each line names the session, the identity it ran as, the skill run it was
-part of when it was part of one, the tool, why policy decided what it did, and what came of it. It records the *paths* a call touched but never the contents of a file: a log
+part of when it was part of one, the routine that started it when a clock did, the tool, why
+policy decided what it did, and what came of it. It records the *paths* a call touched but never the contents of a file: a log
 that quoted every `fs_write` would become the one place on your machine where everything the
 agent ever wrote is collected in plain text. A line for a capture carries the file's path, its
 pixel size and a SHA-256 of the bytes on disk — enough to say later which capture a call
@@ -780,6 +793,104 @@ detail.
 
 ---
 
+## Routines
+
+A routine fires **one runbook, as one identity, on a clock** — and it runs whether or not this
+window is open. That is what the tray is for: closing the window puts Aegis away, it does not stop
+the machine.
+
+*Settings → Routines* is the whole surface. A routine is four decisions and no prose:
+
+```
+name:       Morning watch
+identity:   Watcher
+runbook:    watch.digest
+when:       daily at 07:00        (or every N minutes, or when a folder changes)
+signed for: write files inside the workspace
+budget:     4 runs a day
+```
+
+There is no message field, and there is nowhere to put one. **A routine names a runbook.** If it
+could carry a paragraph it would be a chat on a timer, which is the one thing `COS.md` says never
+to automate.
+
+### The door
+
+A routine may only name a skill that is
+
+1. **live** — a `SKILL.md` that parses, in the library or in that project's workspace. A
+   `PROPOSAL.md` is not one;
+2. **granted** — ticked on that identity in *Settings → Identities*. Putting a runbook on a clock
+   does not grant it;
+3. **already run under watch, at least once, by that identity** — checked against `audit.jsonl`,
+   which records a `skill_return` for every run that reached its end.
+
+The third is the one with teeth, and it is the whole discipline of skills in one check: write the
+seven headings, run it once and watch what it does, *then* put it on a clock. There is no way
+round it in the UI, because it is not enforced in the UI.
+
+### Nobody is watching
+
+A scheduled run cannot raise an approval dialog — there may be no window at all, and a prompt
+nobody answers is a turn parked until it times out. So policy **refuses** instead of asking, and
+what a run may do beyond reading is exactly what you signed when you saved the routine.
+
+Those standing approvals are the same grants the approval dialog creates when you answer *allow
+for this session*, in the same words, stored on the routine and dropped when the run ends. Two
+things bound them, both checked when you save:
+
+- the runbook has to **declare** the tool under *Inputs required and tools it will call*;
+- the identity has to **hold** it.
+
+Anything outside the workspace, and anything under `.git/`, can never be signed for at all — those
+are put to a person every time, and a routine is not a person. A run that wanted one of them
+returns `blocked` and says what it needed, which is a runbook doing its job.
+
+**Run now** takes exactly that path, unattended and all. What you see when you press it is what
+happens at four in the morning, including the refusals.
+
+### Budgets, pauses and silence
+
+Every routine has a daily ceiling, and so does every identity — across all the routines that fire
+as it, because three well-behaved clocks on one role can still spend a night writing. The count is
+spent before a run opens a session, under the store's own lock, so two ticks cannot both fire the
+last one.
+
+A run that ends **without returning at all** is a silence. Two in a row and the routine pauses
+itself, with the reason on its row: escalate after two failures, not twelve creative attempts. A
+`blocked` is not a silence — the runbook answered.
+
+Every run is cut off after fifteen minutes, through the same cancellation a **Stop** uses, so a
+routine that hangs is a failed run rather than a slot occupied forever. At most two scheduled runs
+are in flight at once, across all routines.
+
+### What a run leaves behind
+
+An ordinary session, in your sidebar, with a `routine` badge and a full transcript — "what did it
+do at seven this morning" is a click. Every audit line it wrote carries the routine's id beside
+the identity and the skill, so a week of a watch routine is one `grep` and so is what it cost.
+
+### A trigger, not just a clock
+
+`when a folder changes` watches one directory inside the workspace — `briefs`, `inbox` — by
+looking at it on each tick rather than by holding a filesystem watcher. The first look records
+what is there, so a folder full of old files does not fire it; only something newer does, and at
+most as often as the five-minute floor allows. Sources of truth worth watching for real — mail, a
+ticket queue, a pull request — arrive as MCP connectors later; a folder is what this process can
+already see change.
+
+### Firing and cloning a role
+
+An identity that routines fire as cannot be deleted while they exist: the refusal names how many,
+and repointing or removing them is the decision you take rather than one Aegis takes for you.
+
+*Duplicate* on an identity opens a new one with the same perimeter — role, instructions, tools,
+runbooks, budget — and **none of its memories**, which belong to the identity that learned them.
+It is also how you make a narrower version of the built-in Assistant, which cannot itself be
+edited.
+
+---
+
 ## Layout
 
 ```
@@ -787,14 +898,14 @@ src/           React app — presentation and typed IPC glue only
   ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
   components/  layout, chat, sessions, approvals, projects, agents, skills, memory,
-               settings, audit
+               routines, settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
     agent/     turn loop, wire protocol, providers (scripted, and OpenAI-compatible over SSE),
                event payloads, turn registry
-    store/     projects.json, sessions.json, agents.json, memories.json and
-               settings.json, behind one atomic write
+    store/     projects.json, sessions.json, agents.json, memories.json,
+               routines.json and settings.json, behind one atomic write
     tools/     fs, shell, screenshot, skill, memory, handoff — behind one ToolSpec registry
     policy/    path containment, decision matrix, per-session grants
     skills/    the runbook format and the catalog: a line per skill in context, the body
@@ -802,6 +913,8 @@ src-tauri/
     handoff/   the brief that goes out and the report that comes back, the bus that
                carries them (parallel, bounded, two attempts, then the human), and the
                runner that turns a brief into an ordinary session and turn
+    schedule/  routines: which one may exist, when it is due, what its run is told —
+               and the tick that fires one into an ordinary session nobody is watching
     workspace.rs  the shared-file convention inside a project folder: scaffold, and the
                capped digest every request carries
     compact.rs the older half of a transcript, derived into state — no summarizer,
@@ -825,10 +938,18 @@ Read this before pointing Aegis at anything you care about.
   and screen captures always prompt; anything touching a path outside the workspace prompts every
   single time and can never be granted for a session.
 - **"Allow for this session" is narrow and temporary.** A grant is keyed to a scope — a directory
-  subtree, or one shell program by name — never to a tool as a whole. Grants are never written to
-  disk, and they die with the session. There is no "allow forever". While one is in force it is
-  listed under the transcript of the session that created it, with a Revoke button; revoking
-  restores the prompt from the next call onwards.
+  subtree, or one shell program by name — never to a tool as a whole. A grant you make in a
+  session is never written to disk and dies with the session. There is no "allow forever". While
+  one is in force it is listed under the transcript of the session that created it, with a Revoke
+  button; revoking restores the prompt from the next call onwards.
+- **A routine's standing approvals are the one thing that outlives a session, and you sign them
+  by hand.** A scheduled run cannot ask anybody, so what it may do beyond reading is exactly the
+  list you ticked when you saved the routine — the same scopes, in the same words, stored in
+  `routines.json` and in force only for that routine's own runs. It cannot exceed what the runbook
+  declares it will call or what the identity holds, both checked when you save; nothing outside
+  the workspace and nothing under `.git/` can be signed for at all; and every other call an
+  unattended run makes is refused outright rather than queued behind a prompt nobody can see. See
+  [Routines](#routines).
 - **An unanswered prompt is a refusal.** An approval nobody answers within five minutes is
   refused, as is one whose turn you stop. Neither ends the conversation: the model is told the
   call was refused and carries on.

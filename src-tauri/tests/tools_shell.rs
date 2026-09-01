@@ -171,6 +171,7 @@ impl Fixture {
                 bus: None,
                 open: None,
             },
+            routine: "",
         };
 
         match self.judge(&args) {
