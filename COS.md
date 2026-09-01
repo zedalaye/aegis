@@ -47,15 +47,19 @@ kills the team. Chat is never the database.
 | Session context | the current chat | the model window | that agent, today |
 
 Shared memory is files + an index + the origin tools. Each agent then has a
-*narrow* memory. A shared transcript is not shared memory.
+*narrow* memory. A shared transcript is not shared memory. A bank that every
+identity — or every other product — writes into is the same mistake with a
+database.
 
 The harness must provide these operations:
 
 - **write** — "this decision goes in `DECISIONS.md`, not the thread"
 - **read** — retrieve at session start and after compaction
 - **flush** — save facts before compact
-- **dream / consolidate** — dedupe memory on a slow clock
-- **forget** — the human can correct or delete a stale hypothesis
+- **dream / consolidate** — dedupe memory on a slow clock. Not decay, not an
+  extractor mining the transcript for new facts: silent eviction would
+  sometimes drop a human's correction
+- **forget** — the human can correct or delete a stale hypothesis. Not a tool
 - **cite** — an important decision points at a file or ticket, not "I remember that"
 
 If a fact must survive ten compactions, it does not belong in chat. File or
@@ -73,7 +77,10 @@ already holds.
 A workspace may hold a **world** (`world/`): what the thing *is*, including
 the sins a dump showed, and how a new instance is known to be right. It is
 opt-in. A watch folder or a wish list has no oracle; empty templates there
-are theatre.
+are theatre. A sin has a perimeter (this contract, this role, this class of
+tasks). A local failure is not an invariant. Promoting one, or deleting one,
+is amending the world — the same class as irreversible. There is no agent of
+care, and no decay clock on `world/`.
 
 Specialists **read** the world. They do not write it. They do not reopen
 declared source artefacts (a dump, logs) to "understand the project". If

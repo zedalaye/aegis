@@ -827,6 +827,23 @@ oracle, essence-decisions, declared sources. Specialists read it. They do
 not write it. `decisions/DECISIONS.md` is operational; `world/decisions.md`
 is essence. Mixing them makes the constitution a standup log.
 
+**A sin has a perimeter.** A behaviour recorded from a dump or a failed
+compile names the contract, the role, or the class of tasks it binds. A
+local failure is not an invariant. Promoting it — or deleting it — is
+amending the world, the same class as irreversible (`COS.md` *Work*). There
+is no agent of care, no decay clock on `world/`, and no extractor that mines
+transcripts for lessons. Episode is the audit log and the cabinet (rewritten
+often). How is a skill, promoted under § 7.13. Dream on the role store is
+still dedupe (`COS.md` *Memory*); forget is a button.
+
+**Several worlds, later, as files.** A project is one world. The harness may
+hold many, and a world may declare `needs` and `offers` as files so another
+world consumes a form already paid for. The link is a versioned contract,
+not a fusion: if B breaks, A is not amended in silence. That is not a
+runtime marketplace, not a graph of projects in `src-tauri`, not a phase,
+and not a reason to delay 16–17. Until two workspaces actually have an
+essence, it is theatre — the same as empty `world/` templates.
+
 `world/` is opt-in. The library still lists the skills; they return `blocked`
 if there is no world. Forcing empty templates into a watch folder or a wish
 list is theatre.
@@ -1327,6 +1344,18 @@ here, and they are not Phases 20, 21, 22 and 23.
 - Cherishing the instance (the architecture of the code as a project)
   instead of the oracle. Regeneration is legal. A new language or a chip
   for agents is not the first object.
+- An external memory provider (embeddings, a knowledge graph, a "universal"
+  bank across this process and other products). Role memory is the
+  per-identity store; shared memory is files. A second engine is the
+  transcript again, with ranking nobody can see. Phase 14 already has the
+  store; MCP connectors are Phase 18.
+- Auto-healing role memory: decaying unused rows, promoting lessons out of
+  transcripts, a CoS "care" pass that writes `world/`. Dream is dedupe.
+  Forget is a button. Amending essence is human. A scar that is really a
+  sin lives in `world/` with a perimeter (§ 7.2), not in `memories.json`.
+- A runtime marketplace that couples projects (needs/offers matching, a
+  graph of worlds). Several worlds may later declare needs and offers as
+  files; the human signs the contract. Fusion is a monolith. Not a phase.
 
 ### 7.6 Skills — why this is the efficiency layer
 
