@@ -106,16 +106,23 @@ pub fn project_open(state: State<'_, AppState>, project_id: String) -> AppResult
     Ok(detail)
 }
 
-/// Forgets a project, and its sessions with it.
+/// Forgets a project, and its sessions and routines with it.
 ///
 /// The workspace folder on disk is never touched. The sessions are, because a
 /// transcript belonging to a project that no longer exists is unreachable —
 /// nothing can open it, and leaving it behind grows the session document
 /// forever. Any turn still running in one is cancelled first.
 ///
-/// The project is deleted before its sessions: if the second step fails, the
-/// user gets the outcome they asked for and some orphaned rows, rather than a
-/// project whose sessions are gone but which is still in the sidebar.
+/// So are its routines (PLAN 7.3, Phase 16), and this one is a cascade rather
+/// than the refusal an identity gets: an identity is a thing a routine *names*
+/// and can be pointed at another, while the workspace is where its runs happen.
+/// A clock with nowhere to run cannot be repaired, only re-made. It stops
+/// firing either way — the folder is measured on every tick — so what the
+/// cascade buys is a panel that does not list work that can never happen again.
+///
+/// The project is deleted before the rest: if a later step fails, the user gets
+/// the outcome they asked for and some orphaned rows, rather than a project
+/// whose sessions are gone but which is still in the sidebar.
 #[tauri::command(rename_all = "snake_case")]
 pub fn project_delete(state: State<'_, AppState>, project_id: String) -> AppResult<()> {
     for session in state.session_list(&project_id) {
@@ -126,6 +133,9 @@ pub fn project_delete(state: State<'_, AppState>, project_id: String) -> AppResu
 
     if let Err(err) = state.sessions().delete_for_project(&project_id) {
         tracing::warn!(%err, project_id, "the project is gone but its sessions remain");
+    }
+    if let Err(err) = state.routines().delete_for_project(&project_id) {
+        tracing::warn!(%err, project_id, "the project is gone but its routines remain");
     }
     Ok(())
 }

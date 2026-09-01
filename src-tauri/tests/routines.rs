@@ -702,6 +702,32 @@ fn a_routine_says_what_is_wrong_instead_of_firing() {
     assert!(problem.contains("identity"), "{problem}");
 }
 
+/// A project is where a routine's runs happen, so a routine cannot outlive one.
+/// An identity is only *named* by a routine, and can be pointed at another —
+/// which is why deleting one is refused while a clock still fires as it, and
+/// deleting a project takes its routines with it.
+#[test]
+fn a_routine_outlives_neither_its_project_nor_the_identity_it_names() {
+    let app = App::new();
+    let agent = app.watcher();
+    let routine = app
+        .routines
+        .create(&app.draft(&agent, Vec::new()))
+        .expect("stored");
+
+    assert_eq!(app.routines.count_for_agent(&agent.id), 1);
+
+    // The cascade the command performs when a project is forgotten.
+    assert_eq!(
+        app.routines
+            .delete_for_project(&app.project_id)
+            .expect("the cascade runs"),
+        1
+    );
+    assert!(app.routines.get(&routine.id).is_err());
+    assert_eq!(app.routines.count_for_agent(&agent.id), 0);
+}
+
 /// The store's own refusals: a name somebody can find in a list, an interval
 /// that is not a loop, a budget with a ceiling. And no prompt field anywhere —
 /// a routine is a runbook's name, which is what "never automate a still-fuzzy
