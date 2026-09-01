@@ -385,9 +385,10 @@ export default function RoutineForm({
 
         <p className="field__hint">
           A missed window fires once, never a backlog: a machine that was asleep
-          for a week owes one run. A folder is looked at, not watched — the
-          first look records what is there, and only something newer than that
-          fires it, at most as often as the five-minute floor allows.
+          for a week owes one run. A folder is looked at, not watched: saving
+          this records where it stands, and anything that touches it afterwards
+          — a file added, moved in, rewritten, renamed or deleted — is a change,
+          at most as often as the five-minute floor allows.
         </p>
       </fieldset>
 

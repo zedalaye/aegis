@@ -873,9 +873,13 @@ the identity and the skill, so a week of a watch routine is one `grep` and so is
 ### A trigger, not just a clock
 
 `when a folder changes` watches one directory inside the workspace — `briefs`, `inbox` — by
-looking at it on each tick rather than by holding a filesystem watcher. The first look records
-what is there, so a folder full of old files does not fire it; only something newer does, and at
-most as often as the five-minute floor allows. Sources of truth worth watching for real — mail, a
+looking at it on each tick rather than by holding a filesystem watcher. What it compares is the
+newest modification time under that directory, **the directories' own included**: a file added,
+moved in, rewritten, renamed or deleted all count, because all of them touch the folder even when
+no file in it is new. (A file moved or copied in keeps the time it had elsewhere, which is why the
+folder's own stamp is the one that matters.) Saving the routine records where the folder stands at
+that moment, so a file dropped in straight afterwards is a change; nothing older than that fires
+it, and it fires at most as often as the five-minute floor allows. Sources of truth worth watching for real — mail, a
 ticket queue, a pull request — arrive as MCP connectors later; a folder is what this process can
 already see change.
 

@@ -447,7 +447,25 @@ pub fn newest_change(dir: &Path) -> Option<String> {
     let mut budget = WATCH_ENTRIES;
     let mut stack = vec![(dir.to_path_buf(), 0usize)];
 
+    let mut consider = |modified: std::io::Result<std::time::SystemTime>| {
+        if let Ok(modified) = modified {
+            let at: DateTime<Utc> = modified.into();
+            if newest.is_none_or(|held| at > held) {
+                newest = Some(at);
+            }
+        }
+    };
+
     while let Some((at, depth)) = stack.pop() {
+        // The directory's own stamp, and not only its files'. An entry that
+        // appears, disappears or is renamed touches the directory and may touch
+        // no file at all: a file *moved* into the folder keeps the modification
+        // time it had somewhere else — which on Windows is what copying one
+        // does too — and a deletion has no file left to ask. Watching only the
+        // files makes both of those invisible, which is not what "when this
+        // folder changes" means to the person who wrote it.
+        consider(std::fs::metadata(&at).and_then(|meta| meta.modified()));
+
         let Ok(entries) = std::fs::read_dir(&at) else {
             continue;
         };
@@ -466,12 +484,9 @@ pub fn newest_change(dir: &Path) -> Option<String> {
                 }
                 continue;
             }
-            if let Ok(modified) = meta.modified() {
-                let at: DateTime<Utc> = modified.into();
-                if newest.is_none_or(|held| at > held) {
-                    newest = Some(at);
-                }
-            }
+            // A file rewritten in place, which the directory's stamp would not
+            // notice.
+            consider(meta.modified());
         }
     }
 
@@ -784,14 +799,41 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_change_is_the_newest_file_under_the_directory() {
+    fn the_newest_change_is_the_newest_stamp_under_the_directory() {
         let dir = tempfile::TempDir::new().expect("temp dir");
-        assert_eq!(newest_change(dir.path()), None);
+
+        // Never empty: the directory itself has a stamp, which is what makes an
+        // empty folder something a routine can watch for a first arrival in.
+        let empty = newest_change(dir.path()).expect("a directory has a stamp");
+        assert!(empty.ends_with('Z'), "{empty}");
 
         std::fs::create_dir_all(dir.path().join("nested")).expect("nested");
         std::fs::write(dir.path().join("nested/one.md"), "one").expect("write");
+        let with_file = newest_change(dir.path()).expect("a stamp");
+        assert!(with_file >= empty, "{with_file} vs {empty}");
+    }
 
-        let seen = newest_change(dir.path()).expect("a stamp");
-        assert!(seen.ends_with('Z'), "{seen}");
+    /// The bug a real folder found: a file moved back in keeps the modification
+    /// time it had elsewhere, and a deleted file has none at all. Both change
+    /// the directory, and the directory is what the watch has to read — a walk
+    /// over files alone reports "nothing happened" for either.
+    #[test]
+    fn removing_a_file_is_a_change_even_though_no_file_is_newer() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let file = dir.path().join("brief.md");
+        std::fs::write(&file, "an item").expect("write");
+
+        let before = newest_change(dir.path()).expect("a stamp");
+
+        // A directory's stamp has one-second granularity on some filesystems,
+        // so the change has to be given a moment to be distinguishable at all.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::remove_file(&file).expect("remove");
+
+        let after = newest_change(dir.path()).expect("the directory is still there");
+        assert!(
+            after > before,
+            "a removal has to read as a change: {after} is not after {before}"
+        );
     }
 }
