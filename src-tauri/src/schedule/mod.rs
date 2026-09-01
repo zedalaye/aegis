@@ -369,9 +369,9 @@ pub fn due(routine: &Routine, now: DateTime<Utc>, watch: Option<&Watch>) -> bool
             let Some(newest) = watch.newest.as_deref() else {
                 return false;
             };
-            // The first look only records what is there. A routine pointed at a
-            // folder of old files is watching for the *next* one, not
-            // announcing the last hundred.
+            // Nothing to act on: either this routine has never looked (see
+            // [`learning`], which is the tick's job and not this one's) or
+            // nothing has arrived since the change it last ran for.
             if watch.seen.is_empty() || newest <= watch.seen.as_str() {
                 return false;
             }
@@ -383,6 +383,30 @@ pub fn due(routine: &Routine, now: DateTime<Utc>, watch: Option<&Watch>) -> bool
                 now >= last + chrono::TimeDelta::minutes(i64::from(EVERY_MIN_MINUTES))
             })
         }
+    }
+}
+
+/// The newest change a routine has to *record* rather than act on.
+///
+/// `Some` only for a routine that has never looked at its folder: there is no
+/// "before" to compare against, and a routine pointed at a directory of old
+/// files is watching for the next one, not announcing the last hundred.
+///
+/// Normally nothing takes this path — saving a routine records where "now" is
+/// ([`AppState::arm_watch`](crate::AppState::arm_watch)), so the first tick
+/// already has a watermark and a file dropped in a second after saving fires.
+/// It is the fallback for when that look failed: an unplugged folder, a
+/// permission error.
+///
+/// It is deliberately the *only* case in which the watermark moves without a
+/// run. Advancing it on every tick would swallow any change that arrived while
+/// the routine was inside its cooldown — marked as seen by a tick that did not
+/// fire, with nothing newer ever to come.
+pub fn learning(watch: &Watch) -> Option<&str> {
+    if watch.seen.is_empty() {
+        watch.newest.as_deref()
+    } else {
+        None
     }
 }
 
@@ -704,6 +728,59 @@ mod tests {
             now - chrono::TimeDelta::minutes(i64::from(EVERY_MIN_MINUTES) + 1),
         );
         assert!(due(&routine, now, Some(&watch)));
+    }
+
+    /// The bug this rule exists to prevent: a change that arrives while the
+    /// routine is inside its cooldown must still be pending when the cooldown
+    /// expires. Only a run — or a first look with nothing to compare against —
+    /// moves the watermark.
+    #[test]
+    fn a_change_during_the_cooldown_is_deferred_and_never_swallowed() {
+        let now = Utc::now();
+        let mut routine = routine(
+            Schedule::OnChange {
+                dir: "briefs".to_owned(),
+            },
+            now - chrono::TimeDelta::hours(1),
+        );
+        ran_at(&mut routine, now - chrono::TimeDelta::minutes(1));
+
+        // A file lands a minute after a run: newer than the watermark, and
+        // inside the floor.
+        let watch = Watch {
+            newest: Some(stamp(now)),
+            seen: stamp(now - chrono::TimeDelta::minutes(30)),
+        };
+        assert!(!due(&routine, now, Some(&watch)));
+        assert_eq!(
+            learning(&watch),
+            None,
+            "a routine that has looked before never re-learns, so nothing moves its watermark              but a run"
+        );
+
+        // The floor expires with the same watch, and it fires.
+        let later = now + chrono::TimeDelta::minutes(i64::from(EVERY_MIN_MINUTES));
+        assert!(due(&routine, later, Some(&watch)));
+    }
+
+    #[test]
+    fn only_a_routine_that_has_never_looked_is_learning() {
+        let now = Utc::now();
+        assert_eq!(
+            learning(&Watch {
+                newest: Some(stamp(now)),
+                seen: String::new(),
+            }),
+            Some(stamp(now).as_str())
+        );
+        assert_eq!(
+            learning(&Watch {
+                newest: None,
+                seen: String::new(),
+            }),
+            None,
+            "an empty or missing folder teaches nothing"
+        );
     }
 
     #[test]

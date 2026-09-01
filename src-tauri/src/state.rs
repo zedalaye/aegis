@@ -345,6 +345,37 @@ impl AppState {
             .collect()
     }
 
+    /// Records where a watching routine's folder stands right now.
+    ///
+    /// Called when a routine is saved, so that "save it, then drop a file in"
+    /// fires on the next tick rather than the one after — the first look is
+    /// what a routine compares against, and doing it here means the routine
+    /// starts from the moment somebody set it up rather than from whenever the
+    /// clock next came round.
+    ///
+    /// Best effort, and silent: a folder that is not there yet is a routine
+    /// with nothing to compare against, which the tick handles by learning
+    /// ([`schedule::learning`](crate::schedule::learning)). Nothing about a
+    /// clock schedule is touched.
+    pub fn arm_watch(&self, routine: &Routine) {
+        let crate::store::Schedule::OnChange { dir } = &routine.schedule else {
+            return;
+        };
+        let Some(workspace) = self.workspace_for_project(&routine.project_id) else {
+            return;
+        };
+        let Ok(resolved) = crate::policy::path::resolve(&workspace, dir) else {
+            return;
+        };
+        if !resolved.inside {
+            return;
+        }
+
+        if let Some(newest) = crate::schedule::newest_change(&resolved.path) {
+            self.routines.mark_seen(&routine.id, &newest);
+        }
+    }
+
     /// One routine with its problem measured, as a command hands it back.
     pub fn routine_with_problem(&self, mut routine: Routine) -> Routine {
         routine.problem = self.routine_problem(&routine);

@@ -474,18 +474,23 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
             continue;
         }
 
-        // The watched folder is looked at before `due` and recorded after,
-        // whichever way the answer goes: the first look at a folder full of old
-        // files is what teaches the routine where "now" is, and a fire that did
-        // not update the watermark would fire again on the next tick.
+        // The watermark moves when a change is *acted on*, and at no other
+        // time. Advancing it whichever way the answer went is what would lose a
+        // change that arrived while the routine was inside its cooldown: the
+        // file would be marked as seen by a tick that did not fire, and nothing
+        // newer would ever appear. A pending change stays pending.
+        //
+        // The one exception is a routine that has never looked — normally
+        // impossible, because saving one records where "now" is
+        // (`AppState::arm_watch`), and reachable only when that look failed.
+        // Learning then costs one skipped change rather than a routine that
+        // fires on every old file in the folder.
         let watch = watch_for(&state, &routine);
-        let go = super::due(&routine, now, watch.as_ref());
-        if let Some(watch) = &watch {
-            if let Some(newest) = &watch.newest {
-                state.routines().mark_seen(&routine.id, newest);
-            }
+        if let Some(newest) = watch.as_ref().and_then(super::learning) {
+            state.routines().mark_seen(&routine.id, newest);
+            continue;
         }
-        if !go {
+        if !super::due(&routine, now, watch.as_ref()) {
             continue;
         }
 
@@ -499,6 +504,13 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
 
         if state.scheduler().claim(&routine.id).is_err() {
             continue;
+        }
+        // Before the run rather than after it: a run takes minutes, and a
+        // second tick inside that window would otherwise see the same change
+        // and be told the routine is already running — which is true, and would
+        // have left the watermark behind for a third tick to trip over.
+        if let Some(newest) = watch.as_ref().and_then(|watch| watch.newest.as_deref()) {
+            state.routines().mark_seen(&routine.id, newest);
         }
         start(app.clone(), routine.id.clone());
     }

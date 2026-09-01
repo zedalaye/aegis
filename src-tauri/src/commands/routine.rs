@@ -64,6 +64,11 @@ pub fn routine_save(
         Some(id) => state.routines().update(&id, &draft)?,
         None => state.routines().create(&draft)?,
     };
+    // A routine that watches a folder starts from what is in it *now*, so a
+    // file dropped in a second after saving is a change. Looking on the first
+    // tick instead would mean the first thing you do to test it is the one
+    // thing it cannot see.
+    state.arm_watch(&saved);
     Ok(state.routine_with_problem(saved))
 }
 
