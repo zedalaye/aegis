@@ -63,7 +63,7 @@ ever sent to it.
 > memory, so the whole gate can be walked through without spending a token or configuring a
 > provider.
 >
-> **The audit log has a window.** *Audit log* in the title bar opens a drawer beside the
+> **The audit log has a window.** The audit-log button in the title bar opens a drawer beside the
 > transcript showing the tail of `audit.jsonl`, newest first: one row per tool call with the
 > time, the tool, how it came to run, how it ended, how long it took and how many bytes it
 > carried. *More* opens the turn and call ids, the redacted arguments in full, the SHA-256 over
@@ -84,13 +84,13 @@ ever sent to it.
 >
 > **A session now runs as an identity.** *Settings → Identities* creates one: a name, a line
 > saying what it is for, instructions it carries into every request, and — the part that matters
-> — a tick-list of the tools it may use. Open a session as it from the picker beside **New
-> session**, and that session is bound to it for good. An identity is not shown the tools it was
+> — a tick-list of the tools it may use. Open a session as it from the **+** next to
+> **Sessions**, and that session is bound to it for good. An identity is not shown the tools it was
 > not granted, so a "reviewer" with only `fs_list` and `fs_read` never asks to write a file; and
 > if it asks anyway, policy refuses before anything runs, with no dialog offering to let it
-> through. The audit line names the identity, so *who ran this* is answerable afterwards. Leaving
-> the picker alone gets the built-in **Assistant**, which holds every tool — the assistant Aegis
-> had before identities existed, now with a name. See *Identities*.
+> through. The audit line names the identity, so *who ran this* is answerable afterwards. With
+> only the built-in **Assistant**, the + creates a session as it — the assistant Aegis had
+> before identities existed, now with a name. See *Identities*.
 >
 > **And an identity can follow a runbook.** A skill is a `SKILL.md` — when to use it, the tools
 > it will call, the steps, how to check the result, and what to do when the source it needs is
@@ -203,25 +203,27 @@ a few minutes, later ones are incremental.
 
 No provider and no key needed — the scripted provider is enough to exercise the whole runtime.
 
-1. **Add a project.** *Add workspace…* in the sidebar opens the native folder picker. The folder
-   you choose is the workspace: the only place a tool may touch without asking every time.
+1. **Add a project.** The **+** next to *Projects* opens the native folder picker. The folder
+   you choose is the workspace: the only place a tool may touch without asking every time. The
+   path sits in the title bar; the folder button next to it opens that folder in Explorer,
+   Finder, or the desktop's file manager.
 2. **Start a session** and send anything. The reply streams in a token at a time; the header
    names what produced it.
 3. **Make it ask.** Send a message containing `/write`, `/run` or `/capture`. The prompt names
    the exact file and content, the exact program and arguments, or the display and its size.
    Answer **deny** once to see a refusal land in the transcript without killing the turn, then
    send it again and **allow once**.
-4. **Check the record.** Open **Audit log** in the title bar. Both calls are there — the refused
+4. **Check the record.** Open the audit log from the title bar. Both calls are there — the refused
    one and the allowed one — with the policy's reason and the outcome.
-5. **Close the window.** The app stays in the tray; the tray icon brings it back. *Quit* is the
-   only thing that ends it.
+5. **Close the window.** The app stays in the tray; the tray icon brings it back. The quit
+   button in the title bar is the only thing that ends it.
 6. **Restart.** The project, the session and the transcript are where you left them.
 7. **File a decision.** Press *Set up shared files* in the sidebar, then ask for a decision to be
    recorded. It is written to `.aegis/decisions/DECISIONS.md` through the same approval dialog, and the
    next reply already knows about it. See [Shared workspace files](#shared-workspace-files).
 8. **Open a session as someone narrower.** In *Settings → Identities*, make a **Reviewer** with
-   only `fs_list` and `fs_read` ticked. Back in the sidebar, pick it in the **as** control and
-   press *New session*, then send `/write`. No prompt appears: the write is refused outright
+   only `fs_list` and `fs_read` ticked. Back in the sidebar, press **+** next to *Sessions*,
+   pick that identity, then send `/write`. No prompt appears: the write is refused outright
    because that identity does not hold `fs_write`, and the audit line records the refusal against
    it. See [Identities](#identities).
 9. **Run a skill.** *Settings → Skills* lists the runbooks Aegis found. Edit an identity, click
@@ -612,7 +614,7 @@ it may use. **Settings → Identities** is where they are made.
 | **Tools** | a tick-list of `fs_list`, `fs_read`, `fs_write`, `shell_exec`, `screen_capture`, `skill_run`, `skill_return`. Everything unticked is refused |
 | **Skills** | the runbooks it may load. Granting one ticks `skill_run` and `skill_return`, because an identity that cannot load a runbook holds a grant that does nothing |
 
-Pick one from the **as** control beside *New session* and the session is bound to it. That
+Pick one from the **+** next to *Sessions* and the session is bound to it. That
 binding is permanent: there is no way to move a session to a different identity, because a
 transcript is the record of what one identity did, and rewriting whose record it is would leave
 `fs_write` calls in the history of something that was never allowed to make one. Working as

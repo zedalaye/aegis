@@ -7,10 +7,12 @@
  * doing: the world is the thing to watch while founding one and noise for the
  * next month, and the project list is the reverse.
  *
- * So each carries its own disclosure, and the choice sticks. It is a heading
- * that is also a button rather than a separate caret to hit — the whole row is
- * the target, which is what makes it usable in a rail this narrow — and the
- * caret is decorative, because the button already announces its state.
+ * So each carries its own disclosure, and the choice sticks. The heading is a
+ * button rather than a separate caret to hit — the title is the target, which
+ * is what makes it usable in a rail this narrow — and the caret is decorative,
+ * because the button already announces its state. An optional action (`+`)
+ * sits at the end of the row as a sibling: a button nested in the disclosure
+ * would be invalid HTML and would fold the section when it meant to add.
  *
  * What is remembered is one boolean per section, in `localStorage`. It is a
  * preference about a window, worth nothing to anybody else, and losing it costs
@@ -62,53 +64,89 @@ export default function Section({
    * somebody would want to open it.
    */
   badge = null,
+  /**
+   * Trailing control on the heading — the "+" that adds a project or a
+   * session. A sibling of the disclosure, not a child.
+   */
+  action = null,
+  /**
+   * Keep the body open even if the section was folded. The pending "name this
+   * project" form has nowhere else to go; hiding it behind a caret would leave
+   * a dialog the user already answered with no place to finish.
+   */
+  pinned = false,
 }: {
   readonly id: string;
   readonly title: string;
   readonly className?: string;
   readonly children: ReactNode;
   readonly badge?: ReactNode;
+  readonly action?: ReactNode;
+  readonly pinned?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(() => remembered(id));
 
   const toggle = useCallback(() => {
+    if (pinned) {
+      return;
+    }
     setCollapsed((was) => {
       remember(id, !was);
       return !was;
     });
+  }, [id, pinned]);
+
+  const expand = useCallback(() => {
+    setCollapsed((was) => {
+      if (was) {
+        remember(id, false);
+      }
+      return false;
+    });
   }, [id]);
 
+  const folded = collapsed && !pinned;
   const bodyId = `rail-${id}`;
 
   return (
     <section
       className={[
         "rail__section",
-        collapsed ? "rail__section--collapsed" : "",
+        folded ? "rail__section--collapsed" : "",
         className ?? "",
       ]
         .filter(Boolean)
         .join(" ")}
       aria-label={title}
     >
-      <button
-        type="button"
-        className="rail__toggle"
-        aria-expanded={!collapsed}
-        aria-controls={bodyId}
-        onClick={toggle}
-      >
-        <span aria-hidden="true" className="rail__caret">
-          {collapsed ? "▸" : "▾"}
-        </span>
-        <span className="sidebar__heading">{title}</span>
+      <div className="rail__head">
+        <button
+          type="button"
+          className="rail__toggle"
+          aria-expanded={!folded}
+          aria-controls={bodyId}
+          onClick={toggle}
+        >
+          <span aria-hidden="true" className="rail__caret">
+            {folded ? "▸" : "▾"}
+          </span>
+          <span className="sidebar__heading">{title}</span>
+        </button>
         {badge}
-      </button>
+        {action === null ? null : (
+          // Capture so adding while folded opens the section first: a new
+          // session that landed in a list nobody can see would look like the
+          // click did nothing.
+          <div className="rail__action" onClickCapture={expand}>
+            {action}
+          </div>
+        )}
+      </div>
 
       {/* Unmounted rather than hidden. These bodies are lists that follow
           stores, and one kept mounted behind `display: none` would go on
           re-rendering for a panel nobody can see. */}
-      {collapsed ? null : (
+      {folded ? null : (
         <div className="rail__body" id={bodyId}>
           {children}
         </div>

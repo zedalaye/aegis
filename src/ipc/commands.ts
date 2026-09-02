@@ -17,8 +17,9 @@
  * identities may run (PLAN 7.3, Phase 13), what one identity has learned
  * (PLAN 7.3, Phase 14), the routines that fire a runbook on a clock
  * (PLAN 7.3, Phase 16), the project's board and the runs its audit log folds
- * into (PLAN 7.3, Phase 17), and the external MCP servers whose tools reach
- * the model through the same gate as this build's own (PLAN 7.3, Phase 18).
+ * into (PLAN 7.3, Phase 17), the external MCP servers whose tools reach
+ * the model through the same gate as this build's own (PLAN 7.3, Phase 18),
+ * and revealing a workspace folder in the OS file manager (PLAN 7.10).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -533,6 +534,23 @@ export function workspaceLayout(projectId: string): Promise<WorkspaceLayout> {
  */
 export function workspaceScaffold(projectId: string): Promise<ScaffoldReport> {
   return call<ScaffoldReport>("workspace_scaffold", { project_id: projectId });
+}
+
+/**
+ * Opens a workspace path in the OS file manager (PLAN 7.10).
+ *
+ * Omit `path` to reveal the project folder — the title-bar button. A path
+ * that is not inside that folder is refused; the WebView never opens
+ * `file://` and never gains an opener permission.
+ */
+export function workspaceReveal(
+  projectId: string,
+  path?: string,
+): Promise<void> {
+  return call<void>("workspace_reveal", {
+    project_id: projectId,
+    path: path ?? null,
+  });
 }
 
 /**

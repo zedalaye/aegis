@@ -1,10 +1,12 @@
 /**
- * Adding a workspace: pick a folder, then confirm the name.
+ * Naming a project after a folder has been picked.
  *
- * Two steps rather than one. The picker is a native dialog owned by the
- * runtime, and the name is the only part of a project the user can choose, so
- * it is offered before anything is written — the MVP has no way to rename a
- * project afterwards.
+ * The "+" on the Projects heading opens the native dialog; this form is the
+ * second step, shown only once a folder is chosen. The name is the only part
+ * of a project the user can choose, so it is offered before anything is
+ * written — there is no way to rename a project afterwards.
+ *
+ * Draws nothing when idle: the heading already holds the action.
  */
 
 import { useProjects } from "../../state/projects";
@@ -14,22 +16,12 @@ import WorkspaceBadge from "./WorkspaceBadge";
 export default function ProjectPicker() {
   const pending = useProjects((s) => s.pending);
   const busy = useProjects((s) => s.busy);
-  const pickWorkspace = useProjects((s) => s.pickWorkspace);
   const renamePending = useProjects((s) => s.renamePending);
   const cancelPending = useProjects((s) => s.cancelPending);
   const confirmPending = useProjects((s) => s.confirmPending);
 
   if (pending === null) {
-    return (
-      <button
-        type="button"
-        className="button button--wide"
-        onClick={() => void pickWorkspace()}
-        disabled={busy}
-      >
-        Add workspace…
-      </button>
-    );
+    return null;
   }
 
   // A folder with an all-whitespace name would be stored under the folder's

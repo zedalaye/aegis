@@ -427,6 +427,31 @@ pub enum AppError {
     #[error("your system's credential store could not be used")]
     Keyring,
 
+    /// The window asked to reveal a path that is not inside the open
+    /// project's workspace (PLAN 7.10).
+    ///
+    /// Arbitrary paths from the WebView are refused rather than opened. The
+    /// argument is echoed because it is what the window sent, not a location
+    /// discovered on the machine.
+    #[error("`{path}` is not inside this workspace")]
+    RevealOutside {
+        /// The path as the window sent it.
+        path: String,
+    },
+
+    /// The window asked to reveal a path that could not be opened.
+    ///
+    /// Distinct from [`AppError::RevealOutside`]: this one never resolved to a
+    /// location, or the location has gone. Opening it is not a containment
+    /// miss, it is a path that is not there to show.
+    #[error("`{path}` cannot be opened: {reason}")]
+    RevealPath {
+        /// The path as the window sent it, or as it resolved.
+        path: String,
+        /// Why it cannot be opened, in words a user can act on.
+        reason: String,
+    },
+
     /// A runtime invariant broke somewhere outside the agent and tool
     /// domains — a channel that closed, a resource that vanished mid-call.
     ///
@@ -482,6 +507,8 @@ impl AppError {
             | Self::Routine { .. }
             | Self::Connector { .. } => ErrorCode::InvalidSetting,
             Self::Keyring => ErrorCode::KeyringUnavailable,
+            Self::RevealOutside { .. } => ErrorCode::PathOutsideWorkspace,
+            Self::RevealPath { .. } => ErrorCode::PathInvalid,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
             | Self::WorkspaceScaffold { .. }
@@ -581,6 +608,21 @@ mod tests {
             json["message"],
             r"`C:\gone` cannot be used as a workspace: the folder does not exist"
         );
+    }
+
+    #[test]
+    fn revealing_a_path_outside_the_workspace_names_the_argument() {
+        let err = AppError::RevealOutside {
+            path: "../elsewhere".to_owned(),
+        };
+        let json = serde_json::to_value(&err).expect("AppError serializes");
+
+        assert_eq!(json["code"], "E_PATH_OUTSIDE_WORKSPACE");
+        assert_eq!(
+            json["message"],
+            "`../elsewhere` is not inside this workspace"
+        );
+        assert_eq!(json["retryable"], false);
     }
 
     #[test]

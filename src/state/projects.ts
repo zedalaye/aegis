@@ -21,6 +21,7 @@ import {
   projectList,
   projectOpen,
   projectPickWorkspace,
+  workspaceReveal,
 } from "../ipc/commands";
 import { folderName } from "../lib/format";
 import { toIpcError } from "../lib/errors";
@@ -76,6 +77,13 @@ export type ProjectsState = {
   open: (projectId: string) => Promise<void>;
   /** Forgets a project. */
   remove: (projectId: string) => Promise<void>;
+  /**
+   * Opens this project's folder in the OS file manager.
+   *
+   * Failures land in `error` like every other command, but this one does not
+   * take `busy`: revealing a folder is not a reason to disable the rail.
+   */
+  reveal: (projectId: string) => Promise<void>;
   /** Clears the last error. */
   dismissError: () => void;
 };
@@ -186,6 +194,15 @@ export const useProjects = create<ProjectsState>((set, get) => {
         // No preferred id: whatever is most recent takes the open slot.
         await refresh();
       });
+    },
+
+    reveal: async (projectId) => {
+      try {
+        await workspaceReveal(projectId);
+        set({ error: null });
+      } catch (cause) {
+        set({ error: toIpcError(cause, "workspace_reveal") });
+      }
     },
 
     dismissError: () => set({ error: null }),

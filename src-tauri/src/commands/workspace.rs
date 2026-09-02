@@ -1,11 +1,11 @@
 //! Shared-workspace commands (PLAN 7.3, Phase 11; PLAN 7.2 for the world).
 //!
-//! Three commands, and none of them is a way to edit the files. Reading and
+//! Four commands, and none of them is a way to edit the files. Reading and
 //! writing `STATUS.md` or `DECISIONS.md` is what `fs_read` and `fs_write`
 //! already do, under the approval gate and on the audit log; a second write
 //! path around that gate is exactly the shortcut PLAN 7.1 tells this phase not
 //! to take. What the UI cannot do for itself is find out whether the convention
-//! is present, and lay it down once — so that is all that is here.
+//! is present, and lay it down once — so that is two of them.
 //!
 //! The third is [`world_status`], and it is deliberately *only* a read. There
 //! is no `world_scaffold` beside `workspace_scaffold`: the cabinet is a
@@ -14,10 +14,16 @@
 //! PLAN 7.2 refuses — a world starts when somebody writes `world/essence.md`,
 //! in their own editor or through `fs_write` under the gate, and this command
 //! reports what they wrote.
+//!
+//! The fourth is [`workspace_reveal`] (PLAN 7.10). It opens a contained path
+//! in the OS file manager. The WebView never opens `file://` and never gains
+//! an opener permission; the argument is this project's workspace, or a path
+//! already checked to sit inside it.
 
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::reveal;
 use crate::state::AppState;
 use crate::store::canonical_workspace;
 use crate::workspace::{self, ScaffoldReport, WorkspaceLayout};
@@ -69,6 +75,33 @@ pub fn workspace_scaffold(
 
     let root = canonical_workspace(&project.workspace_path)?;
     workspace::scaffold(&root)
+}
+
+/// Opens a workspace path in the OS file manager (PLAN 7.10).
+///
+/// `path` omitted, or empty, is the project folder — the title-bar button.
+/// Anything else has to resolve inside that folder; a path that climbs out,
+/// or that only looked contained, is refused rather than opened. The window
+/// has no `fs:` / `shell:` / opener permission, so this command is the only
+/// way a click reaches Explorer, Finder, or the desktop's folder handler.
+#[tauri::command(rename_all = "snake_case")]
+pub fn workspace_reveal(
+    state: State<'_, AppState>,
+    project_id: String,
+    path: Option<String>,
+) -> AppResult<()> {
+    let project = state.store().get(&project_id)?;
+
+    if !project.workspace_exists {
+        return Err(AppError::WorkspacePath {
+            path: project.workspace_path,
+            reason: "the folder is not there any more".to_owned(),
+        });
+    }
+
+    let root = canonical_workspace(&project.workspace_path)?;
+    let target = reveal::target(&root, path.as_deref())?;
+    reveal::open(&target)
 }
 
 /// Whether this project's workspace holds a world, and what is true of it.

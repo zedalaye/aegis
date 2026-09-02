@@ -1832,11 +1832,13 @@ It may start once Phase 13 has landed. It must not delay Phases 14–16
 **In scope**
 
 - **Title bar, less prose.** Audit log, Settings, Hide to tray, and Quit
-  become icon buttons. Every icon keeps an `aria-label` and a tooltip —
-  never an icon alone. Settings and Audit stay *modes* (`aria-pressed`);
-  Hide and Quit stay actions. Inline SVG (or the same kind of sign as the
-  workspace badge's `▣`). No icon font, no Lucide, no Blink-only CSS:
-  Linux is WebKitGTK (§ 5.3).
+  become icon buttons. Board (Phase 17, now landed) is the same kind of
+  *mode* as Settings and takes the same treatment — it is not "pre-building
+  the board", which this slice still does not do. Every icon keeps an
+  `aria-label` and a tooltip — never an icon alone. Settings, Audit and
+  Board stay *modes* (`aria-pressed`); Hide and Quit stay actions. Inline
+  SVG (or the same kind of sign as the workspace badge's `▣`). No icon
+  font, no Lucide, no Blink-only CSS: Linux is WebKitGTK (§ 5.3).
 - **Reveal the folder.** A **button** at the end of the title-bar path
   (not a link on the badge, not nested in the rail's project row — that
   click already means "open this project"). Disabled when the folder is
@@ -1873,7 +1875,7 @@ WebView are refused.
   "open with" command in Settings is allowed; it is not the first click.
 - The Phase 17 status board.
 
-**Exit:** the title bar is icon-only for those four actions, each named
+**Exit:** the title bar is icon-only for those actions, each named
 to a screen reader; the open project has an Open button next to its
 path; pressing it shows that folder in the file manager on Windows and
 macOS (best-effort Linux). No new plugin permission. No file tree. No

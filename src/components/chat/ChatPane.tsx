@@ -177,7 +177,7 @@ export default function ChatPane() {
             className="button button--primary"
             onClick={() => void create(project.id)}
           >
-            New session
+            Add session
           </button>
         ) : null}
       </section>

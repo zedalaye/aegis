@@ -57,7 +57,7 @@ function NoProject() {
       </h1>
       <p className="work__body">
         A project is a workspace folder Aegis is allowed to work in. Add one
-        from the sidebar to get started.
+        with the + next to Projects.
       </p>
     </section>
   );

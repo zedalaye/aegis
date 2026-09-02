@@ -55,6 +55,7 @@ pub mod handoff;
 pub mod mcp;
 pub mod oauth;
 pub mod policy;
+pub mod reveal;
 pub mod schedule;
 pub mod secrets;
 pub mod skills;
@@ -211,6 +212,7 @@ pub fn run() {
             commands::settings::settings_list_models,
             commands::workspace::workspace_layout,
             commands::workspace::workspace_scaffold,
+            commands::workspace::workspace_reveal,
             commands::workspace::world_status,
             commands::skill::skill_list,
             commands::memory::memory_list,

@@ -35,7 +35,7 @@
 //! delete.
 //!
 //! What the dot does cost is worth writing down rather than discovering: a
-//! macOS Finder opened by [`workspace_reveal`](crate::commands) hides it until
+//! macOS Finder opened by [`reveal`](crate::reveal) hides it until
 //! ⌘⇧. is pressed, and `rg` skips it without `--hidden`. That is the trade the
 //! single root entry was worth.
 //!

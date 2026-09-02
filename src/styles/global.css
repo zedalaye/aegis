@@ -89,6 +89,21 @@ body {
   width: 100%;
 }
 
+/*
+ * Title-bar actions (PLAN 7.10). Square, named by `aria-label` and `title` on
+ * the button — the SVG inside is decorative. Sized to match the text buttons
+ * they replaced, so the bar does not jump when a mode is pressed.
+ */
+.button--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  flex-shrink: 0;
+}
+
 .button--primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -183,6 +198,13 @@ body {
   color: var(--muted);
 }
 
+.titlebar__workspace {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
 .titlebar__actions {
   display: flex;
   gap: 0.4rem;
@@ -232,11 +254,6 @@ body {
   display: flex;
   align-items: stretch;
   gap: 0.25rem;
-}
-
-.sidebar__footer {
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--border);
 }
 
 .project {
@@ -388,13 +405,21 @@ body {
   border-top: 1px solid var(--border);
 }
 
-/* The whole heading row is the target: a caret alone is too small to hit in a
-   rail this narrow, and the heading is the thing people aim at anyway. */
+.rail__head {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+/* The title is the target: a caret alone is too small to hit in a rail this
+   narrow. It grows so the empty space after the word still folds the section,
+   and the "+" stays a sibling at the end of the row. */
 .rail__toggle {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 0.1rem 0;
   border: 0;
   border-radius: var(--radius);
@@ -406,7 +431,7 @@ body {
 }
 
 .rail__toggle:hover .sidebar__heading {
-  color: var(--text);
+  color: var(--fg);
 }
 
 .rail__toggle:focus-visible {
@@ -421,13 +446,108 @@ body {
   color: var(--muted);
 }
 
-/* What a collapsed section can still say. Pushed to the end of the row so the
-   heading stays where the eye already is. */
+/* What a collapsed section can still say. After the title, before the "+". */
 .rail__count {
-  margin-left: auto;
   flex-shrink: 0;
   font-size: 0.7rem;
   color: var(--muted);
+}
+
+.rail__action {
+  flex-shrink: 0;
+  position: relative;
+}
+
+.rail__addwrap {
+  position: relative;
+}
+
+.rail__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rail__add:hover:enabled {
+  color: var(--fg);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.rail__add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rail__add[aria-expanded="true"] {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--selected);
+}
+
+.rail__menu {
+  position: absolute;
+  top: calc(100% + 0.2rem);
+  right: 0;
+  z-index: 8;
+  min-width: 11rem;
+  max-width: 16rem;
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.rail__menuitem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail__menuitem:hover,
+.rail__menuitem:focus-visible {
+  background: var(--selected);
+}
+
+.rail__menuname {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail__menuhint {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 .rail__count--attention {
@@ -634,7 +754,6 @@ body {
 
 /* --- Sessions ------------------------------------------------------------- */
 
-
 .sessions__list {
   flex: 1;
   min-height: 0;
@@ -648,42 +767,6 @@ body {
   display: flex;
   align-items: stretch;
   gap: 0.2rem;
-}
-
-/*
- * The new-session control and the identity it would use. Two rows rather than
- * one line, because the button is the thing pressed every day and the picker is
- * the thing touched occasionally — and because the picker disappears entirely
- * when there is only one identity to pick.
- */
-.sessions__new {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.sessions__identity {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
-.sessions__identitylabel {
-  flex-shrink: 0;
-}
-
-.sessions__identityselect {
-  flex: 1;
-  min-width: 0;
-  padding: 0.25rem 0.3rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: inherit;
-  font: inherit;
-  font-size: 0.75rem;
 }
 
 .session__open {

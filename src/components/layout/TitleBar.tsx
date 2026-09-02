@@ -24,9 +24,16 @@
  * closes the other. That is decided here rather than in the shell's render
  * chain: a chain that merely preferred one would leave the other's button
  * drawn as pressed with nothing behind it, which is a button that lies.
+ *
+ * The actions on the right are icon buttons (PLAN 7.10). Each keeps its name
+ * as `aria-label` and as a tooltip — never an icon alone. Settings, Audit and
+ * Board stay *modes* (`aria-pressed`); Hide and Quit stay actions. The Open
+ * control sits on the path, not among them: that click is about the folder,
+ * not about a pane of this window.
  */
 
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 import { appQuit, windowHasTray, windowHide } from "../../ipc/commands";
 import { useAudit } from "../../state/audit";
@@ -34,9 +41,47 @@ import { useBoard } from "../../state/board";
 import { useProjects } from "../../state/projects";
 import { useSettings } from "../../state/settings";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
+import {
+  AuditIcon,
+  BoardIcon,
+  FolderIcon,
+  HideIcon,
+  QuitIcon,
+  SettingsIcon,
+} from "./icons";
+
+/** An icon that is also a named button. The name is the tooltip and the label. */
+function IconButton({
+  label,
+  pressed,
+  disabled,
+  onClick,
+  children,
+}: {
+  readonly label: string;
+  readonly pressed?: boolean;
+  readonly disabled?: boolean;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="button button--icon"
+      title={label}
+      aria-label={label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
 
 export default function TitleBar() {
   const project = useProjects((s) => s.detail?.project ?? null);
+  const reveal = useProjects((s) => s.reveal);
   const settingsOpen = useSettings((s) => s.open);
   const openSettings = useSettings((s) => s.openPanel);
   const closeSettings = useSettings((s) => s.closePanel);
@@ -64,20 +109,28 @@ export default function TitleBar() {
         ) : (
           <>
             <span className="titlebar__project">{project.name}</span>
-            <WorkspaceBadge
-              path={project.workspace_path}
-              exists={project.workspace_exists}
-              maxLength={56}
-            />
+            <span className="titlebar__workspace">
+              <WorkspaceBadge
+                path={project.workspace_path}
+                exists={project.workspace_exists}
+                maxLength={56}
+              />
+              <IconButton
+                label="Open this folder in the file manager"
+                disabled={!project.workspace_exists}
+                onClick={() => void reveal(project.id)}
+              >
+                <FolderIcon />
+              </IconButton>
+            </span>
           </>
         )}
       </div>
 
       <div className="titlebar__actions">
-        <button
-          type="button"
-          className="button"
-          aria-pressed={boardOpen}
+        <IconButton
+          label="Board"
+          pressed={boardOpen}
           // Disabled with nothing open rather than hidden: a board is a fact
           // about a project, and a button that vanished would read as a feature
           // that is not there.
@@ -91,20 +144,18 @@ export default function TitleBar() {
             }
           }}
         >
-          Board
-        </button>
-        <button
-          type="button"
-          className="button"
-          aria-pressed={auditOpen}
+          <BoardIcon />
+        </IconButton>
+        <IconButton
+          label="Audit log"
+          pressed={auditOpen}
           onClick={() => void toggleAudit()}
         >
-          Audit log
-        </button>
-        <button
-          type="button"
-          className="button"
-          aria-pressed={settingsOpen}
+          <AuditIcon />
+        </IconButton>
+        <IconButton
+          label="Settings"
+          pressed={settingsOpen}
           onClick={() => {
             if (settingsOpen) {
               closeSettings();
@@ -114,26 +165,24 @@ export default function TitleBar() {
             }
           }}
         >
-          Settings
-        </button>
+          <SettingsIcon />
+        </IconButton>
         {hasTray ? (
-          <button
-            type="button"
-            className="button"
+          <IconButton
+            label="Hide to tray"
             // A rejection here means the window is already gone, which is what
             // was being asked for; there is nothing useful to report.
             onClick={() => void windowHide().catch(() => {})}
           >
-            Hide to tray
-          </button>
+            <HideIcon />
+          </IconButton>
         ) : null}
-        <button
-          type="button"
-          className="button"
+        <IconButton
+          label="Quit"
           onClick={() => void appQuit().catch(() => {})}
         >
-          Quit
-        </button>
+          <QuitIcon />
+        </IconButton>
       </div>
     </header>
   );
