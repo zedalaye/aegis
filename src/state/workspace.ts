@@ -35,6 +35,7 @@ import {
   workspaceScaffold,
   worldStatus,
 } from "../ipc/commands";
+import { subscribe } from "../ipc/events";
 import { toIpcError } from "../lib/errors";
 import type { IpcError } from "../lib/errors";
 
@@ -42,6 +43,8 @@ import type { IpcError } from "../lib/errors";
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
 export type WorkspaceState = {
+  /** The project both measurements belong to, or `null` when none is open. */
+  readonly projectId: string | null;
   /** The convention's state in the open project, or `null` when none is. */
   readonly layout: WorkspaceLayout | null;
   /**
@@ -70,12 +73,22 @@ export type WorkspaceState = {
 
   /** Measures the convention in a project, or clears it for `null`. */
   loadFor: (projectId: string | null) => Promise<void>;
+  /**
+   * Re-measures the open project, in place.
+   *
+   * Not {@link loadFor}: this runs while somebody is looking at the panel, so
+   * it must not pass through `loading` — which blanks both panels — and must not
+   * clear the line reporting what the last scaffold created. It changes what is
+   * drawn only when the folder has actually changed.
+   */
+  refresh: () => Promise<void>;
   /** Lays down what is missing, then re-measures. */
   scaffold: (projectId: string) => Promise<void>;
   dismissError: () => void;
 };
 
-export const useWorkspace = create<WorkspaceState>((set) => ({
+export const useWorkspace = create<WorkspaceState>((set, get) => ({
+  projectId: null,
   layout: null,
   world: null,
   status: "idle",
@@ -87,6 +100,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   loadFor: async (projectId) => {
     if (projectId === null) {
       set({
+        projectId: null,
         layout: null,
         world: null,
         status: "idle",
@@ -97,7 +111,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
       return;
     }
 
-    set({ status: "loading", created: [], scaffolded: false });
+    set({ projectId, status: "loading", created: [], scaffolded: false });
     try {
       const [layout, world] = await Promise.all([
         workspaceLayout(projectId),
@@ -114,6 +128,31 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
         status: "error",
         error: toIpcError(cause, "workspace_layout"),
       });
+    }
+  },
+
+  refresh: async () => {
+    const projectId = get().projectId;
+    if (projectId === null) {
+      return;
+    }
+
+    try {
+      const [layout, world] = await Promise.all([
+        workspaceLayout(projectId),
+        worldStatus(projectId),
+      ]);
+      // Guarded, like the board's: a slow measurement that lands after somebody
+      // opened another project must not draw that project's folder under this
+      // one's name.
+      if (get().projectId === projectId) {
+        set({ layout, world, status: "ready" });
+      }
+    } catch (cause) {
+      // Held, not surfaced. This runs on its own, after a turn nobody asked to
+      // re-measure; a folder that has gone away is worth a line in the shell,
+      // and it is not worth blanking two panels that were right a second ago.
+      set({ error: toIpcError(cause, "workspace_layout") });
     }
   },
 
@@ -150,3 +189,34 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   dismissError: () => set({ error: null }),
 }));
 
+/**
+ * Re-measures the folder when something may have changed it.
+ *
+ * Both panels are a picture of somebody else's directory, and until this
+ * existed they were measured once — when the project opened — and never again.
+ * A session that wrote `world/essence.md` through the gate left the World panel
+ * saying *not written* about a file it had just created, which reads as a
+ * broken panel rather than as a stale one.
+ *
+ * Two events, and neither is `tool:finished`: that fires for every read as well,
+ * and re-measuring is the expensive half here — `world_status` hashes every
+ * declared source. What is used instead is the pair the board already uses, for
+ * the same reason it does.
+ *
+ * * **`tool:approval_resolved`** — every gated write passes through it, and a
+ *   write into `world/` is *always* gated, so the panel follows a session
+ *   founding a world file by file.
+ * * **`turn:finished`** — the catch-all, once per turn. It covers what the
+ *   first misses: a write running under a standing grant, a `shell_exec` that
+ *   touched the folder, a connector's own tool.
+ */
+export function attachWorkspaceEvents(): Promise<() => void> {
+  const again = () => {
+    void useWorkspace.getState().refresh();
+  };
+
+  return subscribe({
+    "tool:approval_resolved": again,
+    "turn:finished": again,
+  });
+}

@@ -31,7 +31,7 @@ import { attachBoardEvents, useBoard } from "../../state/board";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 import { attachSettingsEvents, useSettings } from "../../state/settings";
 import { useSkills } from "../../state/skills";
-import { useWorkspace } from "../../state/workspace";
+import { attachWorkspaceEvents, useWorkspace } from "../../state/workspace";
 
 import AuditDrawer from "../audit/AuditDrawer";
 import BoardPanel from "../board/BoardPanel";
@@ -193,6 +193,7 @@ export default function AppShell() {
       attachRoutineEvents(),
       attachConnectorEvents(),
       attachBoardEvents(),
+      attachWorkspaceEvents(),
     ];
     return () => {
       for (const pending of attaching) {
