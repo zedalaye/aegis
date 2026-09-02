@@ -143,7 +143,7 @@ pub trait Runner: Send + Sync {
     /// zero here.
     ///
     /// `None` when there is nowhere to put it: a workspace that never took the
-    /// convention has no `briefs/`, and inventing one because an agent
+    /// convention has no `.aegis/briefs/`, and inventing one because an agent
     /// delegated would be the harness writing directories into somebody's
     /// folder uninvited (PLAN 7.3, Phase 11 — scaffolding is opt-in). The
     /// delegation still runs; the brief travels in the session that opens
@@ -197,7 +197,7 @@ impl Outcome {
 pub struct Assignment {
     /// The brief as it went out.
     pub brief: Brief,
-    /// Where it was filed, when there was a `briefs/` to file it in.
+    /// Where it was filed, when there was a `.aegis/briefs/` to file it in.
     pub filed: Option<String>,
     /// How many attempts it took, or how many it survived.
     pub attempts: u32,
@@ -572,7 +572,7 @@ mod tests {
 
     impl Runner for Script {
         fn file(&self, _slot: Slot<'_>, _brief: &Brief, _rendered: &str) -> Option<String> {
-            Some("briefs/filed.md".to_owned())
+            Some(".aegis/briefs/filed.md".to_owned())
         }
 
         fn run<'a>(
@@ -604,7 +604,7 @@ mod tests {
             goal: format!("do the {owner} thing"),
             owner: owner.to_owned(),
             priority: Priority::Normal,
-            inputs: vec!["briefs/intake.md".to_owned()],
+            inputs: vec![".aegis/briefs/intake.md".to_owned()],
             constraints: Vec::new(),
             definition_of_done: "the file exists".to_owned(),
             approval_needed: String::new(),
@@ -750,8 +750,8 @@ mod tests {
     async fn the_reviewer_receives_the_artefacts_and_no_transcript() {
         let mut produced = report(Status::Done);
         produced.artefacts = vec![crate::handoff::Artefact {
-            shown: "artefacts/draft.md".to_owned(),
-            path: std::path::PathBuf::from("artefacts/draft.md"),
+            shown: ".aegis/artefacts/draft.md".to_owned(),
+            path: std::path::PathBuf::from(".aegis/artefacts/draft.md"),
         }];
 
         let runner = Script::arc(vec![Ok(report(Status::Done)), Ok(produced)]);
@@ -770,7 +770,7 @@ mod tests {
             review
                 .brief
                 .inputs
-                .contains(&"artefacts/draft.md".to_owned()),
+                .contains(&".aegis/artefacts/draft.md".to_owned()),
             "{:?}",
             review.brief.inputs
         );

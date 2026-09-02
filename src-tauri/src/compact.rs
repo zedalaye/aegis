@@ -28,7 +28,7 @@
 //!
 //! The cost of that honesty is that the state is *thin*: it holds what was
 //! done, not what was reasoned. That is the intended trade. What was reasoned
-//! and matters belongs in a file (`decisions/DECISIONS.md`), in a memory, or in
+//! and matters belongs in a file (`.aegis/decisions/DECISIONS.md`), in a memory, or in
 //! the last few turns, which are kept raw precisely so the thread of the
 //! conversation is not what compaction destroys.
 //!
@@ -98,7 +98,7 @@ const BLOCKERS_MAX: usize = 6;
 /// Matched as a suffix on the path the model wrote, in either separator, so it
 /// catches the relative path a model usually sends and the absolute one it
 /// sometimes does.
-const DECISIONS_SUFFIXES: [&str; 2] = ["decisions/DECISIONS.md", "decisions\\DECISIONS.md"];
+const DECISIONS_SUFFIXES: [&str; 2] = [".aegis/decisions/DECISIONS.md", "decisions\\DECISIONS.md"];
 
 /// What a compaction would record, before it is stamped and stored.
 ///
@@ -257,7 +257,7 @@ fn state(folded: &[Message]) -> String {
     }
     if facts.decisions > 0 {
         out.push_str(&format!(
-            "\nDecisions: {} filed in decisions/DECISIONS.md — read it rather than recalling them",
+            "\nDecisions: {} filed in .aegis/decisions/DECISIONS.md — read it rather than recalling them",
             facts.decisions
         ));
     }
@@ -589,12 +589,12 @@ mod tests {
                 vec![
                     call(
                         tool::FS_WRITE,
-                        r#"{"path":"artefacts/plan.md","content":"x"}"#,
+                        r#"{"path":".aegis/artefacts/plan.md","content":"x"}"#,
                         ToolCallStatus::Ok,
                     ),
                     call(
                         tool::FS_WRITE,
-                        r#"{"path":"decisions/DECISIONS.md","content":"y"}"#,
+                        r#"{"path":".aegis/decisions/DECISIONS.md","content":"y"}"#,
                         ToolCallStatus::Ok,
                     ),
                     call(
@@ -618,12 +618,12 @@ mod tests {
 
         let state = plan(&messages, true).expect("something to fold").state;
 
-        assert!(state.contains("artefacts/plan.md"), "{state}");
+        assert!(state.contains(".aegis/artefacts/plan.md"), "{state}");
         assert!(
             !state.contains("never/written.md"),
             "a failed write wrote nothing: {state}"
         );
-        assert!(state.contains("decisions/DECISIONS.md"), "{state}");
+        assert!(state.contains(".aegis/decisions/DECISIONS.md"), "{state}");
         assert!(state.contains("Commands run: cargo"), "{state}");
         assert!(
             state.contains("shell_exec ×1"),
@@ -739,7 +739,7 @@ mod tests {
                 "",
                 vec![call(
                     tool::FS_WRITE,
-                    &format!(r#"{{"path":"artefacts/{n}.md","content":"x"}}"#),
+                    &format!(r#"{{"path":".aegis/artefacts/{n}.md","content":"x"}}"#),
                     ToolCallStatus::Ok,
                 )],
             ));

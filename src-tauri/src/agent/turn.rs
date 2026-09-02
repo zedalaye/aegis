@@ -80,6 +80,7 @@ use crate::store::{
 use crate::tools::handoff::HandoffCtx;
 use crate::tools::{self, NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult};
 use crate::workspace;
+use crate::world;
 
 use super::event::{
     Event, EventSink, ToolApprovalResolved, ToolFinished, ToolProgress, ToolRequested, ToolStarted,
@@ -427,6 +428,12 @@ impl Turn<'_> {
         let mut rounds = 0u32;
         let mut usage = None;
 
+        // Whether this turn is a brief being worked on — the same question
+        // `execute` asks to build its `PolicyCtx`, and asked here for the world's
+        // frame below, so what the model is *told* about writing `world/` and
+        // what the gate would actually *do* about it come from one fact.
+        let delegated = self.standing.open().is_some();
+
         // Read once per turn rather than per round. A runbook can be edited
         // between two messages and the next turn picks that up, but a catalog
         // that changed halfway through a turn would show the model one list
@@ -521,6 +528,18 @@ impl Turn<'_> {
             // leaves the prompt exactly as it was before that phase.
             let shared = plan.workspace.as_deref().and_then(workspace::digest);
 
+            // Read on the same clock and for a related reason (PLAN 7.2). The
+            // constitution changes far more slowly than the cabinet does — a
+            // human amends it, and only between turns — but the *sources* it
+            // declares can move while a turn is running, because an operator
+            // drops a new dump into the folder without asking anybody. A round
+            // that learned about that one round late would be a round spent
+            // compiling against a schema nobody has re-read.
+            let world = plan
+                .workspace
+                .as_deref()
+                .and_then(|root| world::block(root, delegated));
+
             let request = transcript::build(
                 self.provider.model(),
                 &transcript::Context {
@@ -528,6 +547,7 @@ impl Turn<'_> {
                     workspace: plan.workspace.as_deref(),
                     memories: memory_block.as_deref(),
                     skills: skill_block.as_deref(),
+                    world: world.as_deref(),
                     shared: shared.as_deref(),
                     compacted: compaction.as_ref().map(|held| held.state.as_str()),
                     unattended: self.unattended.is_some(),

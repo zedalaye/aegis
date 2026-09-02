@@ -447,6 +447,7 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
             workspace: Some(&app.workspace),
             memories: None,
             skills: None,
+            world: None,
             shared: None,
             compacted: None,
             unattended: false,

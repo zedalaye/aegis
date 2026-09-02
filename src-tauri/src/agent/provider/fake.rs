@@ -539,7 +539,7 @@ fn skill_turn(request: &ModelRequest) -> Vec<ModelEvent> {
 
 /// The three rounds a scheduled run takes without a model behind it.
 ///
-/// Load the runbook the routine named, write a line into `status/`, close with
+/// Load the runbook the routine named, write a line into `.aegis/status/`, close with
 /// a return. It is the one script here that carries a job *out* rather than
 /// stopping at the gate, and that is deliberate: what the Phase 16 walkthrough
 /// has to show is a run happening with the window shut — the write going
@@ -580,7 +580,7 @@ fn routine_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
 fn write_the_status(name: &str) -> Vec<ModelEvent> {
     let stamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let arguments = serde_json::json!({
-        "path": format!("status/{name}.md"),
+        "path": format!("{}/status/{name}.md", crate::workspace::CABINET_DIR),
         "content": format!(
             "# {name}
 
@@ -612,8 +612,8 @@ fn close_the_run(name: &str, wrote: bool) -> Vec<ModelEvent> {
     let arguments = if wrote {
         serde_json::json!({
             "status": "done",
-            "summary": format!("Ran {name} on its schedule and wrote status/{name}.md."),
-            "artefacts": [format!("status/{name}.md")],
+            "summary": format!("Ran {name} on its schedule and wrote .aegis/status/{name}.md."),
+            "artefacts": [format!("{}/status/{name}.md", crate::workspace::CABINET_DIR)],
         })
     } else {
         serde_json::json!({
@@ -1110,6 +1110,7 @@ mod tests {
                 workspace: Some(&root),
                 memories: None,
                 skills: None,
+                world: None,
                 shared: None,
                 compacted: None,
                 unattended: false,
@@ -1158,6 +1159,7 @@ mod tests {
                 workspace: None,
                 memories: None,
                 skills: None,
+                world: None,
                 shared: None,
                 compacted: None,
                 unattended: false,

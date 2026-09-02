@@ -650,7 +650,7 @@ fn brief(goal: &str, owner: &str) -> serde_json::Value {
         "goal": goal,
         "owner": owner,
         "definition_of_done": "the return says what you found",
-        "inputs": ["status/STATUS.md"],
+        "inputs": [".aegis/status/STATUS.md"],
     })
 }
 
@@ -813,7 +813,7 @@ fn a_delegated_run_is_refused_a_delegation_of_its_own() {
 #[test]
 fn returning_a_brief_is_automatic() {
     let fixture = Fixture::new();
-    fixture.file("artefacts/note.md", "the note");
+    fixture.file(".aegis/artefacts/note.md", "the note");
 
     let call = auto(decide(
         &fixture.ctx(),
@@ -821,14 +821,14 @@ fn returning_a_brief_is_automatic() {
         json!({
             "status": "done",
             "summary": "wrote the note",
-            "artefacts": ["artefacts/note.md"],
+            "artefacts": [".aegis/artefacts/note.md"],
         }),
     ));
 
     match call {
         ResolvedCall::HandoffReturn { report } => {
             assert_eq!(report.artefacts.len(), 1);
-            assert_eq!(report.artefacts[0].shown, "artefacts/note.md");
+            assert_eq!(report.artefacts[0].shown, ".aegis/artefacts/note.md");
             assert!(report.artefacts[0].path.is_file());
         }
         other => panic!("expected a handoff return, got {other:?}"),

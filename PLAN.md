@@ -797,7 +797,7 @@ What the MVP already is, vs what § 7.3 still has to add.
 | --- | --- | --- |
 | 1. Agent registry (role, tools, skills, ACL) | one implicit assistant | `agents/` store: id, role, provider binding, tool allow-list, skill allow-list, memory path |
 | 2. Handoff bus with a fixed schema | a single session transcript | typed `Handoff` / `HandoffResult` objects (`COS.md` *Handoff*), not "read my thread" |
-| 3. `/workspace` as shared memory | user-picked folder; no convention | two layers in that folder, different mutation rules. **Cabinet** (Phase 11): `briefs/`, `status/`, `artefacts/`, `decisions/`, `skills/` — in-flight work, rewritten often. **Constitution** (`world/`, the missed half of Phase 11): what the thing *is*, specialists read, they do not write. Opt-in; empty templates in a workspace with no essence are theatre. The WebView does not grow a file tree or an editor — files stay ordinary files. § 7.11 versions the folder with git when the convention is laid down. § 7.10 reveals it in the OS file manager. Phase 17 is the structured read of `/status`. How the CoS uses both layers is the rest of this subsection |
+| 3. `/workspace` as shared memory | user-picked folder; no convention | two layers in that folder, different mutation rules. **Cabinet** (Phase 11): `briefs/`, `status/`, `artefacts/`, `decisions/`, `skills/`, all under `.aegis/` — in-flight work, rewritten often, the harness's working surface over a project. **Constitution** (`world/`, the missed half of Phase 11, at the *root* because it is the project rather than the tool's view of it): what the thing *is*, specialists read, they do not write. Opt-in; empty templates in a workspace with no essence are theatre. The WebView does not grow a file tree or an editor — files stay ordinary files. § 7.11 versions the folder with git when the convention is laid down. § 7.10 reveals it in the OS file manager. Phase 17 is the structured read of `/status`. How the CoS uses both layers is the rest of this subsection |
 | 4. Memory store per agent | none (transcript only) | CRUD + search + forget, scoped to that agent; CoS sees summaries, not dumps |
 | 5. Skill runner (`SKILL.md`) | none | catalog always cheap; body loaded only on `run skill:…`; authoring is a file write, not a `skill_create` command; see § 7.6 |
 | 6. Scheduler of routines | none; tray process already stays alive | cron/trigger on top of (5); never automate a still-fuzzy workflow |
@@ -819,12 +819,12 @@ what a file holds, a question the world already answers, a concatenated
 transcript as a handoff). Copying the human ceremony anyway is what § 7.5
 calls unusable.
 
-**Cabinet and constitution.** Phase 11 laid down the cabinet: `briefs/`,
+**Cabinet and constitution.** Phase 11 laid down the cabinet, under `.aegis/`: `briefs/`,
 `status/`, `artefacts/`, `decisions/`, `skills/`. Those files change every
 turn — that is the point. A workspace that has an essence to protect also
 holds `world/` — essence, perceived schema, behaviours (including sins),
 oracle, essence-decisions, declared sources. Specialists read it. They do
-not write it. `decisions/DECISIONS.md` is operational; `world/decisions.md`
+not write it. `.aegis/decisions/DECISIONS.md` is operational; `world/decisions.md`
 is essence. Mixing them makes the constitution a standup log.
 
 **A sin has a perimeter.** A behaviour recorded from a dump or a failed
@@ -849,7 +849,7 @@ if there is no world. Forcing empty templates into a watch folder or a wish
 list is theatre.
 
 **Unit of work.** Not an activity ticket ("build the sale screen"). An
-**oracle clause** (a claim evidenced by paths in `artefacts/`) or an
+**oracle clause** (a claim evidenced by paths in `.aegis/artefacts/`) or an
 **écart** (doing the brief would change the essence). A third column —
 tech debt, architecture spike, pick a CSS framework — is how a rewrite
 cherishes the instance and ignores the usage.
@@ -920,6 +920,103 @@ not delay Phases 16–17. It is not a domain pack. It is not a sidecar and
 not a crate: the files live in the workspace, the gate is § 3, the loop is
 `cos.loop`.
 
+*Landed as:* `src-tauri/src/world.rs`, one module beside `workspace.rs` and
+the same shape — read the folder, never own it. `world/` holding at least one
+of `essence.md`, `schema.md`, `behaviours.md`, `oracle.md`, `decisions.md` is
+a world; a `world/` holding only `sources.yml` is not, because a declared dump
+with no essence is the theatre above. **Nothing scaffolds it**: there is no
+`world_scaffold` beside `workspace_scaffold`, and the panel's world section has
+no button — one muted line when there is none, the files and the declared
+sources when there is.
+
+It sits at the **workspace root**, while the cabinet moved under `.aegis/` in
+the same change (Phase 11's entry in § 7.3 carries the note). That asymmetry is
+the whole point of there being two layers: the cabinet is a view *of* a project
+and belongs to whatever tool is holding it, and `world/` is the project — it
+should still make sense to a person who has never run this harness, and it
+outlives one.
+
+The **frame** is a harness injection, not a skill: `world::block` is a
+`transcript::Context` field of its own, built per round beside the cabinet
+digest, carrying the constraint (read it, do not reopen the sources, an écart is
+the answer) plus *status* — which files the constitution holds, which are not
+written yet, what `sources.yml` declares, and any drift. Never `essence.md`
+itself.
+
+Its **write** paragraph is chosen by the same fact the matrix uses, `delegated`,
+and that is load-bearing rather than tidy. A brief is told it does not write
+`world/` and returns `needs_you`; a session is told the essence is not its to
+change on its own initiative, that a person asking for it *is* the decision
+being made, and that `world.draft` is the runbook. One paragraph for both was
+the first version, and it was wrong in the expensive direction: a session on a
+world declined to write it even when the operator asked, never reached the
+dialog that would have said yes, and left an audit log with **no `fs_write` in
+it at all**. A prompt refusing looks nothing like a gate refusing, and it is
+much harder to find — there is no line for a call nobody made.
+
+Two rows in the matrix, and which applies is a fact about the **run**, never
+about the identity — the same identity is a CoS in one session and a specialist
+in the next. A write under `world/` from a **delegated** run is `E_DENIED` with
+no dialog: that is "*Who writes `world/`.* Specialists: no", and the sentence
+after it ("not an ask with a session grant — a refusal") is scoped to exactly
+that case. From a **session** it is an ask, at high risk, with a session grant
+of its own — `Grant::WorldAmend`, which is *not* `Grant::FsWrite` and matches
+none of its rows. The next sentence of the same paragraph is the reason:
+*amending the world is a cabinet act*, and a cabinet act is a human in a
+session. Founding a world is six files and amending one is rarely fewer; six
+identical high-risk dialogs is how a person is trained to click through the one
+that mattered. What the split buys is that allowing writes so a session can file
+artefacts never reaches the essence, and signing for the essence never reaches
+anything else.
+
+Nothing else can hold that grant. An **unattended** run is offered none — the
+row passes `grant: None` when `ctx.unattended`, so `decide_call` refuses it and
+says nobody is watching — and `schedule::check` refuses to store it on a
+routine at all, because `COS.md` says amending the world is a *human* decision
+and a routine is the one run with no human in it. The form does not list it
+either; three places, and the third is what answers a hand-edited
+`routines.json`.
+
+Only the first path segment counts, so a repository's own `src/world/` is
+untouched. A third row on the read side: `fs_read` of a declared source that
+still hashes to what the world recorded is **denied, not asked**. A source that
+has *moved* falls through to the ordinary rows, which is what makes the bounded
+re-perception possible at all.
+
+**Drift** is measured where it changes a decision, never on the way into a
+model request that could have hashed a gigabyte for nothing. `handoff::runner`
+compares the declared hashes before a brief opens its session and refuses —
+fatally, since a retry would hash the same bytes — unless the brief's `inputs`
+name one of the drifted paths, which is what a perceive-delta *is*. The frame's
+own drift line reports only what a glance can see for free (missing, never
+recorded, a recorded length that no longer matches) plus a digest for a source
+small enough that reading it is not itself the waste; it reports the drift it
+saw and never claims there is none. `world_status` is the expensive read, for
+the panel.
+
+Four library runbooks are seeded — `world.draft`, `world.perceive-delta`,
+`world.verify`, `world.check`. `world.draft` is the one that writes `world/`,
+and it is not the `world.amend` this subsection refuses: that refusal is about
+*specialists*, and this is denied inside a brief exactly like any other write to
+the constitution, because the gate reads the run and not the runbook. It serves
+the cabinet act instead — a person in a session who would otherwise write six
+files by hand. Its own steps hold the distinction the section cares about:
+drafting is a procedure and deciding is not, so it writes `schema.md` and
+`behaviours.md` from evidence it can name, and refuses to invent `essence.md` or
+`oracle.md`, which it asks the human for and quotes.
+
+Seeding is now recorded per name in `skills/.seeded`, so a later phase can add
+one without every existing install being the one that never sees it, and a
+runbook somebody deleted still does not come back. Granting is unchanged and
+still separate (§ 7.6, *Authoring*): the library holds them, an identity runs
+them only if somebody said so. `cos.loop` gained step 0 — source drift before
+routing.
+
+Two things from this subsection are deliberately **not** in it. `shell_exec`
+that writes `world/` is still the hole, and the human gate on shell is still
+its answer. And a checksum of `world/` as an attention signal is still not
+written: the constitution is policed by policy, not by a lockfile.
+
 ### 7.3 Post-MVP phase order (do not reorder)
 
 Each phase ends in something you can run. No phase depends on a later one. Domain connectors
@@ -939,17 +1036,30 @@ Four slices are **not** steps in this list:
 is not a number between 15 and 16.
 
 **Phase 11 — Workspace convention**
-Document and optionally scaffold, inside a user-picked workspace: `briefs/`, `status/`,
-`artefacts/`, `decisions/`. Write path: "this decision goes in `DECISIONS.md`, not the thread."
+Document and optionally scaffold, inside a user-picked workspace: `.aegis/briefs/`, `.aegis/status/`,
+`.aegis/artefacts/`, `.aegis/decisions/`. Write path: "this decision goes in `DECISIONS.md`, not the thread."
 Read path: retrieve those files at session start. Exit: a human (or the single MVP agent) can
 file a decision and a status without any new agent type. Cheap, and it makes every later phase
 honest.
 
 The files are meant to be committed. `git init` on scaffold, and the rule that a write is
 not a commit, are § 7.11 — one missed half of this phase, not a new number in this list.
-The other missed half is `world/` (§ 7.2): the constitution, opt-in, specialists
-read and do not write. It is not Phase 20. It may land now that Phase 15 has;
-it must not delay 16–17.
+The other missed half was `world/` (§ 7.2): the constitution, opt-in, specialists
+read and do not write. It was not Phase 20, and it has **landed** — see the note at the
+end of § 7.2.
+
+*Amended when `world/` landed:* the five cabinet directories sit **under `.aegis/`**, not at the
+workspace root. Five entries beside somebody's `src/` are five things they did not ask for, and
+the split is the one this plan already draws — the cabinet is the harness's working surface over a
+project, so it goes in the harness's own directory; `world/` is the project, so it stays at the
+root, unprefixed. The dot is `.github/`'s convention, not a hiding place: PLAN 7.1 forbids *a
+second hidden agent-memory filesystem that bypasses the workspace and the policy matrix*, and
+nothing here does — same containment, same gate, same audit line, same commit. Two costs, taken
+knowingly: macOS Finder hides dot-directories, and `rg` needs `--hidden`. A workspace laid out
+before the move keeps its directories at the root; `layout()` reports them as `strays` and the
+panel names them. **Nothing moves them.** Picking a folder was never consent to rearrange it, and
+relocating a `DECISIONS.md` somebody has been keeping is a worse act than the one `scaffold`
+already refuses.
 
 **Phase 12 — Agent registry**
 Persist agents as data: role, system prompt, provider id, tool ACL, skill ACL. Sessions bind
@@ -1151,7 +1261,7 @@ log into runs. Both halves are pure functions over data, so a replay is exercisa
 application, no clock and no model; the composition that reaches four stores and a log is one
 method on `AppState`, where every other composition of this shape already lives.
 
-**The board is two halves and neither is enough.** `status/STATUS.md` is what somebody decided is
+**The board is two halves and neither is enough.** `.aegis/status/STATUS.md` is what somebody decided is
 true — the client who has not answered, the decision waiting on a meeting — and it is the half
 that can be wrong, because it is only as current as the last write. The runtime's half is what
 this process knows for certain: what is running, what a dialog is parked on, which clock stopped
@@ -1509,7 +1619,7 @@ still-fuzzy chat onto a clock remains forbidden (Phase 16).
 
 Phase 13's stub is supposed to look like those rows (file in, status out), not like a
 chatbot that "knows about inbox". Do not wait for a mail connector to write the skill
-shape: a markdown file in `briefs/` is a valid input. The connector later replaces the
+shape: a markdown file in `.aegis/briefs/` is a valid input. The connector later replaces the
 source, not the procedure.
 
 ### 7.7 Messaging faces (control channel) — not a coding phase now
@@ -1755,7 +1865,7 @@ WebView are refused.
 - An in-app editor, Monaco, or a save path from the WebView. Writing
   `DECISIONS.md` or a `SKILL.md` that way would be a second write path
   around the gate (Phase 11 / § 7.6 *Authoring*).
-- Listing the contents of `briefs/` / `artefacts/` / `skills/`, or a
+- Listing the contents of `.aegis/briefs/` / `.aegis/artefacts/` / `skills/`, or a
   read-only markdown preview. Those are the next honest steps after
   "I cannot even see where the project is", not this slice. They still
   are not an editor: preview in, save out.

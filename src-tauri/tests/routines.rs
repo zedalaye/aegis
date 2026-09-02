@@ -64,11 +64,11 @@ tools: fs_read, fs_write
 On a schedule, to record what changed since the last look.
 
 ## Inputs required and tools it will call
-`briefs/` in this workspace. Calls `fs_read` and `fs_write`.
+`.aegis/briefs/` in this workspace. Calls `fs_read` and `fs_write`.
 
 ## Steps
 1. Read what is in the workspace.
-2. Write a line into `status/`.
+2. Write a line into `.aegis/status/`.
 
 ## How to validate
 The status file exists and names today.
@@ -144,7 +144,10 @@ impl App {
 
         // A workspace runbook, written the way § 7.6 says one is written: a
         // file in a folder somebody owns.
-        let skill_dir = workspace.join(skills::LIBRARY_DIR).join(WATCH_SKILL);
+        let skill_dir = workspace
+            .join(aegis_lib::workspace::CABINET_DIR)
+            .join(skills::LIBRARY_DIR)
+            .join(WATCH_SKILL);
         std::fs::create_dir_all(&skill_dir).expect("skill dir");
         std::fs::write(skill_dir.join(skills::SKILL_FILE), WATCH_RUNBOOK).expect("runbook");
 
@@ -393,7 +396,7 @@ fn a_standing_approval_cannot_exceed_the_runbook_or_the_identity() {
 // 2 and 3. The run
 // ---------------------------------------------------------------------------
 
-/// The exit condition: a run with nothing watching writes into `status/` and
+/// The exit condition: a run with nothing watching writes into `.aegis/status/` and
 /// closes with a report, and the write went through because a person signed for
 /// it when they saved the routine — not because anybody was asked.
 #[tokio::test]
@@ -426,7 +429,7 @@ async fn a_scheduled_run_writes_its_status_without_asking_anyone() {
     );
     assert!(
         app.workspace
-            .join(format!("status/{WATCH_SKILL}.md"))
+            .join(format!(".aegis/status/{WATCH_SKILL}.md"))
             .is_file(),
         "the status file is the whole point of a watch routine"
     );
@@ -496,7 +499,7 @@ async fn an_unsigned_run_is_refused_rather_than_left_waiting() {
     );
     assert!(
         !app.workspace
-            .join(format!("status/{WATCH_SKILL}.md"))
+            .join(format!(".aegis/status/{WATCH_SKILL}.md"))
             .exists(),
         "an unsigned run must not reach the disk"
     );

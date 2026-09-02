@@ -354,7 +354,7 @@ mod tests {
         let held = every_tool();
         let report = handoff::Report {
             status: handoff::Status::Blocked,
-            summary: "briefs/ is empty".to_owned(),
+            summary: ".aegis/briefs/ is empty".to_owned(),
             artefacts: Vec::new(),
             evidence: Vec::new(),
             open_questions: vec!["which item should I triage?".to_owned()],
@@ -390,8 +390,8 @@ mod tests {
             status: handoff::Status::Done,
             summary: "wrote the triage note".to_owned(),
             artefacts: vec![handoff::Artefact {
-                shown: "artefacts/x.md".to_owned(),
-                path: dir.path().join("artefacts/x.md"),
+                shown: ".aegis/artefacts/x.md".to_owned(),
+                path: dir.path().join(".aegis/artefacts/x.md"),
             }],
             evidence: Vec::new(),
             open_questions: Vec::new(),

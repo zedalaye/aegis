@@ -33,6 +33,14 @@
 //! workspace digest. What a compaction takes away is conversation. What it
 //! leaves standing is what the identity knows.
 //!
+//! One block is not like the others. When the workspace holds a `world/`
+//! (PLAN 7.2 — the missed half of Phase 11), the message also carries that
+//! world's *frame*: read the constitution, do not write it, do not reopen the
+//! sources it was perceived from. That is a constraint rather than a fact, and
+//! it is here rather than in a runbook because a runbook can be skipped and
+//! forgetting it is the defect the whole shape exists to prevent. It arrives as
+//! rendered text like everything else, so this module still reads no file.
+//!
 //! The second is repair. The chat-completions API has a structural rule that
 //! the transcript can violate: every tool call in an assistant message must be
 //! answered by a `tool` message with a matching id. A turn cancelled between
@@ -100,6 +108,19 @@ pub struct Context<'a> {
     /// into the turn that asked for it. `None` for an identity granted no
     /// skills, which is every identity from before it.
     pub skills: Option<&'a str>,
+    /// The world's frame and status (PLAN 7.2), or `None` for a workspace with
+    /// no constitution in it.
+    ///
+    /// The missed half of Phase 11, and the block that behaves least like the
+    /// others: it is a *constraint* rather than a fact. A session opened on a
+    /// world reads `world/`, does not write it, and does not reopen the sources
+    /// it was perceived from — and that has to be a harness injection rather
+    /// than a skill, because a skill can be skipped and forgetting this is the
+    /// defect the whole shape exists to prevent (PLAN 7.2, *Frame, not a
+    /// skill*). What it carries beyond the frame is *status* — which files the
+    /// constitution holds, what it declares as its sources, whether any of them
+    /// have visibly moved — and never `essence.md` itself.
+    pub world: Option<&'a str>,
     /// The shared-workspace digest (PLAN 7.3, Phase 11), or `None` for a folder
     /// that does not use the convention.
     pub shared: Option<&'a str>,
@@ -128,8 +149,11 @@ pub struct Context<'a> {
 /// 3. The workspace, which changes when the project does.
 /// 4. The memories, which change when this identity learns something.
 /// 5. The skill catalog, which changes when somebody writes a runbook.
-/// 6. The shared digest, which changes on every request.
-/// 7. The folded state, which is this session's own history, and so sits
+/// 6. The world, which changes when a human amends the constitution — and
+///    which sits above the cabinet because it is what the cabinet is judged
+///    against.
+/// 7. The shared digest, which changes on every request.
+/// 8. The folded state, which is this session's own history, and so sits
 ///    closest to the conversation it stands in for.
 ///
 /// The workspace is named in full because a model asked to work "in the
@@ -139,7 +163,7 @@ pub struct Context<'a> {
 /// The prompt stays a policy summary plus what is true right now (PLAN 7.1,
 /// *System prompt*). That is why an identity's instructions are capped in the
 /// store, why a runbook is a file this message names rather than text it
-/// carries, and why each of the four blocks appended at the end has a cap of
+/// carries, and why each of the five blocks appended at the end has a cap of
 /// its own.
 pub fn system_message(ctx: &Context<'_>) -> String {
     let mut prompt = String::from(SYSTEM_PROMPT);
@@ -192,11 +216,17 @@ pub fn system_message(ctx: &Context<'_>) -> String {
     ));
 
     // Appended in the documented order, and each only when there is one. A
-    // loop rather than four `if let`s because the order *is* the rule, and a
-    // list of four names is harder to reorder by accident than four blocks.
-    for block in [ctx.memories, ctx.skills, ctx.shared, ctx.compacted]
-        .into_iter()
-        .flatten()
+    // loop rather than five `if let`s because the order *is* the rule, and a
+    // list of five names is harder to reorder by accident than five blocks.
+    for block in [
+        ctx.memories,
+        ctx.skills,
+        ctx.world,
+        ctx.shared,
+        ctx.compacted,
+    ]
+    .into_iter()
+    .flatten()
     {
         prompt.push_str("\n\n");
         prompt.push_str(block);
@@ -341,7 +371,7 @@ mod tests {
         Agent {
             name: "Reviewer".to_owned(),
             role: "reviews changes and reports what is risky".to_owned(),
-            instructions: "File what you find in decisions/DECISIONS.md.".to_owned(),
+            instructions: "File what you find in .aegis/decisions/DECISIONS.md.".to_owned(),
             tools: vec![crate::policy::tool::FS_READ.to_owned()],
             ..Agent::builtin()
         }
@@ -372,6 +402,7 @@ mod tests {
             workspace,
             memories: None,
             skills: None,
+            world: None,
             shared: None,
             compacted: None,
             unattended: false,
@@ -423,7 +454,7 @@ mod tests {
 
         assert!(prompt.contains("reviews changes"), "the role is stated");
         assert!(
-            prompt.contains("decisions/DECISIONS.md"),
+            prompt.contains(".aegis/decisions/DECISIONS.md"),
             "and its instructions are carried"
         );
     }
@@ -460,13 +491,13 @@ mod tests {
         let root = root();
         let prompt = system_message(&Context {
             skills: Some(catalog),
-            shared: Some("status/STATUS.md:\nquiet"),
+            shared: Some(".aegis/status/STATUS.md:\nquiet"),
             ..ctx(&reviewer, Some(&root))
         });
 
         assert!(prompt.contains("inbox.triage"), "{prompt}");
         let skills = prompt.find("Skills you may run").expect("the catalog");
-        let state = prompt.find("status/STATUS.md").expect("the state");
+        let state = prompt.find(".aegis/status/STATUS.md").expect("the state");
         assert!(skills < state, "{prompt}");
 
         // And an identity granted none is left exactly where Phase 12 left it.
@@ -483,17 +514,21 @@ mod tests {
         let root = root();
         let plain = system_message(&ctx(&assistant, Some(&root)));
         let shared = system_message(&Context {
-            shared: Some("status/STATUS.md:\nquiet"),
+            shared: Some(".aegis/status/STATUS.md:\nquiet"),
             ..ctx(&assistant, Some(&root))
         });
 
         assert!(shared.starts_with(&plain), "{shared}");
-        assert!(shared.ends_with("status/STATUS.md:\nquiet"), "{shared}");
+        assert!(
+            shared.ends_with(".aegis/status/STATUS.md:\nquiet"),
+            "{shared}"
+        );
     }
 
-    /// The four appended blocks go in one order, and the order is the point:
+    /// The five appended blocks go in one order, and the order is the point:
     /// slowest-changing first, and this session's own folded history last,
-    /// where it sits against the conversation it stands in for.
+    /// where it sits against the conversation it stands in for. The world sits
+    /// above the cabinet because it is what the cabinet is judged against.
     #[test]
     fn the_appended_blocks_are_in_the_documented_order() {
         let reviewer = reviewer();
@@ -501,7 +536,8 @@ mod tests {
         let prompt = system_message(&Context {
             memories: Some("What you have learned. \n- (preference) answers in French"),
             skills: Some("Skills you may run.\n\n- `inbox.triage`"),
-            shared: Some("status/STATUS.md:\nquiet"),
+            world: Some("This workspace has a world."),
+            shared: Some(".aegis/status/STATUS.md:\nquiet"),
             compacted: Some("Earlier in this session, folded to state."),
             unattended: false,
             ..ctx(&reviewer, Some(&root))
@@ -515,12 +551,14 @@ mod tests {
         let identity = at("Reviewer");
         let memories = at("What you have learned");
         let skills = at("Skills you may run");
-        let shared = at("status/STATUS.md");
+        let world = at("This workspace has a world");
+        let shared = at(".aegis/status/STATUS.md");
         let folded = at("folded to state");
 
         assert!(identity < memories, "{prompt}");
         assert!(memories < skills, "{prompt}");
-        assert!(skills < shared, "{prompt}");
+        assert!(skills < world, "{prompt}");
+        assert!(world < shared, "{prompt}");
         assert!(shared < folded, "{prompt}");
     }
 
@@ -536,6 +574,10 @@ mod tests {
 
         assert!(!prompt.contains("What you have learned"), "{prompt}");
         assert!(!prompt.contains("folded to state"), "{prompt}");
+        assert!(
+            !prompt.contains("world"),
+            "a workspace with no constitution is not nagged into one: {prompt}"
+        );
     }
 
     #[test]

@@ -42,6 +42,7 @@ function toolOf(grant: Grant): string {
     case "fs_read_large":
       return "fs_read";
     case "fs_write":
+    case "world_amend":
       return "fs_write";
     case "shell":
       return "shell_exec";

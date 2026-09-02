@@ -6,7 +6,7 @@
 //! cannot know.
 //!
 //! ```text
-//!  status/STATUS.md ─┐
+//!  .aegis/status/STATUS.md ─┐
 //!                    ├─▶ Attention ── In flight ── Blocked
 //!  approvals ────────┤
 //!  sessions ─────────┤
@@ -93,7 +93,7 @@ const LINE_MAX_CHARS: usize = 200;
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts", rename = "BoardSource")]
 pub enum Source {
-    /// A line of `status/STATUS.md`.
+    /// A line of `.aegis/status/STATUS.md`.
     Status,
     /// An approval dialog waiting to be answered.
     Approval,
@@ -209,7 +209,7 @@ pub struct Sections {
 pub struct Facts<'a> {
     /// The project.
     pub project_id: &'a str,
-    /// Where `status/STATUS.md` is, and what it says. `None` when there is no
+    /// Where `.aegis/status/STATUS.md` is, and what it says. `None` when there is no
     /// such file.
     pub status: Option<(&'a str, &'a str)>,
     /// The project's sessions, with their live state already measured.
@@ -273,7 +273,7 @@ pub fn sections(text: &str) -> Sections {
         }
 
         let Some(index) = column else { continue };
-        // An indented block is an example, not an item: the seeded `briefs/`
+        // An indented block is an example, not an item: the seeded `.aegis/briefs/`
         // and `decisions/` files both use one, and a board that copied its own
         // template into itself would be unreadable.
         if line.starts_with("    ") || line.starts_with('\t') {
@@ -571,9 +571,9 @@ _Nothing blocked._
             tool: "fs_write".to_owned(),
             risk: Risk::Medium,
             title: "Write file".to_owned(),
-            summary: "decisions/DECISIONS.md".to_owned(),
+            summary: ".aegis/decisions/DECISIONS.md".to_owned(),
             detail: ApprovalDetail::FsWrite {
-                path: "decisions/DECISIONS.md".to_owned(),
+                path: ".aegis/decisions/DECISIONS.md".to_owned(),
                 bytes: 42,
                 exists: true,
                 preview: None,

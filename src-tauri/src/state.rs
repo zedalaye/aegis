@@ -957,7 +957,14 @@ mod tests {
         let names: Vec<&str> = catalog.iter().map(|skill| skill.name.as_str()).collect();
         assert_eq!(
             names,
-            [crate::skills::COS_SKILL, crate::skills::REVIEW_SKILL]
+            [
+                crate::skills::COS_SKILL,
+                crate::skills::REVIEW_SKILL,
+                crate::skills::CHECK_SKILL,
+                crate::skills::DRAFT_SKILL,
+                crate::skills::PERCEIVE_SKILL,
+                crate::skills::VERIFY_SKILL,
+            ]
         );
         for skill in &catalog {
             assert!(skill.runnable(), "{}: {:?}", skill.name, skill.problem);

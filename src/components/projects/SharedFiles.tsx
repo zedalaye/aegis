@@ -1,13 +1,18 @@
 /**
  * The shared-workspace convention, in the rail (PLAN 7.3, Phase 11).
  *
- * Five directories in the open project's folder — `briefs/`, `status/`,
+ * Five directories inside the open project's `.aegis/` — `briefs/`, `status/`,
  * `artefacts/`, `decisions/` and, from Phase 13, `skills/` — with one button to
  * lay down whatever is missing. That is the whole surface. The files themselves
  * are read and written by the conversation, through `fs_write` and the approval
  * dialog, which is why there is no editor here: a panel that could rewrite
  * `DECISIONS.md` without passing the gate would be a second write path around
  * it.
+ *
+ * One directory rather than five at the root, because five things somebody did
+ * not ask for beside their `src/` is five things too many. The one that is
+ * *not* under it is `world/` — see {@link WorldPanel}: the cabinet is the
+ * harness's working surface over a project, and the world is the project.
  *
  * It sits in the rail rather than the work area because it is a fact about the
  * project, not about the session — and it stays collapsed to a single line once
@@ -29,12 +34,18 @@ function Entry({
   readonly file: string;
   readonly present: boolean;
 }) {
+  // The `.aegis/` every row shares is dropped from the label and kept in the
+  // tooltip: it is on the heading already, and five copies of it down a narrow
+  // rail crowds out the half that differs.
+  const name = dir.slice(dir.indexOf("/") + 1);
   return (
     <li className={`shared__entry${present ? "" : " shared__entry--missing"}`}>
       <span aria-hidden="true" className="shared__mark">
         {present ? "✓" : "·"}
       </span>
-      <span className="shared__dir">{dir}/</span>
+      <span className="shared__dir" title={dir}>
+        {name}/
+      </span>
       <span className="shared__file" title={file}>
         {file.slice(dir.length + 1)}
       </span>
@@ -71,9 +82,10 @@ export default function SharedFiles() {
       {layout.complete ? (
         <p className="shared__note">
           Briefs, status, artefacts, decisions and this project's own runbooks
-          are in this folder. Ask for a decision to be recorded and it goes in{" "}
-          <code>DECISIONS.md</code>; the runbooks in <code>skills/</code> are
-          listed under <em>Settings → Skills</em>.
+          are in <code>.aegis/</code> here. Ask for a decision to be recorded and
+          it goes in <code>DECISIONS.md</code>; the runbooks in{" "}
+          <code>.aegis/skills/</code> are listed under{" "}
+          <em>Settings → Skills</em>.
         </p>
       ) : (
         <>
@@ -115,6 +127,23 @@ export default function SharedFiles() {
           {created.length === 0
             ? "Everything was already there; nothing was changed."
             : `Created ${created.join(", ")}.`}
+        </p>
+      ) : null}
+
+      {/*
+        These five used to sit at the root of the folder. Naming them is all
+        this does — moving somebody's `DECISIONS.md` for them is exactly the
+        act the button next to this one refuses to do, and a folder full of
+        work is the worst possible thing to be clever with.
+      */}
+      {layout.strays.length > 0 ? (
+        <p className="shared__note" role="status">
+          {layout.strays.map((dir) => `${dir}/`).join(", ")}{" "}
+          {layout.strays.length === 1 ? "is" : "are"} at the top of this folder,
+          from the earlier layout. Move{" "}
+          {layout.strays.length === 1 ? "it" : "them"} into{" "}
+          <code>.aegis/</code> and the contents are found again. Nothing here
+          will move {layout.strays.length === 1 ? "it" : "them"} for you.
         </p>
       ) : null}
     </section>

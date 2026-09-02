@@ -163,6 +163,7 @@ impl App {
                 workspace: Some(&self.workspace),
                 memories: block.as_deref(),
                 skills: None,
+                world: None,
                 shared: shared.as_deref(),
                 compacted: compaction.as_ref().map(|held| held.state.as_str()),
                 unattended: false,
@@ -326,7 +327,7 @@ async fn a_remembered_thing_is_approved_stored_and_carried_into_the_next_turn() 
             json!({
                 "kind": "preference",
                 "text": "this client wants everything in French",
-                "source": "briefs/README.md",
+                "source": ".aegis/briefs/README.md",
             }),
         )],
         &[ApprovalDecision::AllowOnce],
@@ -336,11 +337,14 @@ async fn a_remembered_thing_is_approved_stored_and_carried_into_the_next_turn() 
     let held = app.memories.list_for(&scribe.id);
     assert_eq!(held.len(), 1, "one memory was recorded");
     assert_eq!(held[0].kind, MemoryKind::Preference);
-    assert_eq!(held[0].source.as_deref(), Some("briefs/README.md"));
+    assert_eq!(held[0].source.as_deref(), Some(".aegis/briefs/README.md"));
 
     let after = app.next_system_message(&session, &scribe);
     assert!(after.contains("wants everything in French"), "{after}");
-    assert!(after.contains("briefs/README.md"), "the citation too");
+    assert!(
+        after.contains(".aegis/briefs/README.md"),
+        "the citation too"
+    );
     assert!(
         after.contains("the user will correct it"),
         "the model is told who owns a correction: {after}"
@@ -509,7 +513,7 @@ fn long_session(app: &App, agent: &Agent) -> String {
                         call_id: "c1".to_owned(),
                         tool: tool::FS_WRITE.to_owned(),
                         args_json: json!({
-                            "path": "decisions/DECISIONS.md",
+                            "path": ".aegis/decisions/DECISIONS.md",
                             "content": "roll back first",
                         })
                         .to_string(),
@@ -606,9 +610,9 @@ fn after_a_forced_compaction_the_goal_the_blockers_and_the_ledger_survive() {
     // The path to the ledger — twice over, which is the point: the state names
     // it as a decision that was filed, and the Phase 11 digest names the file
     // itself on every request, fold or no fold.
-    assert!(prompt.contains("decisions/DECISIONS.md"), "{prompt}");
+    assert!(prompt.contains(".aegis/decisions/DECISIONS.md"), "{prompt}");
     assert!(
-        prompt.contains("filed in decisions/DECISIONS.md"),
+        prompt.contains("filed in .aegis/decisions/DECISIONS.md"),
         "the state says a decision was filed there: {prompt}"
     );
 
@@ -669,7 +673,7 @@ fn memory_and_the_workspace_digest_survive_a_fold() {
             &MemoryDraft {
                 kind: MemoryKind::Exception,
                 text: "staging never auto-deploys on a Friday".to_owned(),
-                source: Some("decisions/DECISIONS.md".to_owned()),
+                source: Some(".aegis/decisions/DECISIONS.md".to_owned()),
             },
         )
         .expect("recorded");
@@ -684,7 +688,7 @@ fn memory_and_the_workspace_digest_survive_a_fold() {
         "memory is re-injected because it never folded: {prompt}"
     );
     assert!(
-        prompt.contains("status/STATUS.md"),
+        prompt.contains(".aegis/status/STATUS.md"),
         "and so is the shared digest: {prompt}"
     );
 }
@@ -784,7 +788,7 @@ fn nothing_learned_and_nothing_folded_is_the_request_that_came_before() {
     assert!(!prompt.contains("folded to state"), "{prompt}");
     // What Phase 11 and 12 put there is untouched.
     assert!(prompt.contains("Scribe"), "{prompt}");
-    assert!(prompt.contains("status/STATUS.md"), "{prompt}");
+    assert!(prompt.contains(".aegis/status/STATUS.md"), "{prompt}");
 }
 
 /// A session written before this phase carries no fold and reads whole. The

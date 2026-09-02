@@ -16,7 +16,7 @@
 //! 2. The read path reaches the model. What is in the files is in the system
 //!    message of the next request, and what is not in the files is not.
 //! 3. The write path is the ordinary one. A turn that writes
-//!    `decisions/DECISIONS.md` is gated, audited and durable, and the decision
+//!    `.aegis/decisions/DECISIONS.md` is gated, audited and durable, and the decision
 //!    is in the following request.
 //!
 //! The command layer above this needs a running Tauri application and is not
@@ -130,6 +130,7 @@ impl App {
                 workspace: Some(&self.workspace),
                 memories: None,
                 skills: None,
+                world: None,
                 shared: shared.as_deref(),
                 compacted: None,
                 unattended: false,
@@ -256,7 +257,7 @@ fn a_workspace_is_left_alone_until_someone_asks() {
 #[test]
 fn scaffolding_lays_down_what_is_missing_and_keeps_what_is_not() {
     let app = App::new();
-    std::fs::create_dir_all(app.workspace.join("decisions")).expect("decisions dir");
+    std::fs::create_dir_all(app.workspace.join(".aegis/decisions")).expect("decisions dir");
     std::fs::write(app.workspace.join(DECISIONS_FILE), "# Decisions\n\nours\n").expect("write");
 
     let report = workspace::scaffold(&app.workspace).expect("scaffolded");

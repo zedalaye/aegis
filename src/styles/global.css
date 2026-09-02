@@ -444,6 +444,18 @@ body {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
+/*
+ * A declared source that has moved since the world was perceived from it. It is
+ * the one row in either panel that is *waiting on somebody*: until that delta is
+ * perceived, every brief that is not about it is held. Marked with the warning
+ * colour rather than only a word, because it is the answer to "why is nothing
+ * going out".
+ */
+.world__entry--drifted .shared__mark,
+.world__entry--drifted .shared__state {
+  color: var(--warning);
+}
+
 /* --- Work area ------------------------------------------------------------ */
 
 .work {
@@ -547,6 +559,7 @@ body {
 }
 
 /* --- Sessions ------------------------------------------------------------- */
+
 
 .sessions {
   flex: 1;

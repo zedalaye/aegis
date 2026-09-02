@@ -203,7 +203,7 @@ pub enum ApprovalDetail {
         briefs: Vec<HandoffRow>,
         /// The identity that would review what comes back, when one was named.
         reviewer: Option<String>,
-        /// Where the briefs would be filed, when the workspace has a `briefs/`.
+        /// Where the briefs would be filed, when the workspace has a `.aegis/briefs/`.
         filed_in: Option<String>,
     },
     /// Calling a tool that lives in another process (PLAN 7.3, Phase 18).
@@ -1442,6 +1442,223 @@ mod tests {
         match decide(&ctx, tool::SCREEN_CAPTURE, json!({})) {
             Decision::Deny { code, .. } => assert_eq!(code, ErrorCode::NoWorkspace),
             other => panic!("expected a denial, got {other:?}"),
+        }
+    }
+
+    /// A workspace with a constitution in it and one declared source, already
+    /// perceived. The world rows of PLAN 7.2 are the four assertions below.
+    fn with_a_world() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+
+        std::fs::create_dir_all(root.join("world")).expect("world/");
+        std::fs::create_dir_all(root.join("sources")).expect("sources/");
+        // A cabinet beside it, so the tests can show what a world grant does
+        // *not* cover.
+        std::fs::create_dir_all(root.join(".aegis/artefacts")).expect("artefacts/");
+        std::fs::create_dir_all(root.join(".aegis/status")).expect("status/");
+        std::fs::write(root.join("world/essence.md"), "# Essence\n").expect("essence");
+
+        let dump = root.join("sources/dump.sql");
+        std::fs::write(&dump, "select 1;\n").expect("dump");
+        let digest = format!(
+            "{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(b"select 1;\n")
+        );
+        std::fs::write(
+            root.join("world/sources.yml"),
+            format!("sources:\n  - path: sources/dump.sql\n    sha256: {digest}\n"),
+        )
+        .expect("sources.yml");
+
+        (dir, root)
+    }
+
+    /// `COS.md` *Work*: specialists read the world and do not write it. Not an
+    /// ask with a grant on offer — a refusal, in the same class as a reviewer
+    /// calling `fs_write`.
+    #[test]
+    fn a_brief_cannot_amend_the_world() {
+        let (_dir, root) = with_a_world();
+        let grants = GrantStore::new();
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants).delegated();
+
+        let call = json!({ "path": "world/essence.md", "content": "# Something else\n" });
+        match decide(&ctx, tool::FS_WRITE, call) {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::Denied);
+                assert!(reason.contains("needs_you"), "{reason}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// Outside a brief it is a cabinet act, which in this harness is a dialog:
+    /// asked, at high risk, with a grant of its **own**.
+    ///
+    /// The grant is the half worth testing, because it is the half that could
+    /// be got wrong in the quiet direction. Founding a world is six files, so a
+    /// person can sign once — and what they signed covers the constitution and
+    /// nothing else.
+    #[test]
+    fn amending_the_world_is_asked_and_signed_for_on_its_own() {
+        let (_dir, root) = with_a_world();
+        let grants = GrantStore::new();
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants);
+
+        let call = json!({ "path": "world/essence.md", "content": "# Something else\n" });
+        match decide(&ctx, tool::FS_WRITE, call.clone()) {
+            Decision::Ask { request, .. } => {
+                assert_eq!(request.risk, Risk::High);
+                assert_eq!(request.grant, Some(Grant::WorldAmend));
+                assert!(request.reason.contains("constitution"), "{request:?}");
+            }
+            other => panic!("expected an ask, got {other:?}"),
+        }
+
+        // Signed once, the rest of the session's constitution writes go through.
+        grants.insert("s1", Grant::WorldAmend);
+        assert!(matches!(
+            decide(&ctx, tool::FS_WRITE, call),
+            Decision::Auto { .. }
+        ));
+
+        // And it covers only that. An ordinary write in the same workspace is
+        // still asked about, because the two rows offer different grants.
+        let elsewhere = json!({ "path": ".aegis/artefacts/note.md", "content": "hello\n" });
+        match decide(&ctx, tool::FS_WRITE, elsewhere) {
+            Decision::Ask { request, .. } => assert_eq!(request.grant, Some(Grant::FsWrite)),
+            other => panic!("expected the ordinary write row, got {other:?}"),
+        }
+    }
+
+    /// The other direction, and the one that matters more: allowing writes so a
+    /// session can file its artefacts is not agreeing to let it rewrite what
+    /// the project *is*.
+    #[test]
+    fn an_ordinary_write_grant_does_not_reach_the_world() {
+        let (_dir, root) = with_a_world();
+        let grants = GrantStore::new();
+        grants.insert("s1", Grant::FsWrite);
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants);
+
+        assert!(
+            matches!(
+                decide(
+                    &ctx,
+                    tool::FS_WRITE,
+                    json!({ "path": ".aegis/status/STATUS.md", "content": "# Status\n" })
+                ),
+                Decision::Auto { .. }
+            ),
+            "the grant covers what it was created for"
+        );
+
+        match decide(
+            &ctx,
+            tool::FS_WRITE,
+            json!({ "path": "world/essence.md", "content": "# Something else\n" }),
+        ) {
+            Decision::Ask { request, .. } => {
+                assert_eq!(request.grant, Some(Grant::WorldAmend), "{request:?}");
+            }
+            other => panic!("the world is still asked about, got {other:?}"),
+        }
+
+        // Only the first segment of a path is the constitution, so a repository
+        // with its own `src/world/` is untouched by any of this.
+        std::fs::create_dir_all(root.join("src/world")).expect("a module of that name");
+        assert!(matches!(
+            decide(
+                &ctx,
+                tool::FS_WRITE,
+                json!({ "path": "src/world/mod.rs", "content": "//! not one\n" })
+            ),
+            Decision::Auto { .. }
+        ));
+    }
+
+    /// `COS.md`: amending the world is a *human* decision. A scheduled run is
+    /// the one run with no human in it, so it is offered nothing to sign and
+    /// refused — the second of two places, the first being the door in
+    /// `schedule::check` when the routine is saved.
+    #[test]
+    fn a_routine_is_offered_nothing_to_sign_for_the_world() {
+        let (_dir, root) = with_a_world();
+        let grants = GrantStore::new();
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants).unattended(true);
+
+        match decide(
+            &ctx,
+            tool::FS_WRITE,
+            json!({ "path": "world/essence.md", "content": "# Something else\n" }),
+        ) {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::Denied);
+                assert!(reason.contains("nobody is watching"), "{reason}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// The row PLAN 7.2 adds to the read side: a declared source that has not
+    /// moved is denied rather than asked about, because what it says is already
+    /// in `world/`.
+    #[test]
+    fn a_source_already_perceived_is_refused_and_a_moved_one_reads() {
+        let (_dir, root) = with_a_world();
+        let grants = GrantStore::new();
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants);
+
+        match decide(&ctx, tool::FS_READ, json!({ "path": "sources/dump.sql" })) {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::Denied);
+                assert!(reason.contains("sources/dump.sql"), "{reason}");
+                assert!(reason.contains("world/"), "{reason}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+
+        // The delta is the one legitimate re-perception, so once the operator
+        // drops a new dump the same read is an ordinary contained one again.
+        std::fs::write(root.join("sources/dump.sql"), "select 1;\nselect 2;\n").expect("write");
+        assert!(matches!(
+            decide(&ctx, tool::FS_READ, json!({ "path": "sources/dump.sql" })),
+            Decision::Auto { .. }
+        ));
+    }
+
+    /// And none of it applies to a workspace that never opted in. A folder with
+    /// no `world/` is judged exactly as it was before this slice.
+    #[test]
+    fn a_workspace_with_no_world_is_judged_as_it_always_was() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        std::fs::create_dir_all(root.join("world")).expect("an empty folder of that name");
+        std::fs::write(root.join("sources.txt"), "a dump nobody declared").expect("write");
+
+        let grants = GrantStore::new();
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants);
+
+        assert!(matches!(
+            decide(&ctx, tool::FS_READ, json!({ "path": "sources.txt" })),
+            Decision::Auto { .. }
+        ));
+        // An empty `world/` is not a constitution, but a write into it is still
+        // a write into the directory the convention reserves — the gate reads
+        // the path, not the folder's contents, so the *first* file of a world
+        // is asked about the way every later one is. Which is what makes
+        // founding one with `world.draft` behave the same as amending one.
+        match decide(
+            &ctx,
+            tool::FS_WRITE,
+            json!({ "path": "world/essence.md", "content": "# Essence\n" }),
+        ) {
+            Decision::Ask { request, .. } => {
+                assert_eq!(request.grant, Some(Grant::WorldAmend));
+                assert_eq!(request.risk, Risk::High);
+            }
+            other => panic!("expected an ask, got {other:?}"),
         }
     }
 }

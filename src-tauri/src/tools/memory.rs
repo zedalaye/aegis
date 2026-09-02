@@ -220,12 +220,12 @@ mod tests {
             "a",
             MemoryKind::Preference,
             "this client wants French",
-            Some("briefs/client.md"),
+            Some(".aegis/briefs/client.md"),
         );
 
         assert!(produced.result.ok, "{:?}", produced.result.error);
         assert!(produced.result.content.contains("Remembered:"));
-        assert!(produced.result.content.contains("briefs/client.md"));
+        assert!(produced.result.content.contains(".aegis/briefs/client.md"));
         assert!(
             produced.result.content.contains("cannot delete it"),
             "the model is told who corrects a memory: {}",

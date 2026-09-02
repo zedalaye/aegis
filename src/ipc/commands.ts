@@ -11,7 +11,8 @@
  * (PLAN 2.1, "Window / tray"), projects (PLAN 2.1, "Projects"), sessions and
  * turns (PLAN 2.1, "Sessions and turns"), approvals (PLAN 2.1, "Approvals"),
  * the audit log and the provider settings (PLAN 2.1, "Settings and audit"),
- * the shared-workspace convention (PLAN 7.3, Phase 11), the identities a
+ * the shared-workspace convention and the world that may sit beside it in the
+ * same folder (PLAN 7.3, Phase 11; PLAN 7.2), the identities a
  * session can be opened as (PLAN 7.3, Phase 12), the runbooks those
  * identities may run (PLAN 7.3, Phase 13), what one identity has learned
  * (PLAN 7.3, Phase 14), the routines that fire a runbook on a clock
@@ -56,6 +57,7 @@ import type {
   Skill,
   TurnHandle,
   WorkspaceLayout,
+  WorldStatus,
 } from "./bindings";
 
 async function call<T>(command: string, args?: InvokeArgs): Promise<T> {
@@ -531,6 +533,25 @@ export function workspaceLayout(projectId: string): Promise<WorkspaceLayout> {
  */
 export function workspaceScaffold(projectId: string): Promise<ScaffoldReport> {
   return call<ScaffoldReport>("workspace_scaffold", { project_id: projectId });
+}
+
+/**
+ * Whether this project's folder holds a world, and what is true of it.
+ *
+ * A read, and only a read. There is deliberately no `worldScaffold` beside
+ * {@link workspaceScaffold}: the cabinet is a convention worth laying down in an
+ * empty folder, and the constitution is not. Five empty templates in a workspace
+ * with no essence are theatre — a world starts when somebody writes
+ * `world/essence.md`, in their editor or through `fs_write` under the gate.
+ *
+ * The measurement is the expensive one: every source `world/sources.yml`
+ * declares is read if it has to be, so the panel can say *drifted* rather than
+ * *possibly drifted*. A folder with no world answers `present: false` and the
+ * names of the files a world is made of, which is what lets the panel say what
+ * one is without pretending this folder has one.
+ */
+export function worldStatus(projectId: string): Promise<WorldStatus> {
+  return call<WorldStatus>("world_status", { project_id: projectId });
 }
 
 /**

@@ -63,6 +63,7 @@ pub mod store;
 pub mod tools;
 mod tray;
 pub mod workspace;
+pub mod world;
 
 pub use agent::{
     Event, EventSink, FakeProvider, ModelCatalog, ModelEvent, ModelRequest, OpenAiProvider,
@@ -96,6 +97,7 @@ pub use store::{
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
 pub use workspace::{ScaffoldReport, WorkspaceEntry, WorkspaceLayout};
+pub use world::{SourceState, WorldFile, WorldSource, WorldStatus};
 
 use tauri::{Manager, RunEvent, WindowEvent};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -209,6 +211,7 @@ pub fn run() {
             commands::settings::settings_list_models,
             commands::workspace::workspace_layout,
             commands::workspace::workspace_scaffold,
+            commands::workspace::world_status,
             commands::skill::skill_list,
             commands::memory::memory_list,
             commands::memory::memory_save,

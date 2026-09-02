@@ -1,7 +1,7 @@
 //! Board commands (PLAN 7.3, Phase 17).
 //!
 //! Two read-only commands, and there is deliberately no third. Nothing here
-//! writes `status/STATUS.md`: the board's file half is the user's file, and the
+//! writes `.aegis/status/STATUS.md`: the board's file half is the user's file, and the
 //! way a status is corrected is an ordinary `fs_write` through the approval
 //! gate, on the audit log, exactly like a decision (PLAN 7.6, *Authoring*). A
 //! `board_write` would be a second path into the workspace that skipped both.

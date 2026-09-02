@@ -312,7 +312,7 @@ mod tests {
             status,
             summary: "read the brief and wrote the note".to_owned(),
             artefacts: Vec::new(),
-            evidence: vec!["briefs/intake.md".to_owned()],
+            evidence: vec![".aegis/briefs/intake.md".to_owned()],
             open_questions: match status {
                 Status::Done => Vec::new(),
                 _ => vec!["which inbox?".to_owned()],

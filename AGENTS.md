@@ -163,7 +163,8 @@ on another). Keys stay in the OS keyring / env, never in the WebView.
 
 ### After-MVP order (fixed — `PLAN.md` § 7)
 
-1. Shared workspace convention (cabinet files + optional `world/`) +
+1. Shared workspace convention (cabinet files under `.aegis/`, plus an
+   optional `world/` at the root) +
    per-agent memory + skill runner
 2. Then Chef de Cabinet (handoff bus, fan-out / fan-in, status board)
 3. Then scheduler of routines
@@ -175,8 +176,10 @@ A CoS without (1) recites. Do not build (2) first.
 Chrome polish is `PLAN.md` § 7.10. Workspace versioning (`git init` on scaffold,
 never an auto-commit) is § 7.11. Execution host (WSL) is § 7.12. Skill promotion
 (a proposal file, then apply; writing is still not granting) is § 7.13. The
-`world/` constitution is the missed half of Phase 11 (`PLAN.md` § 7.2), not a
-Phase 20. None of these is a step in this list, and none is a reason to delay
+`world/` constitution was the missed half of Phase 11 (`PLAN.md` § 7.2), not a
+Phase 20, and it has landed: opt-in, nothing scaffolds it, the frame is a
+harness injection, and a specialist's write into it is refused rather than
+asked. None of these is a step in this list, and none is a reason to delay
 (1)–(3). There is no in-app editor. A skill is a file: the operator's editor,
 or `fs_write` under the gate. Granting it to an identity is a separate act.
 

@@ -38,6 +38,7 @@ use super::{
 use crate::error::ErrorCode;
 use crate::handoff::{self, bus};
 use crate::workspace;
+use crate::world;
 
 /// Above this, a contained read stops being routine and is asked about.
 ///
@@ -149,6 +150,28 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
+            // A declared source artefact of a world that is in force, still
+            // byte for byte what the world was perceived from (PLAN 7.2).
+            // Refused rather than asked about, and it is the one read row that
+            // is: what this file said is in `world/`, so reading it again is
+            // the round-trip the world exists to have paid once, and a dialog
+            // offering to spend a context window on it is a dialog that teaches
+            // people to click through. A source that has *moved* is not in this
+            // state and falls through to the rows below — perceiving that delta
+            // is the one legitimate re-perception there is.
+            if let Some(declared) = world::perceived_source(workspace, &target.path) {
+                return Err(Decision::deny(
+                    ErrorCode::Denied,
+                    format!(
+                        "`{declared}` is a declared source of this world, and it has not \
+                         changed since the world was perceived from it. What it says is \
+                         already in `world/` — read that instead. If what is there looks \
+                         wrong, say which line and stop: amending the world is a human \
+                         decision"
+                    ),
+                ));
+            }
+
             // Checked before the size row on purpose: a large secret is a
             // secret first. The sensitive row offers no grant, the size row
             // does, and the safer of the two has to win.
@@ -232,6 +255,67 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                         grant: None,
                         scope_label: scope_label(None),
                         reason: "this file is outside the workspace".to_owned(),
+                    },
+                ));
+            }
+
+            // The constitution (PLAN 7.2; `COS.md` *Work*). Which of the two
+            // rows applies is a fact about the *run* and not about the
+            // identity — the same identity is a Chief of Staff in one session
+            // and a specialist in the next — which is why it reads
+            // `ctx.delegated` rather than an allow-list.
+            //
+            // Inside a brief it is a **refusal**, in the same class as a
+            // reviewer calling `fs_write`: specialists read the world and do
+            // not write it, and an ask with a session grant on offer would be
+            // the constitution asking to be overruled by whoever is quickest
+            // to click. The way out of that turn is `needs_you`, not a second
+            // attempt.
+            if in_world_dir(workspace, &target) {
+                if ctx.delegated {
+                    return Err(Decision::deny(
+                        ErrorCode::Denied,
+                        "`world/` is this workspace's constitution, and a brief does not \
+                         amend it: specialists read the world, they do not write it. If this \
+                         cannot be done without changing what the thing is, that is the \
+                         answer — return `needs_you` with the one sentence naming which part \
+                         of the essence would have to move",
+                    ));
+                }
+
+                // Outside a brief, amending the world is a cabinet act — the
+                // human, or the Chief of Staff in front of them — and `COS.md`
+                // asks for a *human decision*, which is what a dialog is.
+                //
+                // A grant is offered, and it is a narrow one of its own.
+                // Founding a world is six files and amending one is rarely
+                // fewer; six identical High-risk dialogs in a row is how a
+                // person is taught to click through the one that mattered. What
+                // the grant must not be is [`Grant::FsWrite`]: allowing writes
+                // so a session could file artefacts is not agreeing to let it
+                // rewrite what the project is, and the two rows never match each
+                // other's key.
+                //
+                // Unattended, nothing is on offer. A routine has no human in it
+                // to make the decision `COS.md` reserves for one, so the row
+                // falls through to `decide_call`'s refusal, which says exactly
+                // that. It is also unsignable in advance — `schedule::check`
+                // refuses the grant when the routine is saved — so this is the
+                // second of the two places, not the only one.
+                let grant = (!ctx.unattended).then_some(Grant::WorldAmend);
+                return Ok(ask(
+                    call,
+                    AskRequest {
+                        tool: tool::FS_WRITE.to_owned(),
+                        risk: Risk::High,
+                        title: "Amend the world",
+                        summary,
+                        detail,
+                        scope_label: scope_label(grant.as_ref()),
+                        grant,
+                        reason: "this is `world/`, the workspace's constitution: what the \
+                                 project is, and what everything else is checked against"
+                            .to_owned(),
                     },
                 ));
             }
@@ -881,6 +965,19 @@ fn is_self(ctx: &PolicyCtx<'_>, program: &str) -> bool {
         .and_then(Path::file_name)
         .and_then(|name| name.to_str())
         .is_some_and(|name| Grant::shell(program) == Grant::shell(name))
+}
+
+/// Whether the target is inside the workspace's constitution.
+///
+/// The first segment only, unlike `.git/` beside it: `world/` is a convention
+/// at the root of a workspace, and a repository with a `src/world/` module in
+/// it has not thereby written one. The predicate itself is
+/// [`world::in_world`], so the gate and the module that reads the constitution
+/// agree on what one is.
+fn in_world_dir(workspace: &Path, target: &Resolved) -> bool {
+    target
+        .relative_to(workspace)
+        .is_some_and(|relative| world::in_world(&relative))
 }
 
 /// Whether any segment below the workspace root is `.git`.

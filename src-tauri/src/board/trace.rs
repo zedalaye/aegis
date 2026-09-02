@@ -880,7 +880,7 @@ mod tests {
         report.args_redacted = json!({
             "status": "done",
             "summary": "filed three tickets",
-            "artefacts": ["artefacts/tickets.md"],
+            "artefacts": [".aegis/artefacts/tickets.md"],
         })
         .to_string();
 
@@ -890,7 +890,7 @@ mod tests {
         assert_eq!(run.status, RunStatus::Done);
         assert_eq!(run.denied, 1, "the refusal is still on the record");
         assert!(run.reason.is_empty());
-        assert_eq!(run.artefacts, ["artefacts/tickets.md"]);
+        assert_eq!(run.artefacts, [".aegis/artefacts/tickets.md"]);
     }
 
     #[test]
@@ -1043,7 +1043,7 @@ mod tests {
     fn artefacts_come_from_writes_captures_and_reports() {
         let mut wrote = line("s1", "t1", "fs_write");
         wrote.args_redacted =
-            json!({ "path": "artefacts/report.md", "content": "<40 bytes>" }).to_string();
+            json!({ "path": ".aegis/artefacts/report.md", "content": "<40 bytes>" }).to_string();
         let mut captured = line("s1", "t1", "screen_capture");
         captured.artifact = Some(crate::audit::AuditArtifact {
             path: "captures/capture-1.png".to_owned(),
@@ -1054,7 +1054,7 @@ mod tests {
         let mut report = line("s1", "t1", "skill_return");
         report.args_redacted = json!({
             "status": "done",
-            "artefacts": ["artefacts/report.md", "artefacts/summary.md"],
+            "artefacts": [".aegis/artefacts/report.md", ".aegis/artefacts/summary.md"],
         })
         .to_string();
 
@@ -1064,9 +1064,9 @@ mod tests {
         assert_eq!(
             run.artefacts,
             [
-                "artefacts/report.md",
+                ".aegis/artefacts/report.md",
                 "captures/capture-1.png",
-                "artefacts/summary.md"
+                ".aegis/artefacts/summary.md"
             ],
             "each path once, in the order it was produced"
         );
@@ -1076,7 +1076,7 @@ mod tests {
     fn a_refused_call_produced_nothing() {
         let mut refused = line("s1", "t1", "fs_write");
         refused.outcome = Outcome::Denied;
-        refused.args_redacted = json!({ "path": "artefacts/never.md" }).to_string();
+        refused.args_redacted = json!({ "path": ".aegis/artefacts/never.md" }).to_string();
 
         let runs = fold(&[refused], &[ledger("s1", &["t1"])]);
 

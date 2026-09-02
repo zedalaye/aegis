@@ -26,7 +26,12 @@ import RoutineForm from "./RoutineForm";
 export function grantLabel(grant: Grant): string {
   switch (grant.kind) {
     case "fs_write":
-      return "write files inside the workspace, except under .git/";
+      return "write files inside the workspace, except under .git/ and world/";
+    // Never signable on a routine — the form does not offer it and the
+    // runtime refuses it — but the union is exhaustive, and a row read back
+    // from a hand-edited routines.json still has to render.
+    case "world_amend":
+      return "amend world/, the workspace’s constitution";
     case "fs_read_large":
       return "read files over 1 MB";
     case "shell":

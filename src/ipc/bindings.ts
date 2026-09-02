@@ -218,7 +218,7 @@ briefs: Array<HandoffRow>,
  */
 reviewer: string | null, 
 /**
- * Where the briefs would be filed, when the workspace has a `briefs/`.
+ * Where the briefs would be filed, when the workspace has a `.aegis/briefs/`.
  */
 filed_in: string | null, } | { "kind": "connector", 
 /**
@@ -803,7 +803,7 @@ from_session_id: string,
 /**
  * Where the brief was filed, relative to the workspace root.
  *
- * `None` when the workspace has no `briefs/` — the brief then lives only
+ * `None` when the workspace has no `.aegis/briefs/` — the brief then lives only
  * in the first message of this transcript, which is still a record of it.
  */
 brief: string | null, };
@@ -816,7 +816,7 @@ brief: string | null, };
  * is the large-file one, and a grant that covered every read would be a
  * different, much broader thing than what the user was asked about.
  */
-export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "kind": "shell", 
+export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "kind": "world_amend" } | { "kind": "shell", 
 /**
  * The normalized program key — see [`Grant::shell`].
  */
@@ -1652,6 +1652,11 @@ problem: string | null, };
 export type SkillScope = "library" | "workspace";
 
 /**
+ * What is true of one declared source right now.
+ */
+export type SourceState = "in_step" | "drifted" | "missing" | "unrecorded";
+
+/**
  * Where one connector is in its life.
  */
 export type State = "off" | "starting" | "ready" | "failed";
@@ -2142,11 +2147,12 @@ total_tokens: number, };
  */
 export type WorkspaceEntry = { 
 /**
- * Directory name, relative to the workspace root: `briefs`, `status`, …
+ * The directory relative to the workspace root: `.aegis/briefs`, …
  */
 dir: string, 
 /**
- * The seed file inside it, relative to the root: `status/STATUS.md`, …
+ * The seed file inside it, relative to the root:
+ * `.aegis/status/STATUS.md`, …
  */
 file: string, 
 /**
@@ -2176,4 +2182,85 @@ entries: Array<WorkspaceEntry>,
  * Derived here rather than in the UI, so that "set up" means the same
  * thing to the panel, to a test, and to whatever later phase asks.
  */
-complete: boolean, };
+complete: boolean, 
+/**
+ * Convention directories found at the workspace *root*, from the layout
+ * this build no longer uses. Bare names: `briefs`, `decisions`, …
+ *
+ * The cabinet moved under [`CABINET_DIR`], and a folder set up before that
+ * still has its `.aegis/status/STATUS.md` where it always was — full of work the
+ * runtime has just stopped being able to see. So they are named, and that
+ * is all: nothing here moves a directory in somebody's repository. Picking
+ * a folder was never consent to rearrange it, and the same rule that keeps
+ * [`scaffold`] from overwriting a file keeps this from relocating one.
+ *
+ * Empty for every workspace that never had the old layout, which is the
+ * ordinary case and draws nothing.
+ */
+strays: Array<string>, };
+
+/**
+ * One file of the constitution, as the panel sees it.
+ */
+export type WorldFile = { 
+/**
+ * The path relative to the workspace root: `world/essence.md`.
+ */
+file: string, 
+/**
+ * What it is for, in one line.
+ */
+what: string, 
+/**
+ * Whether it is there right now.
+ */
+exists: boolean, };
+
+/**
+ * One declared source, as the panel sees it.
+ */
+export type WorldSource = { 
+/**
+ * The path as `sources.yml` declares it, relative to the workspace root.
+ */
+path: string, 
+/**
+ * What is true of it right now, measured by reading it.
+ */
+state: SourceState, };
+
+/**
+ * The world's state in one workspace.
+ *
+ * Measured on every call and never stored, for the reason
+ * [`WorkspaceLayout`](crate::workspace::WorkspaceLayout) is: the folder
+ * belongs to the user, who may have written `world/essence.md` in their editor
+ * a minute ago.
+ */
+export type WorldStatus = { 
+/**
+ * Whether there is a world in this workspace at all.
+ *
+ * False for every workspace that never opted in, which is most of them,
+ * and the panel then says only what a world is and how one is started.
+ */
+present: boolean, 
+/**
+ * Every file of the constitution, present or not, in reading order.
+ */
+files: Array<WorldFile>, 
+/**
+ * What `world/sources.yml` declares, and what is true of each one.
+ */
+sources: Array<WorldSource>, 
+/**
+ * Whether any declared source has moved since it was perceived.
+ *
+ * Derived here rather than in the UI so that "drifted" means the same
+ * thing to the panel, to the brief that will not launch, and to a test.
+ */
+drifted: boolean, 
+/**
+ * Why `sources.yml` could not be read as written, when it could not.
+ */
+problem: string | null, };

@@ -87,7 +87,7 @@ impl App {
         std::fs::create_dir_all(&workspace).expect("workspace dir");
         let workspace = dunce::canonicalize(&workspace).expect("canonical workspace");
 
-        // The convention the way the sidebar button lays it down, so `briefs/`
+        // The convention the way the sidebar button lays it down, so `.aegis/briefs/`
         // is there and a delegation is filed the way a user would see it.
         aegis_lib::workspace::scaffold(&workspace).expect("the convention is laid down");
 
@@ -280,7 +280,7 @@ fn brief(goal: &str, owner: &str) -> Brief {
         goal: goal.to_owned(),
         owner: owner.to_owned(),
         priority: Priority::Normal,
-        inputs: vec!["status/STATUS.md".to_owned()],
+        inputs: vec![".aegis/status/STATUS.md".to_owned()],
         constraints: Vec::new(),
         definition_of_done: "the return says what you found".to_owned(),
         approval_needed: String::new(),
@@ -377,7 +377,7 @@ async fn two_briefs_fan_out_to_two_identities_and_come_back_as_a_board() {
         assert_eq!(record.handoff_id, board.id);
         assert_eq!(record.from_session_id, chief_session);
         let filed = record.brief.as_ref().expect("the brief was filed");
-        assert!(filed.starts_with("briefs/"), "{filed}");
+        assert!(filed.starts_with(".aegis/briefs/"), "{filed}");
         assert!(app.workspace.join(filed).is_file(), "{filed} is on disk");
     }
 }
@@ -405,7 +405,7 @@ async fn a_specialist_runs_as_itself_and_is_not_offered_what_it_does_not_hold() 
                         id: Some("call_write".to_owned()),
                         name: Some(tool::FS_WRITE.to_owned()),
                         args_delta: json!({
-                            "path": "artefacts/note.md",
+                            "path": ".aegis/artefacts/note.md",
                             "content": "x",
                         })
                         .to_string(),
@@ -606,7 +606,8 @@ async fn the_reviewer_runs_last_and_sees_the_artefacts_rather_than_the_work() {
     app.specialist("Checker", vec![tool::FS_READ.to_owned()]);
     let chief_session = app.session_as(&chief);
 
-    std::fs::write(app.workspace.join("artefacts/note.md"), "the note").expect("an artefact");
+    std::fs::write(app.workspace.join(".aegis/artefacts/note.md"), "the note")
+        .expect("an artefact");
 
     let runner = TestRunner::arc(
         app,
@@ -622,7 +623,7 @@ async fn the_reviewer_runs_last_and_sees_the_artefacts_rather_than_the_work() {
                         args_delta: json!({
                             "status": "done",
                             "summary": "wrote it",
-                            "artefacts": ["artefacts/note.md"],
+                            "artefacts": [".aegis/artefacts/note.md"],
                         })
                         .to_string(),
                     },
@@ -654,7 +655,7 @@ async fn the_reviewer_runs_last_and_sees_the_artefacts_rather_than_the_work() {
         review
             .brief
             .inputs
-            .contains(&"artefacts/note.md".to_owned()),
+            .contains(&".aegis/artefacts/note.md".to_owned()),
         "{:?}",
         review.brief.inputs
     );

@@ -114,10 +114,10 @@ impl App {
         aegis_lib::workspace::scaffold(&workspace).expect("the convention is laid down");
 
         // The item the triage runbook is pointed at. A markdown file in
-        // `briefs/` is a valid input today; a mail connector later replaces the
+        // `.aegis/briefs/` is a valid input today; a mail connector later replaces the
         // source, not the procedure (PLAN 7.6).
         std::fs::write(
-            workspace.join("briefs/from-a-client.md"),
+            workspace.join(".aegis/briefs/from-a-client.md"),
             "The staging deploy is failing since Tuesday. Can you look before Friday?\n",
         )
         .expect("an item to triage");
@@ -186,6 +186,7 @@ impl App {
                 workspace: Some(&self.workspace),
                 memories: None,
                 skills: block.as_deref(),
+                world: None,
                 shared: shared.as_deref(),
                 compacted: None,
                 unattended: false,
@@ -203,7 +204,7 @@ impl App {
     /// Runs one turn whose rounds are scripted, one tool call per round.
     ///
     /// Nothing answers an approval, deliberately: the two `fs_write` calls the
-    /// triage runbook makes are inside `briefs/`-adjacent folders and *do* ask,
+    /// triage runbook makes are inside `.aegis/briefs/`-adjacent folders and *do* ask,
     /// so the caller supplies a session grant first and the turn never parks.
     async fn scripted_turn(
         &self,
@@ -297,7 +298,15 @@ fn the_catalog_is_listable_and_carries_no_step_of_any_runbook() {
     let names: Vec<&str> = catalog.iter().map(|skill| skill.name.as_str()).collect();
     assert_eq!(
         names,
-        vec![skills::COS_SKILL, "inbox.triage", skills::REVIEW_SKILL]
+        vec![
+            skills::COS_SKILL,
+            "inbox.triage",
+            skills::REVIEW_SKILL,
+            skills::CHECK_SKILL,
+            skills::DRAFT_SKILL,
+            skills::PERCEIVE_SKILL,
+            skills::VERIFY_SKILL,
+        ]
     );
 
     // Two scopes, and each found where `COS.md` says it lives: the standing
@@ -308,7 +317,11 @@ fn the_catalog_is_listable_and_carries_no_step_of_any_runbook() {
         vec![
             SkillScope::Library,
             SkillScope::Workspace,
-            SkillScope::Library
+            SkillScope::Library,
+            SkillScope::Library,
+            SkillScope::Library,
+            SkillScope::Library,
+            SkillScope::Library,
         ]
     );
     assert!(catalog.iter().all(aegis_lib::Skill::runnable));
@@ -350,7 +363,8 @@ async fn the_workspace_stub_runs_end_to_end_and_its_return_is_validated() {
     // test stands in for.
     app.grants.insert(&session_id, aegis_lib::Grant::FsWrite);
 
-    let status = std::fs::read_to_string(app.workspace.join("status/STATUS.md")).expect("seeded");
+    let status =
+        std::fs::read_to_string(app.workspace.join(".aegis/status/STATUS.md")).expect("seeded");
     let sink = Recorder::default();
 
     let reason = app
@@ -362,11 +376,14 @@ async fn the_workspace_stub_runs_end_to_end_and_its_return_is_validated() {
                 // Load the runbook.
                 (tool::SKILL_RUN, json!({ "name": "inbox.triage" })),
                 // Its steps, as an identity that holds these tools.
-                (tool::FS_READ, json!({ "path": "briefs/from-a-client.md" })),
+                (
+                    tool::FS_READ,
+                    json!({ "path": ".aegis/briefs/from-a-client.md" }),
+                ),
                 (
                     tool::FS_WRITE,
                     json!({
-                        "path": "artefacts/from-a-client.triage.md",
+                        "path": ".aegis/artefacts/from-a-client.triage.md",
                         "content": "# Triage\n\nAsked: look at the failing staging deploy.\nFor: \
                                     the client.\nBlocked on: nothing.\nUrgent: before Friday.\n",
                     }),
@@ -374,7 +391,7 @@ async fn the_workspace_stub_runs_end_to_end_and_its_return_is_validated() {
                 (
                     tool::FS_WRITE,
                     json!({
-                        "path": "status/STATUS.md",
+                        "path": ".aegis/status/STATUS.md",
                         "content": format!("{status}\n- staging deploy, before Friday\n"),
                     }),
                 ),
@@ -386,10 +403,10 @@ async fn the_workspace_stub_runs_end_to_end_and_its_return_is_validated() {
                         "summary": "A client reports staging failing since Tuesday.\nFiled under \
                                     In flight; wanted before Friday.",
                         "artefacts": [
-                            "artefacts/from-a-client.triage.md",
-                            "status/STATUS.md",
+                            ".aegis/artefacts/from-a-client.triage.md",
+                            ".aegis/status/STATUS.md",
                         ],
-                        "evidence": ["read briefs/from-a-client.md"],
+                        "evidence": ["read .aegis/briefs/from-a-client.md"],
                         "next_owner": "human",
                     }),
                 ),
@@ -403,10 +420,10 @@ async fn the_workspace_stub_runs_end_to_end_and_its_return_is_validated() {
     // File in, status and artefact out — the stub doing what its name says.
     assert!(app
         .workspace
-        .join("artefacts/from-a-client.triage.md")
+        .join(".aegis/artefacts/from-a-client.triage.md")
         .is_file());
     assert!(
-        std::fs::read_to_string(app.workspace.join("status/STATUS.md"))
+        std::fs::read_to_string(app.workspace.join(".aegis/status/STATUS.md"))
             .expect("read")
             .contains("staging deploy"),
         "the board was updated"
@@ -427,7 +444,7 @@ async fn the_workspace_stub_runs_end_to_end_and_its_return_is_validated() {
     let rendered = returned["content"].as_str().unwrap_or_default();
     assert!(rendered.contains("status: done"), "{rendered}");
     assert!(
-        rendered.contains("artefacts/from-a-client.triage.md"),
+        rendered.contains(".aegis/artefacts/from-a-client.triage.md"),
         "{rendered}"
     );
     assert!(rendered.contains("next_owner: human"), "{rendered}");
@@ -454,7 +471,7 @@ async fn a_run_that_claims_an_artefact_it_never_wrote_is_refused() {
                 json!({
                     "status": "done",
                     "summary": "Triaged it and filed the note.",
-                    "artefacts": ["artefacts/from-a-client.triage.md"],
+                    "artefacts": [".aegis/artefacts/from-a-client.triage.md"],
                 }),
             ),
         ],
@@ -501,7 +518,10 @@ async fn every_audit_line_of_a_run_names_the_skill_and_lines_outside_it_do_not()
             (tool::FS_LIST, json!({ "path": "briefs" })),
             (tool::SKILL_RUN, json!({ "name": "inbox.triage" })),
             // Inside it.
-            (tool::FS_READ, json!({ "path": "briefs/from-a-client.md" })),
+            (
+                tool::FS_READ,
+                json!({ "path": ".aegis/briefs/from-a-client.md" }),
+            ),
             (
                 tool::SKILL_RETURN,
                 json!({

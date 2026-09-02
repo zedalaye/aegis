@@ -75,11 +75,11 @@ ever sent to it.
 > is open. Nothing in the window can append to that file or clear it.
 >
 > **A workspace can now keep shared memory in files.** *Set up shared files* in the sidebar
-> creates `briefs/`, `status/`, `artefacts/` and `decisions/` in the folder you picked — only what
-> is missing, never overwriting anything you already have. Once they exist, every request carries
+> creates `.aegis/` in the folder you picked, holding `briefs/`, `status/`, `artefacts/` and
+> `decisions/` — only what is missing, never overwriting anything you already have. Once they exist, every request carries
 > what `STATUS.md` says and the recent end of `DECISIONS.md`, plus the *names* of your briefs and
 > artefacts, capped so a long ledger cannot eat the context window. Asking for a decision to be
-> recorded writes `decisions/DECISIONS.md` through the ordinary approval dialog: no new tool, no
+> recorded writes `.aegis/decisions/DECISIONS.md` through the ordinary approval dialog: no new tool, no
 > privileged path, no hidden store beside your folder. See *Shared workspace files*.
 >
 > **A session now runs as an identity.** *Settings → Identities* creates one: a name, a line
@@ -128,7 +128,7 @@ ever sent to it.
 > **And now there is a board.** *Board* in the title bar answers, for the open project, *who ran,
 > what did it cost, and why did it fail* — without opening a chat. Three columns: what wants a
 > person, what is running, what stopped short — half of it read structurally out of your own
-> `status/STATUS.md`, half of it what the runtime can see for itself, with every line saying
+> `.aegis/status/STATUS.md`, half of it what the runtime can see for itself, with every line saying
 > which. Underneath, every run in the recent log: a delegation with its specialists, a morning's
 > firing of a routine, a runbook, a conversation — each with who ran it, what it spent, what it
 > left on disk, and the audit lines it is replayed from. Nothing there writes: correcting the
@@ -217,7 +217,7 @@ No provider and no key needed — the scripted provider is enough to exercise th
    only thing that ends it.
 6. **Restart.** The project, the session and the transcript are where you left them.
 7. **File a decision.** Press *Set up shared files* in the sidebar, then ask for a decision to be
-   recorded. It is written to `decisions/DECISIONS.md` through the same approval dialog, and the
+   recorded. It is written to `.aegis/decisions/DECISIONS.md` through the same approval dialog, and the
    next reply already knows about it. See [Shared workspace files](#shared-workspace-files).
 8. **Open a session as someone narrower.** In *Settings → Identities*, make a **Reviewer** with
    only `fs_list` and `fs_read` ticked. Back in the sidebar, pick it in the **as** control and
@@ -246,7 +246,7 @@ No provider and no key needed — the scripted provider is enough to exercise th
     once, and watch the run: that watching is what the next step checks for. Now *Settings →
     Routines* → **New routine**, pick that identity and that runbook, every 5 minutes, tick *write
     files inside the workspace*, and save. Press **Run now**: a session opens with a `routine`
-    badge, the runbook is loaded, a line is written into `status/`, and the run closes with a
+    badge, the runbook is loaded, a line is written into `.aegis/status/`, and the run closes with a
     status — with no dialog, because you signed for that write when you saved. Untick the approval
     and run it again: the write is refused instead of queued, and the row says `blocked`. Close the
     window; it keeps firing. See [Routines](#routines).
@@ -403,9 +403,11 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts `never-send-without-review` and `cos.loop` there on a first run and
-never touches the folder again — delete it and it stays deleted, because a library is yours. A workspace's own
-runbooks live in that workspace instead, and travel with it. See *Skills*.
+`SKILL.md` in it. Aegis puts six there — `never-send-without-review`, `cos.loop`, `world.draft`,
+`world.perceive-delta`, `world.verify` and `world.check` — and offers each **once**, recorded by
+name in `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later
+version adding a seventh will offer that one and leave the rest alone. A workspace's own runbooks
+live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
 named `capture-<UTC timestamp>-<random>.png`. They are here rather than in your workspace on
@@ -439,28 +441,45 @@ tool call.
 Aegis' own data is above. This is the other half: files that live in **your** workspace folder,
 not in Aegis' application-data directory, and that the agent reads at the start of every reply.
 
-The convention is five directories:
+The convention is five directories, all inside one — `.aegis/` at the top of your folder:
 
 | | Holds |
 | --- | --- |
-| `briefs/` | one file per delegated piece of work — goal, inputs as *paths*, definition of done |
-| `status/` | `STATUS.md`: what is true right now. A board, rewritten in place, not a log |
-| `artefacts/` | what was produced — a draft, a report, an export, a patch |
-| `decisions/` | `DECISIONS.md`: one entry per decision, newest last |
-| `skills/` | this project's own runbooks, one directory each. Seeded with `inbox.triage` |
+| `.aegis/briefs/` | one file per delegated piece of work — goal, inputs as *paths*, definition of done |
+| `.aegis/status/` | `STATUS.md`: what is true right now. A board, rewritten in place, not a log |
+| `.aegis/artefacts/` | what was produced — a draft, a report, an export, a patch |
+| `.aegis/decisions/` | `DECISIONS.md`: one entry per decision, newest last |
+| `.aegis/skills/` | this project's own runbooks, one directory each. Seeded with `inbox.triage` |
+
+**One directory, not five.** These are the **cabinet**: in-flight work, rewritten every turn, the
+harness's working surface over your project. Five of them beside your `src/` would be five things
+you did not ask for, so they go in one, named after the tool whose working surface they are. The
+one thing that does *not* live there is [`world/`](#the-world), which stays at the root because it
+is the project rather than the tool's view of it.
+
+The leading dot is a tidiness convention, not a hiding place — the same one `.github/` and
+`.vscode/` use. Nothing about it is privileged: these are ordinary files under your workspace root,
+reached by the same `fs_read` / `fs_write`, through the same approval dialog, on the same audit
+log, and committed with the repository. Two costs worth knowing before you go looking: macOS Finder
+hides dot-directories until you press ⌘⇧., and `rg` skips them without `--hidden`.
 
 **Set up shared files** in the sidebar creates whatever is missing and seeds each one with a
 short template. It never overwrites: a file that is already there is left byte for byte as it
 was, and the panel says which files it created and which it kept. Nothing is created until you
 press it — a workspace is a folder you already own, usually a repository with its own layout, and
-four directories should not appear in it because you pointed an app at it. You can equally make
+directories should not appear in it because you pointed an app at it. You can equally make
 them by hand, or in a terminal; the panel measures the folder rather than remembering what it did
 to it. They are ordinary files: commit them, edit them in your editor, `grep` them.
+
+**If you set a workspace up before this layout**, its five directories are still at the root, where
+the runtime has stopped looking. The panel names them and stops there — moving somebody's
+`DECISIONS.md` for them is exactly the act the button beside it refuses to do. `mv` them into
+`.aegis/` and they are found again.
 
 Once they exist, two things change.
 
 **The agent reads them.** Every request carries the current `STATUS.md`, the recent end of
-`DECISIONS.md`, and the *names* of what is in `briefs/` and `artefacts/`. Not `skills/`: those
+`DECISIONS.md`, and the *names* of what is in `.aegis/briefs/` and `.aegis/artefacts/`. Not `skills/`: those
 reach the model as the skill catalog instead, which says what each runbook is *for* rather than
 only what it is called. Names, not contents:
 a brief is referred to by path and read with `fs_read` if it is needed, so a folder full of long
@@ -477,6 +496,106 @@ Why bother: a chat is forgotten and a file is not. A decision that lives only in
 cannot be found later, cannot be corrected, and does not survive the conversation being
 compacted or restarted. `COS.md` is the reasoning in full; `PLAN.md` § 7.3 is where this sits in
 the sequence.
+
+---
+
+## The world
+
+The five directories above are the **cabinet**: in-flight work, rewritten every turn. That is the
+point of them. A project that has something worth *protecting* — a shape, a set of rules, a
+notion of what "right" means — keeps that in a second layer in the same folder, with the opposite
+mutation rule.
+
+This one is **not** under `.aegis/`. It sits at the root of your folder, beside `src/`, and the
+asymmetry is the whole reason there are two layers: the cabinet is a view *of* your project and
+belongs to whatever tool is holding it, while `world/` is the project. It should still make sense
+to somebody who has never run Aegis, and it should outlive it.
+
+| | Holds |
+| --- | --- |
+| `world/essence.md` | what this is, and what it is for |
+| `world/schema.md` | the shapes it is made of, as they were perceived |
+| `world/behaviours.md` | how it behaves, including the sins a source showed — each with the perimeter it holds inside |
+| `world/oracle.md` | how a new instance is known to be right |
+| `world/decisions.md` | the decisions that moved the essence. Not `.aegis/decisions/DECISIONS.md`, which is operational |
+| `world/sources.yml` | the dumps, exports and logs all of that was perceived from |
+
+**There is no button, and nothing creates it.** A watch folder or a wish list has no essence, and
+five empty templates in one are worse than nothing. A world starts when you write
+`world/essence.md` — in your editor, or by asking for it and approving the `fs_write` — and the
+panel then reports what is there. None of the six files is required; a world that has only an
+essence is a world.
+
+Once it exists, four things change.
+
+**Every session in that folder is framed.** A few lines go into the system message: read `world/`
+before planning anything, take it as given, do not reopen the declared sources, and if the work
+cannot be done without changing what the thing *is*, stop and say which line would have to move.
+That last one is an **écart**, and it is a better answer than a plausible thing built on a world
+nobody agreed to change. The frame is injected by the runtime rather than left to a runbook,
+because a runbook can be skipped and forgetting this is the whole failure it exists to prevent.
+What goes with it is *status* — which files the constitution holds, which are not written yet,
+what it declares as sources — never `essence.md` itself. The essence stays on disk, where
+`fs_read` reaches it in the one turn that needs it.
+
+What the frame says about **writing** depends on which kind of run it is, and matches what the
+gate would actually do. A specialist on a brief is told it does not write `world/` and should
+return `needs_you`. A session you are sitting in is told the essence is not its to change on its
+own initiative — but that when *you* ask for it, that is the decision being made, and `world.draft`
+is the runbook for it.
+
+**Nothing delegated can amend it — and you can, with help.** A specialist working on a brief that
+calls `fs_write` under `world/` gets a refusal: no dialog, nothing written, and a message telling
+it to return `needs_you` with the one sentence naming what would have to move. That is where the
+danger actually is, and it is where the hard rule sits.
+
+In a session you are sitting in, amending the world is an ordinary approval at high risk — and it
+offers *allow for this session*, because founding a world is six files and six identical prompts
+in a row is how anyone learns to stop reading them. What you sign there is its own narrow thing:
+**amending `world/` is not covered by a general workspace-write approval, and a world approval
+covers nothing else.** The two never stand in for each other. A scheduled run is offered nothing
+at all — it cannot ask you, and it cannot be signed for in advance, because changing what a
+project *is* is a decision and a routine has nobody in it to make one.
+
+Only the first path segment counts, so a repository with its own `src/world/` module is untouched.
+
+**A source that has been read once is not read again.** `world/sources.yml` declares what this
+world was perceived from, with the length and digest each was recorded at:
+
+```yaml
+# what this world was perceived from
+sources:
+  - path: sources/legacy-dump.sql
+    bytes: 18234112
+    sha256: 3f9a…
+  - sources/2026-08-prod.log      # declared, nothing perceived from it yet
+```
+
+`fs_read` of one of those, while it still hashes to what was recorded, is **denied** — not asked
+about. What it said is in `world/`, and re-reading it is the round-trip the world exists to have
+paid once. Paths are resolved against the workspace and one that escapes it is refused, so
+`sources.yml` cannot be turned into a reading list for somewhere else.
+
+**A source that has moved holds the work.** Drop a new dump in and the next request says so. Until
+that delta is perceived, a brief handed to a specialist will not launch — unless it is the
+perceive-delta itself, which names the moved path in its `inputs`. Routing the work and the
+re-perception at once is how a world quietly ends up compiled against a schema nobody re-read.
+Drift is measured at those two moments and when you open the panel; it is not hashed on the way
+into every reply, so the prompt reports drift it has *seen* and never claims there is none.
+
+Four runbooks come with it. **`world.draft`** is the help: point it at a project and it reads what
+is there, drafts `schema.md` and `behaviours.md` from evidence it can name, and then *stops* and
+asks you the two questions it has no business answering — what this is for, and how you would know
+a new version of it was right. Those become `essence.md` and `oracle.md` in your words, quoted
+rather than improved. Run it in a session; inside a brief every one of its writes is refused,
+which is the same rule as everything else here.
+
+The other three: **`world.perceive-delta`** (bounded to the paths that moved), **`world.verify`**
+(the oracle as a program, not a taste review of a diff) and **`world.check`** (read the
+constitution and say where you stand). They are in the library like any other, and like any other
+they are granted to an identity or not — writing a runbook is still not granting it.
+
+`COS.md` *Work* is the reasoning; `PLAN.md` § 7.2 is how it sits on this tree.
 
 ---
 
@@ -577,14 +696,20 @@ fix it — and it is never offered to a model.
 | Scope | Lives | For |
 | --- | --- | --- |
 | **Library** | `skills/` beside your projects file | how *you* work — "never send without review" |
-| **Workspace** | `skills/` inside the project folder | how *this* project works, and it travels with the repo |
+| **Workspace** | `.aegis/skills/` inside the project folder | how *this* project works, and it travels with the repo |
 | **Per identity** | the identity's allow-list | which of the above that identity may run |
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
-happening. Aegis seeds the library with `never-send-without-review` and `cos.loop` on a first
-run, and each workspace with `inbox.triage` when you press *Set up shared files* — all three are
-examples of the format in the place you would look for one, and all three are ordinary files you
-can rewrite or delete. `cos.loop` is the Chief-of-Staff loop; see [Handoffs](#handoffs).
+happening. Aegis seeds the library with `never-send-without-review`, `cos.loop` and the four
+world runbooks, and each workspace with `inbox.triage` when you press *Set up shared files* — all
+of them are examples of the format in the place you would look for one, and all of them are
+ordinary files you can rewrite or delete. `cos.loop` is the Chief-of-Staff loop; see
+[Handoffs](#handoffs). The `world.*` four are the constitution's; see [The world](#the-world).
+
+Seeding happens **once per name**. The library records what it has offered in `skills/.seeded`,
+so a runbook you deleted does not reappear on the next start, and a runbook a later version adds
+reaches an install that already has a library. Nothing here grants anything: a seeded runbook is
+a file in a folder, and an identity that may run it is an identity you granted it to.
 
 ### Catalog in, body on demand
 
@@ -655,14 +780,14 @@ A memory is one of three things, and nothing else:
 | `convention` | how it is done here | "releases are tagged before the changelog" |
 
 Anything that is none of those is not a memory. A fact about a project is a **file** in that
-workspace (`briefs/`, `decisions/` — see *Shared workspace files*), and a procedure is a
+workspace (`.aegis/briefs/`, `decisions/` — see *Shared workspace files*), and a procedure is a
 **skill**. A store that accepted everything would slowly become the transcript it exists to
 replace.
 
 Each memory can name **what it rests on** — a workspace path, a ticket, the person who said it.
 That is optional, and its absence is shown: a memory with no source is presented to the model as
 a hypothesis, not as proof. It is the difference between "you decided this, it is in
-`decisions/DECISIONS.md`" and "I think I remember this".
+`.aegis/decisions/DECISIONS.md`" and "I think I remember this".
 
 ### Who may do what
 
@@ -709,8 +834,8 @@ Earlier in this session, folded to state. 24 messages are no longer in your cont
 
 Goal: get the staging deploy working again
 Then asked: what about the rollback step · use the 2 GB box
-Files written: artefacts/checklist.md · decisions/DECISIONS.md
-Decisions: 2 filed in decisions/DECISIONS.md — read it rather than recalling them
+Files written: .aegis/artefacts/checklist.md · .aegis/decisions/DECISIONS.md
+Decisions: 2 filed in .aegis/decisions/DECISIONS.md — read it rather than recalling them
 Commands run: cargo · git
 Skill runs: deploy.draft — done · watch.digest — blocked
 Open blockers:
@@ -756,10 +881,10 @@ goal:                 Draft the release note for 0.4
 owner:                Scribe
 priority:             normal
 inputs:
-  - artefacts/changelog.md
+  - .aegis/artefacts/changelog.md
 constraints:
   - no marketing language
-definition_of_done:   artefacts/release-0.4.md exists and names every user-visible change
+definition_of_done:   .aegis/artefacts/release-0.4.md exists and names every user-visible change
 approval_needed:      the write
 return_format:        artefact
 ```
@@ -793,7 +918,7 @@ none of the Chief of Staff's session grants. If it wants to write a file, it ask
 own session, so the sidebar row shows *waiting on you* and you click the row to answer. It
 cannot delegate: the tool is not on its list, and it is refused if it asks anyway.
 
-When the workspace has the shared files set up, each brief is also written into `briefs/`, so
+When the workspace has the shared files set up, each brief is also written into `.aegis/briefs/`, so
 what was handed out is on disk and in git rather than only in a transcript.
 
 ### What comes back
@@ -804,12 +929,12 @@ A board. Not a transcript, and not a concatenation of them:
 2 briefs: 1 done, 1 blocked; review done
 
 --- brief 1 — Draft the release note for 0.4 (Scribe)
-brief: briefs/3f2a91b8-draft-the-release-note.md
+brief: .aegis/briefs/3f2a91b8-draft-the-release-note.md
 status: done
 summary:
   Wrote the note from the changelog; 9 user-visible changes.
 artefacts:
-  - artefacts/release-0.4.md
+  - .aegis/artefacts/release-0.4.md
 evidence: —
 open_questions: —
 next_owner: —
@@ -843,7 +968,7 @@ until you grant it one.
 1. *Settings → Identities*: make a **Chief** with `fs_read`, `fs_write` and `handoff_delegate`,
    and grant it the `cos.loop` skill. Make one or two narrow specialists — a **Scribe** with
    `fs_read` and `fs_write`, say.
-2. *Set up shared files* in the sidebar, so there is a board to read and a `briefs/` to file in.
+2. *Set up shared files* in the sidebar, so there is a board to read and a `.aegis/briefs/` to file in.
 3. Open a session as the Chief and ask for something that needs both of them.
 
 With the scripted provider, `/delegate Scribe` hands two briefs to `Scribe` and shows the whole
@@ -984,7 +1109,7 @@ which is the only thing a board is read to find out.
 
 Each column is filled from **two places**, and every line says which it came from.
 
-**Your `status/STATUS.md`** is the half no runtime can know: a client who has not answered, a
+**Your `.aegis/status/STATUS.md`** is the half no runtime can know: a client who has not answered, a
 decision waiting on a meeting, work that is late. Aegis reads it structurally — the three
 headings, and the lines under each — rather than showing you the file. Bullets and plain lines
 both count; an indented example block does not, and neither does a whole line of italics, which
@@ -1205,10 +1330,12 @@ src-tauri/
                runner that turns a brief into an ordinary session and turn
     schedule/  routines: which one may exist, when it is due, what its run is told —
                and the tick that fires one into an ordinary session nobody is watching
-    board/     the structured read of status/STATUS.md beside what the runtime can see,
+    board/     the structured read of .aegis/status/STATUS.md beside what the runtime can see,
                and the fold of the audit log into runs — who ran, what it cost, why it failed
     workspace.rs  the shared-file convention inside a project folder: scaffold, and the
                capped digest every request carries
+    world.rs   the other layer in that same folder: what the project *is*, read and never
+               written by a session, and the declared sources it was perceived from
     compact.rs the older half of a transcript, derived into state — no summarizer,
                and nothing deleted
     approval.rs  pending approvals: the channel a turn parks on until you answer
@@ -1276,6 +1403,19 @@ Read this before pointing Aegis at anything you care about.
   delegation is one level deep and its cost is bounded by the number of briefs you saw. Note that
   a specialist's prompt appears in *its* session: the sidebar row says *waiting on you*, and an
   approval nobody answers within five minutes is refused like any other.
+- **A world's constitution is not editable by delegated work, and approving writes does not
+  approve it.** In a folder that holds a `world/`, an `fs_write` under it from a specialist working
+  on a brief is refused with no prompt — you cannot be asked to let a brief rewrite what the
+  project *is*. From a session you are sitting in it prompts at high risk and *does* offer "allow
+  for this session", but as a **scope of its own**: a general workspace-write approval never
+  reaches `world/`, and a world approval never reaches anything else. A scheduled run is offered
+  neither — it cannot be signed for the world when you save the routine, and it is refused if it
+  tries. An `fs_read` of a file `world/sources.yml` declares is refused too, for as long as it
+  still hashes to what was recorded: what it said is in `world/`. Note the limits. Only the first
+  path segment is the constitution, so a repository's own `src/world/` is an ordinary folder.
+  `shell_exec` is not covered — a command that writes `world/` is stopped by the shell prompt you
+  answer, not by this rule. And a source that has *changed* is deliberately readable again, because
+  that is how a new dump gets perceived. See [The world](#the-world).
 - **There is no sandbox.** Approved tools run as you, with your privileges and environment. The
   real boundary is that you read the exact path, program, arguments and working directory before
   approving. Treat every approval as if you were typing the command yourself.
@@ -1314,10 +1454,10 @@ Read this before pointing Aegis at anything you care about.
   nothing else. Your transcript stays whole on disk, the audit log still answers for every call,
   and the state the fold produces is derived from the record rather than summarized by a model —
   so it cannot invent a file that was never written.
-- **The shared files are sent to your provider.** Once `status/` and `decisions/` exist, every
+- **The shared files are sent to your provider.** Once `.aegis/status/` and `.aegis/decisions/` exist, every
   request carries what is in them — that is the point of them, and it is worth knowing before you
   put something in `STATUS.md` you would not paste into a chat. Only those two files are read,
-  capped at 2 KB each; `briefs/` and `artefacts/` contribute file *names* and never content. A
+  capped at 2 KB each; `.aegis/briefs/` and `.aegis/artefacts/` contribute file *names* and never content. A
   workspace with none of those directories sends nothing extra, and nothing creates them for you.
 - **Keys stay out of the WebView.** The API key lives in the OS credential store (or in
   `AEGIS_API_KEY`) and is read only by the Rust runtime, which attaches it to the request as a

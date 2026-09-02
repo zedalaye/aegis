@@ -295,7 +295,7 @@ pub struct Plan {
 /// Judges a brief, and renders the one the owner will be handed.
 ///
 /// `Ok` carries the brief as text in `COS.md`'s shape: that is what is written
-/// into `briefs/` and what opens the owner's session, so a delegation always
+/// into `.aegis/briefs/` and what opens the owner's session, so a delegation always
 /// reads the same way however it was typed. `Err` is written for the model that
 /// produced it, because that is who has to produce the next one.
 pub fn check_brief(brief: &Brief) -> Result<String, String> {
@@ -391,7 +391,7 @@ fn brief_entries(field: &str, values: &[String]) -> Result<(), String> {
 /// The brief, in the shape `COS.md` writes it.
 ///
 /// Rendered rather than serialized as JSON, for the reason a report is: this
-/// text opens the owner's session and is written into `briefs/` for a person to
+/// text opens the owner's session and is written into `.aegis/briefs/` for a person to
 /// read, and the `COS.md` block is the form both of them already know.
 fn render_brief(brief: &Brief, goal: &str, done: &str) -> String {
     let mut out = String::new();
@@ -707,9 +707,9 @@ mod tests {
             goal: "Triage what came in this morning".to_owned(),
             owner: "Triager".to_owned(),
             priority: Priority::Normal,
-            inputs: vec!["briefs/from-a-client.md".to_owned()],
+            inputs: vec![".aegis/briefs/from-a-client.md".to_owned()],
             constraints: vec!["do not reply to anyone".to_owned()],
-            definition_of_done: "status/STATUS.md names the item and its owner".to_owned(),
+            definition_of_done: ".aegis/status/STATUS.md names the item and its owner".to_owned(),
             approval_needed: "the write to STATUS.md".to_owned(),
             return_format: ReturnFormat::Status,
         }
@@ -731,7 +731,10 @@ mod tests {
         ] {
             assert!(rendered.contains(key), "missing `{key}` in\n{rendered}");
         }
-        assert!(rendered.contains("briefs/from-a-client.md"), "{rendered}");
+        assert!(
+            rendered.contains(".aegis/briefs/from-a-client.md"),
+            "{rendered}"
+        );
         assert!(rendered.contains("return_format: status"), "{rendered}");
     }
 
@@ -861,7 +864,7 @@ mod tests {
             status,
             summary: "Triaged one brief.".to_owned(),
             artefacts: Vec::new(),
-            evidence: vec!["read briefs/intake.md".to_owned()],
+            evidence: vec!["read .aegis/briefs/intake.md".to_owned()],
             open_questions: Vec::new(),
             next_owner: String::new(),
         }
@@ -892,12 +895,12 @@ mod tests {
 
         let mut done = report(Status::Done);
         done.artefacts = vec![Artefact {
-            shown: "artefacts/triage.md".to_owned(),
-            path: dir.path().join("artefacts/triage.md"),
+            shown: ".aegis/artefacts/triage.md".to_owned(),
+            path: dir.path().join(".aegis/artefacts/triage.md"),
         }];
 
         let err = check(&done).expect_err("refused");
-        assert!(err.contains("artefacts/triage.md"), "{err}");
+        assert!(err.contains(".aegis/artefacts/triage.md"), "{err}");
         assert!(err.contains("blocked"), "it says what to do instead: {err}");
     }
 
@@ -910,12 +913,15 @@ mod tests {
         let mut done = report(Status::Done);
         done.evidence.clear();
         done.artefacts = vec![Artefact {
-            shown: "artefacts/triage.md".to_owned(),
+            shown: ".aegis/artefacts/triage.md".to_owned(),
             path,
         }];
 
         let rendered = check(&done).expect("accepted");
-        assert!(rendered.contains("artefacts/triage.md"), "{rendered}");
+        assert!(
+            rendered.contains(".aegis/artefacts/triage.md"),
+            "{rendered}"
+        );
     }
 
     #[test]

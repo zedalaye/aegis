@@ -46,8 +46,25 @@ pub enum Grant {
     /// is asked about every time, so this grant covers exactly the row it was
     /// offered on: "this file is big".
     FsReadLarge,
-    /// Write anywhere in the workspace subtree, except `.git/`.
+    /// Write anywhere in the workspace subtree, except `.git/` and `world/`.
     FsWrite,
+    /// Amend the workspace's constitution for the rest of the session
+    /// (PLAN 7.2).
+    ///
+    /// Its own variant rather than a wider [`Grant::FsWrite`], and the split is
+    /// the point of it existing. Somebody who allowed writes so a session could
+    /// file artefacts has not thereby agreed to let it rewrite what the project
+    /// *is*; somebody helping author an essence has not thereby opened every
+    /// other file in the repository. Neither grant matches the other's row.
+    ///
+    /// It exists at all because founding a world is six files and amending one
+    /// is rarely fewer — and six identical dialogs in a row is how a person
+    /// learns to click through the one that mattered. What it never covers is a
+    /// delegated run, which is refused before any grant is consulted, or an
+    /// unattended one, which is offered nothing to sign: `COS.md` is that
+    /// amending the world is a *human* decision, and a routine has no human in
+    /// it.
+    WorldAmend,
     /// Run one program in the workspace.
     Shell {
         /// The normalized program key — see [`Grant::shell`].
@@ -115,7 +132,10 @@ impl Grant {
     pub fn tool(&self) -> &str {
         match self {
             Self::FsReadLarge => "fs_read",
-            Self::FsWrite => "fs_write",
+            // One tool, two scopes that never overlap: the matrix names which
+            // of them a given path's row offers, and a held grant only ever
+            // matches the row it was created on.
+            Self::FsWrite | Self::WorldAmend => "fs_write",
             Self::Shell { .. } => "shell_exec",
             Self::ScreenCapture => "screen_capture",
             Self::MemoryWrite => "memory_write",
@@ -137,8 +157,13 @@ impl Grant {
                     .to_owned()
             }
             Self::FsWrite => {
-                "write any file inside this workspace, except under .git/, for the rest of this \
-                 session"
+                "write any file inside this workspace, except under .git/ and world/, for the \
+                 rest of this session"
+                    .to_owned()
+            }
+            Self::WorldAmend => {
+                "amend world/, this workspace's constitution, for the rest of this session — \
+                 every other file is still asked about on its own"
                     .to_owned()
             }
             Self::Shell { program } => format!(

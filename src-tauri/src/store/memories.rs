@@ -669,7 +669,7 @@ impl Valid {
                     field: "source",
                     reason: format!(
                         "a source is a pointer, not a quotation — keep it under \
-                         {SOURCE_MAX_CHARS} characters, like `decisions/DECISIONS.md` or a \
+                         {SOURCE_MAX_CHARS} characters, like `.aegis/decisions/DECISIONS.md` or a \
                          ticket id"
                     ),
                 })
@@ -769,7 +769,7 @@ mod tests {
                 "a",
                 None,
                 &MemoryDraft {
-                    source: Some("briefs/client.md".to_owned()),
+                    source: Some(".aegis/briefs/client.md".to_owned()),
                     ..draft(MemoryKind::Preference, "  Answers In French  ")
                 },
             )
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(store.count_for("a"), 1);
         assert_eq!(
             again.source.as_deref(),
-            Some("briefs/client.md"),
+            Some(".aegis/briefs/client.md"),
             "a repeat may add a citation"
         );
 
@@ -791,7 +791,7 @@ mod tests {
                 &draft(MemoryKind::Preference, "answers in french"),
             )
             .expect("recorded a third time");
-        assert_eq!(third.source.as_deref(), Some("briefs/client.md"));
+        assert_eq!(third.source.as_deref(), Some(".aegis/briefs/client.md"));
     }
 
     #[test]
@@ -871,7 +871,7 @@ mod tests {
                 "a",
                 None,
                 &MemoryDraft {
-                    source: Some("decisions/DECISIONS.md".to_owned()),
+                    source: Some(".aegis/decisions/DECISIONS.md".to_owned()),
                     ..draft(MemoryKind::Convention, "releases are tagged first")
                 },
             )

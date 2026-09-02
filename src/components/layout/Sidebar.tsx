@@ -9,12 +9,15 @@
  *
  * The shared-file panel sits between them, on the project's side of that line:
  * `briefs/`, `status/`, `artefacts/` and `decisions/` belong to the folder, not
- * to any one conversation (PLAN 7.3, Phase 11).
+ * to any one conversation (PLAN 7.3, Phase 11). The world is below it, for the
+ * same reason and one stronger: it is the slowest-changing thing here.
+ *
  */
 
 import { useProjects } from "../../state/projects";
 import ProjectPicker from "../projects/ProjectPicker";
 import SharedFiles from "../projects/SharedFiles";
+import WorldPanel from "../projects/WorldPanel";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
 import SessionList from "../sessions/SessionList";
 
@@ -32,54 +35,56 @@ export default function Sidebar() {
     <nav className="sidebar" aria-label="Projects and sessions">
       <h2 className="sidebar__heading">Projects</h2>
 
-      {status === "loading" && projects.length === 0 ? (
-        <p className="sidebar__empty">Loading…</p>
-      ) : null}
+        {status === "loading" && projects.length === 0 ? (
+          <p className="sidebar__empty">Loading…</p>
+        ) : null}
 
-      {status !== "loading" && projects.length === 0 ? (
-        <p className="sidebar__empty">
-          No projects yet. Add a workspace folder to start.
-        </p>
-      ) : null}
+        {status !== "loading" && projects.length === 0 ? (
+          <p className="sidebar__empty">
+            No projects yet. Add a workspace folder to start.
+          </p>
+        ) : null}
 
-      <ul className="sidebar__list">
-        {projects.map((project) => {
-          const isOpen = project.id === openId;
-          return (
-            <li key={project.id} className="sidebar__item">
-              <button
-                type="button"
-                className={`project${isOpen ? " project--open" : ""}`}
-                aria-current={isOpen ? "true" : undefined}
-                onClick={() => void open(project.id)}
-                disabled={busy}
-              >
-                <span className="project__name">{project.name}</span>
-                <WorkspaceBadge
-                  path={project.workspace_path}
-                  exists={project.workspace_exists}
-                  maxLength={28}
-                />
-              </button>
-              <button
-                type="button"
-                className="project__remove"
-                // Removing a project only forgets it here; saying so on the
-                // control itself is cheaper than a confirmation the user
-                // would learn to dismiss without reading.
-                title={`Forget ${project.name}. The folder on disk is not touched.`}
-                aria-label={`Forget project ${project.name}`}
-                onClick={() => void remove(project.id)}
-                disabled={busy}
-              >
-                ×
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+        <ul className="sidebar__list">
+          {projects.map((project) => {
+            const isOpen = project.id === openId;
+            return (
+              <li key={project.id} className="sidebar__item">
+                <button
+                  type="button"
+                  className={`project${isOpen ? " project--open" : ""}`}
+                  aria-current={isOpen ? "true" : undefined}
+                  onClick={() => void open(project.id)}
+                  disabled={busy}
+                >
+                  <span className="project__name">{project.name}</span>
+                  <WorkspaceBadge
+                    path={project.workspace_path}
+                    exists={project.workspace_exists}
+                    maxLength={28}
+                  />
+                </button>
+                <button
+                  type="button"
+                  className="project__remove"
+                  // Removing a project only forgets it here; saying so on the
+                  // control itself is cheaper than a confirmation the user
+                  // would learn to dismiss without reading.
+                  title={`Forget ${project.name}. The folder on disk is not touched.`}
+                  aria-label={`Forget project ${project.name}`}
+                  onClick={() => void remove(project.id)}
+                  disabled={busy}
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
+        </ul>
 
       <SharedFiles />
+
+      <WorldPanel />
 
       <SessionList />
 

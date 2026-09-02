@@ -328,7 +328,7 @@ pub struct Delegated {
     pub from_session_id: String,
     /// Where the brief was filed, relative to the workspace root.
     ///
-    /// `None` when the workspace has no `briefs/` — the brief then lives only
+    /// `None` when the workspace has no `.aegis/briefs/` — the brief then lives only
     /// in the first message of this transcript, which is still a record of it.
     pub brief: Option<String>,
 }

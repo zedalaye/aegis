@@ -34,7 +34,9 @@ function scopeLabel(grant: Grant): string {
     case "fs_read_large":
       return "Read any file over 1 MB inside this workspace";
     case "fs_write":
-      return "Write any file inside this workspace, except under .git/";
+      return "Write any file inside this workspace, except under .git/ and world/";
+    case "world_amend":
+      return "Amend world/, this workspace’s constitution";
     case "shell":
       return `Run \`${grant.program}\` in this workspace, with any arguments`;
     case "screen_capture":

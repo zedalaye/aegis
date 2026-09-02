@@ -54,11 +54,11 @@ tools: fs_read, fs_write
 On a schedule, to record what changed since the last look.
 
 ## Inputs required and tools it will call
-`briefs/` in this workspace. Calls `fs_read` and `fs_write`.
+`.aegis/briefs/` in this workspace. Calls `fs_read` and `fs_write`.
 
 ## Steps
 1. Read what is in the workspace.
-2. Write a line into `status/`.
+2. Write a line into `.aegis/status/`.
 
 ## How to validate
 The status file exists and names today.
@@ -139,7 +139,10 @@ impl App {
         skills::seed(&library);
         aegis_lib::workspace::scaffold(&workspace).expect("the convention is laid down");
 
-        let skill_dir = workspace.join(skills::LIBRARY_DIR).join(WATCH_SKILL);
+        let skill_dir = workspace
+            .join(aegis_lib::workspace::CABINET_DIR)
+            .join(skills::LIBRARY_DIR)
+            .join(WATCH_SKILL);
         std::fs::create_dir_all(&skill_dir).expect("skill dir");
         std::fs::write(skill_dir.join(skills::SKILL_FILE), WATCH_RUNBOOK).expect("runbook");
 

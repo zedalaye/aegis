@@ -29,7 +29,7 @@
 //!
 //! ## Three things worth reading the code for
 //!
-//! **The brief is a file first.** [`Delegating::file`] writes it into `briefs/`
+//! **The brief is a file first.** [`Delegating::file`] writes it into `.aegis/briefs/`
 //! when the workspace has one, and the run then starts from a path rather than
 //! from a paragraph (`COS.md`: inputs are paths, never paste). A workspace with
 //! no convention still works — the brief travels as the run's first message —
@@ -68,6 +68,7 @@ use crate::store::{
     Agent, AgentStore, Delegated, MemoryStore, Message, SessionState, SessionStore,
 };
 use crate::workspace;
+use crate::world;
 
 /// Most characters of a goal that become a session title.
 const TITLE_MAX_CHARS: usize = 48;
@@ -149,7 +150,7 @@ impl Delegating {
         }
     }
 
-    /// Writes the brief into `briefs/`, when the workspace has one.
+    /// Writes the brief into `.aegis/briefs/`, when the workspace has one.
     ///
     /// Directly rather than through `fs_write`, and that is worth being clear
     /// about: this is the *runtime* recording a delegation the user has already
@@ -209,6 +210,21 @@ impl Delegating {
                 brief.owner.trim()
             )));
         };
+
+        // Before the session is opened, because this is a fact about the
+        // *world* and not about the run: if the artefacts this world was
+        // perceived from have moved, no brief goes out on top of them except
+        // the one that is about the delta (PLAN 7.2, *What is still hashed*).
+        // Fatal rather than retryable — a second attempt would hash the same
+        // files and find the same answer — so what the Chief of Staff gets back
+        // is the attention item rather than two wasted turns.
+        if let Some(reason) = self
+            .workspace
+            .as_deref()
+            .and_then(|root| world::blocking(root, &brief.inputs))
+        {
+            return Err(bus::Failure::fatal(reason));
+        }
 
         let session_id = self.session_for(host, slot, brief, &agent.id, filed)?;
         let turn_id = uuid::Uuid::new_v4().to_string();
@@ -514,9 +530,9 @@ mod tests {
             goal: "Draft the release note for 0.4".to_owned(),
             owner: "Scribe".to_owned(),
             priority: Priority::Normal,
-            inputs: vec!["artefacts/changelog.md".to_owned()],
+            inputs: vec![".aegis/artefacts/changelog.md".to_owned()],
             constraints: vec!["no marketing language".to_owned()],
-            definition_of_done: "artefacts/release-0.4.md exists".to_owned(),
+            definition_of_done: ".aegis/artefacts/release-0.4.md exists".to_owned(),
             approval_needed: "the write".to_owned(),
             return_format: ReturnFormat::Artefact,
         }
@@ -543,11 +559,11 @@ mod tests {
     /// off it: this is delegated, and only `handoff_return` reports back.
     #[test]
     fn the_opening_message_carries_the_brief_and_says_how_to_answer() {
-        let message = opening(&brief(), Some("briefs/ab12-draft.md"), 1);
+        let message = opening(&brief(), Some(".aegis/briefs/ab12-draft.md"), 1);
 
         assert!(message.contains("goal: Draft the release note for 0.4"));
-        assert!(message.contains("artefacts/changelog.md"));
-        assert!(message.contains("briefs/ab12-draft.md"));
+        assert!(message.contains(".aegis/artefacts/changelog.md"));
+        assert!(message.contains(".aegis/briefs/ab12-draft.md"));
         assert!(message.contains("handoff_return"));
         assert!(message.contains("grants you anything"), "{message}");
     }

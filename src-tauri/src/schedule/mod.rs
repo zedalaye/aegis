@@ -61,6 +61,7 @@ use std::path::Path;
 use chrono::{DateTime, Local, SecondsFormat, TimeZone as _, Utc};
 
 use crate::error::{AppError, AppResult};
+use crate::policy::Grant;
 use crate::skills::Skill;
 use crate::store::routines::{Routine, RoutineDraft, Schedule, EVERY_MIN_MINUTES};
 use crate::store::Agent;
@@ -203,6 +204,21 @@ pub fn check(
     }
 
     for grant in &draft.grants {
+        // The one standing approval nothing can carry (PLAN 7.2; `COS.md`
+        // *Work*). Amending the world is a human decision, and a routine is
+        // the one run with no human in it — so it is refused here, at the
+        // door, as well as by the matrix at the call. The form does not offer
+        // it; this is what answers a hand-edited `routines.json`.
+        if matches!(grant, Grant::WorldAmend) {
+            return Err(AppError::Routine {
+                field: "grants",
+                reason: "amending `world/` is a human decision, and nobody is watching a \
+                         scheduled run. A routine can read the world; changing it is yours, in \
+                         a session"
+                    .to_owned(),
+            });
+        }
+
         let tool = grant.tool();
         if !skill.tools.iter().any(|declared| declared == tool) {
             return Err(AppError::Routine {
@@ -625,6 +641,48 @@ mod tests {
             outcome: RunOutcome::Done,
             detail: String::new(),
         });
+    }
+
+    /// The one standing approval nothing can be signed for (PLAN 7.2).
+    ///
+    /// Refused at the door as well as at the call: the form does not offer it,
+    /// the matrix offers no grant to an unattended run, and this is what
+    /// answers a hand-edited `routines.json`. All three, because a clock that
+    /// could rewrite what the project *is* at four in the morning is the one
+    /// failure the world exists to make impossible.
+    #[test]
+    fn a_routine_cannot_be_signed_for_amending_the_world() {
+        let mut agent = Agent::builtin();
+        agent.id = "a1".to_owned();
+        agent.skills = vec!["watch.digest".to_owned()];
+
+        let skill = Skill {
+            name: "watch.digest".to_owned(),
+            scope: crate::skills::SkillScope::Library,
+            version: "1".to_owned(),
+            summary: "looks".to_owned(),
+            tools: vec![crate::policy::tool::FS_WRITE.to_owned()],
+            path: "watch.digest/SKILL.md".to_owned(),
+            shadows: false,
+            problem: None,
+        };
+        let draft = |grants: Vec<Grant>| RoutineDraft {
+            name: "Morning watch".to_owned(),
+            project_id: "p1".to_owned(),
+            agent_id: "a1".to_owned(),
+            skill: "watch.digest".to_owned(),
+            schedule: Schedule::Every { minutes: 60 },
+            grants,
+            runs_per_day: 4,
+        };
+
+        // The ordinary write grant is fine: the runbook declares `fs_write` and
+        // the identity holds it.
+        check(&draft(vec![Grant::FsWrite]), &agent, Some(&skill), true).expect("signable");
+
+        let refused = check(&draft(vec![Grant::WorldAmend]), &agent, Some(&skill), true)
+            .expect_err("the world is not");
+        assert!(refused.to_string().contains("human decision"), "{refused}");
     }
 
     #[test]
