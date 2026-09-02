@@ -20,6 +20,7 @@
  * something to look at every day.
  */
 
+import Section from "../layout/Section";
 import { useProjects } from "../../state/projects";
 import { useSkills } from "../../state/skills";
 import { useWorkspace } from "../../state/workspace";
@@ -76,9 +77,16 @@ export default function SharedFiles() {
   }
 
   return (
-    <section className="shared" aria-label="Shared workspace files">
-      <h2 className="sidebar__heading">Shared files</h2>
-
+    <Section
+      id="shared"
+      title="Shared files"
+      className="shared"
+      badge={
+        layout.complete ? null : (
+          <span className="rail__count rail__count--attention">set up</span>
+        )
+      }
+    >
       {layout.complete ? (
         <p className="shared__note">
           Briefs, status, artefacts, decisions and this project's own runbooks
@@ -146,6 +154,6 @@ export default function SharedFiles() {
           will move {layout.strays.length === 1 ? "it" : "them"} for you.
         </p>
       ) : null}
-    </section>
+    </Section>
   );
 }

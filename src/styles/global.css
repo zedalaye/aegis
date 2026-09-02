@@ -373,12 +373,86 @@ body {
  * A panel about files nobody has to touch should not compete with the session
  * list underneath it.
  */
-.shared {
+/* --- Rail sections -------------------------------------------------------- */
+
+/*
+ * Each of the rail's four stacks is a disclosure. The section owns the rule
+ * above it and the row that toggles it; the body owns the column the contents
+ * sit in, so collapsing one leaves the heading exactly where it was.
+ */
+.rail__section {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
   padding-top: 0.5rem;
   border-top: 1px solid var(--border);
+}
+
+/* The whole heading row is the target: a caret alone is too small to hit in a
+   rail this narrow, and the heading is the thing people aim at anyway. */
+.rail__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.1rem 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail__toggle:hover .sidebar__heading {
+  color: var(--text);
+}
+
+.rail__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.rail__caret {
+  flex-shrink: 0;
+  width: 0.75em;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* What a collapsed section can still say. Pushed to the end of the row so the
+   heading stays where the eye already is. */
+.rail__count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.rail__count--attention {
+  color: var(--warning);
+}
+
+.rail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 0;
+}
+
+/* The sessions list is the one that grows: it takes the leftover height of the
+   rail, so its body has to be allowed to as well. Collapsed it claims nothing —
+   a folded section holding the rail's spare height, with a heading alone in it,
+   is the one way this could look broken. */
+.sessions:not(.rail__section--collapsed) {
+  flex: 1;
+  min-height: 0;
+}
+
+.sessions > .rail__body {
+  flex: 1;
+  gap: 0.4rem;
 }
 
 .shared__list {
@@ -560,16 +634,6 @@ body {
 
 /* --- Sessions ------------------------------------------------------------- */
 
-
-.sessions {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--border);
-}
 
 .sessions__list {
   flex: 1;

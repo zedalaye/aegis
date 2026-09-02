@@ -27,6 +27,7 @@
  */
 
 import type { SourceState, WorldSource } from "../../ipc/bindings";
+import Section from "../layout/Section";
 import { useProjects } from "../../state/projects";
 import { useWorkspace } from "../../state/workspace";
 
@@ -96,22 +97,28 @@ export default function WorldPanel() {
   // exists not to do.
   if (!world.present) {
     return (
-      <section className="shared" aria-label="World">
-        <h2 className="sidebar__heading">World</h2>
+      <Section id="world" title="World" className="shared">
         <p className="shared__note">
           No constitution in this folder. A project that has an essence worth
           protecting keeps it in <code>world/</code>, starting with{" "}
           <code>essence.md</code>. Write that file — or ask a session to, with{" "}
           <code>world.draft</code> — and it appears here.
         </p>
-      </section>
+      </Section>
     );
   }
 
   return (
-    <section className="shared" aria-label="World">
-      <h2 className="sidebar__heading">World</h2>
-
+    <Section
+      id="world"
+      title="World"
+      className="shared"
+      badge={
+        world.drifted ? (
+          <span className="rail__count rail__count--attention">drifted</span>
+        ) : null
+      }
+    >
       <ul className="shared__list">
         {world.files.map((file) => (
           <Leaf
@@ -152,6 +159,6 @@ export default function WorldPanel() {
           {world.problem}
         </p>
       )}
-    </section>
+    </Section>
   );
 }

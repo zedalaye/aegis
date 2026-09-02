@@ -12,9 +12,14 @@
  * to any one conversation (PLAN 7.3, Phase 11). The world is below it, for the
  * same reason and one stronger: it is the slowest-changing thing here.
  *
+ * All four are {@link Section}s, so any of them can be folded away and stays
+ * that way. Four stacks is more than a laptop screen holds at once, and which
+ * one matters is a question about what somebody is doing this week — the world
+ * while founding one, the sessions the rest of the time.
  */
 
 import { useProjects } from "../../state/projects";
+import Section from "./Section";
 import ProjectPicker from "../projects/ProjectPicker";
 import SharedFiles from "../projects/SharedFiles";
 import WorldPanel from "../projects/WorldPanel";
@@ -33,8 +38,15 @@ export default function Sidebar() {
 
   return (
     <nav className="sidebar" aria-label="Projects and sessions">
-      <h2 className="sidebar__heading">Projects</h2>
-
+      <Section
+        id="projects"
+        title="Projects"
+        badge={
+          projects.length === 0 ? null : (
+            <span className="rail__count">{projects.length}</span>
+          )
+        }
+      >
         {status === "loading" && projects.length === 0 ? (
           <p className="sidebar__empty">Loading…</p>
         ) : null}
@@ -81,6 +93,7 @@ export default function Sidebar() {
             );
           })}
         </ul>
+      </Section>
 
       <SharedFiles />
 

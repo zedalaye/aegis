@@ -18,6 +18,8 @@ import { DEFAULT_AGENT_ID, useAgents } from "../../state/agents";
 import { useProjects } from "../../state/projects";
 import { useSessions } from "../../state/sessions";
 
+import Section from "../layout/Section";
+
 import SessionItem from "./SessionItem";
 
 /**
@@ -86,8 +88,16 @@ export default function SessionList() {
   }
 
   return (
-    <section className="sessions" aria-label="Sessions">
-      <h2 className="sidebar__heading">Sessions</h2>
+    <Section
+      id="sessions"
+      title="Sessions"
+      className="sessions"
+      badge={
+        sessions.length === 0 ? null : (
+          <span className="rail__count">{sessions.length}</span>
+        )
+      }
+    >
 
       {sessions.length === 0 ? (
         <p className="sidebar__empty">No sessions in this project yet.</p>
@@ -117,6 +127,6 @@ export default function SessionList() {
         </button>
         <IdentityPicker value={chosen} onChange={setAsAgent} />
       </div>
-    </section>
+    </Section>
   );
 }
