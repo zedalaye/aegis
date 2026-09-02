@@ -11,7 +11,9 @@
  * Scrolling follows the stream, but only when the reader is already at the
  * bottom. Someone who has scrolled up to re-read something is reading it; a
  * pane that yanks itself back down every 50 ms while a reply streams is a pane
- * that cannot be read at all.
+ * that cannot be read at all. "Already at the bottom" is remembered from the
+ * reader's own scrolling rather than measured after a render — see the effects
+ * below, where the difference is the whole bug this once had.
  *
  * A compacted session draws a fold marker in place, after the last message the
  * model no longer carries (PLAN 7.3, Phase 14). Everything above it is still
@@ -20,7 +22,7 @@
  * of the conversation to save tokens.
  */
 
-import { Fragment, useEffect, useLayoutEffect, useRef } from "react";
+import { Fragment, useCallback, useLayoutEffect, useRef } from "react";
 
 import type { Message } from "../../ipc/bindings";
 import { isVisible, useSessions } from "../../state/sessions";
@@ -140,23 +142,62 @@ export default function MessageList() {
       ? null
       : foldAfter(detail.messages, compaction.through_message_id);
 
-  // Measured before the browser paints, so the decision is about where the
-  // reader was, not where the new content has already pushed them.
-  useLayoutEffect(() => {
+  // Whether to follow the bottom is a fact about the *reader*, so the only
+  // thing that changes it is the reader scrolling. It is deliberately not
+  // re-derived from the geometry after a render: by the time any effect runs,
+  // React has already put the new bubble in the DOM, so the distance to the
+  // bottom is the height of the thing that was just added rather than where
+  // anybody was standing. Measuring there reads every arriving message as "the
+  // reader has scrolled up" — and once it does, nothing but a manual scroll
+  // ever sets it back.
+  //
+  // A programmatic scroll to the bottom fires this too, and lands on `true`,
+  // which is what keeps the two halves agreeing.
+  const measure = useCallback(() => {
     const pane = paneRef.current;
     if (pane === null) {
       return;
     }
     const distance = pane.scrollHeight - pane.scrollTop - pane.clientHeight;
     stuckRef.current = distance <= STICK_THRESHOLD;
-  });
+  }, []);
 
-  useEffect(() => {
+  // A callback ref rather than a mount effect, because the pane is not in the
+  // DOM on the first render — no session is open yet — and an effect keyed on
+  // `[]` would bind to nothing and never try again, leaving the listener
+  // unattached for the life of the window.
+  const attachPane = useCallback(
+    (node: HTMLDivElement | null) => {
+      paneRef.current?.removeEventListener("scroll", measure);
+      paneRef.current = node;
+      node?.addEventListener("scroll", measure, { passive: true });
+    },
+    [measure],
+  );
+
+  // A different transcript starts at its end, whatever the reader was doing in
+  // the last one. Scrolling up in one session is not a standing instruction
+  // about the next.
+  //
+  // A layout effect, and declared *above* the one that scrolls, because that is
+  // what orders the two: layout effects run in declaration order within a
+  // commit, and a passive one here would reset the flag a frame after the pane
+  // had already decided not to follow.
+  useLayoutEffect(() => {
+    stuckRef.current = true;
+  }, [detail?.session.id]);
+
+  // After every render rather than on a list of things that might have grown.
+  // A message arriving is the obvious case, but a bubble also grows in place —
+  // a tool call resolving, a diff expanding, the fold marker appearing — and
+  // none of those changes `messages.length`. The write is already conditional,
+  // so a render that changed nothing costs one comparison.
+  useLayoutEffect(() => {
     const pane = paneRef.current;
     if (pane !== null && stuckRef.current) {
       pane.scrollTop = pane.scrollHeight;
     }
-  }, [messages.length, buffer, detail?.session.id]);
+  });
 
   if (detail === null) {
     return null;
@@ -165,7 +206,7 @@ export default function MessageList() {
   const empty = messages.length === 0 && buffer === "";
 
   return (
-    <div className="messages" ref={paneRef} aria-live="polite">
+    <div className="messages" ref={attachPane} aria-live="polite">
       {empty ? <EmptyTranscript /> : null}
 
       {/* Nothing drawn is above the fold — every folded message was a tool
