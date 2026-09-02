@@ -653,9 +653,9 @@ struct Frame {
 /// splits a word.
 ///
 /// A byte that cannot be UTF-8 at all is not damage to be papered over with a
-/// replacement character: on Windows it is the ordinary case, because console
-/// programs write the system OEM code page. So the first such byte switches
-/// the decoder to [`legacy_text`] for the rest of the stream. That is a
+/// replacement character: on Windows it is the ordinary case, because a program
+/// writing to a pipe encodes in the locale's code page. So the first such byte
+/// switches the decoder to [`legacy_text`] for the rest of the stream. That is a
 /// per-stream decision rather than a per-chunk one because a program does not
 /// change encoding halfway through, and because guessing again on every chunk
 /// would make the answer depend on where the pipe happened to break.
@@ -839,16 +839,37 @@ fn skip_sequence(chars: &mut std::str::Chars<'_>) -> Result<(), String> {
     }
 }
 
-/// Decodes bytes that are not UTF-8, in whatever this platform's console
-/// programs actually use.
+/// Decodes bytes that are not UTF-8, in whatever this platform's programs
+/// actually write **to a pipe**.
 ///
-/// On Windows that is the system OEM code page — 850 on a French install, 437
-/// on a US one — which is what `cmd` and every built-in tool write, redirected
-/// or not. `GetOEMCP` rather than `GetConsoleOutputCP` because a windowed
-/// application has no console for the latter to report on.
+/// On Windows that is the system **ANSI** code page — 1252 on a Western
+/// install — and the emphasis is the whole of this function's history. Windows
+/// has two legacy code pages, and which one a program writes depends on what it
+/// is writing *to*: the OEM page (850 here, 437 on a US box) is the console's,
+/// and the ANSI page is the locale's. A program with no console attached takes
+/// the second. `shell_exec` pipes both streams and never gives a child a
+/// console, so that is always the case here.
+///
+/// This read `GetOEMCP` first, on the grounds that `cmd`'s built-ins write the
+/// OEM page redirected or not — which is true, and beside the point: this tool
+/// spawns programs directly with no shell, so a built-in is only reachable
+/// through an explicit `cmd /c`. What it actually runs is CRT and interpreter
+/// programs, and those pick the locale's page. Python is the clearest case: for
+/// a non-console stdout it encodes with `locale.getpreferredencoding()`, which
+/// on Windows is the ANSI page.
+///
+/// The symptom that found it, and the one to recognise if this is ever wrong
+/// again: accented letters arriving as *other* accented letters, consistently —
+/// `é`→`Ú`, `û`→`¹`, `è`→`Þ`. Those are exactly the cp1252 bytes `0xE9`, `0xFB`
+/// and `0xE8` read as cp850. Not replacement characters, which is why it reads
+/// as a broken font or a broken PDF rather than as a decoding bug, and why the
+/// model that hit it spent two rounds blaming its extraction library.
+///
+/// `GetACP` rather than `GetConsoleOutputCP` for the reason the old comment
+/// gave about `GetOEMCP`: a windowed application has no console to report one.
 #[cfg(windows)]
 fn legacy_text(bytes: &[u8]) -> String {
-    use windows_sys::Win32::Globalization::{GetOEMCP, MultiByteToWideChar};
+    use windows_sys::Win32::Globalization::{GetACP, MultiByteToWideChar};
 
     /// Falls back to reading the bytes as UTF-8, damage and all. Reached only
     /// if the OS declines to decode its own code page.
@@ -868,7 +889,7 @@ fn legacy_text(bytes: &[u8]) -> String {
     // with a zero length, which is how this function is asked to measure; the
     // second passes a buffer of exactly the length the first returned.
     let (codepage, wide_len) = unsafe {
-        let codepage = GetOEMCP();
+        let codepage = GetACP();
         (
             codepage,
             MultiByteToWideChar(codepage, 0, bytes.as_ptr(), len, std::ptr::null_mut(), 0),
@@ -1215,26 +1236,54 @@ mod tests {
         assert!(decoded.starts_with("num"), "{decoded:?}");
     }
 
-    /// The point of the switch, on the platform that needs it: `numéro` out of
-    /// a French `dir` listing comes back as `numéro`, not `num?ro`.
+    /// The point of the switch, on the platform that needs it: a Python script
+    /// printing `numéro` to a pipe comes back as `numéro`, not `num?ro` and not
+    /// `numÚro`.
     ///
-    /// The exact letter is asserted only for the two code pages where `0x82`
-    /// is `é`, which is every Western Windows; elsewhere the OS still decodes,
-    /// and "no replacement character" is what holds.
+    /// `0xE9` is the byte, because that is what the locale's code page uses for
+    /// `é` and the locale's page is what a program with no console writes —
+    /// which is every program this tool runs, since it pipes both streams. The
+    /// exact letter is asserted only where that page is a Western one;
+    /// elsewhere the OS still decodes, and "no replacement character" holds.
     #[cfg(windows)]
     #[test]
-    fn oem_output_comes_back_as_the_letters_it_was() {
+    fn piped_output_comes_back_as_the_letters_it_was() {
         // SAFETY: a parameterless read of a process-wide setting.
-        let codepage = unsafe { windows_sys::Win32::Globalization::GetOEMCP() };
+        let codepage = unsafe { windows_sys::Win32::Globalization::GetACP() };
 
-        let decoded = legacy_text(b"num\x82ro");
+        let decoded = legacy_text(b"num\xe9ro");
         assert!(
             !decoded.contains('\u{fffd}'),
             "the OS decoded its own code page: {decoded:?}"
         );
 
-        if codepage == 437 || codepage == 850 {
+        if codepage == 1252 {
             assert_eq!(decoded, "numéro");
+        }
+    }
+
+    /// The regression, in the shape it was actually found in.
+    ///
+    /// A PDF extractor printing accented text through a pipe came back with
+    /// every accent mapped to a *different* accented letter — `é`→`Ú`, `û`→`¹`,
+    /// `è`→`Þ` — which is cp1252 bytes read as cp850, the console's page rather
+    /// than the locale's. No replacement characters anywhere, which is why it
+    /// reads as a broken font rather than as a decoding bug.
+    #[cfg(windows)]
+    #[test]
+    fn accents_do_not_come_back_as_other_accents() {
+        // SAFETY: a parameterless read of a process-wide setting.
+        let codepage = unsafe { windows_sys::Win32::Globalization::GetACP() };
+        if codepage != 1252 {
+            return;
+        }
+
+        // `é û è €` as a Western program with no console writes them.
+        let decoded = legacy_text(b"\xe9 \xfb \xe8 \x80");
+        assert_eq!(decoded, "é û è €");
+
+        for wrong in ['Ú', '¹', 'Þ'] {
+            assert!(!decoded.contains(wrong), "cp850 crept back in: {decoded:?}");
         }
     }
 
