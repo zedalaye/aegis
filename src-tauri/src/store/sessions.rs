@@ -393,13 +393,25 @@ pub struct Compaction {
 pub struct TurnCost {
     /// The turn this is the cost of.
     pub turn_id: String,
-    /// Tokens in the requests this turn made.
+    /// Tokens in the requests this turn made, cached ones included.
     #[ts(type = "number")]
     pub prompt_tokens: u64,
+    /// Of those, how many were served out of the prompt cache.
+    ///
+    /// Defaulted rather than required: sessions charged before this was
+    /// recorded are read back as turns that cached nothing, which is what a
+    /// turn that predates the field did.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub cache_read_tokens: u64,
+    /// Of those, how many were written to the cache.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub cache_creation_tokens: u64,
     /// Tokens in the replies it got back.
     #[ts(type = "number")]
     pub completion_tokens: u64,
-    /// Whether the provider actually said. `false` means the two counts above
+    /// Whether the provider actually said. `false` means the counts above
     /// are zero because nothing was reported, not because nothing was spent.
     pub reported: bool,
     /// RFC3339, UTC. When the turn finished.
@@ -416,10 +428,24 @@ impl TurnCost {
         Self {
             turn_id: turn_id.to_owned(),
             prompt_tokens,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             completion_tokens,
             reported: true,
             at: now(),
         }
+    }
+
+    /// How much of [`Self::prompt_tokens`] went through the cache.
+    ///
+    /// Separate from `reported` because it is a different kind of silence: a
+    /// provider that reports usage but no cache figures is one that does not
+    /// cache, and zero is the honest answer for it — unlike a provider that
+    /// reported nothing at all, which is what `reported: false` is for.
+    pub const fn with_cache(mut self, read: u64, created: u64) -> Self {
+        self.cache_read_tokens = read;
+        self.cache_creation_tokens = created;
+        self
     }
 
     /// A turn whose provider said nothing about what it spent.
@@ -427,6 +453,8 @@ impl TurnCost {
         Self {
             turn_id: turn_id.to_owned(),
             prompt_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             completion_tokens: 0,
             reported: false,
             at: now(),
@@ -453,9 +481,18 @@ pub struct Cost {
     pub turns: u32,
     /// Of those, how many reported nothing.
     pub unreported: u32,
-    /// Tokens into the model.
+    /// Tokens into the model, cached ones included.
     #[ts(type = "number")]
     pub prompt_tokens: u64,
+    /// Of those, how many were served out of the prompt cache. The share of
+    /// `prompt_tokens` this is, is how well the prompt is holding its shape.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub cache_read_tokens: u64,
+    /// Of those, how many were written to it.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub cache_creation_tokens: u64,
     /// Tokens out of it.
     #[ts(type = "number")]
     pub completion_tokens: u64,
@@ -468,6 +505,12 @@ impl Cost {
             cost.turns = cost.turns.saturating_add(1);
             if turn.reported {
                 cost.prompt_tokens = cost.prompt_tokens.saturating_add(turn.prompt_tokens);
+                cost.cache_read_tokens = cost
+                    .cache_read_tokens
+                    .saturating_add(turn.cache_read_tokens);
+                cost.cache_creation_tokens = cost
+                    .cache_creation_tokens
+                    .saturating_add(turn.cache_creation_tokens);
                 cost.completion_tokens = cost
                     .completion_tokens
                     .saturating_add(turn.completion_tokens);
@@ -488,6 +531,12 @@ impl Cost {
         self.turns = self.turns.saturating_add(other.turns);
         self.unreported = self.unreported.saturating_add(other.unreported);
         self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_add(other.cache_read_tokens);
+        self.cache_creation_tokens = self
+            .cache_creation_tokens
+            .saturating_add(other.cache_creation_tokens);
         self.completion_tokens = self
             .completion_tokens
             .saturating_add(other.completion_tokens);
@@ -1231,6 +1280,58 @@ mod tests {
         let turns = reopened.costs(&created.id).expect("the per-turn rows");
         assert_eq!(turns.len(), 2, "the join a trace makes is on the turn");
         assert_eq!(turns[0].turn_id, "t1", "oldest first");
+    }
+
+    #[test]
+    fn the_cached_share_survives_a_restart_and_sums_with_the_rest() {
+        let fx = Fixture::new();
+        let created = fx
+            .store
+            .create("p1", Some("Read the PDFs"), DEFAULT_AGENT_ID)
+            .expect("create");
+
+        fx.store
+            .charge(
+                &created.id,
+                TurnCost::reported("t1", 20_000, 400).with_cache(0, 19_000),
+            )
+            .expect("charge");
+        // The second turn is what caching is for: a bigger prompt that cost
+        // less, because almost all of it was the first turn's cache entry.
+        fx.store
+            .charge(
+                &created.id,
+                TurnCost::reported("t2", 24_000, 300).with_cache(19_000, 4_500),
+            )
+            .expect("charge");
+
+        let reopened = fx.reopen();
+        let row = reopened
+            .summary(&created.id, SessionState::Idle)
+            .expect("row");
+        assert_eq!(row.cost.prompt_tokens, 44_000);
+        assert_eq!(row.cost.cache_read_tokens, 19_000);
+        assert_eq!(row.cost.cache_creation_tokens, 23_500);
+    }
+
+    #[test]
+    fn a_turn_charged_before_the_cache_was_counted_still_reads_back() {
+        // The two fields are `serde(default)`, so a session file written by an
+        // earlier build is a session whose turns cached nothing — not a store
+        // that refuses to load.
+        let earlier = serde_json::json!({
+            "turn_id": "t1",
+            "prompt_tokens": 900,
+            "completion_tokens": 120,
+            "reported": true,
+            "at": "2026-09-02T10:00:00Z",
+        });
+
+        let cost: TurnCost = serde_json::from_value(earlier).expect("an earlier turn still loads");
+        assert_eq!(cost.prompt_tokens, 900);
+        assert_eq!(cost.cache_read_tokens, 0);
+        assert_eq!(cost.cache_creation_tokens, 0);
+        assert!(cost.reported);
     }
 
     #[test]

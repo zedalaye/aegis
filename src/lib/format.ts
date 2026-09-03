@@ -183,3 +183,24 @@ export function formatCost(cost: Cost): string {
     ? `at least ${total} tokens · ${turns}`
     : `${total} tokens · ${turns}`;
 }
+
+/**
+ * How much of a {@link Cost}'s prompt was served out of the provider's cache,
+ * as a whole percentage.
+ *
+ * The one number that says whether a session is re-sending its transcript at
+ * full price. A turn's prompt is mostly the turns before it, so on a warm
+ * cache this sits high; a zero where a high number is expected means something
+ * ahead of the breakpoints is changing between requests.
+ *
+ * `null` when there is no prompt to have cached at all — no turns, or turns
+ * whose providers reported nothing. Zero is *not* null: a provider that cached
+ * nothing has answered the question, and a provider that was never asked has
+ * not.
+ */
+export function cacheShare(cost: Cost): number | null {
+  if (cost.prompt_tokens === 0) {
+    return null;
+  }
+  return Math.round((cost.cache_read_tokens / cost.prompt_tokens) * 100);
+}

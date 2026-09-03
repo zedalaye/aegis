@@ -762,9 +762,18 @@ turns: number,
  */
 unreported: number, 
 /**
- * Tokens into the model.
+ * Tokens into the model, cached ones included.
  */
 prompt_tokens: number, 
+/**
+ * Of those, how many were served out of the prompt cache. The share of
+ * `prompt_tokens` this is, is how well the prompt is holding its shape.
+ */
+cache_read_tokens: number, 
+/**
+ * Of those, how many were written to it.
+ */
+cache_creation_tokens: number, 
 /**
  * Tokens out of it.
  */
@@ -1977,15 +1986,27 @@ export type TurnCost = {
  */
 turn_id: string, 
 /**
- * Tokens in the requests this turn made.
+ * Tokens in the requests this turn made, cached ones included.
  */
 prompt_tokens: number, 
+/**
+ * Of those, how many were served out of the prompt cache.
+ *
+ * Defaulted rather than required: sessions charged before this was
+ * recorded are read back as turns that cached nothing, which is what a
+ * turn that predates the field did.
+ */
+cache_read_tokens: number, 
+/**
+ * Of those, how many were written to the cache.
+ */
+cache_creation_tokens: number, 
 /**
  * Tokens in the replies it got back.
  */
 completion_tokens: number, 
 /**
- * Whether the provider actually said. `false` means the two counts above
+ * Whether the provider actually said. `false` means the counts above
  * are zero because nothing was reported, not because nothing was spent.
  */
 reported: boolean, 
@@ -2126,9 +2147,29 @@ model: string, };
  */
 export type Usage = { 
 /**
- * Tokens in the request.
+ * Tokens in the request, whether or not they were paid for at full price.
+ *
+ * The *whole* prompt, always — which is the one definition that means the
+ * same thing across providers and across a cache hit. Anthropic reports
+ * its own `input_tokens` net of both cache figures below, so the provider
+ * puts them back before filling this in; the Responses API counts them in
+ * already and does not. Getting that wrong would make a well-cached turn
+ * look like a cheap one instead of a cheaply-*served* one.
  */
 prompt_tokens: number, 
+/**
+ * Of `prompt_tokens`, how many were served out of the prompt cache — the
+ * ones that cost about a tenth of what they would have.
+ */
+cache_read_tokens: number, 
+/**
+ * Of `prompt_tokens`, how many were written to the cache for a later turn
+ * to read, at a premium over the plain price.
+ *
+ * Anthropic only: providers whose caching is automatic charge nothing to
+ * write and so report nothing, which is a zero here rather than a gap.
+ */
+cache_creation_tokens: number, 
 /**
  * Tokens in the reply.
  */

@@ -751,8 +751,21 @@ fn usage_of(frame: &Value) -> Option<Usage> {
     let prompt = count("prompt_tokens");
     let completion = count("completion_tokens");
 
+    // A share of `prompt_tokens`, not a sibling of it, so nothing is added
+    // back. Servers that cache automatically report this and nothing about
+    // writes; the ones that do not report it at all leave a zero, which is
+    // also what Anthropic's own compatibility layer leaves — it documents
+    // `prompt_tokens_details` as always empty, and caching as unsupported.
+    let cached = usage
+        .get("prompt_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
     Some(Usage {
         prompt_tokens: prompt,
+        cache_read_tokens: cached.min(prompt),
+        cache_creation_tokens: 0,
         completion_tokens: completion,
         total_tokens: match usage.get("total_tokens").and_then(Value::as_u64) {
             Some(total) => total,
@@ -1192,6 +1205,7 @@ mod tests {
                     prompt_tokens: 11,
                     completion_tokens: 4,
                     total_tokens: 15,
+                    ..Usage::default()
                 }),
             })
         );

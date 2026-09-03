@@ -322,6 +322,9 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         reason: StopReason::Stop,
         usage: Some(Usage {
             prompt_tokens: prompt,
+            // The scripted provider has no cache and never pretends to.
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             completion_tokens: completion,
             total_tokens: prompt.saturating_add(completion),
         }),

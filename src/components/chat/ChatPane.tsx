@@ -12,7 +12,7 @@
 import { useProjects } from "../../state/projects";
 import { useApprovals } from "../../state/approvals";
 import { useSessions } from "../../state/sessions";
-import { formatTimestamp, formatTokens } from "../../lib/format";
+import { cacheShare, formatTimestamp, formatTokens } from "../../lib/format";
 
 import AgentBadge from "../agents/AgentBadge";
 import ApprovalDialog from "../approvals/ApprovalDialog";
@@ -63,6 +63,13 @@ function StatusLine() {
  * Absent rather than "0 tokens" until a turn has been charged, and the phrasing
  * says "at least" when some provider reported no usage at all, because a total
  * that read as exact when it is a floor would be worse than none.
+ *
+ * The cached share sits in the badge rather than only in the tooltip because
+ * it is not a detail of the total, it is what the total *means*: the same
+ * number of tokens costs about a tenth as much when it came out of the cache,
+ * and a session whose share has collapsed is a session that has started paying
+ * full price to re-send itself. Hidden when the provider does not cache at
+ * all, so a percentage never appears where it could only ever read zero.
  */
 function CostBadge() {
   const cost = useSessions((s) => s.detail?.session.cost ?? null);
@@ -71,11 +78,18 @@ function CostBadge() {
   }
 
   const total = cost.prompt_tokens + cost.completion_tokens;
+  const cached = cacheShare(cost);
+  const caching = cached !== null && (cost.cache_read_tokens > 0 || cost.cache_creation_tokens > 0);
+
   return (
     <span
       className="chat__cost"
       title={`${cost.prompt_tokens} in, ${cost.completion_tokens} out, over ${cost.turns} turn${
         cost.turns === 1 ? "" : "s"
+      }${
+        caching
+          ? `. ${cost.cache_read_tokens} of the input was read from the prompt cache and ${cost.cache_creation_tokens} was written to it.`
+          : ""
       }${
         cost.unreported > 0
           ? `. ${cost.unreported} of them reported no usage, so this is a floor.`
@@ -84,6 +98,7 @@ function CostBadge() {
     >
       {cost.unreported > 0 ? "≥ " : ""}
       {formatTokens(total)} tokens
+      {caching ? ` · ${cached}% cached` : ""}
     </span>
   );
 }

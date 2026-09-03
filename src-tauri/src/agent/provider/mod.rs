@@ -15,10 +15,10 @@
 //!
 //! Three implementations. [`fake`] is what Phase 5 streams from and what a
 //! fresh install still answers with; [`openai`] speaks SSE to an
-//! OpenAI-compatible endpoint; [`motosan`] consumes a Claude Code or Codex
-//! CLI login already on this machine (Grok reuses [`openai`] after a token
-//! refresh). Because the boundary is this trait, those paths do not reopen
-//! `agent/turn.rs`.
+//! OpenAI-compatible endpoint; [`motosan`] speaks each vendor's own dialect —
+//! a Claude Code or Codex CLI login already on this machine, and an API key
+//! aimed at Anthropic (Grok reuses [`openai`] after a token refresh). Because
+//! the boundary is this trait, those paths do not reopen `agent/turn.rs`.
 //!
 //! Which of the two answers a turn is decided per turn, from settings, in
 //! [`AppState::provider`](crate::state::AppState::provider). Nothing here is a

@@ -832,6 +832,7 @@ _Nothing blocked._
             unreported: 0,
             prompt_tokens: 100,
             completion_tokens: 20,
+            ..Cost::default()
         };
         let mut second = session("s2", SessionState::Idle);
         second.cost = Cost {
@@ -839,6 +840,7 @@ _Nothing blocked._
             unreported: 1,
             prompt_tokens: 0,
             completion_tokens: 0,
+            ..Cost::default()
         };
 
         let sessions = [first, second];

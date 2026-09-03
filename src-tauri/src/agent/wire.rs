@@ -181,18 +181,57 @@ pub enum StopReason {
 }
 
 /// What a turn cost, when the provider says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct Usage {
-    /// Tokens in the request.
+    /// Tokens in the request, whether or not they were paid for at full price.
+    ///
+    /// The *whole* prompt, always — which is the one definition that means the
+    /// same thing across providers and across a cache hit. Anthropic reports
+    /// its own `input_tokens` net of both cache figures below, so the provider
+    /// puts them back before filling this in; the Responses API counts them in
+    /// already and does not. Getting that wrong would make a well-cached turn
+    /// look like a cheap one instead of a cheaply-*served* one.
     #[ts(type = "number")]
     pub prompt_tokens: u64,
+    /// Of `prompt_tokens`, how many were served out of the prompt cache — the
+    /// ones that cost about a tenth of what they would have.
+    #[ts(type = "number")]
+    pub cache_read_tokens: u64,
+    /// Of `prompt_tokens`, how many were written to the cache for a later turn
+    /// to read, at a premium over the plain price.
+    ///
+    /// Anthropic only: providers whose caching is automatic charge nothing to
+    /// write and so report nothing, which is a zero here rather than a gap.
+    #[ts(type = "number")]
+    pub cache_creation_tokens: u64,
     /// Tokens in the reply.
     #[ts(type = "number")]
     pub completion_tokens: u64,
     /// Their sum, as the provider reported it.
     #[ts(type = "number")]
     pub total_tokens: u64,
+}
+
+impl Usage {
+    /// Adds another round's usage into this one.
+    ///
+    /// A turn is a sequence of requests, and what it spent is their sum. Every
+    /// field adds, the cache figures included: they are each a share of the
+    /// `prompt_tokens` in the same round, so their shares sum too.
+    pub const fn add(&mut self, other: Self) {
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_add(other.cache_read_tokens);
+        self.cache_creation_tokens = self
+            .cache_creation_tokens
+            .saturating_add(other.cache_creation_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
+    }
 }
 
 /// One normalized event from a provider's stream.

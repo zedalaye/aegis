@@ -281,7 +281,7 @@ authenticate:
 | | |
 | --- | --- |
 | **Authentication** | An API key, or a login already written by **Claude Code**, **Codex CLI**, or **Grok CLI** on this machine (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.grok/auth.json`). |
-| **Base URL** | For an API key: an OpenAI-compatible endpoint, stopping where `/chat/completions` would begin — `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1` for a local server, or whatever your gateway exposes. For a CLI login, leave it empty unless you are overriding the CLI's own endpoint. |
+| **Base URL** | For an API key: an OpenAI-compatible endpoint, stopping where `/chat/completions` would begin — `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1` for a local server, or whatever your gateway exposes. `https://api.anthropic.com/v1` is the one special case, and is described below. For a CLI login, leave it empty unless you are overriding the CLI's own endpoint. |
 | **Model** | The model id, spelled the way that server spells it. |
 | **API key** | When authentication is "API key": saved to the OS credential store. Leave it empty to keep the one already there. |
 
@@ -294,10 +294,15 @@ reports what came back — which tells a wrong address from a wrong key from a m
 does not serve. It costs a few tokens; that is the price of an answer you can trust. Clearing the
 base URL puts you back on the scripted provider.
 
-Anthropic's own API works through its OpenAI-compatibility layer: base URL
-`https://api.anthropic.com/v1`, a Claude model id such as `claude-opus-5`, and your Anthropic API
-key. (If your key has access to more than one workspace you may also need to pick one — Aegis
-sends no `anthropic-workspace-id` header.)
+Anthropic's own API is the one address Aegis reads as an instruction rather than a URL. Give the
+base URL as `https://api.anthropic.com`, a Claude model id such as `claude-opus-5`, and your
+Anthropic API key, and the turn goes to `/v1/messages` — the real API — rather than to the
+`/chat/completions` compatibility layer on the same host. That layer works, but its documentation
+says it drops prompt caching, and a turn without caching re-sends the whole transcript at full
+price on every round of every tool loop. The native path asks for the cache instead: the tool
+schemas, the system prompt, and the conversation so far are each a point the next round can be
+served from. (If your key has access to more than one workspace you may also need to pick one —
+Aegis sends no `anthropic-workspace-id` header.)
 
 If this machine has no usable credential store — headless Linux, a locked keychain, a dev build
 whose signature keeps changing — set the key in the environment instead and restart:

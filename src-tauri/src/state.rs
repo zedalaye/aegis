@@ -184,11 +184,28 @@ impl AppState {
             return Box::new(FakeProvider::new());
         }
 
-        if settings.auth_kind.is_cli() {
+        // Everything motosan speaks goes to motosan: the three CLI logins, and
+        // an API key aimed at Anthropic's own host. That last one used to fall
+        // through to the OpenAI-compatible path, which reaches the vendor's
+        // compatibility shim — a shim that drops prompt caching, so every
+        // round of every turn re-sent the whole transcript at full price.
+        if settings.auth_kind.is_cli()
+            || catalog::speaks_anthropic(settings.auth_kind, &settings.base_url)
+        {
+            // A CLI login's credential is on disk; only the key path needs the
+            // secret store, and reading it for the others would be a keyring
+            // prompt bought for nothing.
+            let key = if settings.auth_kind.is_cli() {
+                None
+            } else {
+                self.secrets.inspect().key
+            };
+
             return Box::new(SubscriptionProvider::new(
                 settings.auth_kind,
                 settings.model.clone(),
                 settings.base_url.clone(),
+                key,
                 self.http.clone(),
             ));
         }
@@ -271,11 +288,23 @@ impl AppState {
     pub async fn probe_provider(&self) -> ProviderProbe {
         let settings = self.settings.get();
 
-        if settings.auth_kind.is_cli() {
+        // The same fork as `provider`, and for the reason the probe exists: a
+        // test that reaches a different endpoint than a turn does is a test
+        // that can pass on a configuration that cannot answer.
+        if settings.auth_kind.is_cli()
+            || catalog::speaks_anthropic(settings.auth_kind, &settings.base_url)
+        {
+            let key = if settings.auth_kind.is_cli() {
+                None
+            } else {
+                self.secrets.inspect().key
+            };
+
             return motosan::probe(
                 settings.auth_kind,
                 &settings.model,
                 &settings.base_url,
+                key,
                 self.http.as_ref(),
             )
             .await;

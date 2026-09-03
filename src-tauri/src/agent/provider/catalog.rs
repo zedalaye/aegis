@@ -62,6 +62,51 @@ pub fn anthropic_origin(url: &str) -> String {
         .to_owned()
 }
 
+/// Whether this configuration speaks the Anthropic Messages API rather than
+/// OpenAI-compatible chat completions.
+///
+/// Two ways to arrive there. The Claude Code login has no other dialect. The
+/// second is an API key pointed at Anthropic's own host, and it is detected
+/// here rather than declared in Settings because `https://api.anthropic.com/v1`
+/// *does* answer `/chat/completions` — that is the vendor's OpenAI
+/// compatibility layer, which its own documentation says drops prompt caching
+/// and returns no cache token counts. A turn sent there pays full price for a
+/// prefix it just sent, every round. Somebody who pastes that URL wants Claude,
+/// not a shim in front of it, and the native path is strictly better on both
+/// counts, so the address is read as the instruction it is.
+///
+/// The host must match exactly. A gateway that merely proxies Anthropic under
+/// its own name is still asked in the dialect the base URL field documents.
+pub fn speaks_anthropic(kind: AuthKind, override_url: &str) -> bool {
+    match kind {
+        AuthKind::ClaudeCli => true,
+        AuthKind::ApiKey => {
+            host_of(&effective_base_url(kind, override_url)).eq_ignore_ascii_case(ANTHROPIC_HOST)
+        }
+        AuthKind::CodexCli | AuthKind::GrokCli => false,
+    }
+}
+
+/// The one host that is Anthropic's own API.
+const ANTHROPIC_HOST: &str = "api.anthropic.com";
+
+/// The host in a base URL: no scheme, no credentials, no port, no path.
+///
+/// Deliberately not a URL parse. The only question asked of the answer is
+/// whether it is one known name, and every shape this fails on — an IPv6
+/// literal, a URL too malformed to have a host — is a shape that is not that
+/// name, which is the answer that shape should get.
+fn host_of(url: &str) -> &str {
+    let trimmed = url.trim();
+    let rest = match trimmed.split_once("://") {
+        Some((_, rest)) => rest,
+        None => trimmed,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    host.split(':').next().unwrap_or(host)
+}
+
 /// Codex Responses endpoint. The form stores the `/codex` base; motosan posts
 /// to `/responses`.
 pub fn codex_responses_url(url: &str) -> String {
@@ -80,6 +125,11 @@ pub fn models_url(kind: AuthKind, override_url: &str) -> Option<String> {
         return None;
     }
     Some(match kind {
+        // An API key on Anthropic's host lists models the way the Claude Code
+        // login does, for the same reason a turn does: it is the same API.
+        AuthKind::ApiKey if speaks_anthropic(kind, override_url) => {
+            format!("{}/v1/models", anthropic_origin(&base))
+        }
         AuthKind::ApiKey | AuthKind::GrokCli => format!("{base}/models"),
         AuthKind::ClaudeCli => format!("{}/v1/models", anthropic_origin(&base)),
         AuthKind::CodexCli => {
@@ -198,7 +248,13 @@ async fn authorized_get(
                 "No API key. Save one in Settings, or start Aegis with AEGIS_API_KEY set."
                     .to_owned()
             })?;
-            request = bearer(request, key.expose())?;
+            // Anthropic takes the key in its own header and refuses a request
+            // without a version; every other endpoint here takes a bearer.
+            request = if speaks_anthropic(kind, override_url) {
+                anthropic_key(request, key.expose())?.header("anthropic-version", "2023-06-01")
+            } else {
+                bearer(request, key.expose())?
+            };
         }
         AuthKind::ClaudeCli => {
             let Resolved::Anthropic { access_token } =
@@ -247,6 +303,18 @@ async fn authorized_get(
     }
 
     Ok(request)
+}
+
+/// The Anthropic key header. Sensitive for the same reason `bearer` is: a
+/// logged `RequestBuilder` should not carry the key in it.
+fn anthropic_key(
+    request: reqwest::RequestBuilder,
+    key: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    let mut header = HeaderValue::from_str(key)
+        .map_err(|_| "The API key cannot be sent in a header.".to_owned())?;
+    header.set_sensitive(true);
+    Ok(request.header("x-api-key", header))
 }
 
 fn bearer(
@@ -323,6 +391,45 @@ mod tests {
         assert_eq!(
             anthropic_origin("https://api.anthropic.com"),
             "https://api.anthropic.com"
+        );
+    }
+
+    #[test]
+    fn an_api_key_aimed_at_anthropic_speaks_the_messages_api() {
+        for url in [
+            "https://api.anthropic.com",
+            "https://api.anthropic.com/v1",
+            "https://api.anthropic.com/v1/",
+            "  https://API.Anthropic.com/v1  ",
+        ] {
+            assert!(speaks_anthropic(AuthKind::ApiKey, url), "{url}");
+        }
+    }
+
+    #[test]
+    fn every_other_address_stays_on_the_openai_compatible_path() {
+        for url in [
+            "",
+            "https://api.openai.com/v1",
+            "http://127.0.0.1:11434/v1",
+            // A gateway is asked in the dialect the field documents, whatever
+            // it proxies behind itself.
+            "https://gateway.example.com/anthropic/v1",
+            "https://api.anthropic.com.example.com/v1",
+        ] {
+            assert!(!speaks_anthropic(AuthKind::ApiKey, url), "{url}");
+        }
+
+        // The kinds that are neither: their own dialects, neither of them this.
+        assert!(!speaks_anthropic(AuthKind::CodexCli, ""));
+        assert!(!speaks_anthropic(AuthKind::GrokCli, ""));
+    }
+
+    #[test]
+    fn a_key_on_anthropic_lists_models_where_the_login_does() {
+        assert_eq!(
+            models_url(AuthKind::ApiKey, "https://api.anthropic.com/v1").as_deref(),
+            models_url(AuthKind::ClaudeCli, "").as_deref()
         );
     }
 

@@ -1,5 +1,10 @@
 //! Claude Code and Codex via `motosan-ai`, Grok via the OpenAI-compatible path.
 //!
+//! Also an API key aimed at Anthropic's own host, which is not a CLI login at
+//! all and arrives here anyway: `/v1/messages` is where prompt caching lives,
+//! and the `/chat/completions` layer on the same host does not have it. The
+//! credential is the only thing that differs — see [`credentials`].
+//!
 //! Construction still never fails: a missing CLI login becomes the stream's
 //! first [`ModelEvent::Error`]. Refresh happens at the start of the stream so
 //! a settings panel that merely *opens* does not hit the token endpoint.
@@ -13,34 +18,43 @@ use tokio::sync::mpsc;
 use crate::agent::wire::{ModelEvent, ModelRequest, StopReason, Usage, WireMessage, WireToolCall};
 use crate::error::ErrorCode;
 use crate::oauth::{self, Resolved};
+use crate::secrets::ApiKey;
 use crate::store::AuthKind;
 
 use super::openai::{self, OpenAiProvider};
 use super::{Provider, STREAM_BUFFER};
 
-/// A provider that authenticates with a CLI login already on this machine.
+/// A provider that authenticates with a CLI login already on this machine, or
+/// with a pasted key when the endpoint is Anthropic's own.
 #[derive(Debug, Clone)]
 pub struct SubscriptionProvider {
     kind: AuthKind,
     model: String,
     /// Optional base-URL override (Grok). Empty means the CLI's own endpoint.
     base_url: String,
+    /// The pasted key, for the one non-CLI kind that reaches this provider:
+    /// [`AuthKind::ApiKey`] aimed at Anthropic (see
+    /// [`speaks_anthropic`](super::catalog::speaks_anthropic)). `None` for
+    /// every CLI login, whose credential is read from disk per stream.
+    key: Option<ApiKey>,
     http: Option<reqwest::Client>,
 }
 
 impl SubscriptionProvider {
-    /// Builds the provider for this CLI kind. Infallible: a missing login is
-    /// reported on the first stream event.
+    /// Builds the provider for this kind. Infallible: a missing login, or a
+    /// missing key, is reported on the first stream event.
     pub fn new(
         kind: AuthKind,
         model: String,
         base_url: String,
+        key: Option<ApiKey>,
         http: Option<reqwest::Client>,
     ) -> Self {
         Self {
             kind,
             model,
             base_url,
+            key,
             http,
         }
     }
@@ -56,20 +70,49 @@ impl Provider for SubscriptionProvider {
         let kind = self.kind;
         let model = self.model.clone();
         let base_url = self.base_url.clone();
+        let key = self.key.clone();
         let http = self.http.clone();
 
         tokio::spawn(async move {
-            run(kind, model, base_url, http, request, tx).await;
+            run(kind, model, base_url, key, http, request, tx).await;
         });
 
         rx
     }
 }
 
+/// The credential this kind uses.
+///
+/// [`AuthKind::ApiKey`] only reaches this module when the endpoint is
+/// Anthropic's own, so the pasted key *is* the Anthropic credential; motosan
+/// reads the `sk-ant-oat01-` prefix to tell a CLI token from a key and sends
+/// each in the header that one wants. Every other kind is a login on disk.
+async fn credentials(
+    kind: AuthKind,
+    key: Option<ApiKey>,
+    http: Option<&reqwest::Client>,
+    base_url: &str,
+) -> Result<Resolved, oauth::Missing> {
+    if matches!(kind, AuthKind::ApiKey) {
+        return key
+            .map(|access_token| Resolved::Anthropic { access_token })
+            .ok_or_else(|| {
+                oauth::Missing::no_key(format!(
+                    "No API key. Add one in Settings, or start Aegis with {} set.",
+                    crate::secrets::ENV_API_KEY
+                ))
+            });
+    }
+
+    oauth::resolve(kind, http, base_url).await
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run(
     kind: AuthKind,
     model: String,
     base_url: String,
+    key: Option<ApiKey>,
     http: Option<reqwest::Client>,
     request: ModelRequest,
     tx: mpsc::Sender<ModelEvent>,
@@ -78,7 +121,7 @@ async fn run(
         return;
     }
 
-    let resolved = match oauth::resolve(kind, http.as_ref(), &base_url).await {
+    let resolved = match credentials(kind, key, http.as_ref(), &base_url).await {
         Ok(resolved) => resolved,
         Err(missing) => {
             let _ = tx
@@ -154,11 +197,12 @@ async fn run(
     }
 }
 
-/// Asks the CLI's own endpoint whether it will answer.
+/// Asks the endpoint a turn would use whether it will answer.
 pub async fn probe(
     kind: AuthKind,
     model: &str,
     base_url: &str,
+    key: Option<ApiKey>,
     http: Option<&reqwest::Client>,
 ) -> openai::ProviderProbe {
     let unreachable = |message: String| openai::ProviderProbe {
@@ -175,7 +219,7 @@ pub async fn probe(
     }
 
     let started = std::time::Instant::now();
-    let resolved = match oauth::resolve(kind, http, base_url).await {
+    let resolved = match credentials(kind, key, http, base_url).await {
         Ok(resolved) => resolved,
         Err(missing) => return unreachable(missing.message),
     };
@@ -314,7 +358,7 @@ async fn stream_motosan(
             }
         };
 
-    let mut usage = None;
+    let mut usage: Option<Usage> = None;
     let mut saw_tool_call = false;
     let mut reason = None;
     let mut tool_index: HashMap<String, u32> = HashMap::new();
@@ -399,12 +443,11 @@ async fn stream_motosan(
             motosan_ai::StreamEventType::ToolCallEnd => {}
             motosan_ai::StreamEventType::Usage => {
                 if let Some(found) = event.usage {
-                    usage = Some(Usage {
-                        prompt_tokens: found.input_tokens as u64,
-                        completion_tokens: found.output_tokens as u64,
-                        total_tokens: (found.input_tokens as u64)
-                            .saturating_add(found.output_tokens as u64),
-                    });
+                    let round = to_usage(provider, &found);
+                    match &mut usage {
+                        Some(spent) => spent.add(round),
+                        None => usage = Some(round),
+                    }
                 }
             }
             motosan_ai::StreamEventType::ThinkingDelta
@@ -473,6 +516,37 @@ async fn probe_motosan(
     }
 }
 
+/// One round's usage, in the shape [`Usage`] promises.
+///
+/// The whole function is one disagreement between two APIs. Anthropic reports
+/// `input_tokens` *net* of the cached tokens — a turn that read 40k from the
+/// cache and sent 200 new ones says `input_tokens: 200` — so the two cache
+/// figures are added back to make `prompt_tokens` mean "the prompt". The
+/// Responses API counts them in already (`input_tokens_details.cached_tokens`
+/// is a share of `input_tokens`, not a sibling of it), so adding there would
+/// count the cache twice and report a turn as more expensive the better it
+/// went.
+fn to_usage(provider: motosan_ai::Provider, found: &motosan_ai::Usage) -> Usage {
+    let read = u64::from(found.cache_read_input_tokens.unwrap_or(0));
+    let created = u64::from(found.cache_creation_input_tokens.unwrap_or(0));
+    let input = u64::from(found.input_tokens);
+    let completion = u64::from(found.output_tokens);
+
+    let prompt = if matches!(provider, motosan_ai::Provider::Anthropic) {
+        input.saturating_add(read).saturating_add(created)
+    } else {
+        input
+    };
+
+    Usage {
+        prompt_tokens: prompt,
+        cache_read_tokens: read,
+        cache_creation_tokens: created,
+        completion_tokens: completion,
+        total_tokens: prompt.saturating_add(completion),
+    }
+}
+
 fn to_chat_request(request: &ModelRequest, model: &str) -> Result<motosan_ai::ChatRequest, String> {
     let mut system = Vec::new();
     let mut messages = Vec::new();
@@ -484,20 +558,51 @@ fn to_chat_request(request: &ModelRequest, model: &str) -> Result<motosan_ai::Ch
         }
     }
 
+    mark_cache_breakpoint(&mut messages);
+
     let mut builder = motosan_ai::ChatRequest::builder()
         .messages(messages)
         .model(model);
 
     if !system.is_empty() {
-        builder = builder.system(system.join("\n\n"));
+        // The second breakpoint. Anthropic renders `tools` then `system` then
+        // `messages`, so this one alone would cover the tool schemas too — the
+        // separate one below is what survives a system message that moved,
+        // which in this app is every request that re-reads a shared digest.
+        builder = builder.system_cached(system.join("\n\n"));
     }
 
     let tools = tools_of(&request.tools);
     if !tools.is_empty() {
-        builder = builder.tools(tools);
+        builder = builder.tools_cached(tools);
     }
 
     Ok(builder.build())
+}
+
+/// Marks where the conversation may be read back out of the cache.
+///
+/// Caching is a prefix match, so one breakpoint on the newest message makes
+/// every earlier byte re-readable: the request a turn sends is the whole
+/// transcript again, and without this each round of a tool loop pays full
+/// price for the round before it. Three breakpoints in all — tools, system,
+/// here — against a limit of four.
+///
+/// The last message is skipped when it is a tool result, because motosan
+/// serializes `Role::Tool` without ever consulting the flag (`cache` is read
+/// on the user and assistant arms only). Marking one would be a breakpoint
+/// that silently is not there, so the mark goes on the assistant turn that
+/// asked for the call instead. The cost is one round of lag: this round's tool
+/// output is written to the cache by the next round, which is the round that
+/// reads it back.
+fn mark_cache_breakpoint(messages: &mut [motosan_ai::Message]) {
+    if let Some(message) = messages
+        .iter_mut()
+        .rev()
+        .find(|message| !matches!(message.role, motosan_ai::Role::Tool))
+    {
+        message.cache = true;
+    }
 }
 
 fn to_motosan_message(message: &WireMessage) -> Result<motosan_ai::Message, String> {
@@ -634,4 +739,151 @@ async fn fail(tx: &mpsc::Sender<ModelEvent>, code: ErrorCode, message: String, r
             retryable,
         })
         .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_schema(name: &str) -> Value {
+        json!({
+            "type": "function",
+            "function": { "name": name, "description": "", "parameters": { "type": "object" } },
+        })
+    }
+
+    fn request(messages: Vec<WireMessage>, tools: Vec<Value>) -> ModelRequest {
+        ModelRequest {
+            model: "claude-sonnet-5".to_owned(),
+            messages,
+            tools,
+        }
+    }
+
+    #[test]
+    fn a_turn_asks_for_three_cache_breakpoints() {
+        let chat = to_chat_request(
+            &request(
+                vec![
+                    WireMessage::System {
+                        content: "The standing instructions.".to_owned(),
+                    },
+                    WireMessage::User {
+                        content: "Read the PDF.".to_owned(),
+                    },
+                ],
+                vec![tool_schema("fs_read"), tool_schema("shell_exec")],
+            ),
+            "claude-sonnet-5",
+        )
+        .expect("the request converts");
+
+        // Tools, system, and the newest message: everything before each is a
+        // prefix the next round can be served out of the cache.
+        assert!(chat.system_cache, "the system prompt is a breakpoint");
+
+        let tools = chat.tools.as_ref().expect("the tools are carried");
+        assert!(
+            !tools[0].cache && tools[1].cache,
+            "the mark goes on the last tool, which covers the whole array"
+        );
+
+        assert!(chat.messages[0].cache, "the newest message is a breakpoint");
+    }
+
+    #[test]
+    fn the_breakpoint_skips_a_tool_result_for_the_turn_that_asked_for_it() {
+        // motosan serializes `Role::Tool` without consulting `cache`, so a
+        // mark there would be a breakpoint that silently is not one.
+        let chat = to_chat_request(
+            &request(
+                vec![
+                    WireMessage::User {
+                        content: "Read the PDF.".to_owned(),
+                    },
+                    WireMessage::Assistant {
+                        content: None,
+                        tool_calls: vec![WireToolCall::new("call-1", "fs_read", "{}")],
+                    },
+                    WireMessage::Tool {
+                        tool_call_id: "call-1".to_owned(),
+                        content: "{\"ok\":true}".to_owned(),
+                    },
+                ],
+                Vec::new(),
+            ),
+            "claude-sonnet-5",
+        )
+        .expect("the request converts");
+
+        let marked: Vec<usize> = chat
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| message.cache)
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            marked,
+            vec![1],
+            "the assistant turn carries it, not the result"
+        );
+    }
+
+    fn reported(input: u32, read: Option<u32>, created: Option<u32>) -> motosan_ai::Usage {
+        motosan_ai::Usage {
+            input_tokens: input,
+            output_tokens: 7,
+            cache_creation_input_tokens: created,
+            cache_read_input_tokens: read,
+        }
+    }
+
+    #[test]
+    fn anthropics_cached_tokens_are_added_back_into_the_prompt() {
+        // `input_tokens: 200` beside a 40k cache read is a 40.2k prompt that
+        // was cheap to serve, not a 200-token prompt.
+        let usage = to_usage(
+            motosan_ai::Provider::Anthropic,
+            &reported(200, Some(40_000), Some(1_500)),
+        );
+
+        assert_eq!(usage.prompt_tokens, 41_700);
+        assert_eq!(usage.cache_read_tokens, 40_000);
+        assert_eq!(usage.cache_creation_tokens, 1_500);
+        assert_eq!(usage.total_tokens, 41_707);
+    }
+
+    #[test]
+    fn the_responses_api_counts_them_in_already_and_is_left_alone() {
+        // Same numbers, other convention: adding here would report a turn as
+        // more expensive the better its cache went.
+        let usage = to_usage(
+            motosan_ai::Provider::OpenAiChatGpt,
+            &reported(41_700, Some(40_000), None),
+        );
+
+        assert_eq!(usage.prompt_tokens, 41_700);
+        assert_eq!(usage.cache_read_tokens, 40_000);
+        assert_eq!(usage.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn a_provider_that_says_nothing_about_caching_reports_none() {
+        let usage = to_usage(motosan_ai::Provider::Anthropic, &reported(900, None, None));
+
+        assert_eq!(usage.prompt_tokens, 900);
+        assert_eq!(usage.cache_read_tokens, 0);
+        assert_eq!(usage.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn a_request_with_nothing_to_mark_is_still_a_request() {
+        let chat = to_chat_request(&request(Vec::new(), Vec::new()), "claude-sonnet-5")
+            .expect("the request converts");
+
+        assert!(!chat.system_cache);
+        assert!(chat.tools.is_none());
+        assert!(chat.messages.is_empty());
+    }
 }

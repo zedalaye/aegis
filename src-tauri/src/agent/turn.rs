@@ -426,7 +426,7 @@ impl Turn<'_> {
 
         let mut seq = 0u32;
         let mut rounds = 0u32;
-        let mut usage = None;
+        let mut usage: Option<Usage> = None;
 
         // Whether this turn is a brief being worked on — the same question
         // `execute` asks to build its `PolicyCtx`, and asked here for the world's
@@ -590,7 +590,18 @@ impl Turn<'_> {
                     reason,
                     usage: reported,
                 } => {
-                    usage = reported.or(usage);
+                    // Summed, not replaced. A turn is as many requests as it
+                    // ran rounds, and each one was paid for; keeping only the
+                    // last reported a three-round turn as the cost of its
+                    // third request. That was always wrong and is worse now
+                    // that the rounds are cached — the round with the smallest
+                    // `prompt_tokens` is usually the last one.
+                    if let Some(round) = reported {
+                        match &mut usage {
+                            Some(spent) => spent.add(round),
+                            None => usage = Some(round),
+                        }
+                    }
 
                     let records: Vec<ToolCallRecord> = calls.iter().map(record_of).collect();
                     self.persist_assistant(plan, text, records);
@@ -672,6 +683,7 @@ impl Turn<'_> {
         let charge = match usage {
             Some(spent) => {
                 TurnCost::reported(&plan.turn_id, spent.prompt_tokens, spent.completion_tokens)
+                    .with_cache(spent.cache_read_tokens, spent.cache_creation_tokens)
             }
             None => TurnCost::unreported(&plan.turn_id),
         };
