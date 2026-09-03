@@ -165,3 +165,96 @@ unfocused, or both; and whether an expensive call deserves different treatment
 from a cheap one, which the runtime could know from the argument size it is
 already counting for `tool:drafting`. Decide that fresh rather than at the end
 of a debugging session.
+
+## motosan-ai backends Aegis is not using
+
+`motosan-ai` 0.27.1 ships two families of backends. Aegis is on the HTTP
+family (`anthropic`, `chatgpt-codex`) and reuses a Claude Code / Codex / Grok
+CLI *login* as a token source. The CLI family (`claude-code`, `codex-cli`,
+`gemini-cli`) is a subprocess that is itself an agent. The `Cargo.toml`
+comment already records the distinction; this is the investigation behind it,
+so nobody has to re-open the crate docs to decide again.
+
+### 6. Do not turn on `claude-code` / `codex-cli` / `gemini-cli`
+
+**What they are.** `ClaudeCodeProvider` runs `claude --print --output-format
+stream-json`. The Codex and Gemini CLI features are the same shape against
+`codex exec --json` and `gemini -p "" -o stream-json`. Since motosan 0.25 a
+completed CLI turn always reports `stop_reason = end_turn` (never
+`tool_use`); `tool_calls` names tools the CLI already ran; tool *results*
+stay inside the CLI sandbox and never surface.
+
+**What that would buy, if it bought anything.** A one-line feature flag and
+a fifth `AuthKind` that "just works" for anyone who already has `claude` on
+PATH. It does not. Aegis *is* the agent loop: the approval gate, the audit
+jsonl, workspace policy, `fs_*` / `shell_exec`, handoffs. A CLI backend is a
+second harness writing the disk while Aegis still thinks it is deciding.
+That is the thing `PLAN.md` § 7.1 forbids (one loop, tools in-process behind
+`ToolSpec`) and the thing `AGENTS.md` names: this repo is the harness, not a
+new LLM.
+
+The Settings option "Claude Code login on this machine" is **not** this
+feature. It is `AuthKind::ClaudeCli`: read `~/.claude`, refresh, POST
+`api.anthropic.com` via `Provider::Anthropic`. Tools stay Aegis's. Same
+shape as Codex and Grok. That path is already the right use of a CLI
+subscription.
+
+**When it might come back.** As an *execution host* later — a disposable
+specialist in a worktree, analogue of WSL (`PLAN.md` § 7.12) — not as a
+token source. That is a product decision, not a provider.
+
+### 7. Gemini HTTP (`gemini`) as a fifth `AuthKind`
+
+**The change.** Enable `motosan-ai`'s `gemini` feature. Add `AuthKind::Gemini`.
+Talk to `generativelanguage.googleapis.com` with an AI Studio key (`AIza…`,
+header `x-goog-api-key`). Stream mapping already exists in
+`agent/provider/motosan.rs` (`Text` / `ToolCall*` / `Usage` / `Finish`).
+Settings, probe, and the catalog fallback list (`GEMINI_MODELS`) follow the
+Claude/Codex/Grok pattern.
+
+**Why it is not a feature flag.** `AuthKind::ApiKey` always goes through
+OpenAI `/chat/completions`. Gemini is a different dialect. The non-obvious
+piece is tool results: Gemini's `functionResponse.name` must be the
+*function name*, not the opaque call id. Today `to_motosan_message` forwards
+`tool_call_id`. Without a remap on that arm, the second round of an
+`fs_write` fails. The models list is `GET …/v1beta/models`, not the four
+shapes `catalog.rs` already parses. The keyring still holds one key; switching
+auth kind overwrites it, same as today.
+
+**What it buys.** Gemini in the Settings picker, same single-provider model
+as now. Not the roster. `provider_for` still refuses anything but
+`default`.
+
+**Unknown:** whether Gemini's tool-call ids in the stream are names already
+(so the remap is only on the way back) or opaque ids that have to be
+remembered across the turn. Prove it against one `fs_write` before wiring
+the catalog.
+
+### 8. Gemini Code Assist as the Claude-Code-login analogue
+
+**The change.** `gemini-code-assist` against `cloudcode-pa.googleapis.com`,
+OAuth `ya29.*` from a `gemini auth` already on the machine, plus the GCP
+project id from `loadCodeAssist`. New `oauth/gemini.rs` in the same shape as
+`claude.rs` / `codex.rs` / `grok.rs`. Billing is the Gemini CLI seat, not
+per-token.
+
+**What it buys.** Anyone who already pays for Gemini CLI can point Aegis at
+it the way they already point it at Claude Code, without pasting an AI
+Studio key. Tools stay Aegis's.
+
+**Unknown:** where the current Gemini CLI actually writes its bundle on
+Windows / macOS / Linux, and whether `motosan-ai-oauth` is enough or Aegis
+should keep owning the file the way it does for the other three. Read the
+file once before choosing.
+
+Do this after § 7 if the demand is the subscription, not a key. Do not do
+`gemini-cli` (the subprocess) for the same reason as § 6.
+
+### 9. The roster is a different piece of work
+
+A fifth `AuthKind` is a Settings row. CoS on one model and a specialist on
+another is `provider_id` on the identity, more than one key in the keyring,
+and a second arm in `AppState::provider_for`. The trait does not move; the
+turn loop does not move. That is the north-star item in `AGENTS.md`
+("roster of providers and a per-agent binding"). Gemini HTTP can land
+before it. Do not pretend adding Gemini *is* the roster.
