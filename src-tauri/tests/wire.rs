@@ -256,6 +256,7 @@ fn provider(base_url: &str) -> OpenAiProvider {
             auth_kind: aegis_lib::AuthKind::ApiKey,
             base_url: base_url.to_owned(),
             model: "test-model".to_owned(),
+            max_output_tokens: None,
         },
         ApiKey::new("sk-test-key-abcd1234"),
     )
@@ -766,6 +767,7 @@ fn probe_settings(base_url: &str) -> ProviderSettings {
         auth_kind: aegis_lib::AuthKind::ApiKey,
         base_url: base_url.to_owned(),
         model: "test-model".to_owned(),
+        max_output_tokens: None,
     }
 }
 

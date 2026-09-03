@@ -305,6 +305,92 @@ async fn authorized_get(
     Ok(request)
 }
 
+/// How long [`output_cap`] waits before giving up and answering `None`.
+///
+/// Short because somebody is waiting on a Save button. The cap is a nicety —
+/// a lookup that cannot be done in a few seconds is one the provider's own
+/// default can cover — and a save that hung on it would be a worse bug than
+/// the one the cap exists to fix.
+const CAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
+
+/// The largest reply this model will produce, as the provider's own catalog
+/// reports it.
+///
+/// `None` for every honest reason there is: an endpoint whose model list does
+/// not carry the field (OpenAI's does not), a server that could not be reached,
+/// a model the list does not mention. The caller's job is to treat all of those
+/// the same way — leave the request's ceiling unset and let the provider apply
+/// its own — rather than to guess a number, because a `max_tokens` above what
+/// the model allows is a 400 on every turn rather than a slightly worse answer.
+pub async fn output_cap(
+    kind: AuthKind,
+    override_url: &str,
+    model: &str,
+    client: Option<&Client>,
+    api_key: Option<&ApiKey>,
+) -> Option<u32> {
+    if model.is_empty() {
+        return None;
+    }
+
+    let url = models_url(kind, override_url)?;
+    let request = authorized_get(client?, kind, &url, override_url, api_key)
+        .await
+        .inspect_err(|reason| tracing::debug!(%reason, "no model catalog to read a cap from"))
+        .ok()?;
+
+    let body: Value = request
+        .timeout(CAP_TIMEOUT)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    let cap = find_cap(&body, model);
+    tracing::debug!(model, ?cap, "resolved the model's output ceiling");
+    cap
+}
+
+/// Finds `model` in a models payload and reads its output ceiling.
+///
+/// Walks the same nested shapes [`parse_ids`] does, because the field sits on
+/// the same objects. `max_tokens` is what Anthropic calls it; `max_output_tokens`
+/// is accepted beside it so that a gateway using the longer name is not
+/// silently ignored.
+fn find_cap(value: &Value, model: &str) -> Option<u32> {
+    match value {
+        Value::Array(items) => items.iter().find_map(|item| find_cap(item, model)),
+        Value::Object(map) => {
+            let names = ["id", "slug", "model", "name"];
+            let is_this_model = names
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .filter_map(Value::as_str)
+                .any(|id| id == model);
+
+            if is_this_model {
+                let cap = ["max_tokens", "max_output_tokens"]
+                    .iter()
+                    .filter_map(|key| map.get(*key))
+                    .filter_map(Value::as_u64)
+                    .find(|cap| *cap > 0)
+                    .and_then(|cap| u32::try_from(cap).ok());
+                if cap.is_some() {
+                    return cap;
+                }
+            }
+
+            ["data", "models", "items"]
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .find_map(|nested| find_cap(nested, model))
+        }
+        _ => None,
+    }
+}
+
 /// The Anthropic key header. Sensitive for the same reason `bearer` is: a
 /// logged `RequestBuilder` should not carry the key in it.
 fn anthropic_key(
@@ -431,6 +517,42 @@ mod tests {
             models_url(AuthKind::ApiKey, "https://api.anthropic.com/v1").as_deref(),
             models_url(AuthKind::ClaudeCli, "").as_deref()
         );
+    }
+
+    #[test]
+    fn a_models_payload_gives_up_the_chosen_models_ceiling() {
+        let body = serde_json::json!({
+            "data": [
+                { "id": "claude-opus-5", "max_tokens": 128_000 },
+                { "id": "claude-sonnet-5", "max_tokens": 64_000 },
+            ]
+        });
+
+        assert_eq!(find_cap(&body, "claude-sonnet-5"), Some(64_000));
+        assert_eq!(find_cap(&body, "claude-opus-5"), Some(128_000));
+    }
+
+    #[test]
+    fn a_catalog_that_does_not_publish_a_ceiling_says_nothing() {
+        // OpenAI's list carries no such field, and a model nobody listed has
+        // no answer either. Both are `None`, which is what leaves the
+        // request's ceiling unset rather than guessed.
+        let openai = serde_json::json!({ "data": [{ "id": "gpt-4o", "object": "model" }] });
+        assert_eq!(find_cap(&openai, "gpt-4o"), None);
+
+        let anthropic =
+            serde_json::json!({ "data": [{ "id": "claude-opus-5", "max_tokens": 128_000 }] });
+        assert_eq!(find_cap(&anthropic, "a-model-nobody-listed"), None);
+
+        // A zero is a server saying nothing in a different tone of voice.
+        let zero = serde_json::json!({ "data": [{ "id": "m", "max_tokens": 0 }] });
+        assert_eq!(find_cap(&zero, "m"), None);
+    }
+
+    #[test]
+    fn the_longer_field_name_is_read_too() {
+        let gateway = serde_json::json!({ "models": [{ "id": "m", "max_output_tokens": 32_000 }] });
+        assert_eq!(find_cap(&gateway, "m"), Some(32_000));
     }
 
     #[test]

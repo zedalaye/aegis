@@ -147,6 +147,16 @@ pub struct MaskedSettings {
     pub base_url: String,
     /// The model id sent with every request. Empty when unset.
     pub model: String,
+    /// The output ceiling the provider's catalog reported for that model, or
+    /// `None` for an endpoint that does not publish one.
+    ///
+    /// Shown rather than kept internal because its absence is invisible
+    /// otherwise: a lookup that failed leaves the provider's own conservative
+    /// default in place, which is the behaviour that made large `fs_write`
+    /// calls fail silently in the first place. A number here is the panel
+    /// saying the catalog was actually read.
+    #[ts(type = "number | null")]
+    pub max_output_tokens: Option<u32>,
     /// Which store answered when the key was last looked for.
     pub key_source: KeySource,
     /// A few characters of the key, for recognition. `None` when there is no
@@ -193,6 +203,19 @@ pub struct ProviderSettings {
     /// The model id.
     #[serde(default)]
     pub model: String,
+    /// The largest reply this model will produce, from the provider's own
+    /// catalog when it was asked (see
+    /// [`catalog::output_cap`](crate::agent::provider::catalog::output_cap)).
+    ///
+    /// Persisted rather than looked up per turn: it changes when the model
+    /// does, which is when the settings are saved, and an HTTP round trip in
+    /// front of every request would be a latency and a failure the turn does
+    /// not need. `None` is the honest answer for an endpoint that does not
+    /// publish the number, for a lookup that failed, and for a document
+    /// written before the field existed — all three mean the same thing to the
+    /// provider, which is to leave the ceiling unset.
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
 }
 
 impl ProviderSettings {
@@ -378,11 +401,13 @@ impl SettingsStore {
         base_url: &str,
         model: &str,
         auth_kind: AuthKind,
+        max_output_tokens: Option<u32>,
     ) -> AppResult<ProviderSettings> {
         let next = ProviderSettings {
             auth_kind,
             base_url: normalize_base_url(base_url)?,
             model: normalize_model(model)?,
+            max_output_tokens,
         };
 
         let mut provider = self.provider();
@@ -493,7 +518,12 @@ mod tests {
         let store = SettingsStore::load(dir.path());
 
         store
-            .set("https://api.openai.com/v1", "gpt-4o-mini", AuthKind::ApiKey)
+            .set(
+                "https://api.openai.com/v1",
+                "gpt-4o-mini",
+                AuthKind::ApiKey,
+                None,
+            )
             .expect("accepted");
 
         let written = fs::read_to_string(store.path()).expect("the document");
@@ -510,7 +540,12 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
 
         SettingsStore::load(dir.path())
-            .set("https://example.test/v1", "some-model", AuthKind::ApiKey)
+            .set(
+                "https://example.test/v1",
+                "some-model",
+                AuthKind::ApiKey,
+                None,
+            )
             .expect("accepted");
 
         let reopened = SettingsStore::load(dir.path()).get();
@@ -528,10 +563,15 @@ mod tests {
         let store = SettingsStore::load(dir.path());
 
         store
-            .set("https://example.test/v1", "some-model", AuthKind::ApiKey)
+            .set(
+                "https://example.test/v1",
+                "some-model",
+                AuthKind::ApiKey,
+                None,
+            )
             .expect("accepted");
         store
-            .set("not a url", "some-model", AuthKind::ApiKey)
+            .set("not a url", "some-model", AuthKind::ApiKey, None)
             .expect_err("refused");
 
         assert_eq!(store.get().base_url, "https://example.test/v1");
@@ -565,6 +605,7 @@ mod tests {
             auth_kind: AuthKind::ClaudeCli,
             base_url: String::new(),
             model: "claude-sonnet-4-6".to_owned(),
+            max_output_tokens: None,
         };
         assert!(provider.is_configured());
     }

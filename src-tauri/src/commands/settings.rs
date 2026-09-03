@@ -46,8 +46,13 @@ pub fn settings_get(state: State<'_, AppState>) -> AppResult<MaskedSettings> {
 /// leaves the credential store untouched, and a credential store that refuses
 /// the write leaves settings the user can still correct — neither failure
 /// leaves half a configuration behind that the panel does not show.
+/// The model's output ceiling is resolved here, once, rather than per turn:
+/// saving is when the model can change, somebody is already waiting on a
+/// button, and the lookup is allowed to fail. It is deliberately *not* part of
+/// what makes this command succeed — a provider that cannot be asked leaves
+/// the ceiling unset, which is what the previous behaviour was anyway.
 #[tauri::command(rename_all = "snake_case")]
-pub fn settings_set<R: Runtime>(
+pub async fn settings_set<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
     base_url: String,
@@ -55,9 +60,17 @@ pub fn settings_set<R: Runtime>(
     api_key: Option<String>,
     auth_kind: Option<AuthKind>,
 ) -> AppResult<MaskedSettings> {
-    state
-        .settings()
-        .set(&base_url, &model, auth_kind.unwrap_or(AuthKind::ApiKey))?;
+    let auth_kind = auth_kind.unwrap_or(AuthKind::ApiKey);
+
+    // Asked before the write, and with the key that is about to be stored
+    // rather than the one already there: a first-time setup types the address,
+    // the model and the key in one go, and a lookup that used the old key
+    // would fail on exactly the save that most needs to succeed.
+    let cap = state
+        .model_output_cap(auth_kind, &base_url, &model, api_key.as_deref())
+        .await;
+
+    state.settings().set(&base_url, &model, auth_kind, cap)?;
 
     if let Some(key) = api_key.as_deref().and_then(ApiKey::new) {
         state.secrets().store(&key)?;

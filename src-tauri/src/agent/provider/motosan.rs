@@ -19,7 +19,7 @@ use crate::agent::wire::{ModelEvent, ModelRequest, StopReason, Usage, WireMessag
 use crate::error::ErrorCode;
 use crate::oauth::{self, Resolved};
 use crate::secrets::ApiKey;
-use crate::store::AuthKind;
+use crate::store::{AuthKind, ProviderSettings};
 
 use super::openai::{self, OpenAiProvider};
 use super::{Provider, STREAM_BUFFER};
@@ -28,10 +28,11 @@ use super::{Provider, STREAM_BUFFER};
 /// with a pasted key when the endpoint is Anthropic's own.
 #[derive(Debug, Clone)]
 pub struct SubscriptionProvider {
-    kind: AuthKind,
-    model: String,
-    /// Optional base-URL override (Grok). Empty means the CLI's own endpoint.
-    base_url: String,
+    /// The whole provider configuration, carried rather than unpacked: three
+    /// of its four fields were already being threaded through this module one
+    /// argument at a time, and the fourth — the output ceiling — is the one
+    /// that would have made every signature here too long to read.
+    settings: ProviderSettings,
     /// The pasted key, for the one non-CLI kind that reaches this provider:
     /// [`AuthKind::ApiKey`] aimed at Anthropic (see
     /// [`speaks_anthropic`](super::catalog::speaks_anthropic)). `None` for
@@ -41,19 +42,15 @@ pub struct SubscriptionProvider {
 }
 
 impl SubscriptionProvider {
-    /// Builds the provider for this kind. Infallible: a missing login, or a
-    /// missing key, is reported on the first stream event.
+    /// Builds the provider for these settings. Infallible: a missing login, or
+    /// a missing key, is reported on the first stream event.
     pub fn new(
-        kind: AuthKind,
-        model: String,
-        base_url: String,
+        settings: ProviderSettings,
         key: Option<ApiKey>,
         http: Option<reqwest::Client>,
     ) -> Self {
         Self {
-            kind,
-            model,
-            base_url,
+            settings,
             key,
             http,
         }
@@ -62,19 +59,17 @@ impl SubscriptionProvider {
 
 impl Provider for SubscriptionProvider {
     fn model(&self) -> &str {
-        &self.model
+        &self.settings.model
     }
 
     fn stream(&self, request: ModelRequest) -> mpsc::Receiver<ModelEvent> {
         let (tx, rx) = mpsc::channel(STREAM_BUFFER);
-        let kind = self.kind;
-        let model = self.model.clone();
-        let base_url = self.base_url.clone();
+        let settings = self.settings.clone();
         let key = self.key.clone();
         let http = self.http.clone();
 
         tokio::spawn(async move {
-            run(kind, model, base_url, key, http, request, tx).await;
+            run(settings, key, http, request, tx).await;
         });
 
         rx
@@ -107,11 +102,8 @@ async fn credentials(
     oauth::resolve(kind, http, base_url).await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run(
-    kind: AuthKind,
-    model: String,
-    base_url: String,
+    settings: ProviderSettings,
     key: Option<ApiKey>,
     http: Option<reqwest::Client>,
     request: ModelRequest,
@@ -120,6 +112,10 @@ async fn run(
     if tx.is_closed() {
         return;
     }
+
+    let kind = settings.auth_kind;
+    let base_url = settings.base_url.clone();
+    let model = settings.model.clone();
 
     let resolved = match credentials(kind, key, http.as_ref(), &base_url).await {
         Ok(resolved) => resolved,
@@ -141,8 +137,7 @@ async fn run(
                 motosan_ai::Provider::Anthropic,
                 access_token.expose(),
                 None,
-                &model,
-                &base_url,
+                &settings,
                 request,
                 tx,
             )
@@ -156,8 +151,7 @@ async fn run(
                 motosan_ai::Provider::OpenAiChatGpt,
                 access_token.expose(),
                 Some(account_id),
-                &model,
-                &base_url,
+                &settings,
                 request,
                 tx,
             )
@@ -167,14 +161,17 @@ async fn run(
             access_token,
             base_url,
         } => {
-            let settings = crate::store::ProviderSettings {
+            // Grok's proxy is OpenAI-compatible, so it goes back out through
+            // that provider with the endpoint the login named.
+            let grok = ProviderSettings {
                 base_url,
                 model,
                 auth_kind: AuthKind::GrokCli,
+                max_output_tokens: settings.max_output_tokens,
             };
             let inner = OpenAiProvider::with_extra_headers(
                 http,
-                &settings,
+                &grok,
                 Some(access_token),
                 oauth::grok_headers(),
             );
@@ -233,6 +230,7 @@ pub async fn probe(
                 base_url,
                 model: model.to_owned(),
                 auth_kind: AuthKind::GrokCli,
+                max_output_tokens: None,
             };
             return openai::probe_with_headers(
                 http,
@@ -329,12 +327,12 @@ async fn stream_motosan(
     provider: motosan_ai::Provider,
     access_token: &str,
     account_id: Option<String>,
-    model: &str,
-    base_url: &str,
+    settings: &ProviderSettings,
     request: ModelRequest,
     tx: mpsc::Sender<ModelEvent>,
 ) {
-    let chat = match to_chat_request(&request, model) {
+    let (model, base_url) = (settings.model.as_str(), settings.base_url.as_str());
+    let chat = match to_chat_request(&request, model, settings.max_output_tokens) {
         Ok(chat) => chat,
         Err(message) => {
             fail(&tx, ErrorCode::ProviderParse, message, false).await;
@@ -547,7 +545,11 @@ fn to_usage(provider: motosan_ai::Provider, found: &motosan_ai::Usage) -> Usage 
     }
 }
 
-fn to_chat_request(request: &ModelRequest, model: &str) -> Result<motosan_ai::ChatRequest, String> {
+fn to_chat_request(
+    request: &ModelRequest,
+    model: &str,
+    max_tokens: Option<u32>,
+) -> Result<motosan_ai::ChatRequest, String> {
     let mut system = Vec::new();
     let mut messages = Vec::new();
 
@@ -575,6 +577,22 @@ fn to_chat_request(request: &ModelRequest, model: &str) -> Result<motosan_ai::Ch
     let tools = tools_of(&request.tools);
     if !tools.is_empty() {
         builder = builder.tools_cached(tools);
+    }
+
+    // The ceiling the provider's own catalog reported for this model, which is
+    // the whole reason it is carried this far. Left unset when the catalog
+    // would not say, because motosan's fallback is safe on every model and a
+    // guessed number above the model's real limit is a 400 on every turn.
+    //
+    // It is not only a limit on how long a reply may be: a file written by
+    // `fs_write` is emitted as the arguments of a tool call, so this is also
+    // the largest file a turn can write. motosan's own default of 8192 caps
+    // that at roughly 25 KB of source once JSON escaping is counted, and
+    // overflowing it truncates the arguments mid-JSON — which the assembler
+    // then refuses to parse, so the call is answered rather than run and the
+    // file is silently never written.
+    if let Some(max_tokens) = max_tokens {
+        builder = builder.max_tokens(max_tokens);
     }
 
     Ok(builder.build())
@@ -775,6 +793,7 @@ mod tests {
                 vec![tool_schema("fs_read"), tool_schema("shell_exec")],
             ),
             "claude-sonnet-5",
+            None,
         )
         .expect("the request converts");
 
@@ -813,6 +832,7 @@ mod tests {
                 Vec::new(),
             ),
             "claude-sonnet-5",
+            None,
         )
         .expect("the request converts");
 
@@ -879,7 +899,7 @@ mod tests {
 
     #[test]
     fn a_request_with_nothing_to_mark_is_still_a_request() {
-        let chat = to_chat_request(&request(Vec::new(), Vec::new()), "claude-sonnet-5")
+        let chat = to_chat_request(&request(Vec::new(), Vec::new()), "claude-sonnet-5", None)
             .expect("the request converts");
 
         assert!(!chat.system_cache);

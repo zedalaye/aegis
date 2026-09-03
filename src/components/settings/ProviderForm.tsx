@@ -336,6 +336,22 @@ export default function ProviderForm() {
             {errorFor("model")}
           </p>
         )}
+        {/*
+          The ceiling read from the provider's catalog when these settings were
+          saved. Shown only while the field still holds the model it was
+          resolved for, so an edited-but-unsaved id never borrows the previous
+          model's number. Its absence is meaningful too: no line means the
+          catalog did not publish one, and the provider's own default applies.
+        */}
+        {settings.max_output_tokens !== null &&
+        draft.model === settings.model ? (
+          <p className="field__hint">
+            Replies — and files written by <code>fs_write</code>, which are
+            emitted as tool-call arguments — are capped at{" "}
+            {settings.max_output_tokens.toLocaleString()} tokens, from this
+            provider&rsquo;s catalog.
+          </p>
+        ) : null}
       </div>
 
       {cliAuth ? null : (

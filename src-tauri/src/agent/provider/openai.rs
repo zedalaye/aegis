@@ -1423,6 +1423,7 @@ mod tests {
             auth_kind: crate::store::AuthKind::ApiKey,
             base_url: "https://api.example.test/v1".to_owned(),
             model: "some-model".to_owned(),
+            max_output_tokens: None,
         }
     }
 
@@ -1455,6 +1456,7 @@ mod tests {
             auth_kind: crate::store::AuthKind::ApiKey,
             base_url: "not a url".to_owned(),
             model: "m".to_owned(),
+            max_output_tokens: None,
         };
         let provider =
             OpenAiProvider::new(Some(Client::new()), &broken, ApiKey::new("sk-test-1234"));
@@ -1497,6 +1499,7 @@ mod tests {
             auth_kind: crate::store::AuthKind::ApiKey,
             base_url: "https://api.example.test/v1".to_owned(),
             model: String::new(),
+            max_output_tokens: None,
         };
         let probe = probe(Some(&Client::new()), &half_configured, None).await;
 

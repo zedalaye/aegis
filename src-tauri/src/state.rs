@@ -201,13 +201,7 @@ impl AppState {
                 self.secrets.inspect().key
             };
 
-            return Box::new(SubscriptionProvider::new(
-                settings.auth_kind,
-                settings.model.clone(),
-                settings.base_url.clone(),
-                key,
-                self.http.clone(),
-            ));
+            return Box::new(SubscriptionProvider::new(settings, key, self.http.clone()));
         }
 
         Box::new(OpenAiProvider::new(
@@ -274,6 +268,7 @@ impl AppState {
             auth_kind: provider.auth_kind,
             base_url: provider.base_url,
             model: provider.model,
+            max_output_tokens: provider.max_output_tokens,
             key_source,
             key_hint,
             keyring_available: held.keyring_available,
@@ -312,6 +307,26 @@ impl AppState {
 
         let key = self.secrets.inspect().key;
         openai::probe(self.http.as_ref(), &settings, key.as_ref()).await
+    }
+
+    /// The largest reply the named model will produce, from the provider's own
+    /// catalog.
+    ///
+    /// `pending_key` is the key from the form, which may not be the one in the
+    /// credential store yet. It wins when it is there, so the save that first
+    /// configures a provider can still read its catalog.
+    pub async fn model_output_cap(
+        &self,
+        kind: AuthKind,
+        base_url: &str,
+        model: &str,
+        pending_key: Option<&str>,
+    ) -> Option<u32> {
+        let key = pending_key
+            .and_then(crate::secrets::ApiKey::new)
+            .or_else(|| self.secrets.inspect().key);
+
+        catalog::output_cap(kind, base_url, model, self.http.as_ref(), key.as_ref()).await
     }
 
     /// Asks the current authentication kind which models it will accept.
@@ -1109,6 +1124,7 @@ mod tests {
                 "https://api.example.test/v1",
                 "some-model",
                 crate::store::AuthKind::ApiKey,
+                None,
             )
             .expect("accepted");
 

@@ -910,6 +910,17 @@ base_url: string,
  */
 model: string, 
 /**
+ * The output ceiling the provider's catalog reported for that model, or
+ * `None` for an endpoint that does not publish one.
+ *
+ * Shown rather than kept internal because its absence is invisible
+ * otherwise: a lookup that failed leaves the provider's own conservative
+ * default in place, which is the behaviour that made large `fs_write`
+ * calls fail silently in the first place. A number here is the panel
+ * saying the catalog was actually read.
+ */
+max_output_tokens: number | null, 
+/**
  * Which store answered when the key was last looked for.
  */
 key_source: KeySource, 
