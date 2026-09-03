@@ -371,3 +371,90 @@ command *shapes* — `git diff|log|show|status`, `ls`, `rg` — is deterministic
 auditable, and testable, which a judge is not. Do that before considering any
 of the above; if it is not enough afterwards, the residue is the honest brief
 for a judge.
+
+## Settings, identities, and project scope
+
+Asked directly: Settings feel global, and everything else wants to become
+per-project, leaving only the provider credentials as the install-wide
+fact. Three different moves hide in that sentence. Two are refused in
+`PLAN.md` (§ 7.4, § 7.5, § 7.14). One is this entry.
+
+### 13. Grants live on the identity; two cabinets will fight over them
+
+**The gap.** Settings, identities, memories, connectors and the skill
+library are install-global (`store/mod.rs`: seven documents under
+application-data). The cabinet (`.aegis/`, `world/`, workspace skills) is
+per-project. Routines and sessions *name* a project but live in the
+global files. Founding (`PLAN.md` § 7.14) writes a roster in the
+workspace and apply writes global identities. That split is load-bearing:
+a Reviewer is a Reviewer in the next project too, and apply never widens
+a name that exists.
+
+The Settings panel looks like one blob. The pressure that will feel like
+"make settings per-project" is not `settings.json`. It is that **the
+allow-list is a field on the identity**. A CoS granted `mail__list` for
+intake sees mail tools in a delivery session. A Reviewer granted
+`shell_exec` for one repo holds it in a watch folder. Role memory that is
+actually about a client ("this client wants French") lives in
+`memories.json` keyed on the identity, so it follows the CoS into the
+next cabinet — which is why `COS.md` *Memory* puts that class of fact in
+workspace files.
+
+**What we refused.** Moving `settings.json` / `agents.json` / the keyring
+into the workspace. Credentials in a git tree is the forbidden thing.
+Identities in `.aegis/` would ship allow-lists (`shell_exec`, connector
+tools) with the clone, and a session on another machine would inherit
+grants for programs that are not there. A second `settings.json` under
+`.aegis/` is a second store with a second schema. Seeding per-project
+identity *rows* is the Phase 19 Delivery-identity refusal again.
+
+**The change, when two cabinets share a role and disagree.** Not
+per-project settings. Three scopes, of which two already exist:
+
+| Scope | Holds | Today |
+| --- | --- | --- |
+| Machine / operator | keys, provider roster, MCP programs, skill library, the *definition* of a role | `settings.json`, keyring, `connectors.json`, library `skills/`, `agents.json` minus the allow-lists |
+| Identity | perimeter, provider binding | `provider_id`, instructions, role. `AGENTS.md` north star: CoS on one model, specialist on another |
+| Project | the world, who is needed here, which grants *here*, which clocks, exec host | `.aegis/`, `world/`, § 7.14 roster, routines that name a project, § 7.12 `exec_host` |
+
+The missing piece is a **binding**: `(identity × project) → tools[],
+skills[]`. The identity stays a global row. Apply of a roster writes or
+updates *that project's* binding, not the identity. A session in project
+A as Reviewer sees A's list. The same Reviewer in project B sees B's. An
+identity with no binding in this project is not offered, or is offered
+with an empty list (fail closed).
+
+**What it would change.** `Agent::tools` / `Agent::skills` move off the
+row, or become the *default* a binding may narrow (never widen without a
+Settings act — same as § 7.14 apply). `policy::decide_call` and
+`tools::schemas_for` take the open project's id. The Identities form
+grows an "in this project" list when a project is open. Routines already
+name a project: their standing grants stay on the routine (they already
+do). Connector *programs* stay global; a binding names `git__status`, it
+does not start git.
+
+**What it would buy.** A cabinet can be narrow without cloning the
+Reviewer. Founding (§ 7.14) becomes "write the binding", which is what
+the roster file already is, instead of "mint a global identity and hope
+the next project does not need it wider". Memories stay per-identity for
+*role* facts; client facts stay files (`COS.md`).
+
+**What it is not.** Per-project providers (the key stays in the keyring;
+`provider_id` stays on the identity — that is § 9). Per-project
+connectors as processes (starting a program is still the operator on this
+machine). Per-project *identities* (a fourth CoS per folder is a
+generalist that rots, `COS.md` *Roles*). A Settings document inside
+`.aegis/`. The per-project allow-list of read-only *command shapes* in
+§ 12, which is a policy row on the project, not a binding of an identity.
+
+**Unknown:** whether two projects will actually share a role with
+conflicting grants before the provider roster (§ 9) lands. Until they
+do, this is theatre — the same test `PLAN.md` § 7.2 uses for several
+worlds. § 7.14's "skip names that exist, never widen" is the bandage that
+makes that wait cheap. Do not build the binding in order to make
+founding look finished.
+
+**When it might come back.** The first time apply of a second roster
+wants to grant a tool the existing Reviewer does not hold, *and* taking
+it away from the first project would be wrong. Measure that by trying to
+found a second cabinet, not by designing the table.

@@ -31,7 +31,10 @@ Three identities only.
 
 One agent = one perimeter + one definition of done + an explicit list of
 things it must not do. A generalist "that helps with everything" is the
-first thing that rots. The CoS may *see* state. It may not merge to prod or
+first thing that rots. Assembling the roster is a harness act
+(`PLAN.md` § 7.14), not a fourth identity: the built-in Assistant drafts
+a proposal, the human applies, then there is a Chief, specialists, and
+the human. The CoS may *see* state. It may not merge to prod or
 send the client email unless that identity was granted those tools.
 
 ## Memory

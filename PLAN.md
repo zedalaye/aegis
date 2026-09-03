@@ -1027,7 +1027,7 @@ written: the constitution is policed by policy, not by a lockfile.
 Each phase ends in something you can run. No phase depends on a later one. Domain connectors
 are last on purpose.
 
-Four slices are **not** steps in this list:
+Five slices are **not** steps in this list:
 
 - **§ 7.10** chrome (title-bar icons, a button that reveals the folder in the OS file manager)
 - **§ 7.11** workspace versioning (`git init` when the convention is laid down, never an
@@ -1035,10 +1035,13 @@ Four slices are **not** steps in this list:
 - **§ 7.12** execution host (WSL). Windows UI; `shell_exec` in the distro when the project
   says so
 - **§ 7.13** skill promotion (`PROPOSAL.md` then apply; writing is still not granting)
+- **§ 7.14** cabinet founding (a founder skill writes a roster proposal; apply is the grant)
 
 § 7.10–7.12 may start once Phase 13 has landed, and must not delay Phases 14–16.
 § 7.13 waits for Phase 17 (the CoS board). It must not delay Phases 15–17, and it
-is not a number between 15 and 16.
+is not a number between 15 and 16. § 7.14 waits for Phases 12, 13, 16 and 17
+(identities, skills, routines, board). It must not delay remaining domain packs,
+and it is not a number after 19.
 
 **Phase 11 — Workspace convention**
 Document and optionally scaffold, inside a user-picked workspace: `.aegis/briefs/`, `.aegis/status/`,
@@ -1528,8 +1531,9 @@ does not.
 Packs 3–6 are not started, and two pleasant packs are not two reasons to start a third.
 
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
-after Phase 13. § 7.13 (skill promotion) may run after Phase 17. They do not insert
-here, and they are not Phases 20, 21, 22 and 23.
+after Phase 13. § 7.13 (skill promotion) may run after Phase 17. § 7.14 (cabinet
+founding) may run after Phases 12, 13, 16 and 17. They do not insert here, and they
+are not Phases 20, 21, 22, 23 and 24.
 
 ### 7.4 Hard rules that survive every later phase
 
@@ -1556,6 +1560,13 @@ here, and they are not Phases 20, 21, 22 and 23.
   a sprint.
 - Do not copy a human project-management method into a skill, a prompt, or
   the board. Generating is cheap; re-perceiving is the waste.
+- Credentials, the provider roster, installed MCP programs, and identity
+  *rows* stay install-global (application data and the OS keyring). The
+  cabinet — `.aegis/`, `world/`, workspace skills, a roster proposal, a
+  routine that names this project — is per-project. Do not put
+  `settings.json`, `agents.json`, or a key in the workspace. The
+  allow-list remaining on the identity is a known seam (`IDEAS.md`); it
+  is not a reason to move the documents.
 
 ### 7.5 What would make the mode unusable (do not do these)
 
@@ -1599,10 +1610,21 @@ here, and they are not Phases 20, 21, 22 and 23.
   off the audit log. That is a second way to change what the agent will do.
 - A session that grants itself a skill it just wrote. Writing the file is not an allow-list
   change; `agent_update` stays a Settings act, in force on the next turn.
-- Inserting chrome polish, `git init`, WSL, or a skill-proposal queue into § 7.3 as
-  Phase 13.5 / 15.5, or delaying memory, handoff, the scheduler, or the board for
-  icons, a repository, a distro, or an authoring UX. Those slices are § 7.10, § 7.11,
-  § 7.12 and § 7.13.
+- A first-run wizard that creates a Chief, grants it `handoff_delegate` and `cos.loop`,
+  and puts the loop on a clock. That is granting without watching, and it is a CoS that
+  recites on an empty board. Seeding identity rows the way skills are seeded is the same
+  act with no dialog. An `agent_create` tool is a session that grants. Founding is a
+  proposal file, then apply (§ 7.14).
+- A `settings.json` or `agents.json` under `.aegis/` so Settings can be
+  "per-project". That puts a key, or an allow-list, in a git tree, and it
+  is a second store. The Settings panel mixing machine and cabinet is a
+  UI fact; the documents stay where they are. If two cabinets need the
+  same identity with different grants, that is a binding (`IDEAS.md`),
+  not a second settings file.
+- Inserting chrome polish, `git init`, WSL, a skill-proposal queue, or a founding
+  wizard into § 7.3 as Phase 13.5 / 15.5 / 19.5, or delaying memory, handoff, the
+  scheduler, or the board for icons, a repository, a distro, an authoring UX, or a
+  roster. Those slices are § 7.10, § 7.11, § 7.12, § 7.13 and § 7.14.
 - Teaching the model to call `wsl.exe` or `bash -c` so Linux folders "just work". The
   distro is a project field; wrapping is `shell_exec`'s, like `.cmd` shims (§ 5.1,
   § 7.12). Silent fallback to Windows `CreateProcess` when WSL is missing is the
@@ -2252,3 +2274,214 @@ the catalog lists; `skill_run` still needs the name ticked on an
 identity; a proposal is never runnable; a handwritten skill is
 untouched; a routine still cannot name a proposal. No new tool. No
 editor. No grant.
+
+### 7.14 Cabinet founding — not a CoS phase
+
+Not a step in § 7.3. Not Phase 24. Not a first-run wizard. Not a
+fourth role. Not seeded identities.
+
+Phases 12, 13, 16 and 17 have landed, and assembling a working cabinet
+is now the combinatorial product they left on the table: identities ×
+tools × skills × standing grants × routines × connectors. The README
+walkthrough already hides forty checkboxes behind three sentences.
+A CoS that recites is one failure (`AGENTS.md`: a CoS without (1)
+recites). A CoS that exists because a wizard granted `shell_exec` to
+three names nobody read is the other.
+
+This slice starts once those four phases have landed. It must not
+delay remaining domain packs (Phase 19, packs 2–6). It is not § 7.6
+(the runner), not § 7.13 (how a procedure becomes a runbook), not
+Phase 16 (the door a routine still has to pass). Do not insert it
+as Phase 19.5.
+
+**The pattern already answers the naive versions.**
+
+A pack is a workspace + skills + the MCP servers it needs + a
+specialist identity (§ 7.3, Phase 19). Aegis ships the skills. It
+does not create a Delivery identity, because that would be granting
+`shell_exec` and three runbooks to something nobody made. Writing is
+not granting (§ 7.6). A routine names a live skill, already granted,
+already run under watch (Phase 16). `world/` is opt-in and nothing
+scaffolds it (§ 7.2). The built-in Assistant is a constant in the
+runtime, not a row: every tool, no skills, not deletable (Phase 12).
+A session cannot call `agent_update`. There is no `skill_create` and
+no `agent_create` tool.
+
+A wizard that minted the team on first launch would undo all of that
+in one dialog. Seeding identity rows the way `skills::SEEDED` seeds
+runbooks is the same undo with no dialog.
+
+**What is actually missing** is the analog of § 7.13 for a *team*.
+Skills are files; identities are a document in application data
+(`agents.json`). There is a way for the Assistant to draft a
+runbook (`fs_write` under the gate). There is no way for it to
+propose a Chief, a Reviewer and the grants each should hold, as a
+file a human applies. That is the hell: the pattern is known, the
+apply surface is not.
+
+**A founder skill, then apply.** Not a fourth identity. `COS.md`
+*Roles* is three: Chief of Staff, specialist, human. Founding is
+what the built-in Assistant is for — it holds every tool, it drafts
+files, it is not the CoS. The skill is `cabinet.found`, seeded into
+the library beside `cos.loop`. None of this is granted by being
+there.
+
+**When.** An identity — typically the built-in Assistant, after
+someone ticks `cabinet.found` on it — runs the skill in a project
+that already has a workspace. The empty state in Settings →
+Identities names that one tick; it does not perform it. There is
+no bypass in `Agent::allows_skill`. The built-in identity still
+holds no skills until a human says so, for the same reason it
+holds none today: handing it every runbook the moment one appears
+would change what the default identity means under the sessions
+already using it. Founding is one named grant, then a conversation,
+not forty checkboxes and not zero.
+
+The runbook asks what this cabinet is for (which domains, whether
+there is a world, whether anything should ever run unattended) and
+writes **one file**: `.aegis/roster/PROPOSAL.md`, inside the
+workspace, through the ordinary approval dialog. The DiffPreview
+of that write is the moment the human sees the proposed team
+before it exists. Apply is a second act, in Settings, that parses
+the file and calls the same `agent_create` path the form already
+uses. A session cannot apply. Apply is the grant.
+
+**The roster is parseable.** Apply does not need a model. Each
+identity is a heading plus the fields `AgentDraft` already
+validates — `role`, `tools`, `skills`, `runs_per_day` — so a
+proposal that will not parse is listed with the reason and never
+applied, the way a skill proposal that is not seven headings is.
+Unknown tool names are refused (the same check as `agent_create`).
+Skill names use the same rule the form already has: a workspace
+runbook does not have to be in front of you to be grantable.
+
+**Apply creates identities with the proposed allow-lists.** That
+is the difference from § 7.13, and it is load-bearing rather than
+tidy. A skill file is not a grant; an identity record *is* the
+grant. Creating a Chief with an empty tool list and then asking
+the human to tick fourteen boxes is the hell this slice exists
+to end. The preview of apply *is* the allow-lists, identity by
+identity, the way the DiffPreview of a `SKILL.md` write is the
+seven headings. Confirming apply is signing those lists. It is
+still a Settings act, still on the audit log as `agent_create`,
+still in force on the next turn.
+
+**Existing names are skipped, never widened.** A second project
+that proposes a Chief of Staff when one already exists lists it
+as present and does not merge allow-lists. Silent widening is
+how a watch folder would hand `shell_exec` to a Reviewer somebody
+made narrow. The built-in Assistant is never a target of apply;
+its id is reserved.
+
+**What the runbook proposes, not what the runtime seeds.** The
+default roster, when the human asked for a Chef-de-Cabinet
+cabinet and named no extra domain:
+
+- **Chief of Staff** — `fs_list`, `fs_read`, `fs_write`,
+  `skill_run`, `skill_return`, `handoff_delegate`,
+  `memory_write`, `memory_search`. Skills: `cos.loop`,
+  `never-send-without-review`, `world.check`,
+  `world.perceive-delta`. `runs_per_day`: 0. It is the identity
+  you talk to and never put on a clock (Phase 16 already named
+  that as a real thing to want). Not `shell_exec`. Not
+  `screen_capture`. Not `handoff_return` (delegated runs gain
+  it structurally).
+- **Reviewer** — `fs_list`, `fs_read`, `skill_run`,
+  `skill_return`. Skill: `review.diff` when the delivery pack
+  is what the human asked for, otherwise whatever verifier the
+  library holds. No write, no shell, no delegate.
+- Further specialists only for domains the human named. The
+  delivery pack still does not mint a Delivery identity by
+  being seeded (Phase 19); the founder proposes one when asked.
+- The human is not a row.
+
+A Chief that holds `shell_exec` is a Chief that does the work.
+The runbook does not write that grant unless the human asked
+for a specialist that runs programs, and that specialist is
+not the Chief.
+
+**Routines stay behind Phase 16's door.** The proposal may
+name intended clocks (`cos.loop` daily is not one of them:
+the loop is a skill a person runs, not a chat on a timer, and
+a scheduled run does not start other agents). Settings →
+Routines may list those names as intended. Apply does not
+write `routines.json`. A routine still needs a live skill,
+already granted, already witnessed under watch. The founder
+can say "run this once, then the clock can exist". It cannot
+say the clock exists.
+
+**Tools are not created.** Connector names in the proposal
+that nothing answers to are `open_questions`, not rows in
+`connectors.json`. Installing a server starts a program, which
+is the operator's act (Phase 18). Apply refuses a grant for a
+`<connector>__<tool>` that is not live, the same way the form
+does not offer one.
+
+**`world/` is still not scaffolded.** If the human said this
+project has an essence, the founder points at `world.draft`
+and stops. Empty templates in a workspace with no essence
+remain theatre (§ 7.2). Cabinet directories are still
+`workspace_scaffold`, a button, consent; the founder does not
+press it.
+
+**Workspace only, identities global.** Three scopes, and this
+slice only writes two of them. The proposal is the project's
+(who is needed *here*); it lives in the folder and travels
+with the repo. Apply writes identity *rows* in application
+data — a Reviewer is a Reviewer in the next project too.
+Credentials stay in the keyring, connector programs in
+`connectors.json`, the skill library beside them. This slice
+does not put a settings document in `.aegis/`, and it does
+not make the identity's allow-list per-project. Until two
+cabinets share a role and disagree, "skip names that exist,
+never widen" is the whole answer. The seam that would make
+apply write `(identity × this project)` instead of the row
+is `IDEAS.md`; it would not move `agents.json` into the
+folder.
+
+**Propose only.** There is no `auto`. There is no cron that
+rewrites the roster. There is no `agent_create` tool and no
+`roster_apply` tool: the model writes a file the way it
+writes a decision. The CoS does not apply, and the CoS is
+not who founds — an identity that already holds
+`handoff_delegate` is past founding. A later `cabinet.found`
+in a workspace that already has a roster proposes the delta
+(a new specialist) and still skips names that exist.
+
+**Authoring.** Default stays the two paths in § 7.6 for
+skills, plus this third path for the team. A handwritten
+identity in Settings is live once it saves. This slice does
+not replace that form, and it does not touch an identity it
+did not propose.
+
+**Never**
+
+- a first-run wizard, a 12-step modal, or a "quick start"
+  that ticks allow-lists behind Next;
+- seeding identity rows into `agents.json` the way runbooks
+  are seeded into the library;
+- granting `cabinet.found` (or `cos.loop`, or anything) to
+  the built-in Assistant by construction;
+- an `agent_create` / `agent_update` / `roster_apply` tool a
+  session can call;
+- apply that also writes `routines.json`, starts a connector,
+  or scaffolds `world/`;
+- apply that widens an identity whose name already exists;
+- apply that edits the built-in Assistant;
+- a fourth role (Founder, Installer, Onboarding agent) that
+  lives past the proposal;
+- a `settings.json` / `agents.json` under `.aegis/` as the
+  way to make founding per-project;
+- putting the CoS on a clock as part of founding;
+- stuffing the roster body into the system prompt;
+- delaying remaining packs until this exists, or inserting
+  it into § 7.3.
+
+**Exit:** the built-in Assistant, once granted `cabinet.found`,
+can file `.aegis/roster/PROPOSAL.md` in a workspace; applying
+it in Settings creates the named identities with the named
+allow-lists and does not create routines, connectors, or a
+world; a name that already exists is skipped; the built-in
+Assistant is unchanged; a routine still cannot be saved
+without a witnessed run; a session cannot apply. No new tool.
+No wizard. The grant is the apply.
