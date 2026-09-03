@@ -573,9 +573,14 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// the mode needs without every existing install being the one install that
 /// never sees it.
 ///
-/// A library that predates the manifest is treated as having already been
-/// offered [`SEEDED_BEFORE`] — the two it shipped with — so an upgrade adds the
-/// new ones and resurrects nothing.
+/// A library that predates the manifest is reconciled against its own disk. What
+/// it was offered cannot be read back, only inferred, and the two ways of
+/// getting the inference wrong do not cost the same: calling a name offered when
+/// it never was loses that runbook **for good and in silence**, while calling it
+/// unoffered costs one example reappearing once, in the open, on the single
+/// start that writes the manifest. So a name in [`SEEDED_BEFORE`] counts as
+/// offered when its directory is actually there, and after that start the
+/// manifest governs and a deletion is permanent.
 ///
 /// Best effort throughout. A library that could not be created costs the
 /// examples and nothing else: [`catalog`] reads a missing directory as an empty
@@ -626,9 +631,14 @@ pub fn seed(library: &Path) {
             .filter(|line| !line.is_empty())
             .map(str::to_owned)
             .collect(),
-        // A library from before the manifest existed. It has already been
-        // offered what it shipped with, whether or not those are still in it.
-        Err(_) if library.is_dir() => SEEDED_BEFORE.iter().map(|&name| name.to_owned()).collect(),
+        // A library from before the manifest existed: it was offered whichever
+        // of [`SEEDED_BEFORE`] is on its disk, because which of them it saw
+        // depends on the build that made it and no file records the answer.
+        Err(_) if library.is_dir() => SEEDED_BEFORE
+            .iter()
+            .filter(|name| library.join(name).is_dir())
+            .map(|&name| (*name).to_owned())
+            .collect(),
         Err(_) => Vec::new(),
     };
 
@@ -670,8 +680,17 @@ pub fn seed(library: &Path) {
 /// skips it for free — it is not a folder holding a `SKILL.md`.
 const SEEDED_FILE: &str = ".seeded";
 
-/// What a library created before [`SEEDED_FILE`] existed has already been
-/// offered.
+/// What a library created before [`SEEDED_FILE`] existed **may** have been
+/// offered — not what it was.
+///
+/// Two names across two builds, and that is the whole problem. The first wrote
+/// [`REVIEW_SKILL`] alone; [`COS_SKILL`] joined it later, behind a `if
+/// library.exists() { return; }` that skipped every library already on disk. So
+/// a library made by the first build never saw `cos.loop` and never could:
+/// reading this list as a record of what was written is what left one install
+/// without half of the mode, with the manifest recording it as offered. Which of
+/// the two a given library actually got is answerable only by looking, which is
+/// what [`seed`] does.
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
@@ -2309,16 +2328,24 @@ mod tests {
     }
 
     /// The manifest is what lets a later phase add a runbook the mode needs
-    /// without every existing install being the one install that never sees it
-    /// — and it must still not resurrect what somebody deleted.
+    /// without every existing install being the one install that never sees it.
+    ///
+    /// Written against the install that *was* that one install. The earliest
+    /// build seeded [`REVIEW_SKILL`] alone and created the library by writing
+    /// it; [`COS_SKILL`] was added to the pair one phase later, behind a guard
+    /// that skipped any library already on disk, so a library made by the first
+    /// build never saw it. Reading [`SEEDED_BEFORE`] as a record of what was
+    /// written then recorded `cos.loop` as offered in the new manifest, which is
+    /// how an install ends up permanently missing half of the mode without a
+    /// line anywhere saying so. The migration therefore looks at the disk.
     #[test]
-    fn a_library_from_before_the_manifest_gains_the_new_runbooks_and_nothing_else() {
+    fn a_library_from_before_the_manifest_gains_what_it_was_never_actually_offered() {
         let dir = TempDir::new().expect("temp dir");
         let library = dir.path().join(LIBRARY_DIR);
 
-        // A library as an older build left it: the two it shipped with, no
-        // manifest, and one of them since deleted by its owner.
-        write_skill(&library, COS_SKILL, COS_SEED);
+        // A library exactly as the earliest build left it: one runbook, no
+        // manifest, and no `cos.loop` — which that build could not have written.
+        write_skill(&library, REVIEW_SKILL, REVIEW_SEED);
 
         seed(&library);
         let mut names: Vec<String> = catalog(&library, None)
@@ -2326,30 +2353,45 @@ mod tests {
             .map(|skill| skill.name)
             .collect();
         names.sort();
-        assert_eq!(
-            names,
-            [
-                ALERT_SKILL,
-                COS_SKILL,
-                DEPLOY_SKILL,
-                MAIL_SKILL,
-                REPLY_SKILL,
-                REVIEW_DIFF_SKILL,
-                THREAD_SKILL,
-                CHECK_SKILL,
-                DRAFT_SKILL,
-                PERCEIVE_SKILL,
-                VERIFY_SKILL
-            ],
-            "the world's runbooks and both packs arrive; the deleted review does not come back"
-        );
+        let mut expected: Vec<&str> = SEEDED.iter().map(|(name, _)| *name).collect();
+        expected.sort_unstable();
+        assert_eq!(names, expected, "including the `cos.loop` it never got");
 
-        // And the manifest now covers all five, so a third start writes nothing.
+        // From here the manifest is the record, and a deletion is the user's.
         fs::remove_dir_all(library.join(CHECK_SKILL)).expect("the user deletes it");
         seed(&library);
         assert!(
             !library.join(CHECK_SKILL).exists(),
             "once offered, a runbook is the user's to keep or delete"
+        );
+    }
+
+    /// The one thing the disk check costs, paid once and in the open.
+    ///
+    /// A runbook deleted from a library that never got a manifest comes back on
+    /// the start that writes one, because nothing on disk distinguishes "deleted
+    /// it" from "never had it". That is the cheap side of the asymmetry: the
+    /// user deletes it a second time and the manifest makes it stick, where the
+    /// other guess loses a runbook silently and forever.
+    #[test]
+    fn a_deletion_from_before_the_manifest_comes_back_once_and_then_never_again() {
+        let dir = TempDir::new().expect("temp dir");
+        let library = dir.path().join(LIBRARY_DIR);
+
+        // Both of the pre-manifest names shipped here, and the owner deleted one.
+        write_skill(&library, COS_SKILL, COS_SEED);
+
+        seed(&library);
+        assert!(
+            library.join(REVIEW_SKILL).is_dir(),
+            "it cannot be told apart from one that was never written"
+        );
+
+        fs::remove_dir_all(library.join(REVIEW_SKILL)).expect("the user deletes it again");
+        seed(&library);
+        assert!(
+            !library.join(REVIEW_SKILL).exists(),
+            "the manifest now records it, so the second deletion is final"
         );
     }
 
