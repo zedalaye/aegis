@@ -30,6 +30,7 @@ import type {
   SessionSummary,
   ToolApprovalResolved,
   ToolFinished,
+  ToolDrafting,
   ToolProgress,
   ToolRequested,
   ToolStarted,
@@ -72,6 +73,17 @@ export type EventPayloads = {
   "tool:approval_resolved": ToolApprovalResolved;
   /** A tool was cleared and is running. */
   "tool:started": ToolStarted;
+  /**
+   * How far the model has got writing a tool call's arguments, in bytes.
+   *
+   * The mirror of `tool:progress`, one step earlier: that is a tool's output
+   * while it runs, this is its input while it is being written. A file passed
+   * to `fs_write` is generated as the call's arguments, so a large one is
+   * minutes during which a turn is working and emits no assistant text at all.
+   * Coalesced into the same ~50 ms frames as `turn:delta`, and silent while
+   * the count is unchanged.
+   */
+  "tool:drafting": ToolDrafting;
   /**
    * Output from a tool that is still running — `shell_exec` only. Frames are
    * coalesced to ~50 ms and the total is capped, so this is a live view rather

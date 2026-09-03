@@ -83,8 +83,8 @@ use crate::workspace;
 use crate::world;
 
 use super::event::{
-    Event, EventSink, ToolApprovalResolved, ToolFinished, ToolProgress, ToolRequested, ToolStarted,
-    TurnDelta, TurnError, TurnFinished, TurnMessage, TurnStarted,
+    Event, EventSink, ToolApprovalResolved, ToolDrafting, ToolFinished, ToolProgress,
+    ToolRequested, ToolStarted, TurnDelta, TurnError, TurnFinished, TurnMessage, TurnStarted,
 };
 use super::provider::Provider;
 use super::registry::TurnRegistry;
@@ -100,6 +100,35 @@ pub const MAX_TOOL_ROUNDS: u32 = 8;
 
 /// How long a `turn:delta` frame stays open.
 pub const DELTA_FRAME: Duration = Duration::from_millis(50);
+
+/// A tool call the model is part-way through writing.
+///
+/// Exists to answer one question — is anything still happening — during the
+/// stretch where a turn produces no assistant text at all. The arguments
+/// themselves are the assembler's business; this holds only what can honestly
+/// be shown before they parse.
+#[derive(Debug)]
+struct Drafting {
+    /// Which call within this response.
+    index: u32,
+    /// The tool, once the model has named it.
+    tool: Option<String>,
+    /// Argument bytes seen so far.
+    bytes: u64,
+    /// What the last emitted event said, so an unchanged count stays quiet.
+    reported: u64,
+}
+
+impl Drafting {
+    const fn new(index: u32) -> Self {
+        Self {
+            index,
+            tool: None,
+            bytes: 0,
+            reported: 0,
+        }
+    }
+}
 
 /// Where a turn sits in the Chef-de-Cabinet loop (PLAN 7.3, Phase 15).
 ///
@@ -733,6 +762,10 @@ impl Turn<'_> {
         let mut frame = String::new();
         let mut assembler = super::wire::ToolCallAssembler::default();
         let mut deadline: Option<Instant> = None;
+        // What the model is part-way through asking for. Reported by size
+        // rather than kept, because the assembler already keeps it and a
+        // half-arrived JSON string is not something to show anybody.
+        let mut drafting: Option<Drafting> = None;
 
         let mut reason = None;
         let mut failure = None;
@@ -751,13 +784,13 @@ impl Turn<'_> {
                 biased;
 
                 () = cancel.cancelled() => {
-                    self.flush(plan, &mut frame, seq);
+                    self.flush(plan, &mut frame, drafting.as_mut(), seq);
                     tracing::debug!(turn_id = %plan.turn_id, "cancelled mid-stream");
                     return Streamed::Cancelled { text };
                 }
 
                 () = tick => {
-                    self.flush(plan, &mut frame, seq);
+                    self.flush(plan, &mut frame, drafting.as_mut(), seq);
                     deadline = None;
                 }
 
@@ -775,7 +808,31 @@ impl Turn<'_> {
                             }
                         }
                         ModelEvent::ToolCallDelta { index, id, name, args_delta } => {
+                            // Counted before it is handed over: `push` takes
+                            // the fragment, and the size is the only part of
+                            // it this loop still needs.
+                            let grown = args_delta.len() as u64;
+                            let draft = drafting.get_or_insert_with(|| Drafting::new(index));
+                            if draft.index != index {
+                                // A second call in the same response. The
+                                // first is finished being written, so its last
+                                // size is flushed before the count restarts.
+                                self.emit_drafting(plan, draft, seq);
+                                *draft = Drafting::new(index);
+                            }
+                            if let Some(name) = &name {
+                                draft.tool = Some(name.clone());
+                            }
+                            draft.bytes = draft.bytes.saturating_add(grown);
+
                             assembler.push(index, id, name, &args_delta);
+
+                            // Rides the frame the text deltas already open, so
+                            // arguments arriving with no text at all still get
+                            // a window to be reported in.
+                            if deadline.is_none() {
+                                deadline = Some(Instant::now() + DELTA_FRAME);
+                            }
                         }
                         ModelEvent::Finish { reason: stop, usage } => {
                             reason = Some((stop, usage));
@@ -790,7 +847,7 @@ impl Turn<'_> {
             }
         }
 
-        self.flush(plan, &mut frame, seq);
+        self.flush(plan, &mut frame, drafting.as_mut(), seq);
 
         if let Some((code, message, retryable)) = failure {
             return Streamed::Failed {
@@ -830,18 +887,56 @@ impl Turn<'_> {
         }
     }
 
-    /// Emits whatever text has accumulated, and empties the frame.
-    fn flush(&self, plan: &TurnPlan, frame: &mut String, seq: &mut u32) {
-        if frame.is_empty() {
+    /// Emits whatever has accumulated in this frame, and empties it.
+    ///
+    /// Text and the size of a half-written tool call go out together because
+    /// they are the same frame: a turn can be producing one, the other, or
+    /// both, and a large `fs_write` is minutes of the second with none of the
+    /// first. Taking the draft here rather than flushing it separately is what
+    /// stops the two from drifting out of step at the three places this is
+    /// called.
+    fn flush(
+        &self,
+        plan: &TurnPlan,
+        frame: &mut String,
+        drafting: Option<&mut Drafting>,
+        seq: &mut u32,
+    ) {
+        if !frame.is_empty() {
+            self.sink.emit(Event::TurnDelta(TurnDelta {
+                session_id: plan.session_id.clone(),
+                turn_id: plan.turn_id.clone(),
+                seq: *seq,
+                text: std::mem::take(frame),
+            }));
+            *seq = seq.saturating_add(1);
+        }
+
+        if let Some(draft) = drafting {
+            self.emit_drafting(plan, draft, seq);
+        }
+    }
+
+    /// Reports how far a tool call's arguments have got, if that has moved.
+    ///
+    /// Silent when nothing was added since the last frame. The timer fires on
+    /// a schedule and the model does not, so without this a call that paused
+    /// would emit the same number every fifty milliseconds — noise the UI
+    /// would have to filter and a `seq` that would climb for nothing.
+    fn emit_drafting(&self, plan: &TurnPlan, draft: &mut Drafting, seq: &mut u32) {
+        if draft.bytes == draft.reported {
             return;
         }
 
-        self.sink.emit(Event::TurnDelta(TurnDelta {
+        self.sink.emit(Event::ToolDrafting(ToolDrafting {
             session_id: plan.session_id.clone(),
             turn_id: plan.turn_id.clone(),
+            index: draft.index,
+            tool: draft.tool.clone(),
             seq: *seq,
-            text: std::mem::take(frame),
+            bytes: draft.bytes,
         }));
+        draft.reported = draft.bytes;
         *seq = seq.saturating_add(1);
     }
 
@@ -2284,6 +2379,98 @@ mod tests {
             .filter_map(|message| message.tool_call_id.as_deref())
             .collect();
         assert_eq!(answered, vec!["call_a", "call_b"]);
+    }
+
+    /// A file written by `fs_write` is generated as the call's arguments, so a
+    /// large one produces no `turn:delta` at all. Without this the window has
+    /// nothing to show for minutes and a working turn reads as a hung one.
+    #[tokio::test]
+    async fn a_call_being_written_reports_how_far_it_has_got() {
+        let fx = Fixture::new();
+        fx.say("write the file");
+
+        // Three fragments of one call's arguments, as a real stream sends
+        // them: the name arrives once, the rest is content.
+        let provider = FakeProvider::scripted(vec![vec![
+            ModelEvent::ToolCallDelta {
+                index: 0,
+                id: Some("call_a".to_owned()),
+                name: Some(tool::FS_LIST.to_owned()),
+                args_delta: r#"{"pa"#.to_owned(),
+            },
+            ModelEvent::ToolCallDelta {
+                index: 0,
+                id: None,
+                name: None,
+                args_delta: r#"th":"#.to_owned(),
+            },
+            ModelEvent::ToolCallDelta {
+                index: 0,
+                id: None,
+                name: None,
+                args_delta: r#""."}"#.to_owned(),
+            },
+            ModelEvent::Finish {
+                reason: StopReason::ToolCalls,
+                usage: None,
+            },
+        ]]);
+
+        fx.turn(&provider)
+            .run(&fx.plan(), &CancellationToken::new())
+            .await;
+
+        let drafts: Vec<ToolDrafting> = fx
+            .sink
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::ToolDrafting(draft) => Some(draft),
+                _ => None,
+            })
+            .collect();
+
+        let last = drafts.last().expect("the call was reported as it arrived");
+        assert_eq!(
+            last.bytes,
+            r#"{"path":"."}"#.len() as u64,
+            "the count is the whole arguments string, fragments summed"
+        );
+        assert_eq!(last.tool.as_deref(), Some(tool::FS_LIST));
+        assert_eq!(last.index, 0);
+    }
+
+    /// The frame timer fires on a schedule and the model does not. A call that
+    /// paused would otherwise re-report the same number every 50 ms, which is
+    /// noise the UI would have to filter and a `seq` climbing for nothing.
+    #[test]
+    fn an_unchanged_count_stays_quiet() {
+        let fx = Fixture::new();
+        let plan = fx.plan();
+        let provider = FakeProvider::new();
+        let turn = fx.turn(&provider);
+
+        let mut draft = Drafting::new(0);
+        draft.tool = Some(tool::FS_WRITE.to_owned());
+        draft.bytes = 4_096;
+        let mut seq = 0;
+
+        turn.emit_drafting(&plan, &mut draft, &mut seq);
+        turn.emit_drafting(&plan, &mut draft, &mut seq);
+
+        assert_eq!(seq, 1, "the second call had nothing new to say");
+        assert_eq!(
+            fx.sink
+                .names()
+                .iter()
+                .filter(|name| **name == crate::agent::event::name::TOOL_DRAFTING)
+                .count(),
+            1
+        );
+
+        draft.bytes = 8_192;
+        turn.emit_drafting(&plan, &mut draft, &mut seq);
+        assert_eq!(seq, 2, "a count that moved is reported");
     }
 
     #[test]

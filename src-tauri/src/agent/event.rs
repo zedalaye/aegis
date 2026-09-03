@@ -51,6 +51,8 @@ pub mod name {
     pub const TOOL_APPROVAL_RESOLVED: &str = "tool:approval_resolved";
     /// A tool began running.
     pub const TOOL_STARTED: &str = "tool:started";
+    /// The model is still writing a tool call's arguments.
+    pub const TOOL_DRAFTING: &str = "tool:drafting";
     /// A running tool produced output.
     pub const TOOL_PROGRESS: &str = "tool:progress";
     /// A tool finished, whatever became of it.
@@ -197,6 +199,47 @@ pub struct ToolStarted {
     pub tool: String,
 }
 
+/// `tool:drafting` — the model is still writing a call's arguments.
+///
+/// The mirror of [`ToolProgress`], one step earlier: that one is a tool's
+/// *output* while it runs, this is its *input* while it is being written. The
+/// gap it fills is the same one, and it opened wider when turns stopped being
+/// capped at 8192 output tokens. A file written by `fs_write` is emitted as
+/// the arguments of a call, so a large one is twenty thousand tokens that
+/// produce no assistant text at all: several minutes in which the runtime is
+/// working perfectly and the window has nothing to show. That is
+/// indistinguishable from a hang, and people kill turns that look like one.
+///
+/// Bytes rather than the text. The arguments are a JSON string being built a
+/// fragment at a time, so any prefix of it is malformed, and a pane that
+/// streamed it would be showing escaped source with the closing brace missing.
+/// A number that climbs answers the only question being asked, which is
+/// whether anything is still happening.
+///
+/// Coalesced into the same 50 ms window as `turn:delta`, and for the same
+/// reason: these fragments arrive far faster than a window can usefully draw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct ToolDrafting {
+    /// The session.
+    pub session_id: String,
+    /// The turn.
+    pub turn_id: String,
+    /// Which call within this response. There is no call id yet — the model
+    /// may not have sent one, and the call does not exist until the arguments
+    /// parse.
+    pub index: u32,
+    /// The tool being called, once the model has named it. `None` while the
+    /// only thing that has arrived is arguments.
+    pub tool: Option<String>,
+    /// Per-turn monotonic counter, as on `turn:delta`. The UI drops anything
+    /// out of order or repeated.
+    pub seq: u32,
+    /// Bytes of arguments accumulated for this call so far.
+    #[ts(type = "number")]
+    pub bytes: u64,
+}
+
 /// `tool:progress` — output from a tool that is still running.
 ///
 /// `shell_exec` only (PLAN 2.2): a file is read in one call, but a command can
@@ -281,6 +324,7 @@ pub enum Event {
     /// `tool:started`.
     ToolStarted(ToolStarted),
     /// `tool:progress`.
+    ToolDrafting(ToolDrafting),
     ToolProgress(ToolProgress),
     /// `tool:finished`.
     ToolFinished(ToolFinished),
@@ -319,6 +363,7 @@ impl Event {
             Self::ToolApprovalRequired(_) => name::TOOL_APPROVAL_REQUIRED,
             Self::ToolApprovalResolved(_) => name::TOOL_APPROVAL_RESOLVED,
             Self::ToolStarted(_) => name::TOOL_STARTED,
+            Self::ToolDrafting(_) => name::TOOL_DRAFTING,
             Self::ToolProgress(_) => name::TOOL_PROGRESS,
             Self::ToolFinished(_) => name::TOOL_FINISHED,
             Self::SessionUpdated(_) => name::SESSION_UPDATED,
@@ -340,6 +385,7 @@ impl Event {
             Self::ToolApprovalRequired(payload) => &payload.session_id,
             Self::ToolApprovalResolved(payload) => &payload.session_id,
             Self::ToolStarted(payload) => &payload.session_id,
+            Self::ToolDrafting(payload) => &payload.session_id,
             Self::ToolProgress(payload) => &payload.session_id,
             Self::ToolFinished(payload) => &payload.session_id,
             Self::SessionUpdated(payload) => &payload.id,
@@ -375,6 +421,7 @@ impl Event {
             Self::ToolApprovalRequired(payload) => serde_json::to_value(payload),
             Self::ToolApprovalResolved(payload) => serde_json::to_value(payload),
             Self::ToolStarted(payload) => serde_json::to_value(payload),
+            Self::ToolDrafting(payload) => serde_json::to_value(payload),
             Self::ToolProgress(payload) => serde_json::to_value(payload),
             Self::ToolFinished(payload) => serde_json::to_value(payload),
             Self::SessionUpdated(payload) => serde_json::to_value(payload),

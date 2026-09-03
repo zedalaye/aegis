@@ -12,7 +12,12 @@
 import { useProjects } from "../../state/projects";
 import { useApprovals } from "../../state/approvals";
 import { useSessions } from "../../state/sessions";
-import { cacheShare, formatTimestamp, formatTokens } from "../../lib/format";
+import {
+  cacheShare,
+  formatBytes,
+  formatTimestamp,
+  formatTokens,
+} from "../../lib/format";
 
 import AgentBadge from "../agents/AgentBadge";
 import ApprovalDialog from "../approvals/ApprovalDialog";
@@ -36,6 +41,20 @@ function StatusLine() {
     return (
       <span className="chat__status chat__status--awaiting">
         waiting for you
+      </span>
+    );
+  }
+  // A turn writing a tool call produces no assistant text at all, and a large
+  // `fs_write` is minutes of it: the file's content is generated as the call's
+  // arguments. A bare "streaming…" through all of that is what makes a working
+  // turn look like a hung one, so the size stands in for the words there are
+  // none of.
+  if (streaming?.drafting != null) {
+    const { tool, bytes } = streaming.drafting;
+    return (
+      <span className="chat__status chat__status--running">
+        {tool === null ? "writing a tool call" : `writing ${tool}`} ·{" "}
+        {formatBytes(bytes)}
       </span>
     );
   }

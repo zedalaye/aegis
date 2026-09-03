@@ -65,8 +65,25 @@ export type Streaming = {
   readonly model: string;
   /** Text accumulated from `turn:delta` since the last finalized message. */
   readonly text: string;
+  /**
+   * The tool call the model is part-way through writing, or `null`.
+   *
+   * The stretch where a turn is working and has nothing to say: arguments are
+   * generated as output tokens, so a large `fs_write` is minutes of silence on
+   * every other channel. Cleared on `turn:message`, which is the runtime
+   * saying the round's arguments are complete and its calls are about to run.
+   */
+  readonly drafting: Drafting | null;
   /** Highest `seq` applied. Frames at or below it are duplicates. */
   readonly seq: number;
+};
+
+/** A tool call still being written by the model. */
+export type Drafting = {
+  /** The tool, once the model has named it. */
+  readonly tool: string | null;
+  /** Argument bytes so far. */
+  readonly bytes: number;
 };
 
 /** One unbroken run of output from the same pipe. */
@@ -434,7 +451,9 @@ export function attachSessionEvents(): Promise<() => void> {
   return subscribe({
     "turn:started": ({ session_id, turn_id, model }) => {
       if (isOpen(session_id)) {
-        setState({ streaming: { turnId: turn_id, model, text: "", seq: -1 } });
+        setState({
+          streaming: { turnId: turn_id, model, text: "", drafting: null, seq: -1 },
+        });
       }
     },
 
@@ -468,12 +487,30 @@ export function attachSessionEvents(): Promise<() => void> {
               // The buffer has been superseded by the finalized message. A
               // turn with tool calls streams again after this, into an empty
               // buffer.
+              // ...and whatever call was being written has finished being
+              // written, which is what this event means.
               streaming:
                 state.streaming === null
                   ? null
-                  : { ...state.streaming, text: "" },
+                  : { ...state.streaming, text: "", drafting: null },
             },
       );
+    },
+
+    // How far the model has got writing a call's arguments. The mirror of
+    // `tool:progress`, one step earlier, and often the only thing on screen
+    // during a large `fs_write`.
+    "tool:drafting": ({ session_id, seq, tool, bytes }) => {
+      if (!isOpen(session_id)) {
+        return;
+      }
+      setState((state) => {
+        const streaming = state.streaming;
+        if (streaming === null || seq <= streaming.seq) {
+          return state;
+        }
+        return { streaming: { ...streaming, seq, drafting: { tool, bytes } } };
+      });
     },
 
     // Live output from a running command. Kept in the store rather than

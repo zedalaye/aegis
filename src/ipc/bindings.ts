@@ -1795,6 +1795,57 @@ image_path: string | null, };
 export type ToolCallStatus = "pending" | "approved" | "denied" | "running" | "ok" | "error" | "cancelled";
 
 /**
+ * `tool:drafting` — the model is still writing a call's arguments.
+ *
+ * The mirror of [`ToolProgress`], one step earlier: that one is a tool's
+ * *output* while it runs, this is its *input* while it is being written. The
+ * gap it fills is the same one, and it opened wider when turns stopped being
+ * capped at 8192 output tokens. A file written by `fs_write` is emitted as
+ * the arguments of a call, so a large one is twenty thousand tokens that
+ * produce no assistant text at all: several minutes in which the runtime is
+ * working perfectly and the window has nothing to show. That is
+ * indistinguishable from a hang, and people kill turns that look like one.
+ *
+ * Bytes rather than the text. The arguments are a JSON string being built a
+ * fragment at a time, so any prefix of it is malformed, and a pane that
+ * streamed it would be showing escaped source with the closing brace missing.
+ * A number that climbs answers the only question being asked, which is
+ * whether anything is still happening.
+ *
+ * Coalesced into the same 50 ms window as `turn:delta`, and for the same
+ * reason: these fragments arrive far faster than a window can usefully draw.
+ */
+export type ToolDrafting = { 
+/**
+ * The session.
+ */
+session_id: string, 
+/**
+ * The turn.
+ */
+turn_id: string, 
+/**
+ * Which call within this response. There is no call id yet — the model
+ * may not have sent one, and the call does not exist until the arguments
+ * parse.
+ */
+index: number, 
+/**
+ * The tool being called, once the model has named it. `None` while the
+ * only thing that has arrived is arguments.
+ */
+tool: string | null, 
+/**
+ * Per-turn monotonic counter, as on `turn:delta`. The UI drops anything
+ * out of order or repeated.
+ */
+seq: number, 
+/**
+ * Bytes of arguments accumulated for this call so far.
+ */
+bytes: number, };
+
+/**
  * `tool:finished` — the call ended, whatever became of it.
  */
 export type ToolFinished = { 
