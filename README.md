@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 18 (MCP client) — the MVP is
+> **Status: Phase 19 (the first domain pack) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -146,6 +146,16 @@ ever sent to it.
 > later. Adding a connector starts a program, so only you can do it: there is no tool that
 > installs one, and granting its tools to an identity is a second act, on the identity. See
 > *Connectors*.
+>
+> **The first domain pack is three files, and none of them is in the runtime.** `review.diff`,
+> `deploy.draft` and `alert.draft` are runbooks in your library — review a range before it goes
+> to a client, draft the deploy somebody else runs, turn an alert into a note and a reply nobody
+> has sent. Aegis did not learn about clients, forges or hosting to get them: no command, no
+> tool, no row of the policy matrix changed, and an install that does no client work has three
+> folders it can delete. Each one stops one step short of the thing that cannot be taken back —
+> the merge, the deploy, the sent reply — because that step is yours. Nothing is granted by
+> being seeded: they reach a model when you make an identity and tick them. See *The delivery
+> pack*.
 
 ---
 
@@ -418,10 +428,11 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts six there — `never-send-without-review`, `cos.loop`, `world.draft`,
-`world.perceive-delta`, `world.verify` and `world.check` — and offers each **once**, recorded by
-name in `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later
-version adding a seventh will offer that one and leave the rest alone. A workspace's own runbooks
+`SKILL.md` in it. Aegis puts nine there — `never-send-without-review`, `cos.loop`, `world.draft`,
+`world.perceive-delta`, `world.verify`, `world.check`, and the delivery pack's `review.diff`,
+`deploy.draft` and `alert.draft` — and offers each **once**, recorded by name in
+`skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later version
+adding a tenth will offer that one and leave the rest alone. A workspace's own runbooks
 live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -715,11 +726,13 @@ fix it — and it is never offered to a model.
 | **Per identity** | the identity's allow-list | which of the above that identity may run |
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
-happening. Aegis seeds the library with `never-send-without-review`, `cos.loop` and the four
-world runbooks, and each workspace with `inbox.triage` when you press *Set up shared files* — all
-of them are examples of the format in the place you would look for one, and all of them are
-ordinary files you can rewrite or delete. `cos.loop` is the Chief-of-Staff loop; see
-[Handoffs](#handoffs). The `world.*` four are the constitution's; see [The world](#the-world).
+happening. Aegis seeds the library with `never-send-without-review`, `cos.loop`, the four
+world runbooks and the three of the delivery pack, and each workspace with `inbox.triage` when
+you press *Set up shared files* — all of them are examples of the format in the place you would
+look for one, and all of them are ordinary files you can rewrite or delete. `cos.loop` is the
+Chief-of-Staff loop; see [Handoffs](#handoffs). The `world.*` four are the constitution's; see
+[The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are a domain pack; see
+[The delivery pack](#the-delivery-pack).
 
 Seeding happens **once per name**. The library records what it has offered in `skills/.seeded`,
 so a runbook you deleted does not reappear on the next start, and a runbook a later version adds
@@ -1317,6 +1330,76 @@ inlined — `[image, image/png, about 40000 bytes — not shown in this build]` 
 `screen_capture` returns a path and a hash: a megabyte of base64 in the transcript is a megabyte
 the model cannot use and the context window cannot spare. Text is capped at 64 KB, and the
 envelope says when it was cut.
+
+## The delivery pack
+
+A **pack** is a kind of work Aegis can do, assembled out of things it already has: a project
+folder, a few runbooks, whatever connectors that work needs, and one identity that holds them.
+It is not a feature. There is no `client_deliver` tool, nothing in the runtime knows what a
+client is, and adding the next pack will not change that — a domain that arrived as a new branch
+in the agent loop would be a domain nobody could remove.
+
+The first one is client delivery, and Aegis ships its three runbooks in your library:
+
+| Runbook | Reads | Writes | Will not |
+| --- | --- | --- | --- |
+| `review.diff` | a revision range, or a patch file, and the files as they now stand | `.aegis/artefacts/<branch>.review.md`, ending in *ship*, *change first* or *do not ship* | merge, push, tag, or answer the pull request |
+| `deploy.draft` | what the project says about how it ships — its own runbook, the compose file, the CI workflow | `.aegis/artefacts/deploy-<env>-<rev>.md`: the commands in order, each undoable one with how | deploy, or run a step of the plan "to be sure" |
+| `alert.draft` | the alert, plus read-only health checks | an incident note that cites a command behind every observed line, and a reply beside it | restart, scale, roll back, or send the reply |
+
+The shape is the same in all three: something on disk goes in, two files come out, and the run
+stops one step before the act that cannot be taken back. That step is not missing because it is
+hard — it is the human gate (`PLAN.md` § 7.4), and a runbook that ended with the merge would be
+a runbook that had merged.
+
+### Setting it up
+
+1. **Open the client's repository as a project** and press *Set up shared files*. The pack writes
+   into `.aegis/artefacts/`, and the review it produced last week is in the repository beside the
+   change it was about.
+2. **Make the identity.** *Settings → Identities → +*: call it what the work is — *Delivery* —
+   give it a one-line role, and tick `fs_list`, `fs_read`, `fs_write` and `shell_exec`. Nothing
+   else. A specialist that can capture your screen is not a specialist.
+3. **Grant the three runbooks** on that identity. That is the moment the pack exists; until then
+   the files are examples in a folder.
+4. **Install the connectors it wants**, if any — a git or forge MCP server under *Settings →
+   Connectors*, then grant its tools on the same identity. This step is optional on purpose: the
+   runbooks read a diff through `shell_exec` and deploy facts out of the project's own files, so
+   the pack works on the first day and a connector later replaces the *source*, not the
+   procedure.
+5. **Open a session as that identity** and give it a range, a revision or an alert path.
+
+### What stays yours
+
+Merging, deploying and sending. Not by convention — by the same matrix everything else goes
+through, and by three runbooks whose last step says to stop. Aegis has no tool that merges, none
+that deploys and none that sends a message; when a host's connector gives it one, that call is
+put to you every time, like every connector call.
+
+The reply `alert.draft` drafts is a file until you send it, and it is exactly the input
+`never-send-without-review` was seeded for. Run one into the other.
+
+### Where this project's own knowledge goes
+
+`deploy.draft` reads the project's account of itself before anything else, and the best place for
+that account is `.aegis/skills/` inside the repository, where it travels with the repo in git.
+Two ways to write it, and the difference is the name. Call it `deploy.draft` and it **shadows**
+the library's: this project's procedure is now the only one, and the generic one never runs here.
+Call it anything else — `deploy.this-app` — and the library's runbook reads it as the source it
+asks for in step 1. Either is right; the first is for a project whose deploy is nothing like the
+others.
+
+That is the division: the library holds how you work, the repository holds how it works, and the
+identity decides which of them a session may run.
+
+### The other packs are not here
+
+`PLAN.md` § 7.3 lists six — delivery, intake, watch, budget, social, revenue — one at a time,
+each allowed to fail without blocking the next. Intake is not started, and the way to tell that
+this one landed is not that a client got a reply: it is that nothing in `src-tauri` had to learn
+what a client is.
+
+---
 
 ## Layout
 

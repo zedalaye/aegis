@@ -1416,6 +1416,48 @@ identity. Suggested order, because each pack is allowed to fail without blocking
 Never start pack *n+1* because pack *n* is exciting. Never add a domain by growing
 `agent/turn.rs`.
 
+*Pack 1 landed as:* three `SKILL.md` files in the seeded library — `review.diff`, `deploy.draft`,
+`alert.draft` — their three entries in `skills::SEEDED`, and the documentation. Nothing else.
+`agent/turn.rs`, the policy matrix, the tool registry, the IPC surface and the UI are untouched;
+no command was added and no binding regenerated. **A phase whose rule is *not runtime* is a phase
+whose diff is supposed to be boring, and the way to tell this one landed is not that a client got
+a reply — it is that nothing in `src-tauri` had to learn what a client is.**
+
+**Why the library and not a workspace.** How you review a change before it reaches a client is
+how *you* work, so it is the library scope; how *this* application ships is `.aegis/skills/` in
+the repository, which is why `deploy.draft` reads a workspace runbook first and says that one
+beats it. The cost to an install that does no client work is three folders it can delete, because
+a seeded runbook grants nothing and reaches no model until an identity holds it — the pack does
+not exist until somebody ticks three boxes.
+
+**Each runbook stops one step short, and the stop is in the steps rather than left to the gate.**
+The gate would not refuse `docker compose up -d`; it would *ask*, and a question with a plausible
+yes at the end of a procedure that has done everything else is how an irreversible act gets taken
+by momentum. A runbook that never reaches the question is the difference between an approval
+dialog and a procedure. So the last step of each is *stop*, and each says there is no later
+version of it that ends with the merge, the deploy or the sent reply.
+
+**What the pack deliberately does not ship is the other two thirds of it.** § 7.3 defines a pack
+as a workspace, skills, the MCP servers it needs and a specialist identity. Aegis ships the
+skills. It does not install a git or forge connector — installing one starts a program, which is
+the operator's act (Phase 18) — and it does not create a Delivery identity, because that would be
+granting `shell_exec` and three runbooks to something nobody made. The runbooks are therefore
+written to work with **no connector at all**: a diff comes from `shell_exec`, deploy facts come
+from the project's own files, an alert comes from a path in `.aegis/briefs/`. A connector later
+replaces the source, not the procedure (§ 7.6) — which is also the test the pack has to pass:
+`the_delivery_pack_calls_only_tools_this_build_has` fails if a seeded runbook ever declares a
+`<connector>__<tool>` nobody has installed.
+
+**Two failure modes are what the steps are actually written against.** The plausible deploy —
+inferring a pipeline from the framework's defaults for an application that ships some other way,
+which is the most expensive artefact in the pack — is answered by making a missing account a
+`blocked` rather than an invitation. And the inference that becomes a promise: an incident is the
+moment a client is owed a sentence, so the note keeps observed and inferred apart, cites the
+command behind every observed line, and the reply may not name a cause the note marked as a
+guess.
+
+Packs 2–6 are not started, and pack 1 being pleasant is not a reason to start one.
+
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
 after Phase 13. § 7.13 (skill promotion) may run after Phase 17. They do not insert
 here, and they are not Phases 20, 21, 22 and 23.

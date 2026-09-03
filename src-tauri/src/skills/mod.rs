@@ -568,10 +568,24 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// examples and nothing else: [`catalog`] reads a missing directory as an empty
 /// one.
 ///
-/// Six runbooks now, in two groups. Two are the halves of the mode as it was:
-/// the standing rule that nothing irreversible goes out unreviewed, and the
-/// loop a Chief of Staff runs. Four are the world's (PLAN 7.2) — draft one,
-/// perceive a delta, verify against the oracle, check the constitution.
+/// Nine runbooks now, in three groups. Two are the halves of the mode as it
+/// was: the standing rule that nothing irreversible goes out unreviewed, and
+/// the loop a Chief of Staff runs. Four are the world's (PLAN 7.2) — draft one,
+/// perceive a delta, verify against the oracle, check the constitution. Three
+/// are the client-delivery pack (PLAN 7.3, Phase 19) — review a range, draft a
+/// deploy, triage an alert.
+///
+/// That last group is what a **domain pack** is, and the reason it is here
+/// rather than anywhere else in this tree. Phase 19's rule is *domain packs as
+/// skills, not runtime*: delivery reaches the harness as three files in a
+/// directory, and `agent/turn.rs`, the policy matrix and the tool registry do
+/// not know that a client exists. Each runbook stops one step short of the act
+/// that cannot be taken back — a merge, a deploy, a reply to somebody who is
+/// waiting — because that step is the human's (PLAN 7.4) and a procedure that
+/// ended with it would be a procedure that had taken it. The rest of the pack
+/// is not in this file: the connectors it may want are installed by the
+/// operator (Phase 18), and the specialist that runs it is an identity
+/// somebody made and granted these names to.
 ///
 /// [`DRAFT_SKILL`] is the one that writes `world/`, and it is not the
 /// `world.amend` PLAN 7.2 refuses: that sentence is about *specialists*, and
@@ -641,13 +655,16 @@ const SEEDED_FILE: &str = ".seeded";
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
-const SEEDED: [(&str, &str); 6] = [
+const SEEDED: [(&str, &str); 9] = [
     (REVIEW_SKILL, REVIEW_SEED),
     (COS_SKILL, COS_SEED),
     (DRAFT_SKILL, DRAFT_SEED),
     (PERCEIVE_SKILL, PERCEIVE_SEED),
     (VERIFY_SKILL, VERIFY_SEED),
     (CHECK_SKILL, CHECK_SEED),
+    (REVIEW_DIFF_SKILL, REVIEW_DIFF_SEED),
+    (DEPLOY_SKILL, DEPLOY_SEED),
+    (ALERT_SKILL, ALERT_SEED),
 ];
 
 /// The standing rule of the whole mode, as a runbook.
@@ -1167,6 +1184,333 @@ does not apply. Return `status: blocked`, say so in one line, and get on with
 the work under the cabinet's own rules.
 "#;
 
+// ---------------------------------------------------------------------------
+// The client-delivery pack (PLAN 7.3, Phase 19, pack 1)
+// ---------------------------------------------------------------------------
+
+/// Review a range before it goes to a client (PLAN 7.6 names it, under *Three
+/// scopes*).
+pub const REVIEW_DIFF_SKILL: &str = "review.diff";
+
+/// `review.diff`, the first runbook of the delivery pack.
+///
+/// The pack's cheapest runbook, and the one that needs nothing installed: `git`
+/// is on the machine of anybody who has a client repository, so the source of
+/// a diff is `shell_exec` today and a forge's connector later — the procedure
+/// does not move when it does (PLAN 7.6).
+///
+/// What makes it a runbook rather than a prompt is step 4. "Review this diff"
+/// gets a model's four best observations about the hunks it was shown; a fixed
+/// order that asks about intent, correctness, irreversibility and leakage gets
+/// the same four questions on a Friday as on a Tuesday, and a verdict that can
+/// be compared with last week's. The step that reads the *files* rather than
+/// the hunks is there for the failure this catches most often: a hunk is
+/// correct and what it now sits beside is not.
+const REVIEW_DIFF_SEED: &str = r#"---
+version: 1
+tools: fs_read, fs_write, shell_exec
+---
+
+# review.diff
+
+## When to use it
+
+Before a change goes to a client: a branch about to become a pull request, one
+waiting on you, or a patch file in the workspace.
+
+One run reviews one range. Prefer not to run it on a change you wrote in this
+session — a second opinion from whoever had the first one is worth less than it
+looks; hand it to another identity, or to the human.
+
+## Inputs required and tools it will call
+
+- The range, as two revisions: the base the change will land on and its tip.
+  `main..HEAD` is the usual one. Or, if you were handed a `.diff` or `.patch`
+  file instead, its path.
+- What the change was meant to do, in one line. Without it a review is a list
+  of things somebody noticed, not a judgement.
+
+Calls `shell_exec` for read-only git (`diff`, `log`, `show`, `status`),
+`fs_read` for the files as they now stand, and `fs_write` for the review.
+
+## Steps
+
+1. Establish the range. `git status`, then `git log --oneline <base>..<tip>`, so
+   the review names commits that exist rather than a branch that has moved
+   since somebody described it to you.
+2. `git diff --stat <base>..<tip>` first, then the diff itself. If the change
+   touches more than you were told it would, that is already the first finding.
+3. `fs_read` every file the diff changes, at its current state. A hunk is not
+   the file: the defect is usually in what the hunk now sits next to.
+4. Judge four things, in this order and no other: does it do what it was meant
+   to do; is anything in it wrong; is anything in it irreversible once merged —
+   a migration, a dropped column, a rotated key; and does it put something in
+   the client's repository that should not be there.
+5. `fs_write` the review to `.aegis/artefacts/<branch>.review.md`: the range,
+   the four answers, then one finding per bullet, each naming `path:line` and
+   quoting the line it is about. End with one of *ship*, *change first* or
+   *do not ship*.
+6. Stop. Merging, pushing, tagging and answering the pull request are not steps
+   here, and a later version of this runbook that added them would not make
+   them yours.
+
+## How to validate
+
+The review names the exact revisions it read, and `git log` still shows them.
+Every finding gives a path and quotes its line. A verdict of *ship* means you
+worked through step 4 and found nothing, not that nothing stood out.
+
+## What to return
+
+`skill_return` with `status: done`, the review file in `artefacts`, the range
+in `evidence`, and the verdict as the first line of `summary`.
+`status: needs_you` when the change turns on a decision that is the client's or
+the human's — a behaviour nobody asked for, a dependency with a licence — with
+that decision in `open_questions`.
+
+## What requires approval
+
+Every `git` command is an ordinary `shell_exec`, put to the user with its
+arguments. Keep them read-only: `diff`, `log`, `show`, `status`. A command that
+moves the repository — `checkout`, `merge`, `push`, `reset`, `stash` — is not
+part of a review, and the working tree you are reading belongs to somebody who
+did not ask you to touch it.
+
+Read-only means the working tree too, and this is where it is easy to be wrong:
+a build or a test command **writes**. A filtered `cargo test` in this repository
+regenerates a tracked file from a subset of its types and truncates the rest. If
+you need the suite to judge the change, say so and let the person run it; if you
+run it anyway, you have changed the tree you are reviewing and the review has to
+say so.
+
+## What to do if the source is missing
+
+If the range does not resolve, or the patch is not at the path you were given,
+return `status: blocked` with what you tried in `open_questions`. Do not review
+the conversation's account of the change: a review of a diff nobody read is
+worse than no review, because it reads like one.
+
+**A refusal is a missing source.** If a read you needed was denied — by the
+person, or by the round limit that ends a turn — the review is partial, and that
+is a fact about the review rather than an accident of how it went. Name the file
+you could not read, and return `status: needs_you`. Never write *ship* on a diff
+you were refused: a verdict on a file nobody opened is the exact failure the
+four questions exist to prevent.
+
+If `.aegis/artefacts/` is not there, this workspace has not been set up for the
+cabinet. Write the review with its directory created, and say in `summary` that
+the shared files are missing — the button is in the project panel.
+"#;
+
+/// Draft a deployment somebody else runs (PLAN 7.3, Phase 19: *destructive
+/// deploy stays gated*).
+pub const DEPLOY_SKILL: &str = "deploy.draft";
+
+/// `deploy.draft`, the runbook that stops one step before the deploy.
+///
+/// The pack's whole argument in one file. A deploy is irreversible in the sense
+/// the matrix means — somebody else's users are on the other end — so the
+/// procedure that can be written down is everything up to it, and the act
+/// itself stays a human one (PLAN 7.4). That is not a limitation this runbook
+/// works around later: there is no version of it that ends with the deploy,
+/// which is why the last step says so rather than leaving it to the gate.
+///
+/// It also fixes where the facts come from. The project's own account — a
+/// workspace runbook, the compose file, the CI workflow — beats what a model
+/// knows about how applications like this are usually shipped, and a missing
+/// account is a `blocked` rather than an invitation to infer a pipeline. A
+/// Coolify or a host connector, when there is one, replaces that source and
+/// leaves the procedure alone (PLAN 7.6).
+const DEPLOY_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write, shell_exec
+---
+
+# deploy.draft
+
+## When to use it
+
+When something is ready to go to an environment and a person has to decide. The
+output is a plan somebody reads and runs; this runbook never deploys.
+
+## Inputs required and tools it will call
+
+- Which revision, and which environment. Both by name — "the latest" is not a
+  revision, and "prod" is not an environment unless that is the project's own
+  word for it.
+- Where the project says how it is deployed: `.aegis/skills/` if this workspace
+  has its own deploy runbook, then the README, the compose file, the
+  Dockerfile, the CI workflow. Those are the source. What you know about how
+  applications like this are usually shipped is not.
+
+Calls `fs_list` and `fs_read` to gather, `shell_exec` for read-only checks, and
+`fs_write` for the plan.
+
+## Steps
+
+1. Read the project's own account first. A workspace runbook that says how
+   *this* application ships beats everything else here, including this file.
+2. Pin the revision. `git log -1 <revision>` so the plan names a commit that
+   exists, and say what is in it that is not in what is running.
+3. List what the deploy changes beyond code: migrations, environment variables,
+   a queue that must drain, a cache to clear, a job to stop first. Name the
+   variables. Never read a value into the plan.
+4. `fs_write` `.aegis/artefacts/deploy-<environment>-<short revision>.md`: the
+   revision, the environment, and the commands in the order a person runs them,
+   one per line. Beside each one that changes data, how it is undone. A step
+   with no way back is marked as one, in words, on its own line.
+5. Say what "it worked" looks like: the check to run afterwards and what it
+   should say. A plan with no answer to that is a plan nobody can stop halfway
+   through.
+6. Stop. Do not run the plan — not even its first read-only step, to be sure.
+   The person who decides to deploy is the person who runs it.
+
+## How to validate
+
+The plan names one revision and one environment. Every command is copy-pastable
+as written, with no placeholder the reader has to guess at. Every step that
+changes data carries a rollback line or is marked irreversible. No secret value
+appears anywhere in the file — only names.
+
+## What to return
+
+`skill_return` with `status: done`, the plan in `artefacts`, the revision in
+`evidence`, and a summary of at most five lines: what ships, where, and which
+steps cannot be undone. `status: needs_you` when the plan cannot be written
+without a decision — a migration that drops data, a window that costs users —
+with that decision in `open_questions`.
+
+## What requires approval
+
+Reads inside the workspace happen without asking. Each `shell_exec` is put to
+the user with its arguments; keep them read-only, and count a build or a test
+command as a write — it touches the tree you are describing. Deploying is not a
+step in this runbook and there is no version of it in which it is. When a host's
+connector exists it will replace where these facts come from, not who presses
+go.
+
+## What to do if the source is missing
+
+If the project does not say how it is deployed, return `status: blocked`, name
+the files you looked in, and ask for the one that is missing. Do not draft from
+the framework's defaults: a plausible deploy for an application that is shipped
+some other way is the most expensive artefact in this pack.
+
+A refusal is a missing source: a read denied by the person, or by the round
+limit that ends a turn, leaves a plan resting on a file you never opened. Say
+which one and return `status: needs_you`. If `.aegis/artefacts/` is not there,
+write the plan with its directory created and say the shared files are missing.
+"#;
+
+/// Turn a monitoring signal into a note and a reply nobody has sent.
+pub const ALERT_SKILL: &str = "alert.draft";
+
+/// `alert.draft`, triage for something that is on fire.
+///
+/// Two files out, and the second one is why this is in the pack: an incident is
+/// the moment a client is owed a sentence, and that sentence is the one most
+/// likely to be written out of an inference somebody stopped marking as one. So
+/// the note keeps observed and inferred apart and cites the command behind
+/// every observed line, and the reply may not carry a cause the note marked as
+/// a guess.
+///
+/// The steps that say *stop* are load-bearing here in a way they are not in
+/// [`REVIEW_DIFF_SEED`]. Restarting the service is the one move in an incident
+/// that is both plausible and destroys the evidence for what caused it; it is
+/// also exactly what a model holding `shell_exec` and a sense of helpfulness
+/// reaches for. Triage produces the note that informs that decision. The
+/// decision stays a person's.
+const ALERT_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write, shell_exec
+---
+
+# alert.draft
+
+## When to use it
+
+When monitoring has fired, or a client says something is broken. It turns the
+signal into an incident note and a reply the human may send.
+
+It does not fix anything, and it does not answer anybody.
+
+## Inputs required and tools it will call
+
+- The alert, as a path: the exported alert, the log excerpt, the message
+  somebody dropped in `.aegis/briefs/`. If you were given no path, the newest
+  unhandled file there.
+- Which system it is about, if the alert does not say.
+
+Calls `fs_list` and `fs_read` for the alert and what it points at, `shell_exec`
+for read-only checks, and `fs_write` for the two drafts.
+
+## Steps
+
+1. `fs_read` the alert whole, including the parts that repeat. When it started,
+   how often it has fired, and what it actually measures are the three facts a
+   reply stands on.
+2. Establish what is true now, with read-only commands: the service's own health
+   output, the last lines of a log, `git log -1` on what is deployed. **Four
+   commands, and the fourth is the last.** A count rather than "enough", because
+   an alert that names something broken is an invitation to go and fix it, and
+   refusing that invitation is most of this runbook's job. If four have not
+   established the cause, *that is the finding*: write the note with the cause
+   marked unestablished and propose the diagnosis as the next action instead of
+   starting it. A run that spends twenty commands has stopped triaging and is
+   debugging under another name, unwatched, with nobody expecting it.
+3. Keep what you observed and what you infer apart, and keep them apart for the
+   rest of the run. Every line of the note is one or the other and says which.
+4. `fs_write` `.aegis/artefacts/incident-<date>-<system>.md`: when it started,
+   what is affected, what is *not* affected, what is true right now, the
+   likeliest cause with how sure you are, and the next action you would take.
+   Cite the command or the file behind every observed line.
+5. `fs_write` the reply beside it, named for the same incident with `.reply`
+   before the extension: what happened, what it means for them, what is being
+   done, and when they will hear next. It promises nothing the note does not
+   support, and it names no cause the note marked as inferred.
+6. Stop. Restarting a service, scaling something, clearing a queue or rolling
+   back are not steps here — they are the decision this note exists to inform.
+   Sending the reply is the human's, after `never-send-without-review`.
+
+## How to validate
+
+Every observed line in the note cites a command or a file, with the time it came
+from, and the note cites **at most four commands** — if it cites more, this was
+not a triage. The reply contains no claim the note does not carry. The note says
+what is *unaffected*: a report that lists only damage cannot be used to decide
+anything.
+
+## What to return
+
+`skill_return` with `status: done`, both files in `artefacts`, the checks you
+ran in `evidence`, and a summary of at most five lines: what is affected, what
+is not, and the next action. `status: needs_you` when that action is
+irreversible or reaches users — which is most of the interesting ones — with it
+in `open_questions`.
+
+## What requires approval
+
+Both writes are ordinary `fs_write` calls. Every check is a `shell_exec` put to
+the user with its arguments; keep them read-only — a build or a test command
+writes, and during an incident it competes with the thing you are diagnosing —
+and remember that the "harmless" restart is the one command that destroys the
+evidence for what caused it. Nothing here sends: the reply is a file until a
+person sends it.
+
+## What to do if the source is missing
+
+If there is no alert at the path you were given and nothing unhandled in
+`.aegis/briefs/`, return `status: blocked` and say which path you looked at. Do
+not write an incident note from a dashboard you cannot see, and do not
+reconstruct the alert from what the conversation said it probably was.
+
+A check you were refused — by the person, or by the round limit that ends a turn
+— is not an observation and does not become one. Leave it out of the note, say
+in `summary` what you could not check, and return `status: needs_you` if the
+next action turns on it. If `.aegis/artefacts/` is not there, write both files
+with their directory created and say the shared files are missing.
+"#;
+
 /// `inbox.triage`, seeded into a workspace by the shared-files convention.
 ///
 /// The stub PLAN 7.3 asks Phase 13 for: file in, status and artefact out. It
@@ -1288,6 +1632,60 @@ mod tests {
         for (name, text) in SEEDED.iter().chain([&("inbox.triage", TRIAGE_SEED)]) {
             doc::parse(text).unwrap_or_else(|err| panic!("`{name}` does not parse: {err}"));
         }
+    }
+
+    /// The delivery pack (PLAN 7.3, Phase 19) calls nothing that has to be
+    /// installed first.
+    ///
+    /// A pack is skills, connectors and an identity, and only the first of
+    /// those ships. A seeded runbook that declared `coolify__deploy` would be
+    /// an example that fails closed at `skill_run` on every machine where that
+    /// connector is not installed — which is every machine, on the day it is
+    /// seeded. The source of a diff or a deploy fact is `shell_exec` and the
+    /// project's own files today; a connector replaces the source later, and
+    /// that is an edit to the runbook the operator owns.
+    #[test]
+    fn the_delivery_pack_calls_only_tools_this_build_has() {
+        for name in [REVIEW_DIFF_SKILL, DEPLOY_SKILL, ALERT_SKILL] {
+            let (_, text) = SEEDED
+                .iter()
+                .find(|(seeded, _)| *seeded == name)
+                .unwrap_or_else(|| panic!("`{name}` is seeded"));
+            let doc = doc::parse(text).unwrap_or_else(|err| panic!("`{name}`: {err}"));
+
+            assert!(!doc.tools.is_empty(), "`{name}` declares what it calls");
+            for tool in &doc.tools {
+                assert!(
+                    crate::tools::spec(tool).is_some(),
+                    "`{name}` declares `{tool}`, which needs something installed"
+                );
+            }
+        }
+    }
+
+    /// A pack is assembled by a grant, not by being shipped.
+    ///
+    /// The three runbooks are in everybody's library from the first start and
+    /// reach no model until an identity holds them — which is the whole of what
+    /// "domain packs as skills, not runtime" costs an install that does no
+    /// client work: three folders it can delete.
+    #[test]
+    fn the_delivery_pack_reaches_a_specialist_and_nobody_else() {
+        let dir = TempDir::new().expect("temp dir");
+        seed(dir.path());
+        let catalog = catalog(dir.path(), None);
+
+        let specialist = agent_with(&[REVIEW_DIFF_SKILL, DEPLOY_SKILL, ALERT_SKILL]);
+        let held: Vec<&str> = granted(&catalog, &specialist)
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+        assert_eq!(held, [ALERT_SKILL, DEPLOY_SKILL, REVIEW_DIFF_SKILL]);
+
+        assert!(
+            granted(&catalog, &Agent::builtin()).is_empty(),
+            "installing a pack grants nothing"
+        );
     }
 
     #[test]
@@ -1472,13 +1870,17 @@ mod tests {
         assert_eq!(
             names,
             [
+                ALERT_SKILL,
                 COS_SKILL,
+                DEPLOY_SKILL,
+                REVIEW_DIFF_SKILL,
                 CHECK_SKILL,
                 DRAFT_SKILL,
                 PERCEIVE_SKILL,
                 VERIFY_SKILL
             ],
-            "the world's runbooks arrive; the deleted review does not come back"
+            "the world's runbooks and the delivery pack arrive; the deleted review does not come \
+             back"
         );
 
         // And the manifest now covers all five, so a third start writes nothing.

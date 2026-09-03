@@ -300,9 +300,12 @@ fn the_catalog_is_listable_and_carries_no_step_of_any_runbook() {
     assert_eq!(
         names,
         vec![
+            skills::ALERT_SKILL,
             skills::COS_SKILL,
+            skills::DEPLOY_SKILL,
             "inbox.triage",
             skills::REVIEW_SKILL,
+            skills::REVIEW_DIFF_SKILL,
             skills::CHECK_SKILL,
             skills::DRAFT_SKILL,
             skills::PERCEIVE_SKILL,
@@ -317,7 +320,10 @@ fn the_catalog_is_listable_and_carries_no_step_of_any_runbook() {
         scopes,
         vec![
             SkillScope::Library,
+            SkillScope::Library,
+            SkillScope::Library,
             SkillScope::Workspace,
+            SkillScope::Library,
             SkillScope::Library,
             SkillScope::Library,
             SkillScope::Library,

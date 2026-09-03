@@ -999,8 +999,11 @@ mod tests {
         assert_eq!(
             names,
             [
+                crate::skills::ALERT_SKILL,
                 crate::skills::COS_SKILL,
+                crate::skills::DEPLOY_SKILL,
                 crate::skills::REVIEW_SKILL,
+                crate::skills::REVIEW_DIFF_SKILL,
                 crate::skills::CHECK_SKILL,
                 crate::skills::DRAFT_SKILL,
                 crate::skills::PERCEIVE_SKILL,
