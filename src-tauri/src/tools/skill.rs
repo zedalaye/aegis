@@ -167,13 +167,19 @@ pub(crate) fn run(name: &str, ctx: SkillCtx<'_>) -> Produced {
 /// Refused when nothing is running: a return with no run behind it is a status
 /// object about nothing, and accepting it would put a `done` on the audit log
 /// for work no skill ever framed.
+///
+/// "Nothing is running" no longer means "not opened in this turn": a run
+/// carries across the turn boundaries the round cap creates, so a procedure
+/// interrupted half-way still has something to close when it resumes. What is
+/// refused here is a return with no run at all — never opened, already
+/// returned, cancelled, or old enough to have been dropped.
 pub(crate) fn ret(report: &handoff::Report, ctx: SkillCtx<'_>) -> Produced {
     let Some(active) = ctx.active else {
         return Produced::failed(
             tool::SKILL_RETURN,
             ErrorCode::ToolFailed,
-            "no skill is running in this turn, so there is nothing to return. `skill_run` opens \
-             one, and a run lasts for the turn that opened it."
+            "no skill is running, so there is nothing to return. `skill_run` opens one; a run \
+             carries across turns until it is returned, cancelled, or too old."
                 .to_owned(),
         );
     };

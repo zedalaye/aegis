@@ -40,6 +40,43 @@ struct Live {
     running: Option<ActiveTurn>,
     /// What the session shows when no turn is running.
     resting: SessionState,
+    /// The runbook this session is part-way through, if any.
+    run: Option<OpenRun>,
+}
+
+/// Most turns one skill run may span before it is dropped.
+///
+/// The bound on the risk that made a run turn-scoped in the first place: a span
+/// that outlives its turn can end up naming calls made after the conversation
+/// moved on. A run that has survived this many turns without a `skill_return`
+/// is no longer a procedure being followed — it is a name nobody closed — so it
+/// is dropped, loudly, rather than carried further.
+///
+/// Four rather than two because a real run is genuinely several turns: the
+/// trace this was written from (`IDEAS.md` § 10) took five, and the round cap
+/// that made it five has since been raised for exactly this case
+/// ([`MAX_TOOL_ROUNDS_IN_SKILL`](super::turn::MAX_TOOL_ROUNDS_IN_SKILL)).
+pub const MAX_RUN_TURNS: u32 = 4;
+
+/// A runbook a session is part-way through (PLAN 7.6).
+///
+/// Session state rather than a turn's local, and that is a correction rather
+/// than a preference. The round cap can end a turn in the middle of a
+/// procedure; the person then says "continue"; and every audit line after that
+/// boundary used to carry no skill at all — including, in the trace this was
+/// written from, the `fs_write` of the artefact the run existed to produce, and
+/// the `skill_return` that was refused because nothing was open to return.
+/// PLAN 7.6 asks one thing of a run — that it can be budgeted and replayed —
+/// and a name that stops at the first turn boundary cannot deliver it.
+///
+/// Nothing here is persisted, like everything else in this module: a run whose
+/// process is gone has nothing left to return.
+#[derive(Debug, Clone)]
+struct OpenRun {
+    /// The runbook being followed.
+    skill: String,
+    /// How many turns it has spanned, including the one that opened it.
+    turns: u32,
 }
 
 /// A turn currently executing.
@@ -226,6 +263,53 @@ impl TurnRegistry {
             .map(|active| active.id.clone())
     }
 
+    /// The runbook this session is part-way through, if any.
+    ///
+    /// Read at the top of a turn, so a procedure the round cap interrupted
+    /// carries on under its own name instead of continuing anonymously.
+    pub fn open_run(&self, session_id: &str) -> Option<String> {
+        self.sessions()
+            .get(session_id)
+            .and_then(|live| live.run.as_ref())
+            .map(|run| run.skill.clone())
+    }
+
+    /// Records what the turn that just ended was still following.
+    ///
+    /// `None` closes the run, which is what a `skill_return` and a cancelled
+    /// turn both amount to. `Some` keeps it for the next turn and returns how
+    /// many it has now spanned — or `None` when it has spent
+    /// [`MAX_RUN_TURNS`] and was dropped, which the caller says out loud.
+    pub fn carry_run(&self, session_id: &str, skill: Option<&str>) -> Option<u32> {
+        let mut sessions = self.sessions();
+        let live = sessions.entry(session_id.to_owned()).or_default();
+
+        let Some(skill) = skill else {
+            live.run = None;
+            return None;
+        };
+
+        let turns = match &live.run {
+            // The same run, one turn older.
+            Some(open) if open.skill == skill => open.turns.saturating_add(1),
+            // A different runbook, or the first turn of this one. Either way
+            // the count starts here: what the previous name spent is not this
+            // run's budget.
+            _ => 1,
+        };
+
+        if turns > MAX_RUN_TURNS {
+            live.run = None;
+            return None;
+        }
+
+        live.run = Some(OpenRun {
+            skill: skill.to_owned(),
+            turns,
+        });
+        Some(turns)
+    }
+
     /// Drops everything known about a session. Called when one is deleted.
     pub fn forget(&self, session_id: &str) {
         self.cancel_any(session_id);
@@ -242,6 +326,69 @@ impl TurnRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The correction of `IDEAS.md` § 10: a procedure the round cap
+    /// interrupted resumes under its own name.
+    #[test]
+    fn a_run_carries_to_the_next_turn_until_it_returns() {
+        let registry = TurnRegistry::new();
+        assert_eq!(registry.open_run("s1"), None, "nothing is running");
+
+        assert_eq!(registry.carry_run("s1", Some("review.diff")), Some(1));
+        assert_eq!(registry.open_run("s1").as_deref(), Some("review.diff"));
+
+        assert_eq!(registry.carry_run("s1", Some("review.diff")), Some(2));
+        assert_eq!(registry.open_run("s1").as_deref(), Some("review.diff"));
+
+        // What a `skill_return` and a cancelled turn both amount to.
+        registry.carry_run("s1", None);
+        assert_eq!(registry.open_run("s1"), None);
+    }
+
+    /// The bound on the risk that made a run turn-scoped: a name nobody closes
+    /// is dropped rather than carried through a conversation that moved on.
+    #[test]
+    fn a_run_nobody_returns_is_dropped_once_it_has_spent_its_turns() {
+        let registry = TurnRegistry::new();
+
+        for turn in 1..=MAX_RUN_TURNS {
+            assert_eq!(registry.carry_run("s1", Some("cos.loop")), Some(turn));
+        }
+        assert_eq!(
+            registry.carry_run("s1", Some("cos.loop")),
+            None,
+            "the turn past the ceiling drops it"
+        );
+        assert_eq!(registry.open_run("s1"), None);
+    }
+
+    /// A second runbook is a second run, and does not inherit what the first
+    /// one had already spent.
+    #[test]
+    fn a_different_runbook_starts_its_own_count() {
+        let registry = TurnRegistry::new();
+
+        assert_eq!(registry.carry_run("s1", Some("world.check")), Some(1));
+        assert_eq!(registry.carry_run("s1", Some("world.check")), Some(2));
+        assert_eq!(registry.carry_run("s1", Some("review.diff")), Some(1));
+        assert_eq!(registry.open_run("s1").as_deref(), Some("review.diff"));
+    }
+
+    /// A run belongs to one session, like everything else in this map.
+    #[test]
+    fn one_sessions_run_is_not_anothers() {
+        let registry = TurnRegistry::new();
+
+        registry.carry_run("s1", Some("review.diff"));
+        assert_eq!(registry.open_run("s2"), None);
+
+        registry.forget("s1");
+        assert_eq!(
+            registry.open_run("s1"),
+            None,
+            "a deleted session keeps none"
+        );
+    }
 
     #[test]
     fn an_untouched_session_is_idle() {

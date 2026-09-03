@@ -87,7 +87,7 @@ use super::event::{
     ToolRequested, ToolStarted, TurnDelta, TurnError, TurnFinished, TurnMessage, TurnStarted,
 };
 use super::provider::Provider;
-use super::registry::TurnRegistry;
+use super::registry::{TurnRegistry, MAX_RUN_TURNS};
 use super::transcript;
 use super::wire::{AssembledCall, ModelEvent, StopReason, Usage};
 
@@ -96,10 +96,47 @@ use super::wire::{AssembledCall, ModelEvent, StopReason, Usage};
 /// The round after this one is not executed: its calls are answered with
 /// `E_TOO_MANY_TOOL_ROUNDS` and the turn finishes cleanly, which is a model
 /// that can explain itself rather than a loop that runs until someone notices.
+///
+/// It is not a permission gate. It fires whatever the approval matrix decided,
+/// so no grant and no "allow everything this session" moves it: what it bounds
+/// is a loop and a bill, and those are the only two things to weigh when
+/// changing it.
 pub const MAX_TOOL_ROUNDS: u32 = 8;
+
+/// Tool rounds allowed in a turn that is following a runbook.
+///
+/// A skill run is the case where the plain cap is wrong, and measurably so: a
+/// `review.diff` over a 500-line diff needs to read the range, then a diff per
+/// file, then the files themselves, which is twenty rounds before it writes
+/// anything (`IDEAS.md` § 11). At eight it does not stall — it stops mid-way,
+/// and the person is asked to say "continue" so the model can resume a
+/// procedure it had already planned.
+///
+/// A higher ceiling is defensible *here* and not in general, because a run is
+/// the one place the work is bounded before it starts: the runbook declares its
+/// steps and its tools, the identity was granted both, and every call still
+/// goes through the same gate one at a time. What is loosened is the
+/// runaway-loop bound, and only while something is on rails.
+///
+/// Twenty-four rather than the twenty a review needed: a ceiling sized to the
+/// one procedure that was measured would be a ceiling that fits nothing else.
+pub const MAX_TOOL_ROUNDS_IN_SKILL: u32 = 24;
 
 /// How long a `turn:delta` frame stays open.
 pub const DELTA_FRAME: Duration = Duration::from_millis(50);
+
+/// The rounds this turn may spend, given what it is following.
+///
+/// One function rather than two call sites choosing a constant, because the
+/// number in the refusal the model reads and the number the loop stops at have
+/// to be the same one — a message naming a limit the code does not use is worse
+/// than no message.
+const fn round_cap(skill: Option<&str>) -> u32 {
+    match skill {
+        Some(_) => MAX_TOOL_ROUNDS_IN_SKILL,
+        None => MAX_TOOL_ROUNDS,
+    }
+}
 
 /// A tool call the model is part-way through writing.
 ///
@@ -493,10 +530,13 @@ impl Turn<'_> {
             connectors: &connectors,
         };
 
-        // Which runbook this turn is currently following, if any. A local, so
-        // it cannot outlive the turn: the body was loaded into this turn and
-        // the span it names is this turn's (see `skills::track`).
-        let mut skill: Option<String> = None;
+        // Which runbook this session is currently following, if any. Seeded
+        // from the session rather than started empty: the round cap can end a
+        // turn in the middle of a procedure, and a run whose name stopped at
+        // that boundary left its own artefact write unattributed and its
+        // `skill_return` with nothing to close (`IDEAS.md` § 10). Carried back
+        // at the end of the turn, and bounded there.
+        let mut skill: Option<String> = self.turns.open_run(&plan.session_id);
 
         // Once per turn, before the first request, and never mid-turn: a fold
         // that landed between two rounds would take away context the model had
@@ -641,10 +681,19 @@ impl Turn<'_> {
 
                     // The round after the cap is answered, not executed. The
                     // model sees why it stopped and the turn ends cleanly.
-                    if rounds >= MAX_TOOL_ROUNDS {
+                    //
+                    // Which cap depends on whether a runbook is open, and is
+                    // read per round rather than once: a turn that opens a run
+                    // on its third round is following a procedure from that
+                    // round on, and judging it against the plain ceiling would
+                    // cut it off for what it was doing before.
+                    let cap = round_cap(skill.as_deref());
+                    if rounds >= cap {
                         tracing::warn!(
                             session_id = %plan.session_id,
                             rounds,
+                            cap,
+                            skill = skill.as_deref().unwrap_or(""),
                             "tool round cap reached"
                         );
                         self.refuse_all(plan, &calls, &held, skill.as_deref());
@@ -672,17 +721,31 @@ impl Turn<'_> {
             }
         };
 
-        // A run that never returned. Said out loud rather than carried into
-        // the next turn: the runbook was loaded into *this* one, and a span
-        // that outlived it would put a skill's name on calls made after the
-        // user had moved the conversation somewhere else.
-        if let Some(unfinished) = &skill {
-            tracing::warn!(
+        // A run that did not return is carried to the next turn, so the
+        // procedure the cap interrupted resumes under its own name. Two things
+        // close it instead: a cancel, because pressing Stop is the clearest
+        // statement there is that the conversation has moved on, and the
+        // ceiling in `registry`, because a name nobody closed is not a run.
+        let carried = match reason {
+            StopReason::Cancelled => None,
+            _ => skill.as_deref(),
+        };
+        match (carried, self.turns.carry_run(&plan.session_id, carried)) {
+            (Some(unfinished), Some(turns)) => tracing::debug!(
                 session_id = %plan.session_id,
                 turn_id = %plan.turn_id,
                 skill = %unfinished,
-                "the turn ended without a skill_return"
-            );
+                turns,
+                "the turn ended mid-run; it carries to the next one"
+            ),
+            (Some(dropped), None) => tracing::warn!(
+                session_id = %plan.session_id,
+                turn_id = %plan.turn_id,
+                skill = %dropped,
+                limit = MAX_RUN_TURNS,
+                "a run spent its turns without a skill_return and was dropped"
+            ),
+            (None, _) => {}
         }
 
         // A brief that was never returned. The runner turns this into a
@@ -1266,10 +1329,21 @@ impl Turn<'_> {
     ) {
         let refused = CancellationToken::new();
 
+        let cap = round_cap(skill);
         for call in calls {
             let reason = format!(
-                "this turn already ran {MAX_TOOL_ROUNDS} rounds of tools, which is the limit; \
-                 answer with what you have, or ask the user to continue"
+                "this turn already ran {cap} rounds of tools, which is the limit; answer with \
+                 what you have, or ask the user to continue{}",
+                match skill {
+                    // The run is not lost by saying so: it carries to the next
+                    // turn, and a model told only "the limit" would reasonably
+                    // conclude its procedure had been abandoned.
+                    Some(name) => format!(
+                        ". The `{name}` run stays open, so you can carry on with it in the next \
+                         turn and close it with `skill_return` there"
+                    ),
+                    None => String::new(),
+                }
             );
             let ctx = ToolCtx {
                 session_id: &plan.session_id,
@@ -2354,6 +2428,136 @@ mod tests {
             executed,
             usize::try_from(MAX_TOOL_ROUNDS).expect("small"),
             "the round past the cap is answered, not run"
+        );
+    }
+
+    /// A runbook in the fixture's library, granted to the fixture's identity.
+    ///
+    /// Two steps rather than one, and the split is policy's: writing a runbook
+    /// is not granting it, so a test that wants a run has to do both.
+    fn grant_runbook(fx: &mut Fixture, name: &str) {
+        let dir = fx.library.join(name);
+        std::fs::create_dir_all(&dir).expect("skill dir");
+        std::fs::write(dir.join("SKILL.md"), crate::skills::TRIAGE_SEED).expect("runbook");
+        fx.agent.skills = vec![name.to_owned()];
+    }
+
+    /// The cap a turn is judged against depends on whether it is following a
+    /// runbook (`IDEAS.md` § 11).
+    ///
+    /// At eight rounds a real procedure does not stall, it stops half-way: the
+    /// measured `review.diff` needed about twenty before it wrote anything. A
+    /// run is the one place a higher ceiling is defensible, because the work
+    /// was bounded before it started — the runbook declares its steps and its
+    /// tools, and every call still goes through the gate one at a time.
+    #[tokio::test]
+    async fn a_turn_following_a_runbook_gets_the_larger_round_cap() {
+        let mut fx = Fixture::new();
+        grant_runbook(&mut fx, "inbox.triage");
+        std::fs::write(fx.workspace.join("a.txt"), "x").expect("write");
+        fx.say("triage it");
+
+        // One round to open the run, then more reads than a turn outside one
+        // would be allowed.
+        let mut script = vec![tool_call_script(
+            "call_open",
+            tool::SKILL_RUN,
+            r#"{"name":"inbox.triage"}"#,
+        )];
+        script.extend((0..=MAX_TOOL_ROUNDS).map(|round| {
+            tool_call_script(
+                &format!("call_{round}"),
+                tool::FS_READ,
+                r#"{"path":"a.txt"}"#,
+            )
+        }));
+
+        let provider = FakeProvider::scripted(script);
+        fx.turn(&provider)
+            .run(&fx.plan(), &CancellationToken::new())
+            .await;
+
+        let refused = fx.transcript().into_iter().any(|message| {
+            serde_json::from_str::<serde_json::Value>(&message.text)
+                .is_ok_and(|envelope| envelope["error"]["code"] == "E_TOO_MANY_TOOL_ROUNDS")
+        });
+        assert!(
+            !refused,
+            "a turn inside a run is judged against {MAX_TOOL_ROUNDS_IN_SKILL}, not \
+             {MAX_TOOL_ROUNDS}"
+        );
+
+        let executed = fx
+            .sink
+            .names()
+            .iter()
+            .filter(|name| **name == "tool:started")
+            .count();
+        assert_eq!(
+            executed,
+            usize::try_from(MAX_TOOL_ROUNDS).expect("small") + 2,
+            "every scripted round ran"
+        );
+    }
+
+    /// A turn that ends mid-run hands the run to the next one, so the
+    /// procedure the cap interrupted resumes under its own name
+    /// (`IDEAS.md` § 10).
+    #[tokio::test]
+    async fn a_turn_that_ends_mid_run_carries_it_to_the_next_turn() {
+        let mut fx = Fixture::new();
+        grant_runbook(&mut fx, "inbox.triage");
+        fx.say("triage it");
+
+        let provider = FakeProvider::scripted(vec![tool_call_script(
+            "call_open",
+            tool::SKILL_RUN,
+            r#"{"name":"inbox.triage"}"#,
+        )]);
+        fx.turn(&provider)
+            .run(&fx.plan(), &CancellationToken::new())
+            .await;
+
+        assert_eq!(
+            fx.turns.open_run(&fx.session_id).as_deref(),
+            Some("inbox.triage"),
+            "the run outlives the turn that opened it"
+        );
+    }
+
+    /// Except when the user pressed Stop, which is the clearest statement
+    /// there is that the conversation has moved on.
+    #[tokio::test]
+    async fn a_cancelled_turn_closes_the_run_rather_than_carrying_it() {
+        let mut fx = Fixture::new();
+        grant_runbook(&mut fx, "inbox.triage");
+        fx.say("triage it");
+
+        let provider = FakeProvider::scripted(vec![
+            tool_call_script("call_open", tool::SKILL_RUN, r#"{"name":"inbox.triage"}"#),
+            tool_call_script(
+                "call_write",
+                tool::FS_WRITE,
+                r#"{"path":"new.txt","content":"x"}"#,
+            ),
+        ]);
+
+        // Cancelled on the write's approval dialog, which is where a person
+        // watching a run they no longer want actually presses Stop.
+        let cancel = CancellationToken::new();
+        let stopping = async {
+            fx.pending().await;
+            cancel.cancel();
+        };
+        let turn = fx.turn(&provider);
+        let plan = fx.plan();
+        let (reason, ()) = tokio::join!(turn.run(&plan, &cancel), stopping);
+
+        assert_eq!(reason, StopReason::Cancelled);
+        assert_eq!(
+            fx.turns.open_run(&fx.session_id),
+            None,
+            "Stop ends the run, not just the turn"
         );
     }
 

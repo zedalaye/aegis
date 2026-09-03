@@ -213,7 +213,19 @@ impl App {
         sink: &Recorder,
         rounds: Vec<(&str, serde_json::Value)>,
     ) -> StopReason {
-        let turn_id = "turn-1";
+        self.scripted_turn_at(session_id, agent, sink, "turn-1", rounds)
+            .await
+    }
+
+    /// The same, for a test that needs more than one turn of a session.
+    async fn scripted_turn_at(
+        &self,
+        session_id: &str,
+        agent: &Agent,
+        sink: &Recorder,
+        turn_id: &str,
+        rounds: Vec<(&str, serde_json::Value)>,
+    ) -> StopReason {
         let cancel = self.turns.begin(session_id, turn_id).expect("free");
 
         let script = rounds
@@ -719,4 +731,95 @@ async fn a_runbook_the_identity_cannot_carry_out_fails_closed() {
     // followed by hand around the refusal.
     let content = refused["content"].as_str().unwrap_or_default();
     assert!(content.is_empty(), "{content}");
+}
+
+/// Claim 5, written from a run of the Phase 19 `review.diff` runbook against a
+/// real diff: **a run survives the turn boundary the round cap creates.**
+///
+/// `IDEAS.md` § 10 has the trace. One review took five turns, because the cap
+/// ends a turn at eight rounds; the run's name lived in a turn local; so every
+/// audit line after the first boundary carried no skill — the `fs_write` of the
+/// artefact the run existed to produce among them — and the closing
+/// `skill_return` was refused, because by then nothing was open to close. PLAN
+/// 7.6 asks one thing of a run, that it can be budgeted and replayed, and a
+/// name that stops at the first boundary cannot deliver it.
+#[tokio::test]
+async fn a_run_carries_across_turns_and_closes_in_a_later_one() {
+    let app = App::new();
+    let triager = app.triager();
+    let session_id = app.session_as(&triager);
+    app.grants.insert(&session_id, aegis_lib::Grant::FsWrite);
+    let sink = Recorder::default();
+
+    // Turn one opens the run and ends without returning, which is what the
+    // round cap does to a procedure half-way through.
+    app.say(&session_id, "triage what came in");
+    app.scripted_turn_at(
+        &session_id,
+        &triager,
+        &sink,
+        "turn-a",
+        vec![(tool::SKILL_RUN, json!({ "name": "inbox.triage" }))],
+    )
+    .await;
+    assert_eq!(
+        app.turns.open_run(&session_id).as_deref(),
+        Some("inbox.triage"),
+        "the run is still open between the two turns"
+    );
+
+    // Turn two does the work and closes it, having opened nothing itself.
+    app.say(&session_id, "carry on");
+    app.scripted_turn_at(
+        &session_id,
+        &triager,
+        &sink,
+        "turn-b",
+        vec![
+            (
+                tool::FS_WRITE,
+                json!({
+                    "path": ".aegis/artefacts/from-a-client.triage.md",
+                    "content": "Asked: why staging fails. For: the client. Urgent: Friday.\n",
+                }),
+            ),
+            (
+                tool::SKILL_RETURN,
+                json!({
+                    "status": "done",
+                    "summary": "Triaged it and filed the note.",
+                    "artefacts": [".aegis/artefacts/from-a-client.triage.md"],
+                    "evidence": ["read .aegis/briefs/from-a-client.md"],
+                }),
+            ),
+        ],
+    )
+    .await;
+
+    // The return is accepted in a turn that never called `skill_run`. This is
+    // the call that failed with `E_TOOL_FAILED` in the trace.
+    let envelopes = app.envelopes(&session_id);
+    let returned = envelopes.last().expect("the return's envelope");
+    assert_eq!(returned["ok"], json!(true), "{returned}");
+    assert_eq!(returned["meta"]["skill"], json!("inbox.triage"));
+    assert_eq!(returned["meta"]["status"], json!("done"));
+
+    // And every line of the second turn is on the run's record, the artefact
+    // write included — which is what "budgeted and replayed" needs.
+    let lines = app.audit_lines();
+    let second: Vec<&AuditEntry> = lines
+        .iter()
+        .filter(|line| line.turn_id == "turn-b")
+        .collect();
+    assert!(!second.is_empty(), "the second turn wrote audit lines");
+    for line in second {
+        assert_eq!(
+            line.skill, "inbox.triage",
+            "`{}` was recorded outside the run",
+            line.tool
+        );
+    }
+
+    // Closed by the return, not left open over whatever is said next.
+    assert_eq!(app.turns.open_run(&session_id), None);
 }

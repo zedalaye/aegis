@@ -239,3 +239,135 @@ and a second arm in `AppState::provider_for`. The trait does not move; the
 turn loop does not move. That is the north-star item in `AGENTS.md`
 ("roster of providers and a per-agent binding"). Gemini HTTP can land
 before it. Do not pretend adding Gemini *is* the roster.
+
+## Skill runs, turns, and the round cap
+
+Found by hand on 2026-09-03, running the Phase 19 `review.diff` runbook from
+Aegis against this worktree's own uncommitted diff. Nothing here is a Phase 19
+defect: the pack revealed it, it lives in Phases 13, 16 and 17. The numbers
+below are one real trace, in `audit.jsonl` between 18:46:45 and 18:55:52Z.
+
+### 10. A skill run is scoped to a turn, and a real run does not fit in one — landed (A)
+
+**What happened.** One `review.diff` run over a 507-line diff took **5 turns,
+41 tool calls and 9 minutes**. `MAX_TOOL_ROUNDS` cut the turn twice — after 16
+calls in the first, after 11 in the third. The run's name is a turn local
+(`agent/turn.rs:499`, *"A local, so it cannot outlive the turn"*), so:
+
+* 15 of the ~30 calls in the run carry `skill: ""`, **including the `fs_write`
+  of the review artefact**;
+* the final `skill_return` was **refused** — `E_TOOL_FAILED`, *"no skill is
+  running in this turn… a run lasts for the turn that opened it"* — so the run
+  never closed, and a person nonetheless got a correct review file on disk;
+* `board/trace.rs:141` keys a run on the `skill` field, so the untagged half is
+  counted as ordinary session traffic. That is exactly the property PLAN 7.6
+  says Phase 17 depends on: *"A run without `skill` on the line cannot be
+  budgeted or replayed."*
+
+**The invariant is not wrong everywhere.** A delegated brief and a routine
+really are one turn — `handoff::Open` is created around a single `.run()`
+(`handoff/runner.rs:262`), with no human between rounds. The scope only strains
+in an interactive session, which is the one place a turn can end while the same
+work continues. But see § 11: the cap applies to the unattended paths too, and
+there nobody can say "continue".
+
+**Three ways out, and they are not substitutes.**
+
+| | What it changes | What it fixes | What it costs |
+| --- | --- | --- | --- |
+| **A. Run lives on the session** | the local moves to session state; `skill_run` opens, `skill_return` / Stop / cancel closes | attribution, the return, the board, budgets — for interactive runs | the risk `skills/mod.rs` names: a run tagging calls after the conversation moved on. Needs a ceiling (N turns, or an expiry) and cleanup on cancel, session close and restart. **Does nothing for routines.** |
+| **B. Accept a late `skill_return`** | the session remembers "last run opened, unreturned"; a later turn may close it. ~30 lines | the visible failure, and the board gets a closing line | the untagged middle stays untagged, so 7.6's property stays broken. A stopgap, not a fix |
+| **C. Raise the cap while a run is open** | see § 11 | attribution, the return, the board **and** the unattended path, by keeping the run inside one turn | loosens the runaway protection exactly where a runbook could loop; a 25-round turn re-sends the conversation 25 times |
+
+**A and C both landed**, on the reasoning above: A gives the attribution PLAN
+7.6 asks for without pretending a review fits in 8 rounds; C is what makes the
+Phase 16 promise ("a scheduler fires a skill") true for a runbook of realistic
+length. B was not taken — it fixes the visible failure and leaves the property
+Phase 17 depends on broken.
+
+*Landed as:* `Live::run` in `agent/registry.rs` with `open_run` / `carry_run`,
+a turn that seeds its local from the session and carries it back, and
+`MAX_RUN_TURNS = 4` as the ceiling on the risk that made the scope a turn in
+the first place. A cancel closes the run, because pressing Stop is the clearest
+statement there is that the conversation has moved on. The refusal at the cap
+now tells the model its run is still open, so it does not conclude its
+procedure was abandoned. Tests: four in `agent::registry`, three in
+`agent::turn`, and the end-to-end one in `tests/skills.rs` that reproduces the
+trace — a run opened in one turn, the artefact written and returned in the
+next, every line of the second turn on the run's record.
+
+**What we do not know.** Whether a session-scoped run needs to survive an app
+restart (probably not: a run whose turn is gone has nothing to return), and
+what the ceiling in A should be — that is a measurement, see § 11.
+
+### 11. `MAX_TOOL_ROUNDS = 8` is a number nobody has measured — landed (C)
+
+**What it is.** `agent/turn.rs:99`. The round after the eighth is answered with
+`E_TOO_MANY_TOOL_ROUNDS` and the turn ends cleanly. **It is not a permission
+gate**: it fires whatever the approval matrix decides, so "allow everything for
+this session" does not move it, and neither would any judge in § 12. It is a
+runaway-loop bound and a cost bound, and those are the only two things to argue
+about when changing it.
+
+**What the one trace says.** 41 calls for a review of a 507-line diff — but
+~17 of those were a self-inflicted detour (the model noticed `bindings.ts` had
+been truncated, diagnosed it, and repaired it, which was not in the runbook).
+A focused run of that same review is closer to **20–25 rounds**. So 8 is not
+marginally low, it is low by a factor of three, and raising it to 12 would buy
+nothing. Before changing the number, measure the other runbooks the same way —
+`deploy.draft` and `alert.draft` are read-heavier and may be worse.
+
+**The unattended path is where this is not cosmetic.** `schedule/runner.rs`
+drives the same `Turn`, so a routine that fires a real runbook hits the same
+wall with nobody to answer *"answer with what you have, or ask the user to
+continue"*. Today, Phase 16 can only schedule runbooks short enough to fit in
+eight rounds, and nothing says so.
+
+**Landed as** the third of those: `MAX_TOOL_ROUNDS_IN_SKILL = 24`, chosen by
+`round_cap(skill)` per round rather than once per turn, so a run opened on the
+third round is judged against the ceiling that fits it from there on. A runbook
+declares its tools and its steps, so a bounded procedure is exactly the case
+where a higher ceiling is defensible, and every call still passes the gate one
+at a time.
+
+**Still open:** the other two options — a setting, and a wall-clock budget for
+unattended runs, which need it most and have nobody to say "continue". And the
+measurement nobody has taken: what a 24-round turn costs in tokens with the
+cache on, which the board's ledger can already answer. Measure it before
+raising the number again, and measure `deploy.draft` and `alert.draft` the way
+`review.diff` was measured — they are read-heavier and may want more.
+
+### 12. A model that judges how dangerous a call is
+
+Asked directly: could a model watch what the session wants to run, so the
+gate could relax? Three different features hide in that question, and only one
+of them is available.
+
+**Auto-approving judge — excluded, and not by taste.** PLAN 7.4: *"A verifier
+(agent or CI) can raise confidence; it cannot silently flip the default to
+auto."* PLAN 7.1 refuses MCP `sampling` with the argument that applies verbatim
+here — *"a second agent loop with no session, no identity and no dialog in front
+of it"*. Three concrete costs beyond the rule: the audit line becomes *allowed
+because a model said so*, which makes the log's value depend on something
+non-deterministic that cannot be replayed; the text being judged usually came
+from what the session just read (a diff, a README, an alert), so a judge that
+reads attacker-influenced content in order to auto-approve is the standard
+injection target; and it is a model call in the hottest path there is.
+
+**A judge that can only tighten — compatible.** Raising a risk badge, or
+refusing to let a session grant cover a call whose argument shape has drifted,
+only ever adds friction. It is allowed by 7.4. It also does not reduce the
+number of dialogs, which is what the complaint was about.
+
+**A judge that explains — the one worth building.** One line in the approval
+dialog saying what the command actually does, for the case a human misreads a
+shell one-liner (`find … -exec` inside a pipe). It does not move who decides.
+Costs: latency inside the dialog, and a complacency risk worth naming out loud
+("the AI said it was fine") rather than discovering.
+
+**What actually reduces the prompts, with no model in it.** Most of what the
+gate asks about is read-only shell. A per-project allow-list of read-only
+command *shapes* — `git diff|log|show|status`, `ls`, `rg` — is deterministic,
+auditable, and testable, which a judge is not. Do that before considering any
+of the above; if it is not enough afterwards, the residue is the honest brief
+for a judge.

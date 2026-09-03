@@ -522,14 +522,27 @@ pub fn returned(tool: &str, result: &ToolResult) -> Option<Returned> {
     })
 }
 
-/// Follows a turn's skill run across the tool calls of one round.
+/// Follows a session's skill run across the tool calls of one round.
 ///
-/// A run is a span *within a turn* and not a session-long state machine. That
-/// is the same scope the body has — loaded into this turn, gone from the next
-/// — and it keeps the fact in one local variable that cannot be left set by a
-/// crash, a cancel or a window closing. A turn that ends mid-run is a run that
-/// did not return, which the loop says out loud rather than carrying into a
-/// conversation that has moved on.
+/// The scope used to be the turn, on the argument that a local variable cannot
+/// be left set by a crash, a cancel or a window closing, and that a span which
+/// outlived its turn could name calls made after the conversation had moved on.
+/// The first half is still true and is why this function still takes a
+/// `&mut Option<String>`; the second half was measured and found to cost more
+/// than it saved. A real run spans turns because the round cap ends them —
+/// `IDEAS.md` § 10 has the trace, where half a run's audit lines carried no
+/// skill at all, the artefact write among them, and the closing
+/// `skill_return` was refused for want of anything open to close.
+///
+/// So the local is now seeded from the session at the top of a turn and carried
+/// back at the end of it
+/// ([`TurnRegistry::carry_run`](crate::agent::registry::TurnRegistry::carry_run)),
+/// and the "moved on" risk is bounded there instead: a cancel closes the run,
+/// and so does spending
+/// [`MAX_RUN_TURNS`](crate::agent::registry::MAX_RUN_TURNS) without returning.
+/// The body's scope has not changed and is not this: it is still loaded into
+/// one turn and gone from the next, which is what makes a run cheap. What
+/// carries is the name.
 pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
     if !result.ok {
         return;

@@ -535,8 +535,13 @@ session_send
 4. **Executing** — run with the tool's own timeout and byte caps; emit `tool:started` /
    `tool:progress` / `tool:finished`; append exactly one audit line whatever the outcome.
 5. Push one `role: "tool"` message per call, loop back to Building. Cap: **8 tool rounds per
-   turn**; the 9th yields `E_TOO_MANY_TOOL_ROUNDS` as a tool message and a clean finish, rather
-   than an unbounded loop.
+   turn**, or **24 while the turn is following a runbook**; the round past whichever applies
+   yields `E_TOO_MANY_TOOL_ROUNDS` as a tool message and a clean finish, rather than an unbounded
+   loop. The higher ceiling is not a weaker rule, it is the same rule where the work was bounded
+   before it started: a skill declares its steps and its tools, and every call still passes the
+   gate one at a time. At 8 a real procedure does not stall — it stops half-way and has to be
+   told to carry on (`IDEAS.md` § 11). The cap is **not** a permission gate: it fires whatever
+   the matrix decided, and no grant moves it.
 
 ### 4.3 ToolResult envelope (what the model actually sees)
 
