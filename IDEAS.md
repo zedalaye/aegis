@@ -112,3 +112,56 @@ Related gotcha, not an idea: the minimum cacheable prefix on `claude-sonnet-5`
 is 1024 tokens. Below it the API ignores `cache_control` silently — no error,
 no cache entry. A short session reporting 0% may simply be too small to cache,
 and that is correct behaviour rather than a regression.
+
+## Writing large files
+
+`fs_write` has no size limit of its own; what bounds it is the turn's output
+ceiling, because a file's content is emitted as the call's arguments. That
+ceiling now comes from the provider's catalog (128,000 tokens on
+`claude-sonnet-5`) instead of motosan's 8192 default, which is what made large
+writes fail silently. These are the things that cost us a session to learn and
+would cost another to re-derive.
+
+### 4. What a large write actually costs
+
+**Output tokens, and they are the one thing caching cannot touch.** The cache
+works on the prompt; a file's content is generated, not re-read. Roughly 100 KB
+of arguments is 30,000-odd output tokens — on `claude-sonnet-5` that is more
+than the rest of the turn put together, and it recurs in full every time the
+file is rewritten.
+
+**JSON escaping is small on ordinary text, and was measured, not guessed.** A
+63,000-byte file of regular lines escapes to 64,002 bytes: **+1.6%**. Do not
+reach for escaping to explain a large discrepancy — during this session it was
+blamed twice for gaps it could not account for, and both times the real cause
+was elsewhere. Content dense in quotes, backslashes or very short lines will
+sit higher, but nothing like a factor of two.
+
+**The ceiling applies to the escaped arguments, not the file**, which bounds a
+single write at roughly 300-350 KB of real content. There is no setting that
+moves this; a bigger file has to be written in pieces or generated in place.
+
+**The cheap alternative, when it applies:** content that is *derivable* —
+transformed, extracted, computed — costs a few hundred tokens as a script run
+through `shell_exec` instead of forty thousand as generated text. This only
+helps when the content is not genuinely being authored.
+
+### 5. An approval that expires throws away the expensive part
+
+[`APPROVAL_TTL`](src-tauri/src/approval.rs) is five minutes, and the clock
+starts when the call is *requested* — which is after the arguments have been
+generated. So a turn can spend several minutes and forty thousand output tokens
+writing a file, ask, and lose all of it because nobody was at the screen. The
+tokens are spent either way; the refusal recovers nothing.
+
+Observed, not theorised: one test turn asked at 06:38:48 and was refused at
+06:43:48 having never been seen.
+
+Nothing recovers a generation once it has happened, so the lever is not the TTL
+— it is making a pending approval impossible to miss. The app already owns a
+tray icon, which is the obvious place for it. **Unknown:** whether the right
+behaviour is a notification, a TTL that does not run while the window is
+unfocused, or both; and whether an expensive call deserves different treatment
+from a cheap one, which the runtime could know from the argument size it is
+already counting for `tool:drafting`. Decide that fresh rather than at the end
+of a debugging session.

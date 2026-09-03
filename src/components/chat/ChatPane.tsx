@@ -49,12 +49,17 @@ function StatusLine() {
   // arguments. A bare "streaming…" through all of that is what makes a working
   // turn look like a hung one, so the size stands in for the words there are
   // none of.
+  //
+  // "sent" rather than a bare size, because the two are not the same number
+  // and the difference is confusing exactly when someone is watching this: it
+  // counts the escaped JSON arguments, not the file. A reader who takes it for
+  // the file's size will think the model has overshot when it has not.
   if (streaming?.drafting != null) {
     const { tool, bytes } = streaming.drafting;
     return (
       <span className="chat__status chat__status--running">
         {tool === null ? "writing a tool call" : `writing ${tool}`} ·{" "}
-        {formatBytes(bytes)}
+        {formatBytes(bytes)} sent
       </span>
     );
   }
