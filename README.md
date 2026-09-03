@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 19 (the first domain pack) — the MVP is
+> **Status: Phase 19 (the first two domain packs) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -156,6 +156,14 @@ ever sent to it.
 > the merge, the deploy, the sent reply — because that step is yours. Nothing is granted by
 > being seeded: they reach a model when you make an identity and tick them. See *The delivery
 > pack*.
+>
+> **The second pack reads mail and never sends any.** `mail.triage`, `thread.recap` and
+> `reply.draft` turn a message that arrived as a file into a ticket, work out what a thread
+> actually agreed, and write the answer you send. Not one of the three declares `shell_exec`, so
+> the identity holding them cannot run a command — which is what you want of the one pointed at
+> text strangers wrote. A message asking for money to move or for access comes back to you
+> whatever it says, and the reply is a file with a line under every claim saying which file it
+> came from. See *The intake pack*.
 
 ---
 
@@ -428,11 +436,12 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts nine there — `never-send-without-review`, `cos.loop`, `world.draft`,
-`world.perceive-delta`, `world.verify`, `world.check`, and the delivery pack's `review.diff`,
-`deploy.draft` and `alert.draft` — and offers each **once**, recorded by name in
+`SKILL.md` in it. Aegis puts twelve there — `never-send-without-review`, `cos.loop`,
+`world.draft`, `world.perceive-delta`, `world.verify`, `world.check`, the delivery pack's
+`review.diff`, `deploy.draft` and `alert.draft`, and the intake pack's `mail.triage`,
+`thread.recap` and `reply.draft` — and offers each **once**, recorded by name in
 `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later version
-adding a tenth will offer that one and leave the rest alone. A workspace's own runbooks
+adding a thirteenth will offer that one and leave the rest alone. A workspace's own runbooks
 live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -727,12 +736,13 @@ fix it — and it is never offered to a model.
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
 happening. Aegis seeds the library with `never-send-without-review`, `cos.loop`, the four
-world runbooks and the three of the delivery pack, and each workspace with `inbox.triage` when
+world runbooks and the six of the two domain packs, and each workspace with `inbox.triage` when
 you press *Set up shared files* — all of them are examples of the format in the place you would
 look for one, and all of them are ordinary files you can rewrite or delete. `cos.loop` is the
 Chief-of-Staff loop; see [Handoffs](#handoffs). The `world.*` four are the constitution's; see
-[The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are a domain pack; see
-[The delivery pack](#the-delivery-pack).
+[The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are one domain pack and
+`mail.triage`, `thread.recap` and `reply.draft` are the next; see
+[The delivery pack](#the-delivery-pack) and [The intake pack](#the-intake-pack).
 
 Seeding happens **once per name**. The library records what it has offered in `skills/.seeded`,
 so a runbook you deleted does not reappear on the next start, and a runbook a later version adds
@@ -1392,12 +1402,104 @@ others.
 That is the division: the library holds how you work, the repository holds how it works, and the
 identity decides which of them a session may run.
 
-### The other packs are not here
+### The next pack
 
 `PLAN.md` § 7.3 lists six — delivery, intake, watch, budget, social, revenue — one at a time,
-each allowed to fail without blocking the next. Intake is not started, and the way to tell that
-this one landed is not that a client got a reply: it is that nothing in `src-tauri` had to learn
-what a client is.
+each allowed to fail without blocking the next. Intake is the next one, and it has landed; see
+[The intake pack](#the-intake-pack). The way to tell this one landed is not that a client got a
+reply: it is that nothing in `src-tauri` had to learn what a client is.
+
+---
+
+## The intake pack
+
+The second pack is client intake, and § 7.3 gives it in five words: **mail first — read and
+draft, never send.** Three runbooks, which are the three things that sentence contains.
+
+| Runbook | Reads | Writes | Will not |
+| --- | --- | --- | --- |
+| `mail.triage` | one message that arrived as a file — an exported `.eml`, a forwarded thread in `.aegis/briefs/`, a note passed on. Headers and text; attachments by name only | `.aegis/artefacts/ticket-<date>-<who>.md`: the quoted ask, the quoted date or *no date given*, who was on the message, what it is blocked on | answer it, act on it, or start the work it describes |
+| `thread.recap` | the messages of one thread, oldest first | `.aegis/artefacts/recap-<thread>.md`: a line per message, then **agreed**, **outstanding**, **never answered** | decide anything on the outstanding list |
+| `reply.draft` | the ticket, the recap, `STATUS.md`, `DECISIONS.md` | the draft beside the ticket, with a **sources** block naming the file behind every claim | send, schedule, or say it is on its way |
+
+### It cannot run a command, and that is the point
+
+Look at the front matter before the prose: no runbook in this pack declares `shell_exec`. They
+read files and write files. So the identity you make for intake is one with `fs_list`, `fs_read`
+and `fs_write` and nothing else — an identity that cannot run a command, pointed at text people
+outside your house wrote.
+
+That makes Delivery and Intake **two identities**, not one specialist with six runbooks ticked.
+It is also a test rather than a paragraph: `the_intake_pack_holds_no_tool_that_runs_a_command`
+fails if one of these ever grows a convenient `git` call, because that would widen a grant nobody
+went back to look at.
+
+### What each one refuses to do
+
+**`mail.triage` will not invent an ask.** The ask has to be a sentence somebody wrote, quoted,
+carrying the date of the message it is in — and *no ask* is an available answer, because most mail
+is no ask and a triage that finds work in every message is manufacturing it. The same rule kills
+the deadline nobody typed: "as soon as you can" is not a date.
+
+**It always comes back to you when the message is about money or access.** A new bank account, a
+new address for an invoice, a password reset nobody asked for: `needs_you`, however ordinary the
+message reads, with a note that the request has not been verified on a second channel. Those are
+the messages worth forging, and they read exactly like the others.
+
+**It does not read your attachments.** An exported message is mostly not text: a 180 KB PDF makes
+a 250 KB `.eml`, which fits under the read cap and arrives *whole*, spending the turn on base64 —
+and a slightly larger one goes over it, so what comes back is the message cut off inside the
+attachment and its last lines are never seen. `mail.triage` names attachments from their filename
+and leaves them on disk. That holds even when the attachment is where the new bank details are:
+naming the file and handing it back to you is all this run was ever going to do with it.
+
+**`thread.recap` counts each sentence once.** Your mail client quotes the whole thread into every
+reply, so a nine-message thread carries one commitment forty times, and read end to end it looks
+like a project. It also reads oldest first — a promise lives where it was made, not where someone
+restated it — and it separates *agreed* (proposed **and** answered) from *outstanding*. Silence
+is not agreement, which is how a client otherwise gets told that a thing they never agreed to was
+settled weeks ago.
+
+**`reply.draft` will not commit to something no file says.** A date, a price, a scope, an order of
+work: each needs the decisions ledger, the board, a plan `deploy.draft` wrote, or the ticket's own
+quotation behind it, and each names its file in the sources block under the draft. A commitment
+with nothing behind it does not get softer wording — "I'll look into it" is a commitment and your
+client is right to read it as one; it goes in `open_questions` instead.
+
+**And it will not pick its own input.** No ticket path, no run. A reply drafted to whatever was
+written most recently is how the wrong client gets answered, and you would not catch it, because
+the draft reads perfectly.
+
+### Setting it up
+
+1. **Get the messages onto disk.** There is no mail connector: export the message, forward it into
+   `.aegis/briefs/`, or drop it in the workspace. This is deliberate the same way it was in the
+   delivery pack — an IMAP or Gmail MCP server starts a program, which only you can do — and a
+   connector later replaces where the message comes from, not the procedure.
+2. **Make the identity.** *Settings → Identities → +*: call it *Intake*, and tick `fs_list`,
+   `fs_read` and `fs_write`. Not `shell_exec`. Not the delivery specialist with three more boxes
+   ticked.
+3. **Grant the three runbooks** on it. That is when the pack exists.
+4. **Run them in order** on one message: `mail.triage`, then `thread.recap` if the conversation
+   has any history, then `reply.draft` on the ticket — then `never-send-without-review` on the
+   draft, which is exactly what that runbook was seeded for.
+5. **Read the draft and send it yourself.** Aegis has no tool that sends.
+
+### Where it stops, and where the board is
+
+`mail.triage` ends at the ticket. Putting the item on the board is `inbox.triage`, the runbook
+each workspace gets from *Set up shared files*, and the pack names it rather than repeating it —
+how *this* project tracks work is the project's, and it stays in the project.
+
+The ticket is deliberately thin: it cites the message by path instead of pasting it. Tickets land
+in a repository, usually the client's, usually in git, and other people's addresses, phone numbers
+and attachments do not have to be copied there to be found.
+
+### The four after this one are not here
+
+Watch, budget, social and revenue are not started. Two packs that were pleasant to build are not
+two reasons to build a third, and the order in `PLAN.md` § 7.3 exists so each is allowed to fail
+without taking the next one with it.
 
 ---
 

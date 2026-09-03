@@ -1461,7 +1461,71 @@ moment a client is owed a sentence, so the note keeps observed and inferred apar
 command behind every observed line, and the reply may not name a cause the note marked as a
 guess.
 
-Packs 2–6 are not started, and pack 1 being pleasant is not a reason to start one.
+*Pack 2 landed as:* three more `SKILL.md` files — `mail.triage`, `thread.recap`, `reply.draft` —
+their three entries in `skills::SEEDED`, and the documentation. Same boring diff, and the same
+test: nothing in `src-tauri` had to learn what a mailbox is. The pack's shape is § 7.3's own
+sentence — *mail first: read + draft, never send* — and the three files are the three acts that
+sentence contains: sort it, work out where the conversation stands, write the answer somebody
+else sends.
+
+**The pack has a structural property pack 1 does not, and it is the reason to look at the front
+matter before the prose: no runbook here declares `shell_exec`.** Intake reads files and writes
+files, so the identity that holds it is one that cannot run a command — which is what you want
+of the identity pointed at text written by people outside the house. That makes Delivery and
+Intake two identities rather than one specialist with both packs ticked, and it is enforced by
+`the_intake_pack_holds_no_tool_that_runs_a_command` rather than left to whoever grants next: a
+runbook that grew a convenient `git` call would quietly widen a grant nobody revisited.
+
+**Three runbooks, because "read the mail" is three different failures.** `mail.triage` requires
+the ask to be a *quoted sentence carrying its message's date*, which makes *no ask* an available
+answer — most mail is no ask, and a triage that finds work in every message manufactures it; the
+same rule kills the deadline nobody typed, since "as soon as you can" is not a date. `thread.recap`
+exists for an arithmetic problem rather than a judgement one: a mail client quotes the whole
+thread into every reply, so a nine-message thread carries one commitment forty times and a model
+reading it end to end finds a project where there was a sentence. It counts each sentence once,
+reads oldest first because a promise lives where it was made rather than where it was restated,
+and splits *agreed* (proposed **and** answered) from *outstanding* — silence reads as consent to
+anybody summarizing in good faith, which is how a client gets told that something they never
+agreed to was settled weeks ago. `reply.draft` is `deploy.draft` for a sent message, down to the
+name: every date, price and scope in the draft names the file it came from in a sources block,
+and a commitment with no file behind it does not get softer wording — "I'll look into it" is a
+commitment and the reader is right to treat it as one.
+
+**One rule here is not about economy.** A message asking for money to move, for credentials, or
+for access — a new bank account, a new address for an invoice, a password reset nobody requested
+— returns `needs_you` however ordinary it reads, and the ticket says the request was not verified
+on a second channel. Intake is the one pack whose inputs are written by strangers, and it is the
+one place in this tree where the adversary is not a mistake.
+
+**Why the library, and what it does *not* duplicate.** How you handle a message from outside is
+how *you* work, so it is library scope, exactly as `review.diff` was. The workspace already has
+`inbox.triage` from the shared-files convention (Phase 13), and that is the project's own
+procedure for putting an item on its board: `mail.triage` therefore stops at the ticket and names
+`inbox.triage` for the board step rather than repeating it. A runbook that names another runbook
+is the split the format is for; a runbook that restates one is two things to keep in step.
+
+**What it deliberately does not ship is the other two thirds, again.** No mail connector — an
+IMAP or Gmail MCP server starts a program, which is the operator's act (Phase 18) — and no Intake
+identity. So the source is a file the way pack 1's was: an exported `.eml`, a forwarded thread in
+`.aegis/briefs/`, a note passed on by the human. `reply.draft` goes further and refuses to pick
+its own input at all: no ticket, no run. A draft written to whatever was most recently written is
+how the wrong client gets answered, and the failure is invisible because the reply is fluent.
+
+**Two things came out of running it on an exported message rather than out of writing it.** An
+`.eml` is mostly not text: a 180 KB attachment makes a 250 KB file, which is *under* the read cap
+and therefore arrives whole, spending the turn on base64 — and one slightly larger goes over it,
+so the read comes back cut off inside the attachment and the message's own last lines are never
+seen. Neither failure is visible from a step that says "read the message", so step 1 names the
+encoding header instead; the usual place a new bank account arrives is that attachment, and it
+changes nothing, because naming the file and returning `needs_you` is the whole of what this run
+was going to do with it. The second is smaller and applies to every pack after this one: a
+runbook's catalog line is the first paragraph of *When to use it*, capped at 160 characters and
+ellipsised past it, so an opening paragraph that runs long does not cost more prompt — it costs
+the end of the sentence that says when to run the thing. All three opened too long, and
+`a_domain_pack_says_when_to_run_it_without_the_line_being_cut_off` is there so the next pack
+does not.
+
+Packs 3–6 are not started, and two pleasant packs are not two reasons to start a third.
 
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
 after Phase 13. § 7.13 (skill promotion) may run after Phase 17. They do not insert

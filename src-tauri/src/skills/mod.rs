@@ -581,24 +581,31 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// examples and nothing else: [`catalog`] reads a missing directory as an empty
 /// one.
 ///
-/// Nine runbooks now, in three groups. Two are the halves of the mode as it
+/// Twelve runbooks now, in four groups. Two are the halves of the mode as it
 /// was: the standing rule that nothing irreversible goes out unreviewed, and
 /// the loop a Chief of Staff runs. Four are the world's (PLAN 7.2) — draft one,
 /// perceive a delta, verify against the oracle, check the constitution. Three
-/// are the client-delivery pack (PLAN 7.3, Phase 19) — review a range, draft a
-/// deploy, triage an alert.
+/// are the client-delivery pack (PLAN 7.3, Phase 19, pack 1) — review a range,
+/// draft a deploy, triage an alert. Three are client intake (pack 2) — turn a
+/// message into a ticket, recap a thread, draft a reply nobody has sent.
 ///
-/// That last group is what a **domain pack** is, and the reason it is here
-/// rather than anywhere else in this tree. Phase 19's rule is *domain packs as
-/// skills, not runtime*: delivery reaches the harness as three files in a
+/// Those last two groups are what a **domain pack** is, and the reason they are
+/// here rather than anywhere else in this tree. Phase 19's rule is *domain packs
+/// as skills, not runtime*: a domain reaches the harness as three files in a
 /// directory, and `agent/turn.rs`, the policy matrix and the tool registry do
 /// not know that a client exists. Each runbook stops one step short of the act
 /// that cannot be taken back — a merge, a deploy, a reply to somebody who is
 /// waiting — because that step is the human's (PLAN 7.4) and a procedure that
-/// ended with it would be a procedure that had taken it. The rest of the pack
+/// ended with it would be a procedure that had taken it. The rest of a pack
 /// is not in this file: the connectors it may want are installed by the
 /// operator (Phase 18), and the specialist that runs it is an identity
 /// somebody made and granted these names to.
+///
+/// The two packs differ in one thing that is visible from here, and it decides
+/// how they are granted: delivery declares `shell_exec` and intake declares no
+/// command at all. An intake specialist is therefore an identity that cannot run
+/// one — which is what you want of the identity whose inputs were written by
+/// people outside the house.
 ///
 /// [`DRAFT_SKILL`] is the one that writes `world/`, and it is not the
 /// `world.amend` PLAN 7.2 refuses: that sentence is about *specialists*, and
@@ -668,7 +675,7 @@ const SEEDED_FILE: &str = ".seeded";
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
-const SEEDED: [(&str, &str); 9] = [
+const SEEDED: [(&str, &str); 12] = [
     (REVIEW_SKILL, REVIEW_SEED),
     (COS_SKILL, COS_SEED),
     (DRAFT_SKILL, DRAFT_SEED),
@@ -678,6 +685,9 @@ const SEEDED: [(&str, &str); 9] = [
     (REVIEW_DIFF_SKILL, REVIEW_DIFF_SEED),
     (DEPLOY_SKILL, DEPLOY_SEED),
     (ALERT_SKILL, ALERT_SEED),
+    (MAIL_SKILL, MAIL_SEED),
+    (THREAD_SKILL, THREAD_SEED),
+    (REPLY_SKILL, REPLY_SEED),
 ];
 
 /// The standing rule of the whole mode, as a runbook.
@@ -1524,6 +1534,381 @@ next action turns on it. If `.aegis/artefacts/` is not there, write both files
 with their directory created and say the shared files are missing.
 "#;
 
+// ---------------------------------------------------------------------------
+// The client-intake pack (PLAN 7.3, Phase 19, pack 2)
+// ---------------------------------------------------------------------------
+
+/// Turn one inbound message into a ticket (PLAN 7.3, Phase 19: *mail first —
+/// read + draft, never send*).
+pub const MAIL_SKILL: &str = "mail.triage";
+
+/// `mail.triage`, the runbook the rest of the intake pack works from.
+///
+/// The pack's source is a file, exactly as the delivery pack's was: an exported
+/// message, a forwarded thread in `.aegis/briefs/`, a note passed on by the
+/// human. There is no mail tool in this build and this runbook does not want
+/// one — a connector later replaces where the message comes from and leaves the
+/// procedure alone (PLAN 7.6), which is the same seam that let `review.diff`
+/// read a diff through `shell_exec` on the first day.
+///
+/// What makes it a runbook rather than "read this email" is step 2. Mail is
+/// indirect: an ask arrives as *would you have a moment at some point*, and a
+/// model asked to summarize it returns a commitment with a deadline nobody
+/// typed. Requiring the ask to be a **quoted sentence carrying its message's
+/// date** makes *no ask* an available answer, which it has to be, because most
+/// mail is no ask and a triage that finds work in every message is a triage
+/// that manufactures it.
+///
+/// The `needs_you` in *What to return* is the one rule here that is not about
+/// economy. A message asking for money to move, or for access, is the message
+/// worth forging, it reads like the ordinary ones, and a ticket is not what
+/// decides. Intake is the one pack whose inputs are written by strangers.
+///
+/// Step 1 came out of an exported message rather than out of writing this. An
+/// `.eml` is mostly not text: a 180 KB attachment makes a 250 KB file, which is
+/// under [`READ_MAX_BYTES`](crate::tools::READ_MAX_BYTES) and therefore arrives
+/// *whole*, spending the turn on base64 — and one a little larger goes over the
+/// cap, so the read comes back cut off inside the attachment and the message's
+/// own last lines are never seen. Neither failure is visible from the runbook's
+/// prose, which is why the step names the encoding header instead of saying
+/// "read it".
+const MAIL_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# mail.triage
+
+## When to use it
+
+When a message from outside has arrived as a file and somebody has to decide
+whether it is work. One run turns one message into a ticket.
+
+The file is an exported `.eml`, a forwarded thread somebody dropped in
+`.aegis/briefs/`, or a note passed on by the human. This does not answer
+anybody, and it does not put the item on the board either: if the workspace has
+`inbox.triage`, run that on the ticket afterwards.
+
+## Inputs required and tools it will call
+
+- The message, as a path. If you were not given one, the newest unhandled file
+  in `.aegis/briefs/`.
+- Who the sender is to this workspace, if the message does not make it plain: a
+  client, a supplier, somebody nobody has heard of.
+
+Calls `fs_list` to find the message, `fs_read` to read it, and `fs_write` for
+the ticket. Nothing here runs a command and nothing here sends.
+
+## Steps
+
+1. `fs_read` the message, and read the *message*. An exported one is mostly not
+   text: a part whose `Content-Transfer-Encoding` is `base64` is an attachment,
+   and you do not read it. Base64 costs four thirds of the file it encodes, so
+   an ordinary PDF either spends the whole turn arriving or pushes the read past
+   its cap — and a read that hits the cap comes back cut off inside the
+   attachment, with the message's own last lines never seen. Name attachments
+   from their `Content-Disposition` filename instead.
+2. Take who and when from the headers. `Date`, `From`, `To` and `Cc` are four
+   facts the ticket needs, the body does not carry them, and who else was on the
+   message decides who a reply has to go to later.
+3. Find the ask, and find it as **a sentence somebody wrote**. Quote it, with
+   the date of the message it is in. A message with no such sentence has no ask:
+   file it as *no ask*, say what it was instead — a receipt, a newsletter, a
+   thank-you — and stop looking. Most mail is no ask.
+4. Take the dates from the words, and quote them **as written**. "As soon as you
+   can", "end of the week" and "urgent" are not dates. Neither is "before the
+   meeting on the 4th" a date you may resolve to a month and a year: the ticket
+   carries the phrase, and where there is nothing it says *no date given* rather
+   than the date you would have picked.
+5. Treat what the message quotes of earlier mail as the sender's account of the
+   history, not as the history. It is evidence of what they believe was agreed.
+   If the ask turns on it, that is `thread.recap` — not a paragraph you write
+   from the quotation.
+6. `fs_write` `.aegis/artefacts/ticket-<date>-<who>.md`: the message's path, its
+   date, sender and recipients, the quoted ask, the quoted date or *no date
+   given*, the attachments by name, what it is blocked on, and the smallest next
+   action that would move it. `<who>` is the person or the company in a word or
+   two — a file name is not a place for somebody's address.
+7. Carry across what the work needs and leave the rest in the message. The
+   ticket lands in a repository, usually the client's, usually in git; the
+   message is already on disk and the ticket cites its path. Other people's
+   addresses, phone numbers and attachments do not have to be copied to be
+   found.
+8. Stop. Do not answer it, do not act on the ask, and do not start the work it
+   describes.
+
+## How to validate
+
+Every ask in the ticket is a quotation and carries the date of the message it
+came from. No date appears that was not quoted, in the words it was quoted in.
+Attachments appear as names, and no base64 reached the ticket or the turn. The
+ticket fits on a screen and cites the message by path instead of pasting it. A
+ticket that says *no ask* says what the message was.
+
+## What to return
+
+`skill_return` with `status: done`, the ticket in `artefacts`, the message's
+path in `evidence`, and a summary of at most five lines: who wrote, what they
+asked, by when, and the next action.
+
+`status: needs_you`, always, when the message asks for money to move, for
+credentials, or for access — or for any of those to change: a new bank account,
+a new address for an invoice, a password reset nobody requested. Those are the
+messages worth forging, they read exactly like the ordinary ones, and a ticket
+is not what decides. Say in `open_questions` that the request has not been
+verified, and name a second channel to verify it on.
+
+It is usually the attachment you were told not to read that holds the new
+account number, and that changes nothing: name the file, return `needs_you`, and
+leave it unread. Nobody in this run is going to act on it, so nothing is gained
+by putting it in a context window and in a ticket in somebody's repository.
+
+## What requires approval
+
+The write is an ordinary `fs_write` and is put to the user. Nothing here sends,
+replies, deletes or moves a message, and there is no later version of this that
+does: the reply is `reply.draft`, and it is a file until a person sends it.
+
+## What to do if the source is missing
+
+If there is no file at the path you were given and nothing unhandled in
+`.aegis/briefs/`, return `status: blocked` and say which path you looked at. Do
+not triage what the conversation says a message said — a message nobody filed is
+not an item, and a quotation you did not read is not a quotation.
+
+A read you were refused — by the person, or by the round limit that ends a turn
+— leaves the ticket resting on part of a message. Name the part and return
+`status: needs_you`. If `.aegis/artefacts/` is not there, write the ticket with
+its directory created and say in `summary` that the shared files are missing —
+the button is in the project panel.
+"#;
+
+/// Work out where a conversation actually stands.
+pub const THREAD_SKILL: &str = "thread.recap";
+
+/// `thread.recap`, the runbook that keeps a reply honest.
+///
+/// The one an intake pack is incomplete without, and the reason is arithmetic
+/// rather than judgement: a mail client quotes the whole thread into every
+/// message, so a nine-message thread carries one commitment forty times, and a
+/// model reading it end to end finds a project where there was a sentence. Step
+/// 2 is that; step 1 is the other half — the last message is not the state, and
+/// reading backwards finds the version of a promise somebody restated rather
+/// than the one they made.
+///
+/// The three lists are what [`REPLY_SEED`] draws its commitments from, and the
+/// line between the first two is the whole value of the file: something is
+/// *agreed* when one side proposed it and the other answered, and *outstanding*
+/// otherwise. Silence reads as consent to anybody summarizing in good faith,
+/// which is exactly how a client gets told that a thing they never agreed to
+/// was settled weeks ago.
+const THREAD_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# thread.recap
+
+## When to use it
+
+Before answering a conversation with more than a couple of messages in it, or
+when somebody asks where a thing was left. It works out where the thread stands.
+
+Out of it come three lists: what was agreed, what is outstanding, and what was
+asked and never answered. One run recaps one thread, and it recaps a
+conversation rather than a relationship — a question this thread does not answer
+is a question the recap names, not a reason to go and read the others.
+
+## Inputs required and tools it will call
+
+- The thread, as a path: a directory of messages, an export, or a single file
+  with the conversation in it. `fs_list` what you were given first, so the recap
+  covers the messages that are there rather than the ones that were mentioned.
+- Which side you are. A recap that does not know who "we" is cannot say who owes
+  what.
+
+Calls `fs_list` and `fs_read` for the messages and `fs_write` for the recap.
+Nothing here runs a command and nothing here answers the thread.
+
+## Steps
+
+1. Read the messages **oldest first**, in the order they were sent. The last
+   message is not the state of the thread. A commitment lives where it was made,
+   which is usually in the middle, and reading backwards finds the version
+   somebody restated instead of the one they made.
+2. Count each sentence once. The thread is quoted into every reply, so one
+   promise appears eight times over; attribute it to the message that first
+   carried it and skip it everywhere else. Eight copies of one commitment read
+   as eight commitments, and that is what makes a thread look like a project.
+3. Usually the thread is one file and the older messages exist only as the
+   quotations inside it. Then say so: those lines are the quoter's copy, pasted
+   by somebody with a position, and a mail client trims what it quotes. Mark
+   them **as quoted by** whoever forwarded them, and treat a claim that survives
+   only in a quotation as weaker than one in a message you have.
+4. Sort every claim into exactly one of three. **Agreed**: one side proposed it
+   and the other answered yes. **Outstanding**: proposed and not answered, or
+   promised and not delivered — with who owes it and since when. **Never
+   answered**: a question somebody asked that no later message addresses.
+5. Silence is not agreement. A proposal nobody replied to is outstanding, and it
+   stays outstanding however reasonable it was and however long ago it was sent.
+6. `fs_write` `.aegis/artefacts/recap-<thread>.md`: one line per message — date,
+   sender, what changed — then the three lists. Every line in them cites the
+   date and sender of the message it came from. `<thread>` is the subject with
+   the `Re:` chain taken off, so a conversation gets one recap rather than one
+   per round of it.
+7. Stop. The recap is what a reply gets written from; it is not a reply, and it
+   decides nothing on the outstanding list.
+
+## How to validate
+
+Every line of the three lists cites one message by date and sender. Nothing
+appears in two lists. *Agreed* holds only claims with two messages behind them,
+the proposal and the answer. The recap ends by saying how many messages it read
+and which was the last, so a reader can tell whether it is still current.
+
+## What to return
+
+`skill_return` with `status: done`, the recap in `artefacts`, the number and
+range of messages read in `evidence`, and a summary of at most five lines: what
+is agreed, what is outstanding, and who is waiting on whom.
+
+`status: needs_you` when the thread turns on something said somewhere else — a
+call, a meeting, a message in another channel — with it in `open_questions`.
+What was agreed on a call is not in the thread, and a recap that fills that in
+is worse than one that says the thread does not contain it.
+
+## What requires approval
+
+The write is an ordinary `fs_write`, put to the user. Reads inside the workspace
+happen without asking; a thread stored outside it is a path the person is asked
+about. Nothing here replies, forwards, or files anything with the sender.
+
+## What to do if the source is missing
+
+If the path holds no messages, return `status: blocked` and say what you listed.
+Do not recap a conversation from the ticket about it, or from what the session
+said it contained: a recap is a reading of the messages, or it is a rumour with
+dates on it.
+
+If you could read only some of them — a refusal, a format you cannot open, the
+round limit that ends a turn — the recap covers those and says so in its first
+line, and you return `status: needs_you` when what is missing is where the
+answer would be.
+"#;
+
+/// Draft the answer somebody else sends (`COS.md` *Loop*; PLAN 7.4).
+pub const REPLY_SKILL: &str = "reply.draft";
+
+/// `reply.draft`, the intake pack's stop.
+///
+/// [`DEPLOY_SKILL`] is to a deploy what this is to a sent message, down to the
+/// name: the procedure that can be written down is everything up to the
+/// irreversible act, and the act stays a person's (PLAN 7.4). There is no mail
+/// tool in this build, and the last step says so anyway — a connector arriving
+/// later moves where a message comes from, not who sends one.
+///
+/// Its own rule is the sources block. A reply is the one artefact in this
+/// application that ends up in somebody else's hands as a promise, so every
+/// date, price and scope in it names the file it came from, and a commitment
+/// with no file behind it does not get softer wording — it goes in
+/// `open_questions`. "I'll look into it" is a commitment; the reader is right
+/// to treat it as one.
+///
+/// It also refuses to pick its own input, which no other runbook here does. A
+/// draft written to the newest ticket in the directory is how the wrong client
+/// gets answered, and the failure is invisible because the reply is fluent.
+const REPLY_SEED: &str = r#"---
+version: 1
+tools: fs_read, fs_write
+---
+
+# reply.draft
+
+## When to use it
+
+When somebody outside is owed an answer and a person will send it. The reply is
+written as a file, with a source named under every claim in it.
+
+It does not send, and there is no later version of it that does.
+
+## Inputs required and tools it will call
+
+- The ticket, as a path — the one `mail.triage` wrote. If you were not given
+  one, that is the end of the run. A reply drafted to whatever was written most
+  recently is how the wrong client gets answered, and it will read perfectly.
+- The recap, if the thread has one, and the workspace's
+  `.aegis/status/STATUS.md` and `.aegis/decisions/DECISIONS.md`. Those are where
+  a commitment is allowed to come from.
+
+Calls `fs_read` for those and `fs_write` for the draft. It lists nothing, runs
+nothing, and sends nothing.
+
+## Steps
+
+1. `fs_read` the ticket, then the recap if there is one. Answer the ask the
+   ticket quotes — not the question you would rather they had asked, and not the
+   four other things you noticed on the way past.
+2. Before writing a word, decide what the reply commits to. A date, a price, a
+   scope, a name, an order of work: each is a commitment, and each needs a file
+   behind it — the decisions ledger, the board, a plan `deploy.draft` wrote, or
+   the ticket's own quotation.
+3. A commitment with nothing behind it does not get softer wording. "I'll look
+   into it", "should be fine", "early next week" are commitments in the reader's
+   hands, and the reader is right. Leave it out of the draft and put it in
+   `open_questions`.
+4. Write the draft: who it is to, the subject, the body. Short, in the language
+   the message was written in, answering the quoted ask in its first two lines.
+   It goes to everyone the message went to — the ticket lists them — because
+   taking somebody off a thread is a decision about who gets to see the answer,
+   and it is not one this runbook makes on the way past.
+5. Under the body, a **sources** block: one line per claim in the reply, naming
+   the file it came from. It is not part of the message — it is what the person
+   reviewing reads instead of reconstructing the reply from scratch.
+6. `fs_write` it beside the ticket, with `.reply` before the extension:
+   `.aegis/artefacts/ticket-<date>-<who>.reply.md`.
+7. Stop. Sending is the human's, after `never-send-without-review` — this draft
+   is what that runbook was seeded for, so run one into the other. Do not send
+   it, do not schedule it, and do not tell anybody it is on its way.
+
+## How to validate
+
+Every sentence of the body either answers the quoted ask or has a line in the
+sources block. No date, price or scope is in the reply that is not in a file the
+sources block names. The draft answers one message; if it answers two, it is two
+drafts.
+
+## What to return
+
+`skill_return` with `status: done`, the draft in `artefacts`, the ticket and the
+files behind the sources block in `evidence`, and a summary of at most five
+lines: what the reply says and what it commits to.
+
+`status: needs_you` when the answer turns on something that is not in a file — a
+price, a deadline, whether to take the work at all — with it in `open_questions`
+and the draft left unwritten. A draft that guesses at the price is a draft
+somebody sends.
+
+## What requires approval
+
+The write is an ordinary `fs_write`, put to the user. There is no tool here that
+sends, and a mail connector installed later does not change that: a connector
+replaces where a message comes from, not the gate it goes out through
+(`PLAN.md` § 7.6). A reply is a file until a person sends it.
+
+## What to do if the source is missing
+
+No ticket, no run: return `status: blocked` and ask for the path. Do not draft
+from the session's account of what the client wrote. The quotation is the whole
+point, and a reply written from a summary of a message is a reply to a message
+that does not exist.
+
+If the ledger or the board is missing, say so and draft only what the ticket
+supports — a workspace where nothing has been decided in writing is a fact the
+summary should carry. A read you were refused, by the person or by the round
+limit that ends a turn, is a source the block cannot name: leave the claim out
+and return `status: needs_you`.
+"#;
+
 /// `inbox.triage`, seeded into a workspace by the shared-files convention.
 ///
 /// The stub PLAN 7.3 asks Phase 13 for: file in, status and artefact out. It
@@ -1647,24 +2032,40 @@ mod tests {
         }
     }
 
-    /// The delivery pack (PLAN 7.3, Phase 19) calls nothing that has to be
+    /// Every runbook of PLAN 7.3's Phase 19, in the order the packs landed.
+    const PACKS: [&str; 6] = [
+        REVIEW_DIFF_SKILL,
+        DEPLOY_SKILL,
+        ALERT_SKILL,
+        MAIL_SKILL,
+        THREAD_SKILL,
+        REPLY_SKILL,
+    ];
+
+    /// The parsed runbook a seeded name ships with.
+    fn seeded(name: &str) -> doc::SkillDoc {
+        let (_, text) = SEEDED
+            .iter()
+            .find(|(seeded, _)| *seeded == name)
+            .unwrap_or_else(|| panic!("`{name}` is seeded"));
+        doc::parse(text).unwrap_or_else(|err| panic!("`{name}`: {err}"))
+    }
+
+    /// A domain pack (PLAN 7.3, Phase 19) calls nothing that has to be
     /// installed first.
     ///
     /// A pack is skills, connectors and an identity, and only the first of
-    /// those ships. A seeded runbook that declared `coolify__deploy` would be
-    /// an example that fails closed at `skill_run` on every machine where that
-    /// connector is not installed — which is every machine, on the day it is
-    /// seeded. The source of a diff or a deploy fact is `shell_exec` and the
-    /// project's own files today; a connector replaces the source later, and
-    /// that is an edit to the runbook the operator owns.
+    /// those ships. A seeded runbook that declared `coolify__deploy` or
+    /// `imap__fetch` would be an example that fails closed at `skill_run` on
+    /// every machine where that connector is not installed — which is every
+    /// machine, on the day it is seeded. The source of a diff, a deploy fact or
+    /// a client's message is `shell_exec` and files on disk today; a connector
+    /// replaces the source later, and that is an edit to the runbook the
+    /// operator owns.
     #[test]
-    fn the_delivery_pack_calls_only_tools_this_build_has() {
-        for name in [REVIEW_DIFF_SKILL, DEPLOY_SKILL, ALERT_SKILL] {
-            let (_, text) = SEEDED
-                .iter()
-                .find(|(seeded, _)| *seeded == name)
-                .unwrap_or_else(|| panic!("`{name}` is seeded"));
-            let doc = doc::parse(text).unwrap_or_else(|err| panic!("`{name}`: {err}"));
+    fn a_domain_pack_calls_only_tools_this_build_has() {
+        for name in PACKS {
+            let doc = seeded(name);
 
             assert!(!doc.tools.is_empty(), "`{name}` declares what it calls");
             for tool in &doc.tools {
@@ -1673,6 +2074,28 @@ mod tests {
                     "`{name}` declares `{tool}`, which needs something installed"
                 );
             }
+        }
+    }
+
+    /// A pack's catalog line is the whole of what a model sees before choosing
+    /// it.
+    ///
+    /// That line is the first paragraph of *When to use it*, capped at
+    /// [`doc::SUMMARY_MAX_CHARS`] and ellipsised past it — so an opening
+    /// paragraph that runs long does not cost more prompt, it costs the end of
+    /// the sentence saying when to run the thing, which is the one sentence a
+    /// catalog is for. Six domain runbooks are already more than a person keeps
+    /// in their head, and whichever pack lands next, its first paragraph fits.
+    #[test]
+    fn a_domain_pack_says_when_to_run_it_without_the_line_being_cut_off() {
+        for name in PACKS {
+            let summary = seeded(name).summary;
+            assert!(
+                !summary.ends_with('…'),
+                "`{name}` opens with {} characters and the catalog keeps {}: {summary}",
+                summary.chars().count(),
+                doc::SUMMARY_MAX_CHARS
+            );
         }
     }
 
@@ -1699,6 +2122,29 @@ mod tests {
             granted(&catalog, &Agent::builtin()).is_empty(),
             "installing a pack grants nothing"
         );
+    }
+
+    /// Intake (PLAN 7.3, Phase 19, pack 2) holds no tool that runs a command.
+    ///
+    /// The property that decides how the pack is granted, which is why it is a
+    /// test rather than a sentence in the README. Its three runbooks read files
+    /// and write files, so the specialist that holds them needs `fs_*` and
+    /// nothing else — and an identity with no `shell_exec` is what you want
+    /// pointed at text somebody outside the house wrote. A runbook here that
+    /// grew a `git` call would quietly turn that identity into one that has a
+    /// shell, on a grant nobody revisited.
+    #[test]
+    fn the_intake_pack_holds_no_tool_that_runs_a_command() {
+        for name in [MAIL_SKILL, THREAD_SKILL, REPLY_SKILL] {
+            assert!(
+                !seeded(name)
+                    .tools
+                    .iter()
+                    .any(|held| held == tool::SHELL_EXEC),
+                "`{name}` declares `{}`; intake is granted to an identity that has none",
+                tool::SHELL_EXEC
+            );
+        }
     }
 
     #[test]
@@ -1886,14 +2332,16 @@ mod tests {
                 ALERT_SKILL,
                 COS_SKILL,
                 DEPLOY_SKILL,
+                MAIL_SKILL,
+                REPLY_SKILL,
                 REVIEW_DIFF_SKILL,
+                THREAD_SKILL,
                 CHECK_SKILL,
                 DRAFT_SKILL,
                 PERCEIVE_SKILL,
                 VERIFY_SKILL
             ],
-            "the world's runbooks and the delivery pack arrive; the deleted review does not come \
-             back"
+            "the world's runbooks and both packs arrive; the deleted review does not come back"
         );
 
         // And the manifest now covers all five, so a third start writes nothing.
