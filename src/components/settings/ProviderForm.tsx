@@ -19,10 +19,15 @@ import { ENV_API_KEY, useSettings } from "../../state/settings";
 
 const AUTH_LABELS: Readonly<Record<AuthKind, string>> = {
   api_key: "API key (OpenAI-compatible)",
+  gemini: "Gemini (Google AI Studio key)",
   claude_cli: "Claude Code login on this machine",
   codex_cli: "Codex CLI login on this machine",
   grok_cli: "Grok CLI login on this machine",
 };
+
+function isCliLogin(kind: AuthKind): boolean {
+  return kind === "claude_cli" || kind === "codex_cli" || kind === "grok_cli";
+}
 
 function presetOf(
   presets: ReadonlyArray<AuthPreset>,
@@ -230,7 +235,8 @@ export default function ProviderForm() {
   const errorFor = (field: string) =>
     fieldError?.field === field ? fieldError.message : null;
 
-  const cliAuth = draft.authKind !== "api_key";
+  const cliAuth = isCliLogin(draft.authKind);
+  const geminiAuth = draft.authKind === "gemini";
   const preset = presetOf(settings.presets, draft.authKind);
   const defaultUrl = preset?.default_base_url ?? "";
   const defaultModel = preset?.default_model ?? "";
@@ -278,7 +284,9 @@ export default function ProviderForm() {
         <p className="field__hint">
           {cliAuth
             ? "Reuses a login the official CLI already wrote on this machine. Aegis presents itself as that CLI. That is widely done and may be outside the provider's terms."
-            : "An API key stored in this machine's credential store, or AEGIS_API_KEY."}
+            : geminiAuth
+              ? "A Google AI Studio key (AIza…), stored in this machine's credential store or AEGIS_API_KEY. Aegis talks to the Generative Language API, not an OpenAI-compatible server."
+              : "An API key stored in this machine's credential store, or AEGIS_API_KEY."}
         </p>
       </div>
 
@@ -291,7 +299,9 @@ export default function ProviderForm() {
         hint={
           cliAuth
             ? `Leave empty to use ${defaultUrl || "the CLI's own endpoint"}. Change it to point at a proxy or another host.`
-            : "Any OpenAI-compatible server. Aegis appends /chat/completions, so the URL stops at /v1. Over http:// the key crosses the network in clear text — use it only for a server on this machine."
+            : geminiAuth
+              ? `Leave empty to use ${defaultUrl || "Google's Generative Language API"}. Aegis talks to /v1beta/models/{id}:generateContent, so the URL stops at /v1beta.`
+              : "Any OpenAI-compatible server. Aegis appends /chat/completions, so the URL stops at /v1. Over http:// the key crosses the network in clear text — use it only for a server on this machine."
         }
         onChange={(event) => edit({ baseUrl: event.target.value })}
         disabled={busy}
@@ -362,7 +372,9 @@ export default function ProviderForm() {
           value={draft.apiKey}
           placeholder={
             settings.key_source === "none"
-              ? "Paste a key"
+              ? geminiAuth
+                ? "Paste an AI Studio key (AIza…)"
+                : "Paste a key"
               : "Leave empty to keep the current key"
           }
           error={null}

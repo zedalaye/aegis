@@ -56,6 +56,11 @@ pub enum Resolved {
         /// user overrode the base URL.
         base_url: String,
     },
+    /// Gemini: an AI Studio key (`AIza…`), sent as `x-goog-api-key`.
+    Gemini {
+        /// The access token.
+        access_token: ApiKey,
+    },
 }
 
 /// A token sitting in a CLI file, before any refresh.
@@ -115,7 +120,7 @@ pub async fn resolve(
     base_url_override: &str,
 ) -> Result<Resolved, Missing> {
     match kind {
-        crate::store::AuthKind::ApiKey => Err(Missing {
+        crate::store::AuthKind::ApiKey | crate::store::AuthKind::Gemini => Err(Missing {
             code: crate::error::ErrorCode::NoApiKey.as_str(),
             message: "Aegis is set to use an API key, not a CLI login.".to_owned(),
         }),
@@ -128,7 +133,7 @@ pub async fn resolve(
 /// Looks at the chosen CLI's store without touching the network.
 pub fn peek(kind: crate::store::AuthKind) -> Option<Peek> {
     match kind {
-        crate::store::AuthKind::ApiKey => None,
+        crate::store::AuthKind::ApiKey | crate::store::AuthKind::Gemini => None,
         crate::store::AuthKind::ClaudeCli => peek_claude(),
         crate::store::AuthKind::CodexCli => peek_codex(),
         crate::store::AuthKind::GrokCli => peek_grok().map(|found| found.peek),

@@ -203,32 +203,13 @@ subscription.
 specialist in a worktree, analogue of WSL (`PLAN.md` § 7.12) — not as a
 token source. That is a product decision, not a provider.
 
-### 7. Gemini HTTP (`gemini`) as a fifth `AuthKind`
+### 7. Gemini HTTP (`gemini`) as a fifth `AuthKind` — landed
 
-**The change.** Enable `motosan-ai`'s `gemini` feature. Add `AuthKind::Gemini`.
-Talk to `generativelanguage.googleapis.com` with an AI Studio key (`AIza…`,
-header `x-goog-api-key`). Stream mapping already exists in
-`agent/provider/motosan.rs` (`Text` / `ToolCall*` / `Usage` / `Finish`).
-Settings, probe, and the catalog fallback list (`GEMINI_MODELS`) follow the
-Claude/Codex/Grok pattern.
-
-**Why it is not a feature flag.** `AuthKind::ApiKey` always goes through
-OpenAI `/chat/completions`. Gemini is a different dialect. The non-obvious
-piece is tool results: Gemini's `functionResponse.name` must be the
-*function name*, not the opaque call id. Today `to_motosan_message` forwards
-`tool_call_id`. Without a remap on that arm, the second round of an
-`fs_write` fails. The models list is `GET …/v1beta/models`, not the four
-shapes `catalog.rs` already parses. The keyring still holds one key; switching
-auth kind overwrites it, same as today.
-
-**What it buys.** Gemini in the Settings picker, same single-provider model
-as now. Not the roster. `provider_for` still refuses anything but
-`default`.
-
-**Unknown:** whether Gemini's tool-call ids in the stream are names already
-(so the remap is only on the way back) or opaque ids that have to be
-remembered across the turn. Prove it against one `fs_write` before wiring
-the catalog.
+`AuthKind::Gemini`, motosan-ai `gemini` feature, AI Studio key, Settings
+picker, probe, and `GET /v1beta/models`. The unknown is settled: motosan
+assigns opaque ids (`call_N`) on the stream, and `to_chat_request` remaps
+`Role::Tool` onto the function name before the second round. Do not redo
+that investigation. What is left of Gemini is § 8.
 
 ### 8. Gemini Code Assist as the Claude-Code-login analogue
 
@@ -247,7 +228,7 @@ Windows / macOS / Linux, and whether `motosan-ai-oauth` is enough or Aegis
 should keep owning the file the way it does for the other three. Read the
 file once before choosing.
 
-Do this after § 7 if the demand is the subscription, not a key. Do not do
+Do this if the demand is the subscription, not a key. Do not do
 `gemini-cli` (the subprocess) for the same reason as § 6.
 
 ### 9. The roster is a different piece of work

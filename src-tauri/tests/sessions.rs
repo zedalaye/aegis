@@ -330,6 +330,7 @@ async fn a_tool_call_runs_under_policy_and_is_audited() {
             id: Some("call_1".to_owned()),
             name: Some("fs_read".to_owned()),
             args_delta: r#"{"path":"notes.txt"}"#.to_owned(),
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -432,6 +433,7 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
                     status: ToolCallStatus::Cancelled,
                     summary: None,
                     image_path: None,
+                    thought_signature: None,
                 }],
             ),
             SessionState::Idle,

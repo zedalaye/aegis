@@ -166,6 +166,14 @@ pub struct ToolCallRecord {
     /// existed — a session on disk must keep opening.
     #[serde(default)]
     pub image_path: Option<String>,
+    /// Gemini thought signature to echo on the next request.
+    ///
+    /// Opaque encrypted state. Not shown in the WebView (`ts(skip)`); kept on
+    /// disk so a tool round after a restart still has it. Missing in
+    /// transcripts written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub thought_signature: Option<String>,
 }
 
 /// One message in a transcript.
@@ -1643,6 +1651,7 @@ mod tests {
                         status: ToolCallStatus::Pending,
                         summary: None,
                         image_path: None,
+                        thought_signature: None,
                     }],
                 ),
                 SessionState::Running,
@@ -1785,6 +1794,7 @@ mod tests {
                     status: ToolCallStatus::Ok,
                     summary: None,
                     image_path: None,
+                    thought_signature: None,
                 }],
             )],
             compaction: Some(Compaction {

@@ -226,6 +226,7 @@ impl App {
                         id: Some(format!("call_{index}")),
                         name: Some(name.to_owned()),
                         args_delta: args.to_string(),
+                        thought_signature: None,
                     },
                     ModelEvent::Finish {
                         reason: StopReason::ToolCalls,

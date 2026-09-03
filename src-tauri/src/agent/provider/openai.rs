@@ -715,6 +715,7 @@ fn tool_call_delta(call: &Value) -> ModelEvent {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
+        thought_signature: None,
     }
 }
 
@@ -1263,6 +1264,7 @@ mod tests {
                 id: Some("call_a".to_owned()),
                 name: Some("fs_read".to_owned()),
                 args_delta: String::new(),
+                thought_signature: None,
             }
         );
         assert_eq!(
@@ -1272,6 +1274,7 @@ mod tests {
                 id: None,
                 name: None,
                 args_delta: r#"{"path":"#.to_owned(),
+                thought_signature: None,
             },
             "an empty id must not overwrite the real one"
         );

@@ -239,6 +239,7 @@ impl App {
                         id: Some(format!("call_{index}")),
                         name: Some(name.to_owned()),
                         args_delta: args.to_string(),
+                        thought_signature: None,
                     },
                     ModelEvent::Finish {
                         reason: StopReason::ToolCalls,
@@ -520,6 +521,7 @@ fn long_session(app: &App, agent: &Agent) -> String {
                         status: ToolCallStatus::Ok,
                         summary: None,
                         image_path: None,
+                        thought_signature: None,
                     },
                     ToolCallRecord {
                         call_id: "c2".to_owned(),
@@ -533,6 +535,7 @@ fn long_session(app: &App, agent: &Agent) -> String {
                         status: ToolCallStatus::Ok,
                         summary: None,
                         image_path: None,
+                        thought_signature: None,
                     },
                 ],
             ),

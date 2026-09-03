@@ -266,6 +266,7 @@ fn returns(status: &str, summary: &str, said: &str) -> Vec<Vec<ModelEvent>> {
                 "open_questions": ["what next?"],
             })
             .to_string(),
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -409,6 +410,7 @@ async fn a_specialist_runs_as_itself_and_is_not_offered_what_it_does_not_hold() 
                             "content": "x",
                         })
                         .to_string(),
+                        thought_signature: None,
                     },
                     ModelEvent::Finish {
                         reason: StopReason::ToolCalls,
@@ -485,6 +487,7 @@ async fn a_specialist_cannot_delegate_and_is_told_why() {
                             }],
                         })
                         .to_string(),
+                        thought_signature: None,
                     },
                     ModelEvent::Finish {
                         reason: StopReason::ToolCalls,
@@ -626,6 +629,7 @@ async fn the_reviewer_runs_last_and_sees_the_artefacts_rather_than_the_work() {
                             "artefacts": [".aegis/artefacts/note.md"],
                         })
                         .to_string(),
+                        thought_signature: None,
                     },
                     ModelEvent::Finish {
                         reason: StopReason::ToolCalls,

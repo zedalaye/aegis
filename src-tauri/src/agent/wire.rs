@@ -129,6 +129,10 @@ pub struct WireToolCall {
     pub kind: &'static str,
     /// The call itself.
     pub function: WireFunction,
+    /// Gemini thought signature to echo on the next request. Skipped on the
+    /// OpenAI-compatible body: that dialect has no such field.
+    #[serde(skip)]
+    pub thought_signature: Option<String>,
 }
 
 impl WireToolCall {
@@ -145,6 +149,7 @@ impl WireToolCall {
                 name: name.into(),
                 arguments: arguments.into(),
             },
+            thought_signature: None,
         }
     }
 }
@@ -254,6 +259,12 @@ pub enum ModelEvent {
         name: Option<String>,
         /// A slice of the arguments JSON string.
         args_delta: String,
+        /// Gemini thought signature for this call, when the part carried one.
+        ///
+        /// Opaque. Must be echoed on the `functionCall` part of the next
+        /// request or Gemini 3 rejects the round. Other providers leave this
+        /// `None`.
+        thought_signature: Option<String>,
     },
     /// The response ended.
     Finish {
@@ -291,6 +302,8 @@ pub struct AssembledCall {
     /// An `Err` is answered rather than executed: it becomes a `tool` message
     /// carrying an error envelope, and the turn continues (PLAN 4.1).
     pub args: Result<Value, String>,
+    /// Gemini thought signature, when the stream carried one.
+    pub thought_signature: Option<String>,
 }
 
 /// Accumulates streamed [`ModelEvent::ToolCallDelta`] fragments.
@@ -312,6 +325,7 @@ struct Partial {
     id: Option<String>,
     name: Option<String>,
     args: String,
+    thought_signature: Option<String>,
 }
 
 impl ToolCallAssembler {
@@ -322,6 +336,18 @@ impl ToolCallAssembler {
     /// value, and a provider that sends a second, different one is confused —
     /// the first is what the earlier fragments belong to.
     pub fn push(&mut self, index: u32, id: Option<String>, name: Option<String>, args_delta: &str) {
+        self.push_signed(index, id, name, args_delta, None);
+    }
+
+    /// [`push`] plus a Gemini thought signature, taken the first time it appears.
+    pub fn push_signed(
+        &mut self,
+        index: u32,
+        id: Option<String>,
+        name: Option<String>,
+        args_delta: &str,
+        thought_signature: Option<String>,
+    ) {
         let partial = match self.calls.iter_mut().find(|call| call.index == index) {
             Some(existing) => existing,
             None => {
@@ -330,6 +356,7 @@ impl ToolCallAssembler {
                     id: None,
                     name: None,
                     args: String::new(),
+                    thought_signature: None,
                 });
                 // Just pushed, so this cannot be `None`.
                 let Some(fresh) = self.calls.last_mut() else {
@@ -344,6 +371,9 @@ impl ToolCallAssembler {
         }
         if partial.name.is_none() {
             partial.name = name;
+        }
+        if partial.thought_signature.is_none() {
+            partial.thought_signature = thought_signature.filter(|sig| !sig.is_empty());
         }
         partial.args.push_str(args_delta);
     }
@@ -389,6 +419,7 @@ impl ToolCallAssembler {
                     name: partial.name.unwrap_or_default(),
                     args_json,
                     args,
+                    thought_signature: partial.thought_signature,
                 }
             })
             .collect()
@@ -593,6 +624,20 @@ mod tests {
             .as_ref()
             .expect_err("nameless")
             .contains("no function name"));
+    }
+
+    #[test]
+    fn a_thought_signature_is_kept_with_the_call() {
+        let mut assembler = ToolCallAssembler::default();
+        assembler.push_signed(
+            0,
+            Some("call_0".to_owned()),
+            Some("fs_list".to_owned()),
+            "{}",
+            Some("sig-1".to_owned()),
+        );
+        let calls = assembler.finish();
+        assert_eq!(calls[0].thought_signature.as_deref(), Some("sig-1"));
     }
 
     #[test]

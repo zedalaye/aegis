@@ -30,6 +30,7 @@ pub struct ModelCatalog {
 pub fn fallback(kind: AuthKind) -> &'static [&'static str] {
     match kind {
         AuthKind::ApiKey => &["gpt-4o", "gpt-4o-mini", "o4-mini"],
+        AuthKind::Gemini => motosan_ai::models::GEMINI_MODELS,
         AuthKind::ClaudeCli => motosan_ai::ANTHROPIC_MODELS,
         AuthKind::CodexCli => &[
             "gpt-5.5",
@@ -83,7 +84,20 @@ pub fn speaks_anthropic(kind: AuthKind, override_url: &str) -> bool {
         AuthKind::ApiKey => {
             host_of(&effective_base_url(kind, override_url)).eq_ignore_ascii_case(ANTHROPIC_HOST)
         }
-        AuthKind::CodexCli | AuthKind::GrokCli => false,
+        AuthKind::CodexCli | AuthKind::GrokCli | AuthKind::Gemini => false,
+    }
+}
+
+/// Whether a turn for this configuration goes through
+/// [`motosan`](super::motosan) rather than the OpenAI-compatible path.
+///
+/// The three CLI logins, Gemini's own dialect, and an API key aimed at
+/// Anthropic's host. Grok still *arrives* here and then reuses the OpenAI
+/// client after a token refresh; the fork is inside motosan, not here.
+pub fn uses_motosan(kind: AuthKind, override_url: &str) -> bool {
+    match kind {
+        AuthKind::ClaudeCli | AuthKind::CodexCli | AuthKind::GrokCli | AuthKind::Gemini => true,
+        AuthKind::ApiKey => speaks_anthropic(kind, override_url),
     }
 }
 
@@ -130,7 +144,7 @@ pub fn models_url(kind: AuthKind, override_url: &str) -> Option<String> {
         AuthKind::ApiKey if speaks_anthropic(kind, override_url) => {
             format!("{}/v1/models", anthropic_origin(&base))
         }
-        AuthKind::ApiKey | AuthKind::GrokCli => format!("{base}/models"),
+        AuthKind::ApiKey | AuthKind::GrokCli | AuthKind::Gemini => format!("{base}/models"),
         AuthKind::ClaudeCli => format!("{}/v1/models", anthropic_origin(&base)),
         AuthKind::CodexCli => {
             let base = base
@@ -219,7 +233,11 @@ pub async fn list(
         }
     };
 
-    let mut models = parse_ids(&value);
+    let mut models = if matches!(kind, AuthKind::Gemini) {
+        parse_gemini_ids(&value)
+    } else {
+        parse_ids(&value)
+    };
     if models.is_empty() {
         return catalog(
             fallback_ids,
@@ -300,6 +318,13 @@ async fn authorized_get(
                 request = request.header(name, value);
             }
         }
+        AuthKind::Gemini => {
+            let key = api_key.ok_or_else(|| {
+                "No API key. Save a Google AI Studio key in Settings, or start Aegis with AEGIS_API_KEY set."
+                    .to_owned()
+            })?;
+            request = goog_key(request, key.expose())?;
+        }
     }
 
     Ok(request)
@@ -368,10 +393,10 @@ fn find_cap(value: &Value, model: &str) -> Option<u32> {
                 .iter()
                 .filter_map(|key| map.get(*key))
                 .filter_map(Value::as_str)
-                .any(|id| id == model);
+                .any(|id| model_id(id) == model_id(model));
 
             if is_this_model {
-                let cap = ["max_tokens", "max_output_tokens"]
+                let cap = ["max_tokens", "max_output_tokens", "outputTokenLimit"]
                     .iter()
                     .filter_map(|key| map.get(*key))
                     .filter_map(Value::as_u64)
@@ -413,11 +438,65 @@ fn bearer(
     Ok(request.header(AUTHORIZATION, header))
 }
 
+/// Gemini's AI Studio key header. Sensitive for the same reason `bearer` is.
+fn goog_key(
+    request: reqwest::RequestBuilder,
+    key: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    let mut header = HeaderValue::from_str(key)
+        .map_err(|_| "The API key cannot be sent in a header.".to_owned())?;
+    header.set_sensitive(true);
+    Ok(request.header("x-goog-api-key", header))
+}
+
 /// Pulls model ids out of the shapes the four endpoints actually send.
 fn parse_ids(value: &Value) -> Vec<String> {
     let mut ids = Vec::new();
     collect_ids(value, &mut ids);
     ids
+}
+
+/// Gemini's list: `{ "models": [{ "name": "models/gemini-2.5-flash", ... }] }`.
+///
+/// The `name` field is a resource path, not the id a turn sends, and the
+/// payload mixes chat models with embeddings and image generators. Only
+/// entries that advertise `generateContent` become picker rows, and the
+/// `models/` prefix is stripped so the id matches what `:generateContent`
+/// wants.
+fn parse_gemini_ids(value: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    let Some(models) = value.get("models").and_then(Value::as_array) else {
+        return ids;
+    };
+    for model in models {
+        if !supports_generate_content(model) {
+            continue;
+        }
+        if let Some(id) = model.get("name").and_then(Value::as_str) {
+            push_id(&mut ids, model_id(id));
+        }
+    }
+    ids
+}
+
+fn supports_generate_content(model: &Value) -> bool {
+    match model
+        .get("supportedGenerationMethods")
+        .and_then(Value::as_array)
+    {
+        Some(methods) => methods
+            .iter()
+            .any(|method| method.as_str() == Some("generateContent")),
+        // A payload that does not say is treated as a chat model rather than
+        // dropped: the fallback list is the other way out if this turns out
+        // to be noise.
+        None => true,
+    }
+}
+
+/// The id a turn sends: Gemini's catalog prefixes it with `models/`.
+fn model_id(raw: &str) -> &str {
+    raw.strip_prefix("models/").unwrap_or(raw)
 }
 
 fn collect_ids(value: &Value, ids: &mut Vec<String>) {
@@ -509,6 +588,10 @@ mod tests {
         // The kinds that are neither: their own dialects, neither of them this.
         assert!(!speaks_anthropic(AuthKind::CodexCli, ""));
         assert!(!speaks_anthropic(AuthKind::GrokCli, ""));
+        assert!(!speaks_anthropic(AuthKind::Gemini, ""));
+        assert!(uses_motosan(AuthKind::Gemini, ""));
+        assert!(uses_motosan(AuthKind::ClaudeCli, ""));
+        assert!(!uses_motosan(AuthKind::ApiKey, "https://api.openai.com/v1"));
     }
 
     #[test]
@@ -585,6 +668,10 @@ mod tests {
             models_url(AuthKind::GrokCli, "").as_deref(),
             Some("https://cli-chat-proxy.grok.com/v1/models")
         );
+        assert_eq!(
+            models_url(AuthKind::Gemini, "").as_deref(),
+            Some("https://generativelanguage.googleapis.com/v1beta/models")
+        );
     }
 
     #[test]
@@ -606,5 +693,32 @@ mod tests {
             "models": [{ "slug": "gpt-5.5" }, { "slug": "gpt-5.4-mini" }]
         });
         assert_eq!(parse_ids(&body), vec!["gpt-5.5", "gpt-5.4-mini"]);
+    }
+
+    #[test]
+    fn a_gemini_list_strips_the_resource_prefix_and_keeps_chat_models() {
+        let body = serde_json::json!({
+            "models": [
+                {
+                    "name": "models/gemini-2.5-flash",
+                    "supportedGenerationMethods": ["generateContent", "countTokens"],
+                    "outputTokenLimit": 65536
+                },
+                {
+                    "name": "models/gemini-embedding-001",
+                    "supportedGenerationMethods": ["embedContent"]
+                },
+                {
+                    "name": "models/gemini-2.5-pro",
+                    "supportedGenerationMethods": ["generateContent"]
+                }
+            ]
+        });
+        assert_eq!(
+            parse_gemini_ids(&body),
+            vec!["gemini-2.5-flash", "gemini-2.5-pro"]
+        );
+        assert_eq!(find_cap(&body, "gemini-2.5-flash"), Some(65_536));
+        assert_eq!(find_cap(&body, "models/gemini-2.5-flash"), Some(65_536));
     }
 }

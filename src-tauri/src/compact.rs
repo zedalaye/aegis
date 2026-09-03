@@ -511,6 +511,7 @@ mod tests {
             status,
             summary: None,
             image_path: None,
+            thought_signature: None,
         }
     }
 

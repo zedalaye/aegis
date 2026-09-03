@@ -807,7 +807,13 @@ impl Turn<'_> {
                                 deadline = Some(Instant::now() + DELTA_FRAME);
                             }
                         }
-                        ModelEvent::ToolCallDelta { index, id, name, args_delta } => {
+                        ModelEvent::ToolCallDelta {
+                            index,
+                            id,
+                            name,
+                            args_delta,
+                            thought_signature,
+                        } => {
                             // Counted before it is handed over: `push` takes
                             // the fragment, and the size is the only part of
                             // it this loop still needs.
@@ -825,7 +831,13 @@ impl Turn<'_> {
                             }
                             draft.bytes = draft.bytes.saturating_add(grown);
 
-                            assembler.push(index, id, name, &args_delta);
+                            assembler.push_signed(
+                                index,
+                                id,
+                                name,
+                                &args_delta,
+                                thought_signature,
+                            );
 
                             // Rides the frame the text deltas already open, so
                             // arguments arriving with no text at all still get
@@ -1460,6 +1472,7 @@ fn record_of(call: &AssembledCall) -> ToolCallRecord {
         summary: None,
         // Filled in when the call finishes, and only by `screen_capture`.
         image_path: None,
+        thought_signature: call.thought_signature.clone(),
     }
 }
 
@@ -1694,6 +1707,7 @@ mod tests {
                 id: Some(id.to_owned()),
                 name: Some(name.to_owned()),
                 args_delta: args.to_owned(),
+                thought_signature: None,
             },
             ModelEvent::Finish {
                 reason: StopReason::ToolCalls,
@@ -2356,12 +2370,14 @@ mod tests {
                 id: Some("call_a".to_owned()),
                 name: Some(tool::FS_LIST.to_owned()),
                 args_delta: r#"{"path":"."}"#.to_owned(),
+                thought_signature: None,
             },
             ModelEvent::ToolCallDelta {
                 index: 1,
                 id: Some("call_b".to_owned()),
                 name: Some(tool::FS_READ.to_owned()),
                 args_delta: r#"{"path":"nope.txt"}"#.to_owned(),
+                thought_signature: None,
             },
             ModelEvent::Finish {
                 reason: StopReason::ToolCalls,
@@ -2397,18 +2413,21 @@ mod tests {
                 id: Some("call_a".to_owned()),
                 name: Some(tool::FS_LIST.to_owned()),
                 args_delta: r#"{"pa"#.to_owned(),
+                thought_signature: None,
             },
             ModelEvent::ToolCallDelta {
                 index: 0,
                 id: None,
                 name: None,
                 args_delta: r#"th":"#.to_owned(),
+                thought_signature: None,
             },
             ModelEvent::ToolCallDelta {
                 index: 0,
                 id: None,
                 name: None,
                 args_delta: r#""."}"#.to_owned(),
+                thought_signature: None,
             },
             ModelEvent::Finish {
                 reason: StopReason::ToolCalls,

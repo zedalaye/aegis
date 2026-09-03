@@ -280,10 +280,10 @@ authenticate:
 
 | | |
 | --- | --- |
-| **Authentication** | An API key, or a login already written by **Claude Code**, **Codex CLI**, or **Grok CLI** on this machine (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.grok/auth.json`). |
-| **Base URL** | For an API key: an OpenAI-compatible endpoint, stopping where `/chat/completions` would begin — `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1` for a local server, or whatever your gateway exposes. `https://api.anthropic.com/v1` is the one special case, and is described below. For a CLI login, leave it empty unless you are overriding the CLI's own endpoint. |
+| **Authentication** | An OpenAI-compatible API key, a **Gemini** AI Studio key, or a login already written by **Claude Code**, **Codex CLI**, or **Grok CLI** on this machine (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.grok/auth.json`). |
+| **Base URL** | For an OpenAI-compatible API key: an endpoint stopping where `/chat/completions` would begin — `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1` for a local server, or whatever your gateway exposes. `https://api.anthropic.com/v1` is the one special case, and is described below. For Gemini or a CLI login, leave it empty unless you are overriding the default endpoint. |
 | **Model** | The model id, spelled the way that server spells it. |
-| **API key** | When authentication is "API key": saved to the OS credential store. Leave it empty to keep the one already there. |
+| **API key** | When authentication is "API key" or "Gemini": saved to the OS credential store. Leave it empty to keep the one already there. |
 
 A CLI login is not an API key. Aegis reads the official file, refreshes the access token if it
 has expired, and writes the new bundle back so the CLI keeps working. It presents itself as that
@@ -303,6 +303,14 @@ price on every round of every tool loop. The native path asks for the cache inst
 schemas, the system prompt, and the conversation so far are each a point the next round can be
 served from. (If your key has access to more than one workspace you may also need to pick one —
 Aegis sends no `anthropic-workspace-id` header.)
+
+**Gemini** is a fifth authentication kind, not a URL on the OpenAI-compatible path. Pick
+"Gemini (Google AI Studio key)", paste an `AIza…` key from
+[Google AI Studio](https://aistudio.google.com/apikey), and leave the base URL empty unless you
+are pointing at a proxy. Aegis talks to `generativelanguage.googleapis.com` in Gemini's own
+dialect (`x-goog-api-key`, `functionResponse.name` is the tool name). It is the same single
+provider as the others, not a roster: switching to Gemini overwrites the key in the credential
+store, the same as switching any other kind.
 
 If this machine has no usable credential store — headless Linux, a locked keychain, a dev build
 whose signature keeps changing — set the key in the environment instead and restart:

@@ -438,6 +438,7 @@ async fn streamed_tool_call_fragments_assemble_into_one_parsed_call() {
             id,
             name,
             args_delta,
+            ..
         } = event
         {
             assembler.push(*index, id.clone(), name.clone(), args_delta);

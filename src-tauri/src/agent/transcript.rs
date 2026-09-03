@@ -286,7 +286,12 @@ pub fn build(
                     tool_calls: message
                         .tool_calls
                         .iter()
-                        .map(|call| WireToolCall::new(&call.call_id, &call.tool, &call.args_json))
+                        .map(|call| {
+                            let mut wire =
+                                WireToolCall::new(&call.call_id, &call.tool, &call.args_json);
+                            wire.thought_signature = call.thought_signature.clone();
+                            wire
+                        })
                         .collect(),
                 });
 
@@ -385,6 +390,7 @@ mod tests {
             status: ToolCallStatus::Pending,
             summary: None,
             image_path: None,
+            thought_signature: None,
         }
     }
 

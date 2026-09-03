@@ -359,6 +359,7 @@ fn ask_to_write(said: &str) -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::FS_WRITE.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -416,6 +417,7 @@ fn ask_to_run() -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::SHELL_EXEC.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -443,6 +445,7 @@ fn ask_to_capture() -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::SCREEN_CAPTURE.to_owned()),
             args_delta: "{}".to_owned(),
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -478,6 +481,7 @@ fn ask_to_remember() -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::MEMORY_WRITE.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -602,6 +606,7 @@ There is no model behind this run —              the scripted provider wrote t
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::FS_WRITE.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -635,6 +640,7 @@ fn close_the_run(name: &str, wrote: bool) -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::SKILL_RETURN.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -674,6 +680,7 @@ fn ask_to_load(name: &str) -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::SKILL_RUN.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -709,6 +716,7 @@ fn ask_to_return(name: &str) -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::SKILL_RETURN.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -788,6 +796,7 @@ fn delegate_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::HANDOFF_DELEGATE.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,
@@ -871,6 +880,7 @@ fn return_the_brief(request: &ModelRequest) -> Vec<ModelEvent> {
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
             name: Some(crate::policy::tool::HANDOFF_RETURN.to_owned()),
             args_delta: arguments,
+            thought_signature: None,
         },
         ModelEvent::Finish {
             reason: StopReason::ToolCalls,

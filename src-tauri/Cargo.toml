@@ -82,15 +82,16 @@ reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "system-proxy",
 ] }
-# Claude Code OAuth (`sk-ant-oat01-*` + identity headers) and the ChatGPT
-# Codex Responses backend are not OpenAI-compatible chat/completions. The
-# crate detects the OAuth prefix and speaks those two dialects; Aegis still
-# owns reading `~/.claude`, `~/.codex` and `~/.grok` and still maps the
-# stream onto `ModelEvent`. CLI backends (`claude-code`, `codex-cli`) are
-# deliberately off: those shell out to a second agent.
+# Claude Code OAuth (`sk-ant-oat01-*` + identity headers), the ChatGPT
+# Codex Responses backend, and Gemini's Generative Language API are not
+# OpenAI-compatible chat/completions. The crate speaks those dialects; Aegis
+# still owns reading `~/.claude`, `~/.codex` and `~/.grok` and still maps the
+# stream onto `ModelEvent`. CLI backends (`claude-code`, `codex-cli`,
+# `gemini-cli`) are deliberately off: those shell out to a second agent.
 motosan-ai = { version = "0.27.1", default-features = false, features = [
     "anthropic",
     "chatgpt-codex",
+    "gemini",
 ] }
 # `motosan-ai::Client::stream` is a futures `Stream`. The turn loop consumes
 # it with `select!` the same way it consumes the OpenAI SSE channel.

@@ -157,6 +157,7 @@ impl App {
                 id: Some("call_1".to_owned()),
                 name: Some("fs_write".to_owned()),
                 args_delta: arguments,
+                thought_signature: None,
             },
             ModelEvent::Finish {
                 reason: StopReason::ToolCalls,

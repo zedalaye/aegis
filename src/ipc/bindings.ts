@@ -490,10 +490,12 @@ artifact: AuditArtifact | null, };
  * How a configured provider authenticates.
  *
  * Persisted, not a secret: it names a *source*, never a token. `api_key` is
- * the original path (keyring / `AEGIS_API_KEY`). The CLI variants reuse a
+ * the original path (keyring / `AEGIS_API_KEY`), aimed at an OpenAI-compatible
+ * host. [`AuthKind::Gemini`] is the same store, a different dialect: Google's
+ * Generative Language API, not `/chat/completions`. The CLI variants reuse a
  * login the official agent already wrote on this machine.
  */
-export type AuthKind = "api_key" | "claude_cli" | "codex_cli" | "grok_cli";
+export type AuthKind = "api_key" | "gemini" | "claude_cli" | "codex_cli" | "grok_cli";
 
 /**
  * The URL and model Settings prefills for one [`AuthKind`].

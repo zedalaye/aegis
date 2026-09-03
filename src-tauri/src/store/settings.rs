@@ -56,7 +56,9 @@ const ENDPOINT_SUFFIX: &str = "/chat/completions";
 /// How a configured provider authenticates.
 ///
 /// Persisted, not a secret: it names a *source*, never a token. `api_key` is
-/// the original path (keyring / `AEGIS_API_KEY`). The CLI variants reuse a
+/// the original path (keyring / `AEGIS_API_KEY`), aimed at an OpenAI-compatible
+/// host. [`AuthKind::Gemini`] is the same store, a different dialect: Google's
+/// Generative Language API, not `/chat/completions`. The CLI variants reuse a
 /// login the official agent already wrote on this machine.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +67,9 @@ pub enum AuthKind {
     /// A key stored in the OS credential store or `AEGIS_API_KEY`.
     #[default]
     ApiKey,
+    /// Google AI Studio key, same store, talking to
+    /// `generativelanguage.googleapis.com`.
+    Gemini,
     /// Claude Code: `~/.claude/.credentials.json` / Keychain.
     ClaudeCli,
     /// OpenAI Codex CLI: `~/.codex/auth.json`.
@@ -76,13 +81,14 @@ pub enum AuthKind {
 impl AuthKind {
     /// Whether this kind reads a CLI login instead of an API key.
     pub const fn is_cli(self) -> bool {
-        !matches!(self, Self::ApiKey)
+        matches!(self, Self::ClaudeCli | Self::CodexCli | Self::GrokCli)
     }
 
     /// The endpoint this kind talks to when the user has not overridden it.
     pub const fn default_base_url(self) -> &'static str {
         match self {
             Self::ApiKey => "https://api.openai.com/v1",
+            Self::Gemini => "https://generativelanguage.googleapis.com/v1beta",
             Self::ClaudeCli => "https://api.anthropic.com",
             Self::CodexCli => "https://chatgpt.com/backend-api/codex",
             Self::GrokCli => "https://cli-chat-proxy.grok.com/v1",
@@ -93,6 +99,7 @@ impl AuthKind {
     pub const fn default_model(self) -> &'static str {
         match self {
             Self::ApiKey => "",
+            Self::Gemini => "gemini-2.5-flash",
             Self::ClaudeCli => "claude-sonnet-4-6",
             Self::CodexCli => "gpt-5.5",
             Self::GrokCli => "grok-4",
@@ -100,9 +107,10 @@ impl AuthKind {
     }
 
     /// Every authentication kind, with the URL and model the form prefills.
-    pub fn presets() -> [AuthPreset; 4] {
+    pub fn presets() -> [AuthPreset; 5] {
         [
             Self::ApiKey.preset(),
+            Self::Gemini.preset(),
             Self::ClaudeCli.preset(),
             Self::CodexCli.preset(),
             Self::GrokCli.preset(),
@@ -196,8 +204,8 @@ pub struct ProviderSettings {
     pub auth_kind: AuthKind,
     /// The OpenAI-compatible base URL, without a trailing slash.
     ///
-    /// Unused when [`AuthKind`] is a CLI login, unless the user overrode the
-    /// CLI's own endpoint (Grok).
+    /// Unused when [`AuthKind`] is a CLI login or Gemini, unless the user
+    /// overrode the default endpoint.
     #[serde(default)]
     pub base_url: String,
     /// The model id.
@@ -226,12 +234,12 @@ impl ProviderSettings {
     /// — whereas an unconfigured one is a fresh install, where the scripted
     /// provider answering is the documented behaviour rather than a fault.
     ///
-    /// A CLI login implies its own endpoint, so a model id is enough.
+    /// A CLI login and Gemini imply their own endpoint, so a model id is enough.
     pub fn is_configured(&self) -> bool {
         if self.model.is_empty() {
             return false;
         }
-        self.auth_kind.is_cli() || !self.base_url.is_empty()
+        !matches!(self.auth_kind, AuthKind::ApiKey) || !self.base_url.is_empty()
     }
 }
 
@@ -596,7 +604,13 @@ mod tests {
             assert!(url.starts_with("https://"), "{kind:?} defaulted to {url}");
             assert!(!kind.default_model().is_empty(), "{kind:?} has no model");
         }
-        assert_eq!(AuthKind::presets().len(), 4);
+        assert_eq!(AuthKind::presets().len(), 5);
+        assert_eq!(
+            AuthKind::Gemini.default_base_url(),
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+        assert_eq!(AuthKind::Gemini.default_model(), "gemini-2.5-flash");
+        assert!(!AuthKind::Gemini.is_cli());
     }
 
     #[test]
@@ -608,6 +622,18 @@ mod tests {
             max_output_tokens: None,
         };
         assert!(provider.is_configured());
+    }
+
+    #[test]
+    fn gemini_is_configured_with_a_model_alone() {
+        let provider = ProviderSettings {
+            auth_kind: AuthKind::Gemini,
+            base_url: String::new(),
+            model: "gemini-2.5-flash".to_owned(),
+            max_output_tokens: None,
+        };
+        assert!(provider.is_configured());
+        assert!(!provider.auth_kind.is_cli());
     }
 
     #[test]

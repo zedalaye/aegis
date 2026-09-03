@@ -184,17 +184,16 @@ impl AppState {
             return Box::new(FakeProvider::new());
         }
 
-        // Everything motosan speaks goes to motosan: the three CLI logins, and
-        // an API key aimed at Anthropic's own host. That last one used to fall
-        // through to the OpenAI-compatible path, which reaches the vendor's
-        // compatibility shim — a shim that drops prompt caching, so every
-        // round of every turn re-sent the whole transcript at full price.
-        if settings.auth_kind.is_cli()
-            || catalog::speaks_anthropic(settings.auth_kind, &settings.base_url)
-        {
+        // Everything motosan speaks goes to motosan: the three CLI logins,
+        // Gemini, and an API key aimed at Anthropic's own host. That last one
+        // used to fall through to the OpenAI-compatible path, which reaches
+        // the vendor's compatibility shim — a shim that drops prompt caching,
+        // so every round of every turn re-sent the whole transcript at full
+        // price.
+        if catalog::uses_motosan(settings.auth_kind, &settings.base_url) {
             // A CLI login's credential is on disk; only the key path needs the
             // secret store, and reading it for the others would be a keyring
-            // prompt bought for nothing.
+            // prompt bought for nothing. Gemini is a key, not a login.
             let key = if settings.auth_kind.is_cli() {
                 None
             } else {
@@ -252,7 +251,7 @@ impl AppState {
                 AuthKind::ClaudeCli => crate::secrets::KeySource::ClaudeCli,
                 AuthKind::CodexCli => crate::secrets::KeySource::CodexCli,
                 AuthKind::GrokCli => crate::secrets::KeySource::GrokCli,
-                AuthKind::ApiKey => crate::secrets::KeySource::None,
+                AuthKind::ApiKey | AuthKind::Gemini => crate::secrets::KeySource::None,
             };
             let hint =
                 oauth::peek(provider.auth_kind).map(|peek| key_hint(peek.access_token.expose()));
@@ -286,9 +285,7 @@ impl AppState {
         // The same fork as `provider`, and for the reason the probe exists: a
         // test that reaches a different endpoint than a turn does is a test
         // that can pass on a configuration that cannot answer.
-        if settings.auth_kind.is_cli()
-            || catalog::speaks_anthropic(settings.auth_kind, &settings.base_url)
-        {
+        if catalog::uses_motosan(settings.auth_kind, &settings.base_url) {
             let key = if settings.auth_kind.is_cli() {
                 None
             } else {

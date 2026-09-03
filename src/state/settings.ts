@@ -131,8 +131,9 @@ export type SettingsState = {
 /**
  * Whether these settings name a real provider.
  *
- * Mirrors `ProviderSettings::is_configured`: a CLI login implies its own
- * endpoint, so a model id is enough. An API key still needs a URL and a model.
+ * Mirrors `ProviderSettings::is_configured`: a CLI login or Gemini implies
+ * its own endpoint, so a model id is enough. An OpenAI-compatible API key
+ * still needs a URL and a model.
  */
 export function isConfigured(settings: MaskedSettings): boolean {
   if (settings.model.length === 0) {
