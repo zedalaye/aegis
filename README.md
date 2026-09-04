@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 19 (the first four domain packs) — the MVP is
+> **Status: Phase 19 (the first five domain packs) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -182,6 +182,14 @@ ever sent to it.
 > reconcile comes back to you. It declares three tools — list, read, write — and § 7.3's reason is
 > blunt: *not a broker*. Aegis has nothing that buys, sells, transfers or pays. See *The budget
 > pack*.
+>
+> **The fifth pack drafts what you post and cannot post it.** `social.scan`, `social.reply` and
+> `social.post` find the few things worth answering, draft one answer, and draft one post about
+> something that has already happened. It is the first pack whose artefact is addressed to nobody
+> in particular — a mistaken mail is fixed by a second mail, and nothing fixes a post — so both
+> drafts end by handing the file to `never-send-without-review`. Its adversary is the material:
+> the sharp reply performs best, so *being wrong* is excluded from the criterion by name, and
+> *none worth answering* is the ordinary answer. See *The social pack*.
 
 ---
 
@@ -454,14 +462,15 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts eighteen there — `never-send-without-review`, `cos.loop`,
+`SKILL.md` in it. Aegis puts twenty-one there — `never-send-without-review`, `cos.loop`,
 `world.draft`, `world.perceive-delta`, `world.verify`, `world.check`, the delivery pack's
 `review.diff`, `deploy.draft` and `alert.draft`, the intake pack's `mail.triage`,
 `thread.recap` and `reply.draft`, the watch pack's `watch.sweep`, `watch.digest` and
-`watch.impact`, and the budget pack's `budget.position`, `budget.runway` and `budget.alert` —
-and offers each **once**, recorded by name in
+`watch.impact`, the budget pack's `budget.position`, `budget.runway` and `budget.alert`, and the
+social pack's `social.scan`, `social.reply` and `social.post` — and offers each **once**, recorded
+by name in
 `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later version
-adding a nineteenth will offer that one and leave the rest alone. A workspace's own runbooks
+adding a twenty-second will offer that one and leave the rest alone. A workspace's own runbooks
 live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -756,15 +765,17 @@ fix it — and it is never offered to a model.
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
 happening. Aegis seeds the library with `never-send-without-review`, `cos.loop`, the four
-world runbooks and the twelve of the four domain packs, and each workspace with `inbox.triage` when
+world runbooks and the fifteen of the five domain packs, and each workspace with `inbox.triage` when
 you press *Set up shared files* — all of them are examples of the format in the place you would
 look for one, and all of them are ordinary files you can rewrite or delete. `cos.loop` is the
 Chief-of-Staff loop; see [Handoffs](#handoffs). The `world.*` four are the constitution's; see
 [The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are one domain pack,
 `mail.triage`, `thread.recap` and `reply.draft` the next, `watch.sweep`, `watch.digest` and
-`watch.impact` the third, and `budget.position`, `budget.runway` and `budget.alert` the fourth;
-see [The delivery pack](#the-delivery-pack), [The intake pack](#the-intake-pack),
-[The watch pack](#the-watch-pack) and [The budget pack](#the-budget-pack).
+`watch.impact` the third, `budget.position`, `budget.runway` and `budget.alert` the fourth, and
+`social.scan`, `social.reply` and `social.post` the fifth; see
+[The delivery pack](#the-delivery-pack), [The intake pack](#the-intake-pack),
+[The watch pack](#the-watch-pack), [The budget pack](#the-budget-pack) and
+[The social pack](#the-social-pack).
 
 Seeding happens **once per name**. The library records what it has offered in `skills/.seeded`,
 so a runbook you deleted does not reappear on the next start, and a runbook a later version adds
@@ -1730,9 +1741,121 @@ runbook here has a later version that ends in one, and a connector you install l
 change it: a read-only connector replaces where a figure comes from, never what may be done with
 it. Money moving is a human act, every time.
 
-### The two after this one are not here
+### The pack after the budget
 
-Social and revenue are not started.
+Social is the next one, and it has landed; see [The social pack](#the-social-pack). Revenue
+experiments and the wish list are not started.
+
+---
+
+## The social pack
+
+The fifth pack is social, and `PLAN.md` § 7.3 gives it as: **find posts worth answering; draft
+replies and news posts. Publish is irreversible → human gate.**
+
+| Runbook | Reads | Writes | Will not |
+| --- | --- | --- | --- |
+| `social.scan` | an export of mentions or a timeline, plus a written-down criterion for what this house answers | `.aegis/artefacts/social-scan-<date>.md`: at most three items, each with the sentence that qualifies it and the file that would answer it — or no file at all | put a post on the list because it is wrong |
+| `social.reply` | one item, the file that answers it, and this house's earlier posts | `.aegis/artefacts/social-reply-<handle>-<date>.md`: one or two sentences, with a **sources** block | correct somebody when the fact alone would do |
+| `social.post` | what happened, in the files that show it happened | `.aegis/artefacts/social-post-<date>-<subject>.md`: the draft, its sources, and a line naming anything in it not yet true | say anything in the future tense about this house |
+
+### The artefact is addressed to nobody in particular
+
+Everything else in your library writes to a reader: a client, a colleague, whoever set the
+threshold, whoever opens the digest on Friday. A post has an audience instead. Most of them arrive
+without your context, some of them keep a copy, and none of them see the correction.
+
+That is a different kind of irreversible from a deploy, which can be rolled back, or a mail, which
+is fixed by a second mail to the same person. Nothing fixes a post. So *publish* sits on the same
+line as send, pay, merge, deploy and trade, and both drafting runbooks end by handing the file to
+`never-send-without-review` — which is what that runbook was seeded for, and which is now a test:
+`a_draft_somebody_else_sends_names_the_runbook_that_checks_it`.
+
+### The adversary is inside the run
+
+The intake pack's adversary is a forger — hostile, but at least outside. This one is the material
+itself. Of all the answers that could be written to a post, the sharp one performs best, and a
+model asked for *a good reply* has no way to tell good from rewarded.
+
+So the runbooks name the shapes to refuse rather than asking for judgement: opening with *actually*,
+the correction that is not needed to answer, the joke at somebody's expense, the rhetorical
+question, the reply that is really an announcement. Every one of them outperforms the plain answer.
+That is the problem, not the argument for them.
+
+**And `social.scan` keeps exactly two reasons to answer**: somebody asked a question this house can
+answer from a file, or somebody is relying on something of ours that is wrong in a way a fact
+fixes. Being wrong on the internet is not one of them. It is the most answerable thing there is,
+which is precisely why it is excluded by name.
+
+### "None worth answering" is the ordinary answer
+
+This is the third pack to need that rule, and by now it is a property of domain packs rather than of
+these domains. `mail.triage` needs *no ask*. `watch.digest` needs *nothing new*. `social.scan`
+needs *none qualified*, and returns `done` with no file when that is the case.
+
+A procedure pointed at a pile and asked what to do about it will always find something. A scan that
+finds a post worth answering every time is manufacturing obligation, and a queue of drafts nobody
+asked for is how you end up posting more than you meant to.
+
+### What each one refuses to do
+
+**`social.scan` reads the criterion before the export.** It has to be quotable from a file — a line
+in your decisions ledger, a standing policy note — written before the posts were read. Reading the
+posts first and deciding afterwards is how the criterion quietly becomes whatever the loudest post
+was about. No file naming it means `blocked`.
+
+**And a hostile post about you is not an item.** An accusation, a pile-on, somebody angry: that
+comes straight back to you as `needs_you` with nothing drafted. Whether to answer at all is your
+decision, and it is the one place in this pack where being fast makes things worse.
+
+**`social.reply` reads its own draft twice more before writing it out** — once as a stranger with no
+context, once with the question cropped off. The quotable sentence nobody meant to write is this
+artefact's characteristic failure, and it is invisible while you are still holding the thread in
+your head.
+
+**It also stays short.** One or two sentences. An answer that needs three paragraphs is not a reply;
+it is a post of its own, or a message to one person, and there is already a runbook for a message to
+one person.
+
+**`social.post` will not use the future tense about this house.** "Coming next week", "soon", "in
+the coming months" cost nothing to write and are deadlines published to everybody — and they are
+exactly the sentences a model reaches for, because a post about something finished feels like it
+needs one. It also refuses the hook, the thread marker and the question-then-answer opener: those
+buy attention and are the first thing that ages badly.
+
+**And it will not announce what is not on disk.** No tag, no merge, no published page means
+`blocked`, not a draft. A post about something that is *about to be* true is the most expensive
+artefact this pack can produce: it cannot be corrected, and it is the one people screenshot.
+
+**Nor will it name a competitor.** A comparison is a claim about something you did not measure and
+cannot correct, made to an audience that includes them. And this house is held to the same standard
+`watch.sweep` applies to everybody else's announcements — a benchmark travels with its method or it
+does not go in.
+
+### Setting it up
+
+1. **Write the criterion down first**, in `.aegis/decisions/DECISIONS.md` or a policy note, with a
+   date. `social.scan` will not run without it, which is the feature.
+2. **Get the export onto disk.** There is no account connector; adding one starts a program, which
+   is yours to do.
+3. **Make the identity.** *Settings → Identities → +*: call it *Voice*, tick `fs_list`, `fs_read`
+   and `fs_write`. Nothing else.
+4. **Grant the three runbooks** on it.
+5. **Run `social.scan`, then choose the item yourself.** `social.reply` refuses to pick one — which
+   post this house answers is a decision, and it belongs to whoever lives with the answer.
+6. **Run `never-send-without-review` on the draft**, read it, and post it yourself.
+
+### What stays yours
+
+Posting, replying, quoting, following, blocking, reporting. Aegis has no tool that does any of them,
+none of these runbooks has a later version that ends in one, and
+`the_social_pack_holds_nothing_that_could_publish` keeps the perimeter at three tools — because
+what needs defending is not the absence of a posting tool, it is the edit where a runbook grows a
+shell "just to check the API".
+
+### The last one is not here
+
+Revenue experiments and the wish list are not started.
 
 ---
 

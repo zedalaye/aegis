@@ -586,7 +586,7 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// examples and nothing else: [`catalog`] reads a missing directory as an empty
 /// one.
 ///
-/// Eighteen runbooks now, in six groups. Two are the halves of the mode as it
+/// Twenty-one runbooks now, in seven groups. Two are the halves of the mode as it
 /// was: the standing rule that nothing irreversible goes out unreviewed, and
 /// the loop a Chief of Staff runs. Four are the world's (PLAN 7.2) — draft one,
 /// perceive a delta, verify against the oracle, check the constitution. Three
@@ -596,9 +596,10 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// are the watch (pack 3) — sweep what arrived into entries, digest what is new
 /// since the last digest, and say what one entry would mean here. Three are
 /// budget and portfolio (pack 4) — say what is held, say how long it lasts, and
-/// say what crossed a line somebody set.
+/// say what crossed a line somebody set. Three are social (pack 5) — find the
+/// few posts worth answering, draft one answer, draft one post.
 ///
-/// Those last four groups are what a **domain pack** is, and the reason they
+/// Those last five groups are what a **domain pack** is, and the reason they
 /// are here rather than anywhere else in this tree. Phase 19's rule is *domain
 /// packs as skills, not runtime*: a domain reaches the harness as three files in
 /// a directory, and `agent/turn.rs`, the policy matrix and the tool registry do
@@ -633,6 +634,22 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 ///   somebody else wrote or shown as a sum a reader can redo, and a total that
 ///   does not reconcile is `needs_you` rather than a rounded line. Its stop is
 ///   delivery's again, one item further down PLAN 7.4's list: the order.
+/// * **Social** is the only one whose artefact is addressed to nobody in
+///   particular, and the difference is permanence rather than accuracy. A
+///   mistaken mail is fixed by a second mail to the same person; a post is read
+///   by people who have none of the context, kept by some of them, and reached
+///   by no correction. Its adversary is new too: intake's was a forger, which is
+///   at least outside the run, and this one is inside it — the sharp answer
+///   performs best, and a model asked for *a good reply* cannot tell good from
+///   rewarded. So its steps name the shapes to refuse rather than asking for
+///   judgement.
+///
+/// One rule now appears in three packs, which is worth reading as a property of
+/// domain packs rather than of those three domains: `mail.triage` needs *no
+/// ask*, `watch.digest` needs *nothing new*, `social.scan` needs *none worth
+/// answering*. A procedure pointed at a pile and asked what to do about it will
+/// always find something, so the empty answer has to be ordinary, cheap and
+/// complete — not a fallback nobody reaches.
 ///
 /// [`DRAFT_SKILL`] is the one that writes `world/`, and it is not the
 /// `world.amend` PLAN 7.2 refuses: that sentence is about *specialists*, and
@@ -716,7 +733,7 @@ const SEEDED_FILE: &str = ".seeded";
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
-const SEEDED: [(&str, &str); 18] = [
+const SEEDED: [(&str, &str); 21] = [
     (REVIEW_SKILL, REVIEW_SEED),
     (COS_SKILL, COS_SEED),
     (DRAFT_SKILL, DRAFT_SEED),
@@ -735,6 +752,9 @@ const SEEDED: [(&str, &str); 18] = [
     (BUDGET_POSITION_SKILL, BUDGET_POSITION_SEED),
     (BUDGET_RUNWAY_SKILL, BUDGET_RUNWAY_SEED),
     (BUDGET_ALERT_SKILL, BUDGET_ALERT_SEED),
+    (SOCIAL_SCAN_SKILL, SOCIAL_SCAN_SEED),
+    (SOCIAL_REPLY_SKILL, SOCIAL_REPLY_SEED),
+    (SOCIAL_POST_SKILL, SOCIAL_POST_SEED),
 ];
 
 /// The standing rule of the whole mode, as a runbook.
@@ -2692,6 +2712,362 @@ to go and look, and that is a sentence worth writing. The other way round is
 `blocked`.
 "#;
 
+/// Which of it, if any, is worth answering (PLAN 7.3, Phase 19, pack 5).
+pub const SOCIAL_SCAN_SKILL: &str = "social.scan";
+
+/// `social.scan`, and the third time this library has had to make *nothing* an
+/// available answer.
+///
+/// `mail.triage` needed *no ask*, `watch.digest` needed *nothing new*, and this
+/// needs *none worth answering* — which is worth saying out loud, because three
+/// packs arriving at the same rule is not a coincidence about those domains. The
+/// characteristic failure of a domain pack is manufacturing work: a procedure
+/// pointed at a pile and asked what to do about it will always find something,
+/// and the cheapest way to stop that is to make the empty answer explicit,
+/// ordinary and complete rather than a fallback nobody reaches.
+///
+/// What is new here is the adversary. Intake's was a forger, and a forger is at
+/// least outside the run. This one is inside it: the material was written to be
+/// engaging, and the post that most invites an answer is the one somebody is
+/// wrong on. *Being wrong* is never in the criterion, and the criterion has to
+/// be a file rather than a judgement made while reading — the same shape as
+/// [`BUDGET_ALERT_SEED`]'s threshold, for the same reason, and against a pull
+/// that is much stronger here.
+const SOCIAL_SCAN_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# social.scan
+
+## When to use it
+
+When an export of mentions or a timeline is on disk and somebody has to decide
+which of it, if any, is worth answering. Most of it is not.
+
+The export is a file you put there. Nothing here connects to an account, reads a
+live feed, follows anybody, or posts.
+
+## Inputs required and tools it will call
+
+- The export, as a path — `.aegis/briefs/` unless you were given another.
+- The criterion: what this house answers, written down. A line in
+  `.aegis/decisions/DECISIONS.md`, a note from the human, a file of standing
+  policy. If no file says what is worth answering, this runbook does not apply,
+  and saying so is the run.
+
+Calls `fs_list` and `fs_read` for those and `fs_write` for the list. It runs
+nothing, reaches no account, and answers nobody.
+
+## Steps
+
+1. `fs_read` the criterion first, before the export, and quote it in the file
+   you write. Reading the posts first and deciding afterwards is how the
+   criterion becomes whatever the loudest post was about.
+2. `fs_read` the export. Take each item once: a quoted or reposted item is the
+   same item, and a thread is one item, not one per message.
+3. Keep exactly two reasons to answer, and require the post to meet one of them:
+   somebody asked a question this house can answer **from a file**, or somebody
+   is relying on something of ours that is wrong in a way we can correct with a
+   fact. Nothing else qualifies.
+4. **Being wrong is not a reason.** Not a bad take, not a misreading of the
+   field, not a claim you could refute. A post nobody addressed to us, that
+   nothing of ours depends on, is not an item however answerable it looks — and
+   it will look very answerable, because that is what the material is written
+   for.
+5. Cap the list at three. If more than three qualify, keep the three where an
+   answer would be most useful to the person who wrote them, and say how many
+   you dropped. A list of eleven is a list nobody works through.
+6. For each item: the handle, the date, the quoted sentence that qualifies it,
+   which of the two reasons it meets, and the file that would answer it. An item
+   with no file behind the answer is not on the list — that is a question for
+   the human, not a draft waiting to happen.
+7. `fs_write` `.aegis/artefacts/social-scan-<date>.md`: the quoted criterion, the
+   items, how many were considered, and how many were dropped. Quote one sentence
+   per item, not the post — other people's writing does not need to be copied
+   into a repository to be found by the link beside it.
+8. Stop. Do not draft anything. That is `social.reply`, one item at a time, and
+   somebody chooses which.
+
+## How to validate
+
+The criterion in the file is a quotation from a file, not a sentence written
+during this run. Every item names one of the two reasons and the file that would
+answer it. No item is there because the post is wrong. The list is at most three
+and says how many were considered.
+
+## What to return
+
+`skill_return` with `status: done`, the list in `artefacts`, the export path in
+`evidence`, and a summary of at most five lines: how many items were considered
+and which few qualified.
+
+**None qualifying is the ordinary answer**, and a complete one: `status: done`,
+no artefact, one line saying how many were read and that none met the criterion.
+A scan that finds something worth answering every time is a scan manufacturing
+obligation, and a queue of drafts nobody asked for is how a person ends up
+posting more than they meant to.
+
+`status: needs_you`, and no item written, when a post is about this house and
+hostile — an accusation, a pile-on, somebody angry. That is not a draft; it is a
+person's decision about whether to answer at all, and it is the one place in this
+pack where speed makes things worse.
+
+## What requires approval
+
+One `fs_write` inside the workspace. Nothing here posts, replies, follows,
+likes, reports or blocks, and there is no tool in this build that could. A
+connector installed later replaces where the export comes from, not what may be
+done with it (`PLAN.md` § 7.6).
+
+## What to do if the source is missing
+
+No export, or no file naming the criterion: `status: blocked`, saying which. Do
+not scan from what the session has heard about; do not infer the criterion from
+the posts. A criterion derived from what is in front of you selects the loudest
+thing in front of you.
+
+A read you were refused, by the person or by the round limit that ends a turn,
+means the scan covered part of the export. Say which part, and return
+`status: needs_you` only if what you could not read is where a question about
+this house would have been.
+"#;
+
+/// Draft the answer to one post (PLAN 7.3, Phase 19, pack 5).
+pub const SOCIAL_REPLY_SKILL: &str = "social.reply";
+
+/// `social.reply`, written against the gradient rather than against a mistake.
+///
+/// Every other drafting runbook here can be got right by being careful. This one
+/// has something pulling at it: of the answers that could be written to a post,
+/// the sharp one performs best, and a model asked for *a good reply* has no way
+/// to tell the difference between good and rewarded. So the steps name the
+/// shapes to refuse rather than asking for judgement — no correction that is not
+/// load-bearing, no reply whose first clause is about the other person being
+/// wrong, no answer to the argument instead of the question.
+///
+/// The other half is that a reply is **public and permanent**, which the mail
+/// pack's is not. `reply.draft` goes to a named person in a thread that carries
+/// its own context, and a mistake in it is fixed by a second mail to the same
+/// person. This goes to everybody, it will be read by people who have none of
+/// the context, it can be quoted with the question cropped off, and no
+/// correction reaches the people who read the first one. That is why publish
+/// sits on PLAN 7.4's list beside sending and deploying, and why the last step
+/// hands the draft to [`REVIEW_SKILL`].
+const SOCIAL_REPLY_SEED: &str = r#"---
+version: 1
+tools: fs_read, fs_write
+---
+
+# social.reply
+
+## When to use it
+
+When one post deserves an answer and a person will publish it. One run drafts
+one reply to one post.
+
+It does not publish, and there is no later version of it that does.
+
+## Inputs required and tools it will call
+
+- The item, as a path or as the line from a `social.scan` list. If you were not
+  given one, that is the end of the run: a reply drafted to whichever post was
+  most interesting is a reply to the wrong person, and it will read well.
+- The file that answers it — the one the scan named. And a handful of this
+  house's own previous posts, if any are on disk, to write in the voice that is
+  already there rather than one invented today.
+
+Calls `fs_read` for those and `fs_write` for the draft. It lists nothing, runs
+nothing, reaches no account, and publishes nothing.
+
+## Steps
+
+1. `fs_read` the item and the file that answers it. Answer the question that was
+   asked. Not the question behind it, not the better question, and not the four
+   other things in the post you could have said something about.
+2. Give the fact and stop. If the fact makes the other person's claim wrong, the
+   fact is enough — a sentence explaining that they were wrong is a sentence
+   about them rather than about the thing, and it is the sentence that gets
+   quoted on its own.
+3. Refuse these shapes, whatever the post did: opening with *actually*; the
+   correction that is not needed to answer; the joke at somebody's expense; the
+   rhetorical question; the reply that is really an announcement. Each of them
+   performs better than the plain answer, which is exactly the problem.
+4. Every claim carries a file behind it, and a claim with no file does not get
+   softer wording — it comes out of the draft. "Should be fixed soon", "we're
+   looking at it", "probably next release" are commitments published to
+   everybody, and they will be quoted back with a date attached.
+5. Write it short: one or two sentences, in the language the post was written
+   in. An answer that needs three paragraphs is not a reply — it is either a
+   post of its own or a message to one person, and the runbook for a message to
+   one person is `reply.draft`.
+6. Then read it as a stranger with none of the context, and read it again with
+   the post it answers cropped off. If either reading is worse than the plain
+   truth, rewrite it. A quotable sentence you did not mean to write is the
+   characteristic failure of this artefact.
+7. `fs_write` `.aegis/artefacts/social-reply-<handle>-<date>.md`: the item and
+   its link or path, the quoted question, the draft, and a **sources** block —
+   one line per claim, naming the file it came from.
+8. Stop. Publishing is the human's, after `never-send-without-review`, which is
+   what that runbook was seeded for. Do not publish, do not schedule, and do not
+   tell anybody an answer is coming.
+
+## How to validate
+
+The draft answers the quoted question in its first sentence. Every claim in it
+has a line in the sources block. There is no sentence about the other person,
+only about the thing. It survives being read with the question cropped off. It
+is short enough to be read whole without expanding it.
+
+## What to return
+
+`skill_return` with `status: done`, the draft in `artefacts`, the item and the
+source files in `evidence`, and a summary of at most five lines: what was asked,
+what the reply says, and what it commits to.
+
+`status: needs_you` when the honest answer is one this house has not decided —
+whether something will ship, whether a bug is a bug, what something will cost —
+with it in `open_questions` and the draft left unwritten. A public guess is a
+commitment with an audience.
+
+And `status: needs_you`, always, when answering would mean disagreeing with a
+named person in public. That is a choice about how this house wants to be seen,
+it is not reversible by deleting the post, and it is not a choice a runbook
+makes on somebody's behalf.
+
+## What requires approval
+
+One `fs_write` inside the workspace. There is no tool here that publishes, and a
+connector installed later does not change it: publish is on the same line as
+send, pay, merge and deploy (`PLAN.md` § 7.4), so it stays a human act. A reply
+is a file until a person posts it.
+
+## What to do if the source is missing
+
+No item, no run: `status: blocked`, and ask which one. Do not pick from the scan
+list yourself — which post this house answers is a decision, and it is made by
+the person who has to live with the answer.
+
+If the file that would answer it is not there, say so and write nothing: an
+answer with no source is the one kind of reply that cannot be taken back and
+cannot be defended. Return `status: needs_you` with what you would have needed.
+"#;
+
+/// Say the thing that happened (PLAN 7.3, Phase 19, pack 5).
+pub const SOCIAL_POST_SKILL: &str = "social.post";
+
+/// `social.post`, the only artefact in this tree addressed to nobody in
+/// particular.
+///
+/// Everything else the library writes has a reader: a client, a colleague, the
+/// person who set a threshold, whoever opens the digest on Friday. A post has an
+/// audience instead, most of whom will arrive without the context, some of whom
+/// will keep a copy, and none of whom will see the correction. So the two rules
+/// are about permanence rather than about accuracy: every claim names something
+/// that has *already happened* and is on disk, and every sentence is read once
+/// on its own, out of context, before the draft is written out.
+///
+/// The forward-looking sentence is the one this exists to stop. "Coming next
+/// week" costs nothing to write and is a published deadline; it is also the
+/// sentence a model reaches for, because a post about something finished feels
+/// like it needs one.
+const SOCIAL_POST_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# social.post
+
+## When to use it
+
+When something has happened here that is worth saying in public — a release, a
+write-up, a result. One run drafts one post from the files behind it.
+
+It does not publish. Nothing in this build can.
+
+## Inputs required and tools it will call
+
+- What happened, and where it is on disk: a changelog entry, a tag, a merged
+  change, a file that exists now and did not before. The post is written from
+  that, not from a description of it.
+- This house's previous posts, if any are on disk, so the draft sounds like
+  whoever writes here rather than like a launch.
+
+Calls `fs_list` and `fs_read` for those, and `fs_write` for the draft. It runs
+nothing, reaches no account, and publishes nothing.
+
+## Steps
+
+1. `fs_read` what happened, in the files. If the thing being announced cannot be
+   pointed at — a version that is not tagged, a feature not merged, a page not
+   published — there is no post to write yet, and that is the answer.
+2. Say what it is, in the first sentence, to somebody who has never heard of
+   this project. No hook, no thread marker, no question the post then answers,
+   no "we've been quiet lately". Those shapes are there to buy attention and
+   they are the first thing that ages badly.
+3. Only the past tense about this house. What shipped, what changed, what was
+   measured. **No dates for anything that has not happened** — "next week",
+   "soon", "in the coming months" are commitments published to everybody, and
+   nobody will remember they were an aside.
+4. Every number, name and claim comes from a file, and the file goes in the
+   sources block. A benchmark needs its method beside it or it does not go in.
+   This house is subject to the same rule `watch.sweep` applies to everybody
+   else's announcements, and it is the same rule.
+5. Do not compare with somebody else's product by name. A comparison is a claim
+   about a thing you did not measure and cannot correct, made to an audience
+   that includes them.
+6. Read every sentence once, alone, as though it were the only one quoted. Then
+   read the whole thing as somebody who dislikes this project. Rewrite anything
+   that is worse under either reading — not to soften it, but because a sentence
+   that only works in context will be read out of it.
+7. `fs_write` `.aegis/artefacts/social-post-<date>-<subject>.md`: the draft, then
+   a **sources** block naming the file behind every claim, then one line saying
+   what in the draft is not yet true anywhere. That last line should be empty.
+8. Stop. Publishing is the human's, after `never-send-without-review`. Do not
+   publish, do not schedule it, do not write the follow-up, and do not draft the
+   replies to it.
+
+## How to validate
+
+Every claim has a file in the sources block. Nothing in the post is in the future
+tense about this house. No competitor is named. The first sentence makes sense to
+somebody with no context. The line about what is not yet true is empty.
+
+## What to return
+
+`skill_return` with `status: done`, the draft in `artefacts`, the files behind it
+in `evidence`, and a summary of at most five lines: what it announces and what it
+claims.
+
+`status: blocked` when the thing is not on disk yet. A post about something that
+is about to be true is the most expensive artefact this pack can produce, because
+it is the one that cannot be corrected and the one people screenshot. Say what
+would have to exist, and stop.
+
+`status: needs_you` when the post would be the first public word on something —
+a price, a licence, a partnership, a person leaving. Those are announcements
+before they are posts, and what they say is a decision somebody takes rather than
+a draft somebody edits.
+
+## What requires approval
+
+One `fs_write` inside the workspace. Publish is on PLAN 7.4's line with send,
+pay, merge, deploy and trade, so it stays a human act however the draft reads;
+Aegis has no tool that posts, and a connector installed later would be one more
+call put to a person, every time.
+
+## What to do if the source is missing
+
+If what you were asked to announce is not on disk, return `status: blocked` and
+name what you looked for. Do not write it from the session's account of what
+shipped — the session is where "it's basically done" lives, and this is the one
+artefact where that sentence becomes public.
+
+A read you were refused, by the person or by the round limit that ends a turn,
+is a claim with no source: leave it out of the draft rather than out of the
+sources block, and say so in the summary.
+"#;
+
 /// `inbox.triage`, seeded into a workspace by the shared-files convention.
 ///
 /// The stub PLAN 7.3 asks Phase 13 for: file in, status and artefact out. It
@@ -2816,7 +3192,7 @@ mod tests {
     }
 
     /// Every runbook of PLAN 7.3's Phase 19, in the order the packs landed.
-    const PACKS: [&str; 12] = [
+    const PACKS: [&str; 15] = [
         REVIEW_DIFF_SKILL,
         DEPLOY_SKILL,
         ALERT_SKILL,
@@ -2829,6 +3205,9 @@ mod tests {
         BUDGET_POSITION_SKILL,
         BUDGET_RUNWAY_SKILL,
         BUDGET_ALERT_SKILL,
+        SOCIAL_SCAN_SKILL,
+        SOCIAL_REPLY_SKILL,
+        SOCIAL_POST_SKILL,
     ];
 
     /// The parsed runbook a seeded name ships with.
@@ -3046,6 +3425,60 @@ mod tests {
                 assert!(
                     allowed.contains(&declared.as_str()),
                     "`{name}` declares `{declared}`; surveillance reads files and writes one back"
+                );
+            }
+        }
+    }
+
+    /// A draft somebody else sends names the runbook that checks it first.
+    ///
+    /// Not a rule invented for this pack — an invariant the library already had
+    /// and nobody had written down. Of the twenty-one seeded runbooks, exactly
+    /// the ones whose output is a message a person will send end by handing it
+    /// to [`REVIEW_SKILL`], and that runbook was seeded first precisely to be
+    /// the other end of this (PLAN 7.6, *Verifier is a skill*). A runbook naming
+    /// another is the split the format is for; four of them naming this one is
+    /// the standing rule of the whole mode having somewhere to attach.
+    ///
+    /// It matters most where it was added last. Social is the pack whose drafts
+    /// go to nobody in particular and stay there — a mistaken mail is fixed by a
+    /// second mail to the same person, and no correction reaches the people who
+    /// read a post. Publish sits on PLAN 7.4's line with send, pay, merge and
+    /// deploy for that reason, and a draft that reached the end of its runbook
+    /// without naming the review is a draft one step from being published by
+    /// momentum.
+    #[test]
+    fn a_draft_somebody_else_sends_names_the_runbook_that_checks_it() {
+        for name in [
+            ALERT_SKILL,
+            REPLY_SKILL,
+            SOCIAL_REPLY_SKILL,
+            SOCIAL_POST_SKILL,
+        ] {
+            assert!(
+                seeded(name).body.contains(REVIEW_SKILL),
+                "`{name}` ends in something a person sends and never names `{REVIEW_SKILL}`"
+            );
+        }
+    }
+
+    /// Social (PLAN 7.3, Phase 19, pack 5) has no tool that could publish.
+    ///
+    /// The same set assertion the budget pack gets, and for the sharper half of
+    /// the same reason: § 7.4 puts *publish* on one line with send, pay, merge,
+    /// deploy and trade. Aegis has no tool that posts, so the perimeter is not
+    /// enforcing an absence today — it is what makes the absence survive the
+    /// edit where a runbook grows a `shell_exec` to "just check the API", on an
+    /// identity somebody granted once and has not looked at since.
+    #[test]
+    fn the_social_pack_holds_nothing_that_could_publish() {
+        let allowed = [tool::FS_LIST, tool::FS_READ, tool::FS_WRITE];
+
+        for name in [SOCIAL_SCAN_SKILL, SOCIAL_REPLY_SKILL, SOCIAL_POST_SKILL] {
+            for declared in seeded(name).tools {
+                assert!(
+                    allowed.contains(&declared.as_str()),
+                    "`{name}` declares `{declared}`; a draft is a file until a person posts it"
                 );
             }
         }

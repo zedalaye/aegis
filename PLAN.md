@@ -1630,7 +1630,57 @@ quotable, with the date it was written, from a file that predates the move. A li
 what already happened turns every move into a crossing, and a watch that alerts on everything is a
 watch nobody reads.
 
-Packs 5 and 6 are not started.
+*Pack 5 landed as:* three more `SKILL.md` files — `social.scan`, `social.reply` and `social.post`
+— their three entries in `skills::SEEDED`, and the documentation. Fifth boring diff.
+
+**It is the first pack whose artefact is addressed to nobody in particular, and the difference is
+permanence rather than accuracy.** Everything else this library writes has a reader: a client, a
+colleague, whoever set the threshold, whoever opens the digest on Friday. A post has an *audience*,
+most of whom arrive without the context, some of whom keep a copy, and none of whom see the
+correction. A mistaken mail is fixed by a second mail to the same person; nothing fixes a post,
+which is why § 7.4 has *publish* on one line with send, pay, merge, deploy and trade, and why the
+last step of both drafting runbooks hands the file to `never-send-without-review`.
+
+**Its adversary is new, and it is inside the run.** Intake's was a forger — hostile, but at least
+outside. Here the material was written to be engaging, and of the answers that could be written to
+a post, the sharp one performs best: a model asked for *a good reply* has no way to tell good from
+rewarded. So the steps name the shapes to refuse instead of asking for judgement — the opening
+*actually*, the correction that is not load-bearing, the joke at somebody's expense, the reply that
+is really an announcement — and `social.scan` keeps exactly two reasons to answer, neither of which
+is that somebody is wrong. Being wrong on the internet is the most answerable thing there is and
+never an item.
+
+**One rule has now appeared in three packs, and that is a fact about domain packs rather than about
+those three domains.** `mail.triage` needed *no ask*; `watch.digest` needed *nothing new*;
+`social.scan` needs *none worth answering*, and returns `done` with no artefact when nothing
+qualifies. A procedure pointed at a pile and asked what to do about it will always find something,
+so the empty answer has to be ordinary, cheap and complete rather than a fallback nobody reaches. A
+scan that finds something every time is manufacturing obligation, and a queue of drafts nobody
+asked for is how a person ends up posting more than they meant to.
+
+**The runbooks' own rules, each written against one artefact.** `social.scan` reads its criterion
+from a file *before* the export, because reading the posts first and deciding afterwards is how the
+criterion becomes whatever the loudest post was about — the same shape as `budget.alert`'s
+threshold, against a much stronger pull. It caps the list at three and quotes one sentence per item
+rather than the post, for the reason a ticket cites a message by path. `social.reply` reads every
+draft twice more before writing it out: once as a stranger with no context, once with the question
+cropped off, because the quotable sentence nobody meant to write is this artefact's characteristic
+failure. And `social.post` refuses the future tense about this house — "coming next week" costs
+nothing to write and is a published deadline, and it is exactly the sentence a model reaches for,
+because a post about something finished feels like it needs one. A thing not on disk yet is
+`blocked`, not a draft.
+
+**Two tests, and the first is older than this pack.**
+`a_draft_somebody_else_sends_names_the_runbook_that_checks_it` writes down an invariant the library
+already had: of twenty-one seeded runbooks, exactly the ones whose output is a message a person
+sends end by naming `never-send-without-review` — which is what that runbook was seeded first for
+(§ 7.6, *Verifier is a skill*). It had been true of `alert.draft` and `reply.draft` since they
+landed and was recorded nowhere. The second,
+`the_social_pack_holds_nothing_that_could_publish`, is the budget pack's set assertion for the
+sharper half of the same reason: the absence of a posting tool is not what needs defending, the
+edit where a runbook grows a `shell_exec` to "just check the API" is.
+
+Pack 6 is not started.
 
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
 after Phase 13. § 7.13 (skill promotion) may run after Phase 17. § 7.14 (cabinet
