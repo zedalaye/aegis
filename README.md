@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 19 (the first five domain packs) — the MVP is
+> **Status: Phase 19 complete (all six domain packs) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -190,6 +190,18 @@ ever sent to it.
 > drafts end by handing the file to `never-send-without-review`. Its adversary is the material:
 > the sharp reply performs best, so *being wrong* is excluded from the criterion by name, and
 > *none worth answering* is the ordinary answer. See *The social pack*.
+>
+> **The sixth pack keeps what you want and what might pay for it — apart.** `wish.list`,
+> `revenue.thesis` and `revenue.pipeline` hold your goals in your own ordering, write one money
+> idea well enough to be wrong, and show what is funded and what the gap is. It is the only pack
+> whose material has not happened, so nothing in it may read as a fact: an ordering nobody stated
+> is *unordered*, a price nobody looked up is *not priced*, and a thesis carries what would show it
+> false or it is not written. A thesis may not read your wish list and the pipeline gives a
+> proposal no number, because the worst artefact here would be a trade argued for by a holiday.
+> See *The revenue and wish-list pack*.
+>
+> **That completes Phase 19.** Six domains, eighteen runbooks, and `agent/turn.rs` never opened:
+> see *Phase 19, and what it did not do*.
 
 ---
 
@@ -462,15 +474,15 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts twenty-one there — `never-send-without-review`, `cos.loop`,
+`SKILL.md` in it. Aegis puts twenty-four there — `never-send-without-review`, `cos.loop`,
 `world.draft`, `world.perceive-delta`, `world.verify`, `world.check`, the delivery pack's
 `review.diff`, `deploy.draft` and `alert.draft`, the intake pack's `mail.triage`,
 `thread.recap` and `reply.draft`, the watch pack's `watch.sweep`, `watch.digest` and
 `watch.impact`, the budget pack's `budget.position`, `budget.runway` and `budget.alert`, and the
-social pack's `social.scan`, `social.reply` and `social.post` — and offers each **once**, recorded
-by name in
+social pack's `social.scan`, `social.reply` and `social.post`, and the revenue pack's `wish.list`,
+`revenue.thesis` and `revenue.pipeline` — and offers each **once**, recorded by name in
 `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later version
-adding a twenty-second will offer that one and leave the rest alone. A workspace's own runbooks
+adding a twenty-fifth will offer that one and leave the rest alone. A workspace's own runbooks
 live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -765,17 +777,18 @@ fix it — and it is never offered to a model.
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
 happening. Aegis seeds the library with `never-send-without-review`, `cos.loop`, the four
-world runbooks and the fifteen of the five domain packs, and each workspace with `inbox.triage` when
+world runbooks and the eighteen of the six domain packs, and each workspace with `inbox.triage` when
 you press *Set up shared files* — all of them are examples of the format in the place you would
 look for one, and all of them are ordinary files you can rewrite or delete. `cos.loop` is the
 Chief-of-Staff loop; see [Handoffs](#handoffs). The `world.*` four are the constitution's; see
 [The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are one domain pack,
 `mail.triage`, `thread.recap` and `reply.draft` the next, `watch.sweep`, `watch.digest` and
 `watch.impact` the third, `budget.position`, `budget.runway` and `budget.alert` the fourth, and
-`social.scan`, `social.reply` and `social.post` the fifth; see
-[The delivery pack](#the-delivery-pack), [The intake pack](#the-intake-pack),
-[The watch pack](#the-watch-pack), [The budget pack](#the-budget-pack) and
-[The social pack](#the-social-pack).
+`social.scan`, `social.reply` and `social.post` the fifth, and `wish.list`, `revenue.thesis` and
+`revenue.pipeline` the sixth; see [The delivery pack](#the-delivery-pack),
+[The intake pack](#the-intake-pack), [The watch pack](#the-watch-pack),
+[The budget pack](#the-budget-pack), [The social pack](#the-social-pack) and
+[The revenue and wish-list pack](#the-revenue-and-wish-list-pack).
 
 Seeding happens **once per name**. The library records what it has offered in `skills/.seeded`,
 so a runbook you deleted does not reappear on the next start, and a runbook a later version adds
@@ -1853,9 +1866,123 @@ none of these runbooks has a later version that ends in one, and
 what needs defending is not the absence of a posting tool, it is the edit where a runbook grows a
 shell "just to check the API".
 
-### The last one is not here
+### The last one
 
-Revenue experiments and the wish list are not started.
+Revenue experiments and the wish list are the sixth, and they have landed; see
+[The revenue and wish-list pack](#the-revenue-and-wish-list-pack).
+
+---
+
+## The revenue and wish-list pack
+
+The sixth pack is the last, and `PLAN.md` § 7.3 gives it as two things kept in one place: **a
+workspace of goals** — pay models, setup, vacation, car — **and of proposals** — a trade thesis, a
+monetization draft. Execution of money movement is always human.
+
+| Runbook | Reads | Writes | Will not |
+| --- | --- | --- | --- |
+| `wish.list` | the existing goals file, and what somebody actually said | `.aegis/artefacts/goals.md`: the goals in **their** order, each with a price or *not priced*, a date phrase or none, and what it waits on | invent an ordering, add what nobody asked for, or have an opinion about a want |
+| `revenue.thesis` | the idea, in one sentence from a person, and whatever on disk bears on it | `.aegis/artefacts/thesis-<date>-<subject>.md`: the claim, its conditions, the **falsifier** with a date, and what being wrong costs | read the wish list or the position file — or attach a size |
+| `revenue.pipeline` | the goals file and what money is actually there | `.aegis/artefacts/pipeline-<date>.md`: cost, covered and gap per goal, in the person's order, plus the total gap | give a proposal a number, or connect one to a goal |
+
+### Its material has not happened
+
+Every other pack in your library works one way: name the file the claim came from. That works
+because a diff, a message, a release note, a bank statement and a post all exist. There is no export
+of somebody wanting a car, and a trade thesis is an argument about a future.
+
+So the rule inverts. Nothing here may take on the grammar of a fact:
+
+- an ordering nobody stated is **unordered**, not one the run chose;
+- a price nobody looked up is **not priced**, never an estimate — an estimate is the number
+  `revenue.pipeline` divides by, and by then nobody remembers it was invented;
+- a thesis carries **what would show it false**, with a date, or it is not a thesis.
+
+### The two halves are deliberately not joined
+
+A wish list beside a folder of revenue proposals is one step from *here is how to pay for the car* —
+and the most expensive artefact this pack could produce is a thesis whose real cause is a holiday.
+
+The wall is held from both sides. `revenue.thesis` may not read the wish list **or** the position
+file: a thesis written with either one open is a thesis sized by what there is to lose, or aimed at
+what somebody wants to buy. And `revenue.pipeline` — the one file allowed to hold both halves —
+gives a proposal no expected value, no probability, and no line beside a goal. It reports the gap
+and never claims anything closes it.
+
+That is also why this is the only pack under two prefixes. Naming them apart is the cheapest way to
+keep them apart.
+
+### What each one refuses to do
+
+**`wish.list` has no opinions**, which is harder than it sounds for a procedure whose input is your
+spending. It adds only what you said — not the cheaper version, not the prerequisite it can see. It
+does not drop a goal that looks unwise, does not rank by what is achievable, and does not suggest
+what to give up. Goals you have met stay at the bottom, dated, because a list that only grows is a
+list of failures.
+
+**And a goal is a file, not something an identity remembers.** `memory_write` is right there and a
+want is exactly the shape of a thing to remember — but a memory belongs to one identity, no other
+can read it, there is a cap of 200, and deleting the identity forgets it. Your own goals should be
+none of those things. `a_goal_is_a_file_and_not_something_an_identity_remembers` keeps it that way.
+
+**`revenue.thesis` will not attach a number.** No size, no allocation, no expected return, no entry
+or exit. Not "a small position", not "10x if it works". Those are the order, they are yours, and a
+number attached to a thesis is the part people read.
+
+**And it never deletes a thesis that was wrong.** When the falsifier fires, the date and the outcome
+are appended to the file that predicted it. A folder of theses whose losers were edited out is the
+most misleading thing this library could hold — and the ones that were wrong are the only reason to
+keep any of them.
+
+**If there is no falsifier, that is the answer.** When nothing over any horizon would tell you the
+idea was wrong, the run says so and writes no file. It is the single most useful sentence this
+runbook produces.
+
+**`revenue.pipeline` keeps your ordering.** Re-ranking the goals by what looks achievable is the one
+edit that would make the file feel helpful and make it somebody else's list.
+
+### Setting it up
+
+1. **Open it as its own project** and press *Set up shared files*.
+2. **Make the identity.** *Settings → Identities → +*: call it *Steward*, tick `fs_list`, `fs_read`
+   and `fs_write`. Nothing else.
+3. **Grant the three runbooks** on it.
+4. **Run `wish.list` first** — the pipeline needs it and will not assemble one on the way past.
+5. **Run `revenue.thesis` only on an idea you had.** It will not go and find one: a folder of theses
+   the machine ran up on its own is a folder that gets read as research.
+6. **Read the pipeline and decide the spend yourself.** Aegis has no tool that buys, sells,
+   transfers or books anything.
+
+---
+
+## Phase 19, and what it did not do
+
+Six domains have now reached this harness, and they arrived as **eighteen files in eighteen
+directories**.
+
+`agent/turn.rs` was not opened for any of them. Neither was the policy matrix, the tool registry,
+the IPC surface or the UI. No command was added, no binding regenerated, no connector installed and
+no identity created. Nothing in `src-tauri` learned what a client, a mailbox, a release note, a bank
+statement, a timeline or a goal is.
+
+| Pack | Runbooks | Its own rule |
+| --- | --- | --- |
+| Delivery | `review.diff`, `deploy.draft`, `alert.draft` | stops one step short of the merge, the deploy, the sent reply |
+| Intake | `mail.triage`, `thread.recap`, `reply.draft` | declares no command: its inputs were written by strangers |
+| Watch | `watch.sweep`, `watch.digest`, `watch.impact` | runs unattended, so *nothing happened* has to be cheap |
+| Budget | `budget.position`, `budget.runway`, `budget.alert` | arithmetic: a figure is copied or shown, never asserted |
+| Social | `social.scan`, `social.reply`, `social.post` | its artefact is public and permanent, so publish is yours |
+| Revenue + wish list | `wish.list`, `revenue.thesis`, `revenue.pipeline` | its material has not happened, so nothing reads as a fact |
+
+An install that does none of this work has eighteen folders it can delete. None of them is granted
+to anything by being seeded: a pack does not exist until you make an identity and tick the boxes.
+
+**And the standing cost is bounded.** The catalog — one line per runbook, never a step — is in the
+system message of every request an identity granted them makes. All twenty-four seeded runbooks
+together come to **5,556 characters**, against a 7,424 bound derived from the per-line cap, and
+`a_library_holding_every_pack_still_costs_a_bounded_block` fails if that ever stops being true. Six
+packs added one at a time, each with a boring diff nobody was counting, is exactly how a library
+would otherwise become a context window.
 
 ---
 

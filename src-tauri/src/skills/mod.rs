@@ -586,7 +586,7 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// examples and nothing else: [`catalog`] reads a missing directory as an empty
 /// one.
 ///
-/// Twenty-one runbooks now, in seven groups. Two are the halves of the mode as it
+/// Twenty-four runbooks now, in eight groups. Two are the halves of the mode as it
 /// was: the standing rule that nothing irreversible goes out unreviewed, and
 /// the loop a Chief of Staff runs. Four are the world's (PLAN 7.2) — draft one,
 /// perceive a delta, verify against the oracle, check the constitution. Three
@@ -597,9 +597,11 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// since the last digest, and say what one entry would mean here. Three are
 /// budget and portfolio (pack 4) — say what is held, say how long it lasts, and
 /// say what crossed a line somebody set. Three are social (pack 5) — find the
-/// few posts worth answering, draft one answer, draft one post.
+/// few posts worth answering, draft one answer, draft one post. Three are
+/// revenue and the wish list (pack 6) — keep somebody's goals, write one
+/// proposal well enough to be wrong, and show what is funded.
 ///
-/// Those last five groups are what a **domain pack** is, and the reason they
+/// Those last six groups are what a **domain pack** is, and the reason they
 /// are here rather than anywhere else in this tree. Phase 19's rule is *domain
 /// packs as skills, not runtime*: a domain reaches the harness as three files in
 /// a directory, and `agent/turn.rs`, the policy matrix and the tool registry do
@@ -643,6 +645,18 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 ///   performs best, and a model asked for *a good reply* cannot tell good from
 ///   rewarded. So its steps name the shapes to refuse rather than asking for
 ///   judgement.
+/// * **Revenue and the wish list** is the last of the six, and the only one
+///   whose material has not happened. Every other pack's discipline is a
+///   variant of *name the file the claim came from*; a want has no export
+///   behind it and a proposal is an argument about a future. So the rule
+///   inverts — nothing may acquire the grammar of a fact: an ordering nobody
+///   stated is *unordered*, a price nobody looked up is *not priced*, and a
+///   thesis carries what would show it false or it is not written. It is also
+///   the only pack under two prefixes, which is load-bearing rather than
+///   untidy: `revenue.thesis` may not read the wish list and
+///   `revenue.pipeline` may not give a proposal a number, because a thesis
+///   explained by the holiday it would fund is motivated reasoning with a file
+///   behind it.
 ///
 /// One rule now appears in three packs, which is worth reading as a property of
 /// domain packs rather than of those three domains: `mail.triage` needs *no
@@ -733,7 +747,7 @@ const SEEDED_FILE: &str = ".seeded";
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
-const SEEDED: [(&str, &str); 21] = [
+const SEEDED: [(&str, &str); 24] = [
     (REVIEW_SKILL, REVIEW_SEED),
     (COS_SKILL, COS_SEED),
     (DRAFT_SKILL, DRAFT_SEED),
@@ -755,6 +769,9 @@ const SEEDED: [(&str, &str); 21] = [
     (SOCIAL_SCAN_SKILL, SOCIAL_SCAN_SEED),
     (SOCIAL_REPLY_SKILL, SOCIAL_REPLY_SEED),
     (SOCIAL_POST_SKILL, SOCIAL_POST_SEED),
+    (WISH_LIST_SKILL, WISH_LIST_SEED),
+    (REVENUE_THESIS_SKILL, REVENUE_THESIS_SEED),
+    (REVENUE_PIPELINE_SKILL, REVENUE_PIPELINE_SEED),
 ];
 
 /// The standing rule of the whole mode, as a runbook.
@@ -3068,6 +3085,359 @@ is a claim with no source: leave it out of the draft rather than out of the
 sources block, and say so in the summary.
 "#;
 
+/// What somebody wants, written where it can be seen (PLAN 7.3, Phase 19,
+/// pack 6).
+pub const WISH_LIST_SKILL: &str = "wish.list";
+
+/// `wish.list`, and the first artefact in this library with nothing behind it.
+///
+/// Every other runbook's discipline is a variant of one sentence: name the file
+/// the claim came from. A diff, a message, a release note, a statement, a post —
+/// all of them happened, and the rule is that the artefact may not go beyond
+/// them. A want has not happened and may never. There is no export of somebody
+/// wanting a car.
+///
+/// So the rule inverts. What the file must never do is let a want acquire the
+/// grammar of a fact: the ordering is the one the person stated, recorded as
+/// theirs, and where they stated none the list says *unordered* rather than
+/// picking; a price nobody looked up is *not priced* rather than an estimate,
+/// because an estimate is the number [`REVENUE_PIPELINE_SEED`] then divides by.
+///
+/// It is also the runbook that has no opinions. PLAN 7.3 is that the CoS keeps
+/// the list visible and the human decides the spend, and AGENTS.md's line for
+/// this workload is *not a shopping agent*. Nothing here judges whether a want
+/// is sensible, drops one that looks unwise, or adds one nobody asked for.
+///
+/// And it is a **file**, which PLAN 7.4 says in as many words — funding goals
+/// expressed as files. Not a memory on an identity: a memory is invisible,
+/// capped, unreadable by anybody else and gone when the identity is deleted,
+/// which is four things a person's own goals should never be.
+const WISH_LIST_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# wish.list
+
+## When to use it
+
+When somebody has said what they want and it should be written where it can be
+seen. One run updates the goals file and judges nothing on it.
+
+The goals are theirs: a car, a holiday, paying for a model subscription, a
+machine, time off. What they are for is not this runbook's business.
+
+## Inputs required and tools it will call
+
+- The goals file, if there is one — `.aegis/artefacts/goals.md` unless you were
+  given another path. `fs_list` first: an existing list is edited, never
+  rewritten from what the conversation remembers of it.
+- What was said this time, as the person said it.
+
+Calls `fs_list`, `fs_read` and `fs_write`. It runs nothing, buys nothing, and
+prices nothing by going and looking.
+
+## Steps
+
+1. `fs_read` the existing list before writing a word. What is already on it
+   stays on it, in the words it is written in, unless the person said to change
+   that entry.
+2. Add only what was actually said. Not the thing that would obviously go with
+   it, not the cheaper version, not the prerequisite you can see. A list nobody
+   recognises as their own is a list they stop reading.
+3. Take the ordering from the person, and record it as theirs. If they have not
+   said what comes first, write *unordered* at the top and leave the entries in
+   the order they arrived. An ordering invented here would be read next month as
+   one they chose.
+4. Price each entry only from something you were given or can read: a quote, an
+   invoice, a page they saved, a figure they said. Anything else is **not
+   priced**, in those words. Never an estimate — an estimate is what the funding
+   pipeline will divide by, and by then nobody remembers it was made up.
+5. Keep the date only if there was one. "Before the summer" is a date somebody
+   said and goes in as that phrase; a month and a year you resolved it to is
+   not.
+6. Say what each entry is waiting on, in one line, when the person said: money,
+   a decision, somebody else, nothing.
+7. `fs_write` the list: the ordering and whose it is, then one entry per goal —
+   what it is, what it costs or *not priced*, the date phrase or none, and what
+   it waits on. Keep entries somebody has met, marked as met and dated, at the
+   bottom; a list that only ever grows is a list of failures.
+8. Stop. Do not propose how to pay for any of it, do not rank by what is
+   achievable, and do not suggest dropping anything. How this gets funded is
+   `revenue.pipeline`, and what to give up is nobody's call here.
+
+## How to validate
+
+Every entry is something the person said, in words they would recognise. The
+ordering is attributed to them or the list says *unordered*. Every price names
+where it came from, and everything else says *not priced*. No entry carries a
+date nobody uttered. Nothing in the file evaluates whether a goal is a good
+idea.
+
+## What to return
+
+`skill_return` with `status: done`, the list in `artefacts`, and a summary of at
+most five lines: what was added or changed, and what is still not priced.
+
+`status: needs_you` when two entries conflict — the same money twice, two dates
+that cannot both hold — with both quoted and no resolution proposed. Which one
+gives way is the whole of what a wish list is for deciding, and it is not a
+tie-break a runbook performs.
+
+There is no `blocked` for an empty list. A first run with no file writes the
+first version, and a person with one goal has a goals file.
+
+## What requires approval
+
+One `fs_write` inside the workspace. Nothing here spends, orders, subscribes or
+books, and there is no tool in this build that could. A goal is a file the
+person can open, edit and delete in their own folder — deliberately not
+something an identity remembers, which nobody else could read and which would
+vanish with the identity.
+
+## What to do if the source is missing
+
+If the path you were given is not there and you were told to update rather than
+create, return `status: blocked` and say which path you looked at. Do not
+reconstruct somebody's goals from the conversation: a list rebuilt from memory
+quietly loses the entries nobody has mentioned lately, which are usually the
+ones that mattered longest.
+
+A read you were refused, by the person or by the round limit that ends a turn,
+means you have part of the list. Write nothing and return `status: needs_you`:
+a partial list written whole is a list with entries silently deleted.
+"#;
+
+/// One idea, written well enough to be wrong (PLAN 7.3, Phase 19, pack 6).
+pub const REVENUE_THESIS_SKILL: &str = "revenue.thesis";
+
+/// `revenue.thesis`, which is a proposal and never an order.
+///
+/// PLAN 7.3 asks for *proposals* — a trade thesis, a monetization draft — and
+/// PLAN 7.4 keeps trading and X monetization as funding goals expressed as
+/// files, not as a reason to put a broker in `src-tauri`. What that leaves is an
+/// argument, and an argument's only defence against being fluent is being
+/// falsifiable. So every thesis carries what would show it false and what being
+/// wrong costs, and it carries no size, no allocation and no expected return —
+/// those three are the order wearing a thesis.
+///
+/// Its sharpest rule is that it may not read the position. A thesis is about the
+/// world; the balance is about this house; and reading the second while writing
+/// the first is exactly how a thesis gets sized by what is available to lose.
+/// That is the same wall [`REVENUE_PIPELINE_SEED`] holds from the other side,
+/// and it is why the wish list is not in this runbook's inputs either: *this
+/// could pay for the car* is motivated reasoning with a file behind it, which is
+/// worse than motivated reasoning without one.
+const REVENUE_THESIS_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# revenue.thesis
+
+## When to use it
+
+When an idea for making money should be written down properly enough to be
+wrong. One run writes one proposal, with what would show it false.
+
+A trade idea, a thing to sell, a way to charge for something that is free. It is
+an argument on disk. Nothing here executes anything.
+
+## Inputs required and tools it will call
+
+- The idea, in one sentence, from a person. This runbook does not generate ideas
+  to fill a folder.
+- Whatever is on disk that bears on it: a watch entry, a note, a page somebody
+  saved, earlier theses in `.aegis/artefacts/`.
+
+Calls `fs_list` and `fs_read` for those and `fs_write` for the thesis. It runs
+nothing, reaches no account and places no order.
+
+**It does not read the position file, and it does not read the wish list.** Both
+are about this house rather than about the world, and a thesis written with
+either open is a thesis sized by what there is to lose or aimed at what somebody
+wants to buy.
+
+## Steps
+
+1. Write the claim in one sentence, in the present or past tense about the
+   world: what is true that other people have not priced in, what somebody would
+   pay for that nobody is charging for. If it takes a paragraph, it is more than
+   one claim, and each gets its own file.
+2. Say what would have to be true for it to work, as things somebody could go
+   and check. Not "if adoption continues" — a number, a shipped version, a
+   published price, a filing, a contract.
+3. Write the **falsifier**: what would show this is wrong, and by when it would
+   show it. A thesis with no falsifier is not an idea, it is a mood, and this is
+   the step that decides whether the file is worth keeping.
+4. Write what being wrong costs, in the units it would be paid in — money,
+   months, a reputation with somebody named, an opportunity that closes.
+5. Say who is on the other side of it and why they are there. Somebody is
+   selling what you would buy, or not charging for what you would charge for,
+   and the reason is usually not stupidity.
+6. **No size, no allocation, no expected return, no entry or exit.** Not "a
+   small position", not "worth a few percent", not "10x if it works". Those are
+   the order, they are the human's, and a number attached to a thesis is the
+   part people read.
+7. Do not say what this would pay for. Not the car, not the runway, not the
+   subscription. A thesis explained by what it would fund is an argument written
+   backwards, and it is the failure this pack exists to keep apart.
+8. `fs_write` `.aegis/artefacts/thesis-<date>-<subject>.md`: the claim, the
+   conditions, the falsifier and its date, the cost of being wrong, who is on
+   the other side, and the files you read. Then stop.
+
+## How to validate
+
+The claim is one sentence about the world. Every condition is checkable rather
+than judged. There is a falsifier and it carries a date. There is no size, no
+allocation, no expected return and no target. Nothing in the file names a goal
+this would pay for.
+
+## What to return
+
+`skill_return` with `status: done`, the thesis in `artefacts`, what you read in
+`evidence`, and a summary of at most five lines: the claim, the falsifier, and
+what being wrong costs.
+
+`status: needs_you` when writing the falsifier shows there is not one — when
+nothing over any horizon would tell you the idea was wrong. Say so plainly. That
+is the single most useful sentence this runbook can produce, and it is worth
+more than the file it did not write.
+
+`status: blocked` when nobody gave you an idea. Do not go and find one. A folder
+of theses this ran up on its own is a folder that gets read as research.
+
+## What requires approval
+
+One `fs_write` inside the workspace. There is no tool here that trades, sells,
+posts or transfers, and no later version of this runbook ends in one: execution
+of money movement is always a person's (`PLAN.md` § 7.3), and trade sits on
+§ 7.4's line with send, pay, merge, publish and deploy.
+
+## What to do if the source is missing
+
+If a file you were pointed at is not there, say so and write the thesis without
+it, marking what is unsupported. An argument that admits its gaps is usable; one
+that quietly fills them is the kind that survives right up until money moves.
+
+**Never delete or rewrite a thesis that turned out wrong.** When a falsifier
+fires, append the date and what happened to the file that predicted it. A folder
+of theses whose losers were edited out is the most misleading artefact this
+whole library could hold, and the ones that were wrong are the only reason to
+keep any of them.
+"#;
+
+/// What is funded, what is not (PLAN 7.3, Phase 19, pack 6).
+pub const REVENUE_PIPELINE_SKILL: &str = "revenue.pipeline";
+
+/// `revenue.pipeline`, the one file allowed to hold both halves of this pack,
+/// and the wall between them.
+///
+/// PLAN 7.3 gives the CoS this job in one clause — keep the wish list and the
+/// funding pipeline visible, not click "buy" — and *visible* is not *joined*. A
+/// wish list beside a folder of revenue proposals is one step from "here is how
+/// to pay for the car", and the most expensive artefact this pack could produce
+/// is a thesis whose real cause is a holiday.
+///
+/// So the pipeline reports the gap and never claims anything closes it: a
+/// proposal has no expected value here and the file has no column for one.
+/// [`REVENUE_THESIS_SEED`] holds the same wall from the other side by refusing
+/// to read the wish list at all. Together they are the reason this pack is two
+/// prefixes rather than one — the naming keeps apart what the arithmetic would
+/// happily join.
+const REVENUE_PIPELINE_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# revenue.pipeline
+
+## When to use it
+
+When somebody needs to see what is funded, what is not, and what each goal is
+waiting on. It reports the gap and never claims to close it.
+
+One run covers the goals as they stand today. It is a picture, not a plan.
+
+## Inputs required and tools it will call
+
+- The goals file — the one `wish.list` keeps.
+- What is actually there: a position file `budget.position` wrote, or the
+  decisions ledger, or whatever this workspace records committed money in.
+
+Calls `fs_list` and `fs_read` for those and `fs_write` for the pipeline. It runs
+nothing, spends nothing, and moves nothing.
+
+## Steps
+
+1. `fs_read` the goals file, and keep its ordering exactly. Whose ordering it is
+   goes at the top of yours. Re-ranking the goals by what looks achievable is
+   the one edit that would make this file feel helpful and make it somebody
+   else's list.
+2. `fs_read` what is actually available, and take its as-of date. A pipeline is
+   as current as the position under it, and it says so in its first line.
+3. For each goal in order: what it costs or *not priced*, what of it is covered,
+   and the gap. A goal that is not priced has no gap — it has a missing price,
+   and that is the line it gets.
+4. Say what each goal is waiting on, taking it from the goals file rather than
+   deciding: money, a decision, somebody else, nothing. Where it is waiting on
+   money and the money is there, say that the wait is over — that is the one
+   fact in this file somebody may want today.
+5. **A proposal is not income.** A thesis in `.aegis/artefacts/` has no expected
+   value, no probability and no line in this file. If one is mentioned at all it
+   is in a closing list of *what exists as proposals*, by file name only, with
+   no number beside it and no goal attached to it.
+6. Do not connect a proposal to a goal, ever — not as a suggestion, not as an
+   observation, not as "this would cover the second entry". That sentence is the
+   whole reason these are two runbooks, and it is how a plan for a holiday
+   becomes an argument for a trade.
+7. Write the total gap plainly, and where the nearest unfunded goal is
+   concerned, write the **condition** rather than a plan: what would have to be
+   true for it to be funded — this much more, by this date, from something that
+   already exists. Not a route to it, and not a suggestion about what to give up.
+8. `fs_write` `.aegis/artefacts/pipeline-<date>.md`: how current the money
+   figures are, the goals in the person's order with cost, covered and gap, what
+   each waits on, the total gap, the condition on the nearest one, and the
+   proposals by file name. Stop.
+
+## How to validate
+
+The goals are in the order the goals file has them, attributed to whoever set
+it. Every money figure carries its as-of date and the file it came from. No
+proposal has a number beside it. No line in the file connects a proposal to a
+goal. Nothing suggests dropping or reordering anything.
+
+## What to return
+
+`skill_return` with `status: done`, the pipeline in `artefacts`, the goals and
+money files in `evidence`, and a summary of at most five lines: how many goals
+are funded, the total gap, and what the nearest one is waiting on.
+
+`status: needs_you` when the money figures are older than the goals — a pipeline
+built on a stale position is a picture of a month that has ended — and when a
+goal's date has passed with a gap still open. The second is not a failure to
+report gently: a date somebody set and did not meet is exactly what they asked
+this file to show them.
+
+## What requires approval
+
+One `fs_write` inside the workspace. Nothing here spends, transfers, buys or
+commits, and no later version of it does. What money moves and when is a human
+decision every time (`PLAN.md` § 7.4); this file exists so that decision is
+taken by somebody looking at the numbers rather than at a feeling about them.
+
+## What to do if the source is missing
+
+No goals file: `status: blocked`, and the thing to run is `wish.list`. Do not
+assemble one from the conversation on the way past.
+
+If there is no position file and no ledger, write the pipeline from the goals
+alone, say in the first line that nothing on disk says what is available, and
+return `status: needs_you`. A gap computed against a balance nobody exported is
+a number that would be acted on, and it is the one kind of wrong this file must
+not be.
+"#;
+
 /// `inbox.triage`, seeded into a workspace by the shared-files convention.
 ///
 /// The stub PLAN 7.3 asks Phase 13 for: file in, status and artefact out. It
@@ -3192,7 +3562,7 @@ mod tests {
     }
 
     /// Every runbook of PLAN 7.3's Phase 19, in the order the packs landed.
-    const PACKS: [&str; 15] = [
+    const PACKS: [&str; 18] = [
         REVIEW_DIFF_SKILL,
         DEPLOY_SKILL,
         ALERT_SKILL,
@@ -3208,6 +3578,9 @@ mod tests {
         SOCIAL_SCAN_SKILL,
         SOCIAL_REPLY_SKILL,
         SOCIAL_POST_SKILL,
+        WISH_LIST_SKILL,
+        REVENUE_THESIS_SKILL,
+        REVENUE_PIPELINE_SKILL,
     ];
 
     /// The parsed runbook a seeded name ships with.
@@ -3482,6 +3855,88 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A goal is a file, and not something an identity remembers.
+    ///
+    /// PLAN 7.4 says it in as many words — trading, X monetization and the wish
+    /// list are *funding goals expressed as files* — and the tempting shortcut
+    /// is the one this forbids: `memory_write` is right there, a want is exactly
+    /// the shape of a thing to remember, and a runbook that recorded goals as
+    /// memories would look tidier than one that keeps a markdown file.
+    ///
+    /// It would also be wrong in four ways at once, and all four are properties
+    /// of memories rather than opinions about them: a memory belongs to one
+    /// identity and no other can read it, there is no view spanning two, an
+    /// identity holds at most two hundred, and deleting the identity forgets
+    /// what it knew. Somebody's own goals must not be invisible, capped,
+    /// unreadable by the next specialist, or destroyed by an edit in Settings.
+    /// A file in their folder is none of those things.
+    ///
+    /// The rest of the perimeter is the budget pack's, for the reason PLAN 7.3
+    /// gives this one: execution of money movement is always human.
+    #[test]
+    fn a_goal_is_a_file_and_not_something_an_identity_remembers() {
+        let allowed = [tool::FS_LIST, tool::FS_READ, tool::FS_WRITE];
+
+        for name in [
+            WISH_LIST_SKILL,
+            REVENUE_THESIS_SKILL,
+            REVENUE_PIPELINE_SKILL,
+        ] {
+            for declared in seeded(name).tools {
+                assert!(
+                    allowed.contains(&declared.as_str()),
+                    "`{name}` declares `{declared}`; a goal is a file somebody can open and delete"
+                );
+            }
+        }
+    }
+
+    /// What a full library costs every turn, now that all six packs have landed.
+    ///
+    /// [`the_catalog_block_carries_no_step_of_any_runbook`] bounds what *one
+    /// more* runbook costs. This bounds the whole of it, which is the question
+    /// Phase 19 made worth asking: eighteen of the twenty-four seeded runbooks
+    /// arrived as domain packs, one pack at a time, each diff boring enough that
+    /// nobody was counting — and the catalog is in the system message of every
+    /// request an identity granted them makes (PLAN 7.6, *catalog in, body on
+    /// demand*). Six more packs added the same way, with nothing watching the
+    /// total, is how a library becomes a context window.
+    ///
+    /// The bound is the per-line one multiplied out, so it stays true of the
+    /// seventh pack without being edited, and it fails if a line ever stops
+    /// being bounded — which is the thing that would actually go wrong.
+    ///
+    /// [`the_catalog_block_carries_no_step_of_any_runbook`]: self#tests
+    #[test]
+    fn a_library_holding_every_pack_still_costs_a_bounded_block() {
+        let dir = TempDir::new().expect("temp dir");
+        seed(dir.path());
+        let catalog = catalog(dir.path(), None);
+
+        let mut everything = Agent::builtin();
+        everything.id = "a1".to_owned();
+        everything.builtin = false;
+        everything.skills = SEEDED.iter().map(|(name, _)| (*name).to_owned()).collect();
+
+        let held = granted(&catalog, &everything);
+        assert_eq!(held.len(), SEEDED.len(), "an identity granted all of them");
+
+        let block = prompt_block(&held).expect("a block");
+        let bound = SEEDED.len() * (doc::SUMMARY_MAX_CHARS + NAME_MAX_CHARS + 64) + 512;
+        assert!(
+            block.len() <= bound,
+            "the whole library costs {} characters of every request, over the {bound} its own \
+             per-line cap allows",
+            block.len()
+        );
+
+        // And the property the cap exists to protect: it is still a catalog.
+        assert!(
+            !block.contains("## Steps"),
+            "a runbook's steps reached the system message:\n{block}"
+        );
     }
 
     #[test]

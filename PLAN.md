@@ -1680,7 +1680,65 @@ landed and was recorded nowhere. The second,
 sharper half of the same reason: the absence of a posting tool is not what needs defending, the
 edit where a runbook grows a `shell_exec` to "just check the API" is.
 
-Pack 6 is not started.
+*Pack 6 landed as:* three more `SKILL.md` files — `wish.list`, `revenue.thesis` and
+`revenue.pipeline` — their three entries in `skills::SEEDED`, and the documentation. Sixth boring
+diff, and the last one: **Phase 19 is complete.**
+
+**It is the only pack whose material has not happened.** Every other pack's discipline is a variant
+of one sentence — name the file the claim came from — and it works because a diff, a message, a
+release note, a statement and a post all exist. There is no export of somebody wanting a car, and a
+trade thesis is an argument about a future. So the rule inverts: nothing here may acquire the
+grammar of a fact. An ordering nobody stated is *unordered* rather than one the run picked; a price
+nobody looked up is *not priced* rather than an estimate, because an estimate is the number
+`revenue.pipeline` then divides by and by then nobody remembers it was invented; and a thesis
+carries what would show it false, with a date, or it is not a thesis.
+
+**The pack is under two prefixes, and that is load-bearing rather than untidy.** § 7.3 gives the CoS
+one clause here — keep the wish list and the funding pipeline visible, not click "buy" — and
+*visible* is not *joined*. A wish list beside a folder of revenue proposals is one step from "here
+is how to pay for the car", and the most expensive artefact this pack could produce is a thesis
+whose real cause is a holiday. So the wall is enforced from both sides: `revenue.thesis` may not
+read the wish list *or* the position file — a thesis written with either open is one sized by what
+there is to lose or aimed at what somebody wants to buy — and `revenue.pipeline`, the one file
+allowed to hold both halves, gives a proposal no expected value, no probability and no line beside
+a goal. Naming them apart is the cheapest way to keep them apart.
+
+**`wish.list` is the runbook with no opinions**, which is harder than it sounds for a procedure
+whose input is somebody's spending. It adds only what was said, never the cheaper version or the
+prerequisite it can see; it keeps entries in words the person would recognise; it does not drop a
+goal that looks unwise or rank by what is achievable; and met goals stay at the bottom, dated,
+because a list that only grows is a list of failures. AGENTS.md's line for this workload is *not a
+shopping agent*, and this is what that costs in steps.
+
+**One rule of `revenue.thesis` is not about economy.** A thesis that turned out wrong is never
+deleted or rewritten — when the falsifier fires, the date and the outcome are appended to the file
+that predicted it. A folder of theses whose losers were edited out is the most misleading artefact
+this library could hold, and the ones that were wrong are the only reason to keep any of them.
+
+**Two tests, and the second closes the phase rather than the pack.**
+`a_goal_is_a_file_and_not_something_an_identity_remembers` forbids `memory_write` here, which is the
+tempting shortcut: a want is exactly the shape of a thing to remember. It would be wrong in four
+ways that are properties of memories rather than opinions about them — one identity only, no view
+spanning two, capped at two hundred, gone when the identity is deleted — and § 7.4 already says it:
+funding goals expressed as **files**.
+
+`a_library_holding_every_pack_still_costs_a_bounded_block` is the question Phase 19 made worth
+asking. Eighteen of the twenty-four seeded runbooks arrived as domain packs, one at a time, each
+diff boring enough that nobody was counting, and the catalog is in the system message of *every*
+request an identity granted them makes (§ 7.6). The existing test bounds what one more runbook
+costs; this bounds the whole of it. Measured: **5,556 characters for all twenty-four**, against a
+bound of 7,424 derived from the per-line cap — so the bound stays true of a seventh pack without
+being edited, and it fails if a line ever stops being bounded, which is the thing that would
+actually go wrong.
+
+**Phase 19 is done, and what it did not do is the point.** Six domains reached this harness as
+eighteen files in eighteen directories. `agent/turn.rs` was not opened for any of them; neither
+was the policy matrix, the tool registry, the IPC surface or the UI. No command was added, no
+binding regenerated, no connector installed and no identity created. An install that does none of
+this work has eighteen folders it can delete, and the packs do not exist until somebody makes an
+identity and ticks the boxes. That is the whole of what *domain packs as skills, not runtime* was
+supposed to mean, and the way to tell is that nothing in `src-tauri` learned what a client, a
+mailbox, a release note, a statement, a timeline or a goal is.
 
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
 after Phase 13. § 7.13 (skill promotion) may run after Phase 17. § 7.14 (cabinet
