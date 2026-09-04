@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 19 (the first two domain packs) — the MVP is
+> **Status: Phase 19 (the first three domain packs) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -164,6 +164,15 @@ ever sent to it.
 > text strangers wrote. A message asking for money to move or for access comes back to you
 > whatever it says, and the reply is a file with a line under every claim saying which file it
 > came from. See *The intake pack*.
+>
+> **The third pack is the one that runs while you are asleep.** `watch.sweep`, `watch.digest` and
+> `watch.impact` turn material you dropped in a folder into entries, report only what the last
+> report did not, and say what one item would actually cost this project. It is the first pack
+> whose § 7.3 line says *scheduled*, so `watch.digest` is built for *Settings → Routines* — which
+> means it is never asked anything at four in the morning, and what it may do beyond reading is
+> exactly what you signed. Nothing here fetches: a `curl` signed once and fired daily is an
+> outbound channel with nobody on it. And a quiet week writes no file at all, because a digest
+> that always has five items is a digest inventing them. See *The watch pack*.
 
 ---
 
@@ -436,12 +445,13 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts twelve there — `never-send-without-review`, `cos.loop`,
+`SKILL.md` in it. Aegis puts fifteen there — `never-send-without-review`, `cos.loop`,
 `world.draft`, `world.perceive-delta`, `world.verify`, `world.check`, the delivery pack's
-`review.diff`, `deploy.draft` and `alert.draft`, and the intake pack's `mail.triage`,
-`thread.recap` and `reply.draft` — and offers each **once**, recorded by name in
+`review.diff`, `deploy.draft` and `alert.draft`, the intake pack's `mail.triage`,
+`thread.recap` and `reply.draft`, and the watch pack's `watch.sweep`, `watch.digest` and
+`watch.impact` — and offers each **once**, recorded by name in
 `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later version
-adding a thirteenth will offer that one and leave the rest alone. A workspace's own runbooks
+adding a sixteenth will offer that one and leave the rest alone. A workspace's own runbooks
 live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -736,13 +746,14 @@ fix it — and it is never offered to a model.
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
 happening. Aegis seeds the library with `never-send-without-review`, `cos.loop`, the four
-world runbooks and the six of the two domain packs, and each workspace with `inbox.triage` when
+world runbooks and the nine of the three domain packs, and each workspace with `inbox.triage` when
 you press *Set up shared files* — all of them are examples of the format in the place you would
 look for one, and all of them are ordinary files you can rewrite or delete. `cos.loop` is the
 Chief-of-Staff loop; see [Handoffs](#handoffs). The `world.*` four are the constitution's; see
-[The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are one domain pack and
-`mail.triage`, `thread.recap` and `reply.draft` are the next; see
-[The delivery pack](#the-delivery-pack) and [The intake pack](#the-intake-pack).
+[The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are one domain pack,
+`mail.triage`, `thread.recap` and `reply.draft` the next, and `watch.sweep`, `watch.digest` and
+`watch.impact` the third; see [The delivery pack](#the-delivery-pack),
+[The intake pack](#the-intake-pack) and [The watch pack](#the-watch-pack).
 
 Seeding happens **once per name**. The library records what it has offered in `skills/.seeded`,
 so a runbook you deleted does not reappear on the next start, and a runbook a later version adds
@@ -1042,6 +1053,9 @@ budget:     4 runs a day
 There is no message field, and there is nowhere to put one. **A routine names a runbook.** If it
 could carry a paragraph it would be a chat on a timer, which is the one thing `COS.md` says never
 to automate.
+
+That example is not invented: `watch.digest` is a runbook Aegis seeds, and it is the one written
+to be read by somebody who was not in the room. See [The watch pack](#the-watch-pack).
 
 ### The door
 
@@ -1495,10 +1509,120 @@ The ticket is deliberately thin: it cites the message by path instead of pasting
 in a repository, usually the client's, usually in git, and other people's addresses, phone numbers
 and attachments do not have to be copied there to be found.
 
-### The four after this one are not here
+### The pack after this one
 
-Watch, budget, social and revenue are not started. Two packs that were pleasant to build are not
-two reasons to build a third, and the order in `PLAN.md` § 7.3 exists so each is allowed to fail
+Watch is the next one, and it has landed; see [The watch pack](#the-watch-pack). Budget, social
+and revenue are not started.
+
+---
+
+## The watch pack
+
+The third pack is the tech, AI and economics watch, and its line in `PLAN.md` § 7.3 has a word the
+first two did not: **scheduled** research, artefacts in the watch workspace. Everything below
+follows from that word.
+
+| Runbook | Reads | Writes | Will not |
+| --- | --- | --- | --- |
+| `watch.sweep` | what arrived in `.aegis/briefs/` — a saved page, a release note, a paper, an export | `.aegis/artefacts/watch-<source>.md`, one per item: the quoted claim, and what the source actually **shows** | fetch anything, or decide whether it matters |
+| `watch.digest` | the entries written since the last digest, and that digest's closing list | `.aegis/artefacts/watch-digest-<date>.md`: **changed**, **worth reading**, **noise** — or no file at all | report an item twice, or decide anything |
+| `watch.impact` | one entry, plus this project's own account of itself — `world/`, the ledger, the board | `.aegis/artefacts/impact-<entry>.md`: what it touches by path, what would have to be true, what both options cost | recommend a course of action, or write `world/` |
+
+### This is the pack that goes on a clock
+
+Delivery and intake run because something happened: a change is up for review, a client wrote. A
+watch runs whether or not anything happened, so it is the first pack whose cost is *recurring* and
+the first meant to fire with nobody in the room.
+
+That changes what has to be true of it. `watch.digest` is meant to sit in *Settings → Routines* —
+`Watcher`, `watch.digest`, daily at 07:00, signed for *write files inside the workspace* — and a
+scheduled run is never asked anything: what it may do beyond reading is exactly what you signed,
+and everything else is **refused** rather than put to you. So a version of these runbooks that
+wanted a folder outside the workspace, or a command, would be a routine that failed every morning
+at the same time. `the_watch_pack_can_be_put_on_a_clock` puts all three through the real door
+rather than trusting the prose.
+
+### It cannot fetch, and that is also the point
+
+There is no tool in Aegis that retrieves a page, and this pack does not want one. Not because
+reading the web is unreasonable, but because a `curl` signed once and fired at four in the morning
+is an outbound channel with nobody on it. The material arrives the way a client's message does in
+the intake pack — you put it in the workspace — and a connector you install later replaces where
+it comes from, not the procedure.
+
+One standing approval covers the whole pack: *write files inside the workspace*. Everything else
+these runbooks do is a read inside the workspace, which is not asked about in the first place.
+
+### What each one refuses to do
+
+**`watch.sweep` keeps what a source *says* apart from what it *shows*.** A watch reads material
+written by people with something to sell. The claim is quoted; the evidence is whatever a third
+party could go and check — a number with its method beside it, a repository, a licence, a price, a
+date. Most announcements are all claim, and an entry that says so is the entry doing its job, not
+a verdict on the item. It also takes the date from the source or writes *undated*, and it says who
+published and what they sell.
+
+**It will not read the same page twice.** An entry is named after its source, so `fs_list` of the
+artefacts folder is the whole of the bookkeeping — no ledger to keep in step, and deleting an entry
+is how you ask for that item to be read again.
+
+**`watch.digest` reports only what the last digest did not.** It reads that digest's closing list
+of entry names first, and covers what the list does not name. A run is therefore proportional to
+what arrived, not to how long the watch has been running — the thing you notice eight months in,
+when the folder has two hundred entries.
+
+**And a quiet week writes nothing.** No file, `done`, one line saying nothing is new since the last
+digest. A digest that always has five items is a digest manufacturing them, exactly as a triage
+that finds an ask in every message manufactures work — and on a clock, that manufacturing happens
+by itself, every week, forever. Returning `blocked` instead would put the routine two silences from
+pausing itself over a watch working perfectly.
+
+**`watch.impact` writes the condition, never the conclusion.** *This exists* is one sentence away
+from *we should switch*, and the sentence in between is the one nobody writes. So the note says
+what would have to be **true** for this to be worth doing — a number nobody has, a version that has
+not shipped, a licence somebody would have to accept — in things a person can go and find out. It
+names what it touches as paths in your project, and *it touches nothing here* is a good answer;
+most of what a watch turns up does.
+
+**It costs doing nothing, beside doing it.** A note that prices only the change is an argument for
+the change wearing a table.
+
+**And it will not pick its own input**, for the reason `reply.draft` does not: a note written about
+whatever looked most interesting is a note about the wrong thing, and it will read well.
+
+### Where it stops: the écart
+
+`watch.impact` is the runbook in the whole library likeliest to conclude that the constitution
+would have to change — noticing that is what a watch is *for*. It is also the one thing it may not
+act on. Amending `world/` is a human decision (`PLAN.md` § 7.4), so the note says the essence would
+have to move, returns `needs_you`, and stops.
+
+The two halves of that meet in the machinery rather than by luck: a routine cannot sign *amend the
+world* at all, and the form refuses it when you save, not at four in the morning.
+
+### Setting it up
+
+1. **Open the watch as its own project** and press *Set up shared files*. A watch workspace is a
+   folder of its own — the entries and digests are the artefacts of the watch, not of a client's
+   repository.
+2. **Get the material onto disk**: save the page, export the feed, drop the release note in
+   `.aegis/briefs/`. Nothing here fetches.
+3. **Make the identity.** *Settings → Identities → +*: call it *Watcher*, tick `fs_list`, `fs_read`
+   and `fs_write`. Not `shell_exec` — for a different reason than the intake identity, and the same
+   answer.
+4. **Grant the three runbooks** on it, and give it a daily ceiling it can live inside.
+5. **Run `watch.sweep` and then `watch.digest` by hand, once, and watch what they do.** This is not
+   politeness: a routine may only name a runbook that has already run under watch as that identity,
+   checked against `audit.jsonl`. A clock is the last step of promoting a procedure, not the first.
+6. **Put `watch.digest` on a clock**: *Settings → Routines → New routine*, daily at 07:00 or *when
+   `.aegis/briefs/` changes*, signed for *write files inside the workspace*.
+7. **Run `watch.impact` yourself**, on the entry the digest made you look at. It is the one in this
+   pack that reads your project, and it is not a thing to run on a schedule.
+
+### The three after this one are not here
+
+Budget, social and revenue are not started. Three packs that were pleasant to build are not three
+reasons to build a fourth, and the order in `PLAN.md` § 7.3 exists so each is allowed to fail
 without taking the next one with it.
 
 ---

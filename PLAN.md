@@ -1528,7 +1528,59 @@ the end of the sentence that says when to run the thing. All three opened too lo
 `a_domain_pack_says_when_to_run_it_without_the_line_being_cut_off` is there so the next pack
 does not.
 
-Packs 3–6 are not started, and two pleasant packs are not two reasons to start a third.
+*Pack 3 landed as:* three more `SKILL.md` files — `watch.sweep`, `watch.digest` and
+`watch.impact` — their three entries in `skills::SEEDED`, and the documentation. Third boring
+diff: nothing in `src-tauri` had to learn what a release note is.
+
+**Its § 7.3 sentence contains a word the first two did not, and everything about the pack follows
+from it: *scheduled*.** Delivery and intake run because something happened — a change is up for
+review, a client wrote. A watch runs whether or not anything happened, which makes it the first
+pack whose cost is *recurring* and the first meant to fire with nobody in the room. So the
+property to check is not "does it stop short of the irreversible act" — there is no irreversible
+act in a watch — it is **can it actually go on a clock**, and that is a real door rather than a
+sentence: `the_watch_pack_can_be_put_on_a_clock` runs `schedule::check` on all three, which is
+where the runbook has to declare its tools, the identity has to hold them, and every standing
+approval a run needs has to be one a person may sign.
+
+**The pack declares no command, and for a different reason than intake's.** Intake has no
+`shell_exec` because its inputs were written by strangers. Watch has none because a `curl` signed
+once and fired at four in the morning is an outbound channel with nobody on it — § 7.4's rule has
+an outbound twin, and an unattended run is the one run that is never asked anything. Fetching
+therefore stays the operator's act: material arrives in the workspace as files, exactly as pack
+2's messages do, and a connector installed later replaces the source and not the procedure
+(§ 7.6). One standing approval covers the whole pack, `Grant::FsWrite`, and everything else it
+does is a read inside the workspace, which is not asked about at all.
+
+**Three runbooks, because a watch fails three different ways, and none of them is the failure the
+first two packs were written against.** `watch.sweep` is written against the material: a watch
+reads pages by people with something to sell, so an entry keeps *what the source says* apart from
+*what it shows* — a claim is quoted, evidence is what a third party could go and check, and "this
+announcement shows nothing" is the entry doing its job rather than a criticism of the item. Its
+bookkeeping is a set of file names (`watch-<source>.md`) rather than a ledger, so nothing has to
+be kept in step and deleting an entry is how you ask for that item again. `watch.digest` is the
+arithmetic one, as `thread.recap` was: it reads the previous digest's closing list of entry names
+first and reports only what that list does not name, which keeps a run proportional to what
+arrived rather than to how long the watch has existed. And `watch.impact` is the stop — not a
+stop before an irreversible act, but before the sentence *this exists* becomes *we should switch*.
+It writes the **condition** (what would have to be true, in things somebody could go and find
+out) and never the conclusion, and it prices doing nothing beside doing it, because a note that
+costs only the change is an argument for the change wearing a table.
+
+**The discipline that replaces "stop one step short" is that *nothing* has to be cheap.** A digest
+that always has five items is a digest manufacturing them, exactly as a triage with no *no ask*
+manufactures work — and on a clock the manufacturing is automatic and weekly. So an empty period
+writes **no file at all** and returns `done`: a `blocked` for a quiet week would leave the routine
+two silences from pausing itself (§ 7.6, *Budgets*) over a watch working exactly as intended, and
+one digest per empty week is a folder nobody opens.
+
+**One interaction came out of the door rather than out of writing the runbooks**, and it is the
+one worth keeping: `watch.impact` is the runbook in this whole library likeliest to conclude that
+the constitution would have to change — that is what a watch is *for* — and a routine may not sign
+`Grant::WorldAmend` at all. Those two facts meet correctly rather than by luck: the conclusion is
+an écart, it goes to a person, and the refusal is at the door when the routine is saved rather
+than at four in the morning. The test asserts both halves.
+
+Packs 4–6 are not started, and three pleasant packs are not three reasons to start a fourth.
 
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
 after Phase 13. § 7.13 (skill promotion) may run after Phase 17. § 7.14 (cabinet

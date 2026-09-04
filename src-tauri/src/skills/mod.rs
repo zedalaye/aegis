@@ -586,31 +586,43 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// examples and nothing else: [`catalog`] reads a missing directory as an empty
 /// one.
 ///
-/// Twelve runbooks now, in four groups. Two are the halves of the mode as it
+/// Fifteen runbooks now, in five groups. Two are the halves of the mode as it
 /// was: the standing rule that nothing irreversible goes out unreviewed, and
 /// the loop a Chief of Staff runs. Four are the world's (PLAN 7.2) — draft one,
 /// perceive a delta, verify against the oracle, check the constitution. Three
 /// are the client-delivery pack (PLAN 7.3, Phase 19, pack 1) — review a range,
 /// draft a deploy, triage an alert. Three are client intake (pack 2) — turn a
-/// message into a ticket, recap a thread, draft a reply nobody has sent.
+/// message into a ticket, recap a thread, draft a reply nobody has sent. Three
+/// are the watch (pack 3) — sweep what arrived into entries, digest what is new
+/// since the last digest, and say what one entry would mean here.
 ///
-/// Those last two groups are what a **domain pack** is, and the reason they are
-/// here rather than anywhere else in this tree. Phase 19's rule is *domain packs
-/// as skills, not runtime*: a domain reaches the harness as three files in a
-/// directory, and `agent/turn.rs`, the policy matrix and the tool registry do
-/// not know that a client exists. Each runbook stops one step short of the act
-/// that cannot be taken back — a merge, a deploy, a reply to somebody who is
-/// waiting — because that step is the human's (PLAN 7.4) and a procedure that
-/// ended with it would be a procedure that had taken it. The rest of a pack
-/// is not in this file: the connectors it may want are installed by the
-/// operator (Phase 18), and the specialist that runs it is an identity
-/// somebody made and granted these names to.
+/// Those last three groups are what a **domain pack** is, and the reason they
+/// are here rather than anywhere else in this tree. Phase 19's rule is *domain
+/// packs as skills, not runtime*: a domain reaches the harness as three files in
+/// a directory, and `agent/turn.rs`, the policy matrix and the tool registry do
+/// not know that a client exists. The rest of a pack is not in this file: the
+/// connectors it may want are installed by the operator (Phase 18), and the
+/// specialist that runs it is an identity somebody made and granted these names
+/// to.
 ///
-/// The two packs differ in one thing that is visible from here, and it decides
-/// how they are granted: delivery declares `shell_exec` and intake declares no
-/// command at all. An intake specialist is therefore an identity that cannot run
-/// one — which is what you want of the identity whose inputs were written by
-/// people outside the house.
+/// Each pack has one property visible from here, and in each case it is the
+/// property that decides how the pack is granted.
+///
+/// * **Delivery** declares `shell_exec` and every runbook stops one step short
+///   of the act that cannot be taken back — a merge, a deploy, a sent reply —
+///   because that step is the human's (PLAN 7.4), and a procedure that ended
+///   with it would be a procedure that had taken it.
+/// * **Intake** declares no command at all, so its specialist is an identity
+///   that cannot run one, which is what you want of the identity whose inputs
+///   were written by people outside the house.
+/// * **Watch** declares no command either, for a different reason: it is the
+///   pack meant to run *unattended*, and an unattended run is never asked
+///   anything — what it may do beyond reading is what somebody signed onto the
+///   routine, and everything else is refused (PLAN 7.6). It also has no
+///   irreversible act to stop short of, so its discipline is the other one:
+///   *nothing happened* has to be a cheap and complete answer, or a watch on a
+///   clock manufactures news the way a triage with no *no ask* manufactures
+///   work.
 ///
 /// [`DRAFT_SKILL`] is the one that writes `world/`, and it is not the
 /// `world.amend` PLAN 7.2 refuses: that sentence is about *specialists*, and
@@ -694,7 +706,7 @@ const SEEDED_FILE: &str = ".seeded";
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
-const SEEDED: [(&str, &str); 12] = [
+const SEEDED: [(&str, &str); 15] = [
     (REVIEW_SKILL, REVIEW_SEED),
     (COS_SKILL, COS_SEED),
     (DRAFT_SKILL, DRAFT_SEED),
@@ -707,6 +719,9 @@ const SEEDED: [(&str, &str); 12] = [
     (MAIL_SKILL, MAIL_SEED),
     (THREAD_SKILL, THREAD_SEED),
     (REPLY_SKILL, REPLY_SEED),
+    (WATCH_SWEEP_SKILL, WATCH_SWEEP_SEED),
+    (WATCH_DIGEST_SKILL, WATCH_DIGEST_SEED),
+    (WATCH_IMPACT_SKILL, WATCH_IMPACT_SEED),
 ];
 
 /// The standing rule of the whole mode, as a runbook.
@@ -1928,6 +1943,388 @@ limit that ends a turn, is a source the block cannot name: leave the claim out
 and return `status: needs_you`.
 "#;
 
+/// Turn what arrived into entries (PLAN 7.3, Phase 19, pack 3).
+pub const WATCH_SWEEP_SKILL: &str = "watch.sweep";
+
+/// `watch.sweep`, the collecting half of the watch pack.
+///
+/// There is no tool in this build that fetches anything, and this runbook does
+/// not want one. Material reaches the watch the way a client's message reaches
+/// intake: as files somebody put in the workspace. A connector later replaces
+/// where the material comes from and leaves the procedure alone (PLAN 7.6) —
+/// and installing one starts a program, which is the operator's act (Phase 18).
+///
+/// What makes it a runbook rather than "read these pages" is step 3. A watch
+/// reads material written by people with something to sell, where the sentence
+/// and the evidence for it are not the same object and only one of them is
+/// usually present. Keeping *what it says* apart from *what it shows* is the
+/// whole of an entry's value, because the digest above it can only be as honest
+/// as the entries under it, and by then the launch post is gone.
+///
+/// Its bookkeeping is deliberately a set of file names rather than a ledger
+/// file. What has been swept is answered by `fs_list` of the artefacts
+/// directory, so nothing has to be kept in step with anything, and deleting an
+/// entry is how you ask for that item to be read again.
+const WATCH_SWEEP_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# watch.sweep
+
+## When to use it
+
+When material for the watch has arrived as files and nothing has read it yet.
+One run turns what is new in one folder into one entry per item.
+
+The material is whatever you put there: a saved page, a release note, a paper,
+an export, a note somebody passed on. There is no tool here that fetches
+anything, and nothing in this run reaches the network.
+
+## Inputs required and tools it will call
+
+- The folder the material is in — `.aegis/briefs/` unless you were given
+  another. `fs_list` it first, so the sweep covers what is on disk rather than
+  what was mentioned.
+- Nothing else. What has already been swept is answered by the entry names in
+  `.aegis/artefacts/`, not by anybody's memory of last time.
+
+Calls `fs_list` for both folders, `fs_read` for the material, and `fs_write`
+for one entry per new item. Nothing here runs a command and nothing here
+fetches.
+
+## Steps
+
+1. `fs_list` `.aegis/artefacts/` and read the names. An entry is
+   `watch-<source>.md`, where `<source>` is the material's file name without its
+   extension. A source already named there has been swept: skip it without
+   reading it. That is the whole of the bookkeeping, and it is names rather than
+   a ledger so that deleting an entry is how you ask for an item to be read
+   again. Where the name is taken by a different file, put the folder in it too.
+2. `fs_list` the material folder and take what is left. If nothing is left, the
+   sweep found nothing — write no entries and go to *What to return*. That is
+   the answer most days.
+3. For each new item, `fs_read` it and write down two things separately: **what
+   it says** and **what it shows**. A claim is what the source asserts — faster,
+   cheaper, the first, the only. Evidence is what somebody else could go and
+   check: a number with its method beside it, a repository, a licence, a price,
+   a date, a name. Most announcements are all claim. Say so; that is not a
+   criticism of the item, it is the fact the entry exists to carry.
+4. Quote the claim rather than restating it, and take the date from the source.
+   A date inferred from where the file sits is not a date — write *undated*
+   instead. An undated source is worth less than a dated one, and a reader of
+   the entry should be able to see that.
+5. Say who published it and what they sell. A benchmark in a launch post, a
+   forecast from somebody holding the position, a study funded by the thing it
+   measures: none of that is disqualifying, and all of it belongs in the entry.
+6. `fs_write` `.aegis/artefacts/watch-<source>.md` for each: the source's path,
+   its date or *undated*, who published it, the quoted claim, what is shown
+   behind it, and one line on what it would touch here — a file, a dependency,
+   a cost, or nothing. One entry per item, however tempting a combined one is:
+   two items in one file is one item that cannot be skipped later.
+7. Stop. Do not work out whether any of it matters. That is `watch.impact`, on
+   one entry, and it needs this file written first.
+
+## How to validate
+
+Every entry names the file it came from, and nothing else in it claims to be a
+source. Every claim is a quotation. No entry carries a date its source did not.
+An entry whose source shows nothing says so in those words, rather than
+paraphrasing the claim into something that sounds checked.
+
+## What to return
+
+`skill_return` with `status: done`, the entries in `artefacts`, the material's
+paths in `evidence`, and a summary of at most five lines: how many items were
+new, what they were, and which of them showed anything.
+
+*Nothing new* is a complete run: `status: done`, no artefacts, one line naming
+the folder you listed and what was already swept. A sweep that finds something
+every time is a sweep reading the same page twice.
+
+`status: needs_you` when a source is somebody's private material — a client's
+document, a contract, a message — dropped in the watch folder by mistake. Name
+the file, do not enter it, and do not summarize it in the return either.
+
+## What requires approval
+
+The writes are ordinary `fs_write` calls. Reads inside the workspace happen
+without asking, and a folder outside it is a path the person is asked about
+every time — which is why the material belongs in the workspace before a sweep,
+and certainly before one on a clock. Nothing here fetches, downloads,
+subscribes, or answers anybody.
+
+## What to do if the source is missing
+
+If the material folder is not there, or holds nothing at all, return
+`status: blocked` and say which folder you listed. Do not sweep from what the
+session says has been happening: a watch whose entries came out of a
+conversation is a watch reporting its own memory back to you.
+
+A read you were refused — by the person, or by the round limit that ends a turn
+— leaves that item unswept, and unswept is where it should stay. Write the
+entries you could, name the ones you could not in `open_questions`, and return
+`status: needs_you`. Half an entry carrying the source's own headline is worse
+than no entry.
+"#;
+
+/// Report what is new since the last report (PLAN 7.3, Phase 19, pack 3).
+pub const WATCH_DIGEST_SKILL: &str = "watch.digest";
+
+/// `watch.digest`, the one runbook in this tree written to be put on a clock.
+///
+/// Every other seeded runbook answers something that happened: a client wrote,
+/// a change is up for review, an alert fired. A watch runs whether or not
+/// anything happened, which makes it the first pack whose cost is *recurring* —
+/// and that changes what the failure is. Nothing here can be sent, so nothing
+/// here needs a stop one step short of an irreversible act. What it needs
+/// instead is for **nothing** to be a cheap and complete answer, because a
+/// digest that always has five items is a digest manufacturing them, exactly as
+/// a triage that finds an ask in every message manufactures work.
+///
+/// So an empty period writes no file and returns `done` rather than `blocked`:
+/// a `blocked` for a quiet week would leave a routine two silences from pausing
+/// itself over a watch working exactly as intended (PLAN 7.6, *Budgets*).
+///
+/// The delta is bookkept the way [`WATCH_SWEEP_SEED`]'s is, and for the same
+/// reason: the digest ends with the entry names it covered, and the next run
+/// reads that list first. It is what keeps a run proportional to what arrived
+/// rather than to how long the watch has existed — the property a folder of two
+/// hundred entries takes eight months to notice is missing.
+const WATCH_DIGEST_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# watch.digest
+
+## When to use it
+
+When the watch is due to report: a week, a morning, a clock. It reads the
+entries written since the last digest and reports only what that one did not.
+
+This is the runbook of the pack that belongs on a clock, and the only one here
+written for a reader who was not in the room.
+
+## Inputs required and tools it will call
+
+- Nothing. `fs_list` `.aegis/artefacts/` and the run has what it needs: the
+  entries `watch.sweep` wrote, and the digests written before this one.
+- The period, if you were given one. Without one the period is *since the last
+  digest*, which is what that digest's own closing list answers.
+
+Calls `fs_list` and `fs_read` in `.aegis/artefacts/`, and `fs_write` for the
+digest — when there is one to write.
+
+## Steps
+
+1. `fs_list` `.aegis/artefacts/`. Digests are `watch-digest-<date>.md` and
+   entries are `watch-<source>.md`. `fs_read` the newest digest **first** and
+   read the list of entry names at the end of it. That list is where the watch
+   got to, and it is the only thing that keeps this run cheap.
+2. Take the entries that list does not name. Those are the run. Do not re-read
+   the ones it does, and do not open the sources any of them came from: an entry
+   is what its source was read into, and reading both is paying twice for one
+   item.
+3. If nothing is left, write no file. *Nothing new since <date>* is the answer,
+   and it is the answer most of the time. One digest per empty week is a folder
+   nobody opens and a watch nobody believes.
+4. Sort what is left into **changed**, **worth reading** and **noise**, each item
+   in exactly one. *Changed* is something now true that was not — a version
+   shipped, a price moved, a licence changed, a company bought. *Worth reading*
+   is an argument somebody here would be better for having read. *Noise* is the
+   rest, one line each, because "eleven of these arrived" is information and
+   eleven summaries of them are not.
+5. Cap the first two lists at five items each. Past five, the sixth is noise by
+   the definition above, whatever it is about. A digest that lists everything has
+   handed the sorting back to the reader, which was the work.
+6. Every line names the entry it came from — the entry, not the source, because
+   the entry names the source and carries what was actually shown. A digest
+   citing a page directly is a digest whose claims cannot be checked without
+   leaving the folder.
+7. `fs_write` `.aegis/artefacts/watch-digest-<date>.md`: the period covered, the
+   three lists, and — last — every entry name this digest looked at, including
+   the ones it filed as noise. That closing list is what the next run reads
+   first, so an entry left out of it is an entry reported twice.
+8. Stop. A digest reports; it decides nothing. An item in it that looks like it
+   changes what this project does is one run of `watch.impact` on that entry,
+   started by somebody.
+
+## How to validate
+
+Every line of the digest names an entry file. No entry is in two lists. Nothing
+in it appeared in the previous digest. The closing list holds every entry the
+run looked at, so its length is the number of entries considered. The digest
+fits on a screen.
+
+## What to return
+
+`skill_return` with `status: done`, the digest in `artefacts`, the entry names
+in `evidence`, and a summary of at most five lines: the period, what changed,
+and how many items were noise.
+
+An empty period is also `status: done`: no artefact, and one line saying nothing
+is new since the last digest and which digest that was. A quiet week is this
+runbook working, not failing — `blocked` would put a routine two silences from
+pausing itself over it.
+
+`status: needs_you` for one thing only: an entry saying something has happened
+to something this project currently relies on — a dependency abandoned, a
+licence changed under it, a service closing. That is not a line to be read on
+Friday.
+
+## What requires approval
+
+One `fs_write` inside the workspace, and nothing else. That matters more here
+than in the rest of the pack, because this is the runbook meant to fire
+unattended, and an unattended run is never asked anything: what it may do beyond
+reading is exactly what was signed on the routine, and everything else is
+refused rather than put to somebody. A version of this that wanted a folder
+outside the workspace, or a command, would be a routine that failed every
+morning at the same time.
+
+## What to do if the source is missing
+
+If `.aegis/artefacts/` holds no entries at all, return `status: blocked` and say
+so: there is nothing to digest, and the thing to run is `watch.sweep`. If it
+holds entries and no digest, this is the first one — cover everything, and say
+that in its first line.
+
+If some entries could not be read — a refusal, the round limit that ends a turn
+— the digest covers the ones you read, says which it could not in its first
+line, and leaves those out of the closing list so the next run picks them up.
+Return `status: needs_you`.
+"#;
+
+/// What one entry would mean here (PLAN 7.3, Phase 19, pack 3).
+pub const WATCH_IMPACT_SKILL: &str = "watch.impact";
+
+/// `watch.impact`, where the watch meets this project and stops.
+///
+/// A watch is only worth running because something in it occasionally changes
+/// what you do, and that is also the step where it goes wrong: *this exists* is
+/// one sentence away from *we should switch*, and the sentence in between is the
+/// one nobody writes. So the note carries the **condition** rather than the
+/// conclusion — what would have to be true for this to be worth doing, in things
+/// somebody could go and find out — and it costs doing nothing as well as doing
+/// it, because a note that prices only the change is an argument for the change
+/// wearing a table.
+///
+/// Its own stop is an écart (`COS.md` *Work*). This is the runbook most likely
+/// of any in the library to conclude that the constitution would have to move,
+/// which is the most useful thing it can conclude and the one thing it may not
+/// act on. A specialist does not write `world/` — and a scheduled run is not
+/// even offered that approval, since [`Grant::WorldAmend`] is refused at the
+/// routine's door.
+///
+/// Like [`REPLY_SEED`] it refuses to pick its own input, for the same reason and
+/// with the same failure: a note written about whatever looked most interesting
+/// is a note about the wrong thing, and it will read well.
+///
+/// [`Grant::WorldAmend`]: crate::policy::Grant::WorldAmend
+const WATCH_IMPACT_SEED: &str = r#"---
+version: 1
+tools: fs_read, fs_write
+---
+
+# watch.impact
+
+## When to use it
+
+When one thing in the watch looks like it might change what this project does.
+One run takes one entry and says what would have to be true here.
+
+It decides nothing and recommends nothing. What comes out is what would have to
+change and what that would cost, which is what a person needs in order to
+decide.
+
+## Inputs required and tools it will call
+
+- The entry, as a path — one `watch.sweep` wrote. If you were not given one,
+  that is the end of the run. A note written about whatever looked most
+  interesting is a note about the wrong thing, and it will read well.
+- This project's own account of itself: `world/essence.md` if there is one, the
+  decisions ledger, the board. Those are what "here" means, and with none of
+  them this run has nothing to compare against.
+
+Calls `fs_read` for those and `fs_write` for the note. It lists nothing, runs
+nothing, and changes nothing about the project.
+
+## Steps
+
+1. `fs_read` the entry. Work from what it recorded as **shown**, not from what
+   it quoted as claimed. A claim is a reason to look; it is not a fact about
+   this project's options.
+2. `fs_read` this project's account of itself, before writing a word. What the
+   project is, what it has already decided, and what it is doing now are three
+   different files, and a note written without them is a description of the item
+   with our name pasted on it.
+3. Name what here it touches, as paths: a dependency in a manifest, a decision
+   in the ledger, a constraint in the essence, a bill somebody pays monthly. If
+   you cannot name a file, the honest answer is that it touches nothing here,
+   and that is a good thing for a watch to produce.
+4. Write the condition, not the conclusion: **what would have to be true** for
+   this to be worth doing. A number nobody has, a version that has not shipped,
+   a licence somebody would have to accept, a migration nobody has costed. Each
+   of those is something a person could go and find out.
+5. Cost it in the units this project actually pays in — files that would be
+   rewritten, a dependency added or dropped, an interface other people depend
+   on, money per month — and cost doing nothing beside it. Never "a moderate
+   effort".
+6. If what it touches is `world/`, stop there and say so. That the constitution
+   would have to change is the most useful thing this note can conclude and the
+   one thing it must not act on: it is an écart, it belongs to a person, and no
+   run of this writes `world/` — least of all one on a clock, which is not
+   offered that approval at all.
+7. `fs_write` `.aegis/artefacts/impact-<entry>.md`: the entry, what it touches
+   by path, what would have to be true, what the change would cost, and what
+   doing nothing would cost. No recommendation, and no order of work.
+8. Stop. The decision is somebody's, and whoever takes it files it in the
+   decisions ledger — not this run, and not as a suggestion phrased as one.
+
+## How to validate
+
+Every "it touches" line names a path in this project. Every condition is
+something that could be found out rather than judged. No sentence in the note
+recommends a course of action. The cost of doing nothing is there, because a
+note that prices only the change is an argument for the change.
+
+## What to return
+
+`skill_return` with `status: done`, the note in `artefacts`, the entry and the
+project files you read in `evidence`, and a summary of at most five lines: what
+it touches, what would have to be true, and what it would cost.
+
+A note saying it touches nothing here is a good run, and `done`. Most of what a
+watch turns up touches nothing here; a note finding consequences in every item
+is the sweep manufacturing work at the other end of the pack.
+
+`status: needs_you` when the answer turns on a decision rather than a fact —
+whether to take the cost, whether the constraint still holds, whether this is
+the year for it — with the question in `open_questions` and no recommendation
+attached to it. And always when the essence would have to change: that is an
+écart, and it is the human's.
+
+## What requires approval
+
+One `fs_write` into `.aegis/artefacts/`, under the usual gate. A write into
+`world/` is refused outright however clearly this note argues for it — amending
+the constitution is a human decision (`PLAN.md` § 7.4), and a scheduled run is
+never offered that approval.
+
+## What to do if the source is missing
+
+No entry, no run: return `status: blocked` and ask for the path. Do not take the
+newest entry, and do not work from the digest — a digest line is a pointer, and
+a note written from a pointer is written from a summary of a summary of a page.
+
+If the project has no `world/`, no ledger and no board, say so and write only
+what the manifest and the files on disk support: a project that has not written
+down what it is is itself worth a line in the note. A read you were refused, by
+the person or by the round limit that ends a turn, is a comparison you did not
+make — leave that line out and return `status: needs_you`.
+"#;
+
 /// `inbox.triage`, seeded into a workspace by the shared-files convention.
 ///
 /// The stub PLAN 7.3 asks Phase 13 for: file in, status and artefact out. It
@@ -2052,13 +2449,16 @@ mod tests {
     }
 
     /// Every runbook of PLAN 7.3's Phase 19, in the order the packs landed.
-    const PACKS: [&str; 6] = [
+    const PACKS: [&str; 9] = [
         REVIEW_DIFF_SKILL,
         DEPLOY_SKILL,
         ALERT_SKILL,
         MAIL_SKILL,
         THREAD_SKILL,
         REPLY_SKILL,
+        WATCH_SWEEP_SKILL,
+        WATCH_DIGEST_SKILL,
+        WATCH_IMPACT_SKILL,
     ];
 
     /// The parsed runbook a seeded name ships with.
@@ -2164,6 +2564,84 @@ mod tests {
                 tool::SHELL_EXEC
             );
         }
+    }
+
+    /// The watch (PLAN 7.3, Phase 19, pack 3) can actually be put on a clock.
+    ///
+    /// The property that decides how *this* pack is granted, and the one the
+    /// other two never had to have: § 7.3 gives watch as **scheduled** research,
+    /// so a runbook here that cannot pass the routine door is a runbook that
+    /// does not do the thing the pack is for. The door is the real one —
+    /// [`schedule::check`](crate::schedule::check) — because every part of it is
+    /// a claim about these files: the tools are declared under *Inputs required
+    /// and tools it will call*, the identity holds them, and every standing
+    /// approval a run needs is one a person may sign.
+    ///
+    /// Which is why the pack declares no command, for a different reason than
+    /// intake's. A `curl` signed once and fired at four in the morning is an
+    /// outbound channel with nobody on it. Fetching stays the operator's act
+    /// — material arrives in the workspace, or a connector they installed puts
+    /// it there — and the runbooks read files and write one file back.
+    #[test]
+    fn the_watch_pack_can_be_put_on_a_clock() {
+        use crate::policy::Grant;
+        use crate::store::routines::{RoutineDraft, Schedule};
+
+        let dir = TempDir::new().expect("temp dir");
+        seed(dir.path());
+        let catalog = catalog(dir.path(), None);
+
+        let mut watcher = agent_with(&[WATCH_SWEEP_SKILL, WATCH_DIGEST_SKILL, WATCH_IMPACT_SKILL]);
+        watcher.name = "Watcher".to_owned();
+        // Everything the three declare, and nothing else. `shell_exec` and
+        // `screen_capture` are not on this identity, which is the point.
+        watcher.tools = vec![
+            tool::FS_LIST.to_owned(),
+            tool::FS_READ.to_owned(),
+            tool::FS_WRITE.to_owned(),
+            tool::SKILL_RUN.to_owned(),
+            tool::SKILL_RETURN.to_owned(),
+        ];
+
+        let draft = |name: &str, grants: Vec<Grant>| RoutineDraft {
+            name: "Morning watch".to_owned(),
+            project_id: "p1".to_owned(),
+            agent_id: watcher.id.clone(),
+            skill: name.to_owned(),
+            schedule: Schedule::DailyAt { hour: 7, minute: 0 },
+            grants,
+            runs_per_day: 4,
+        };
+
+        for name in [WATCH_SWEEP_SKILL, WATCH_DIGEST_SKILL, WATCH_IMPACT_SKILL] {
+            let skill = find(&catalog, name).expect("seeded");
+            // One standing approval: write inside the workspace. Everything
+            // else a run of these wants is a read, and reads inside the
+            // workspace are not asked about in the first place.
+            crate::schedule::check(
+                &draft(name, vec![Grant::FsWrite]),
+                &watcher,
+                Some(skill),
+                true,
+            )
+            .unwrap_or_else(|err| panic!("`{name}` cannot be scheduled: {err}"));
+        }
+
+        // And the one conclusion `watch.impact` is likeliest to reach is the
+        // one no clock may act on: amending the constitution is a human
+        // decision (`COS.md` *Work*), so the door refuses the grant rather than
+        // the runbook discovering it at four in the morning.
+        let impact = find(&catalog, WATCH_IMPACT_SKILL).expect("seeded");
+        assert!(
+            crate::schedule::check(
+                &draft(WATCH_IMPACT_SKILL, vec![Grant::WorldAmend]),
+                &watcher,
+                Some(impact),
+                true,
+            )
+            .is_err(),
+            "an écart is not something a routine signs for"
+        );
     }
 
     #[test]
