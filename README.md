@@ -13,7 +13,7 @@ audit trail; you point it at an OpenAI-compatible provider.
 The WebView renders UI only. No tool ever executes in the browser context, and no API key is
 ever sent to it.
 
-> **Status: Phase 19 (the first three domain packs) — the MVP is
+> **Status: Phase 19 (the first four domain packs) — the MVP is
 > feature-complete, and the post-MVP sequence of `PLAN.md` § 7.3 has started.** The app boots,
 > lives in the system tray, remembers the workspace folders you point it at, and holds
 > conversations in them: create a session, send a message, watch the reply stream in a token at a
@@ -173,6 +173,15 @@ ever sent to it.
 > exactly what you signed. Nothing here fetches: a `curl` signed once and fired daily is an
 > outbound channel with nobody on it. And a quiet week writes no file at all, because a digest
 > that always has five items is a digest inventing them. See *The watch pack*.
+>
+> **The fourth pack watches money and cannot touch it.** `budget.position`, `budget.runway` and
+> `budget.alert` turn exports you dropped on disk into one page saying what is held and what is
+> owed, answer how long it lasts as a range rather than a number, and say when a line you set has
+> been crossed. It is the first pack whose material is arithmetic, so a figure is either copied
+> from a line naming its export or shown as a sum you can redo, and a total that will not
+> reconcile comes back to you. It declares three tools — list, read, write — and § 7.3's reason is
+> blunt: *not a broker*. Aegis has nothing that buys, sells, transfers or pays. See *The budget
+> pack*.
 
 ---
 
@@ -445,13 +454,14 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts fifteen there — `never-send-without-review`, `cos.loop`,
+`SKILL.md` in it. Aegis puts eighteen there — `never-send-without-review`, `cos.loop`,
 `world.draft`, `world.perceive-delta`, `world.verify`, `world.check`, the delivery pack's
 `review.diff`, `deploy.draft` and `alert.draft`, the intake pack's `mail.triage`,
-`thread.recap` and `reply.draft`, and the watch pack's `watch.sweep`, `watch.digest` and
-`watch.impact` — and offers each **once**, recorded by name in
+`thread.recap` and `reply.draft`, the watch pack's `watch.sweep`, `watch.digest` and
+`watch.impact`, and the budget pack's `budget.position`, `budget.runway` and `budget.alert` —
+and offers each **once**, recorded by name in
 `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later version
-adding a sixteenth will offer that one and leave the rest alone. A workspace's own runbooks
+adding a nineteenth will offer that one and leave the rest alone. A workspace's own runbooks
 live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -746,14 +756,15 @@ fix it — and it is never offered to a model.
 
 A workspace runbook shadows a library one of the same name; the panel says when that is
 happening. Aegis seeds the library with `never-send-without-review`, `cos.loop`, the four
-world runbooks and the nine of the three domain packs, and each workspace with `inbox.triage` when
+world runbooks and the twelve of the four domain packs, and each workspace with `inbox.triage` when
 you press *Set up shared files* — all of them are examples of the format in the place you would
 look for one, and all of them are ordinary files you can rewrite or delete. `cos.loop` is the
 Chief-of-Staff loop; see [Handoffs](#handoffs). The `world.*` four are the constitution's; see
 [The world](#the-world). `review.diff`, `deploy.draft` and `alert.draft` are one domain pack,
-`mail.triage`, `thread.recap` and `reply.draft` the next, and `watch.sweep`, `watch.digest` and
-`watch.impact` the third; see [The delivery pack](#the-delivery-pack),
-[The intake pack](#the-intake-pack) and [The watch pack](#the-watch-pack).
+`mail.triage`, `thread.recap` and `reply.draft` the next, `watch.sweep`, `watch.digest` and
+`watch.impact` the third, and `budget.position`, `budget.runway` and `budget.alert` the fourth;
+see [The delivery pack](#the-delivery-pack), [The intake pack](#the-intake-pack),
+[The watch pack](#the-watch-pack) and [The budget pack](#the-budget-pack).
 
 Seeding happens **once per name**. The library records what it has offered in `skills/.seeded`,
 so a runbook you deleted does not reappear on the next start, and a runbook a later version adds
@@ -1619,11 +1630,109 @@ world* at all, and the form refuses it when you save, not at four in the morning
 7. **Run `watch.impact` yourself**, on the entry the digest made you look at. It is the one in this
    pack that reads your project, and it is not a thing to run on a schedule.
 
-### The three after this one are not here
+### The pack after the watch
 
-Budget, social and revenue are not started. Three packs that were pleasant to build are not three
-reasons to build a fourth, and the order in `PLAN.md` § 7.3 exists so each is allowed to fail
+Budget is the next one, and it has landed; see [The budget pack](#the-budget-pack). Social and
+revenue are not started, and the order in `PLAN.md` § 7.3 exists so each pack is allowed to fail
 without taking the next one with it.
+
+---
+
+## The budget pack
+
+The fourth pack is budget and portfolio, and `PLAN.md` § 7.3 gives it in eight words:
+**read-only connectors, a status file, alerts. Not a broker.**
+
+| Runbook | Reads | Writes | Will not |
+| --- | --- | --- | --- |
+| `budget.position` | exports you put on disk — a bank CSV, a broker statement, an invoice ledger | `.aegis/artefacts/position-<date>.md`: **held**, **owed**, **committed**, **unplaced**, every figure citing its export | sum across currencies at a rate nobody named, or hide a total that does not reconcile |
+| `budget.runway` | one position file, plus the standing commitments and whatever income is written down | `.aegis/artefacts/runway-<date>.md`: the outgoings, the division shown, and a **range** in months | give a single number, or rank what you should cut |
+| `budget.alert` | one threshold somebody wrote down, and the figure it names | `.aegis/artefacts/alert-<figure>-<date>.md`: what crossed what, by how much, since when, and **one** question | propose anything at all |
+
+### The material is arithmetic, and that is a different failure
+
+Everything else in your library reads prose. A wrong review argues with you; a wrong total does
+not. Ask a model to add a column and it returns a plausible number, formatted exactly like a
+right one, and nothing about the page looks off.
+
+So one rule runs through all three: **a figure is either copied or shown.** Copied means it names
+the export and the place in it. Shown means the addends are beside the total so you can redo it.
+There is no third kind, and where the export states its own total, the runbook reconciles against
+it and writes the difference down as a number — a total that does not reconcile comes back to you
+rather than getting rounded into agreement.
+
+### It cannot run a calculator, on purpose
+
+The pack declares `fs_list`, `fs_read` and `fs_write`, and nothing else — a stricter perimeter
+than the intake pack's, and for a blunter reason. *Not a broker.* A program on PATH is a
+calculator right up until it is a broker's client, and the identity holding your portfolio is the
+last one to give a shell to. `the_budget_pack_could_not_reach_a_broker_if_it_tried` asserts the
+tool set rather than the prohibition.
+
+That leaves the arithmetic to the model, deliberately. A run that shows its addends and reconciles
+against the statement's own total is *caught* when it adds wrong; one that reports only the total
+never is. And if you want the sums done by a program, that program is a read-only connector you
+install — replacing where the number comes from, not the procedure.
+
+### Stale money is the failure that costs
+
+A figure with no date is not a figure, and a position is only as current as its oldest input. So
+`position-<date>.md` opens with the **stalest** as-of date among its sources, not today's, and
+`budget.runway` comes back to you when the position it is dividing is older than the period it is
+dividing by. An export with no date in it is dated *unknown* rather than getting the file's
+modification time.
+
+### What each one refuses to do
+
+**`budget.position` will not merge two exports it cannot match.** The same transaction in two
+overlapping exports is one transaction, matched on account, date and amount. Where two lines nearly
+match, it takes neither and lists a discrepancy. And whatever fits none of *held*, *owed* or
+*committed* goes in a fourth list called *unplaced*, with its source — because the alternative is a
+line quietly filed under the heading that made the totals work.
+
+**`budget.runway` will not give you a single number.** "Eleven months" from inputs that support
+nine to fourteen is a number somebody plans against. It answers with a range, says which assumption
+each end rests on, and ends with the three things that would narrow it.
+
+**And it will not infer a rate from one charge.** An annual subscription billed in March is
+invisible in April and is a twelfth of itself every month. Every outgoing names its frequency and
+the file that says so; every period conversion shows its division. This is where a runway goes
+wrong, and it goes wrong quietly.
+
+**`budget.alert` proposes nothing.** Not *consider reducing*, not *it may be worth reviewing*, not
+an ordering of options. A number crossing a line reads as an instruction, and an alert that ends in
+a recommendation is a trade being placed one sentence at a time. It ends with exactly one question
+instead — the one a person would need answered to decide.
+
+**And the threshold has to be somebody else's.** Quotable, from a file, with the date it was
+written, predating the move. A line drawn now around what already happened turns every move into a
+crossing, and a watch that alerts on everything is a watch nobody reads. No file naming the
+threshold means `blocked`, not a threshold invented from the figure's own history.
+
+### Setting it up
+
+1. **Open the money as its own project** and press *Set up shared files*. Its artefacts are not a
+   client's, and it is not a folder anybody else should be pointed at.
+2. **Get the exports onto disk.** There is no account connector, and adding one starts a program,
+   which is yours to do. When you do add one, add a **read-only** one.
+3. **Make the identity.** *Settings → Identities → +*: call it *Treasurer*, tick `fs_list`,
+   `fs_read` and `fs_write`. Nothing else, and in particular not `shell_exec`.
+4. **Grant the three runbooks** on it.
+5. **Write your thresholds down first**, in `.aegis/decisions/DECISIONS.md` or a limits file, with
+   dates. `budget.alert` will not work without them, which is the feature.
+6. **Run them in order**: `budget.position` on the exports, then `budget.runway` on the position,
+   and `budget.alert` when a line you set has been crossed.
+
+### What stays yours
+
+Buying, selling, transferring, cancelling and paying. Aegis has no tool that does any of them, no
+runbook here has a later version that ends in one, and a connector you install later does not
+change it: a read-only connector replaces where a figure comes from, never what may be done with
+it. Money moving is a human act, every time.
+
+### The two after this one are not here
+
+Social and revenue are not started.
 
 ---
 

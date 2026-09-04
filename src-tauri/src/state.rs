@@ -1000,6 +1000,9 @@ mod tests {
             names,
             [
                 crate::skills::ALERT_SKILL,
+                crate::skills::BUDGET_ALERT_SKILL,
+                crate::skills::BUDGET_POSITION_SKILL,
+                crate::skills::BUDGET_RUNWAY_SKILL,
                 crate::skills::COS_SKILL,
                 crate::skills::DEPLOY_SKILL,
                 crate::skills::MAIL_SKILL,

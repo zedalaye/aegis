@@ -586,7 +586,7 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// examples and nothing else: [`catalog`] reads a missing directory as an empty
 /// one.
 ///
-/// Fifteen runbooks now, in five groups. Two are the halves of the mode as it
+/// Eighteen runbooks now, in six groups. Two are the halves of the mode as it
 /// was: the standing rule that nothing irreversible goes out unreviewed, and
 /// the loop a Chief of Staff runs. Four are the world's (PLAN 7.2) — draft one,
 /// perceive a delta, verify against the oracle, check the constitution. Three
@@ -594,9 +594,11 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 /// draft a deploy, triage an alert. Three are client intake (pack 2) — turn a
 /// message into a ticket, recap a thread, draft a reply nobody has sent. Three
 /// are the watch (pack 3) — sweep what arrived into entries, digest what is new
-/// since the last digest, and say what one entry would mean here.
+/// since the last digest, and say what one entry would mean here. Three are
+/// budget and portfolio (pack 4) — say what is held, say how long it lasts, and
+/// say what crossed a line somebody set.
 ///
-/// Those last three groups are what a **domain pack** is, and the reason they
+/// Those last four groups are what a **domain pack** is, and the reason they
 /// are here rather than anywhere else in this tree. Phase 19's rule is *domain
 /// packs as skills, not runtime*: a domain reaches the harness as three files in
 /// a directory, and `agent/turn.rs`, the policy matrix and the tool registry do
@@ -623,6 +625,14 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 ///   *nothing happened* has to be a cheap and complete answer, or a watch on a
 ///   clock manufactures news the way a triage with no *no ask* manufactures
 ///   work.
+/// * **Budget** declares no command for a third reason, and this one is about
+///   the tool rather than the input or the hour: § 7.3 says *not a broker*, and
+///   a program on PATH is a calculator right up until it is `ccxt`. It is also
+///   the first pack whose material is arithmetic, where a wrong answer is
+///   formatted exactly like a right one — so a figure is copied from a line
+///   somebody else wrote or shown as a sum a reader can redo, and a total that
+///   does not reconcile is `needs_you` rather than a rounded line. Its stop is
+///   delivery's again, one item further down PLAN 7.4's list: the order.
 ///
 /// [`DRAFT_SKILL`] is the one that writes `world/`, and it is not the
 /// `world.amend` PLAN 7.2 refuses: that sentence is about *specialists*, and
@@ -706,7 +716,7 @@ const SEEDED_FILE: &str = ".seeded";
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
-const SEEDED: [(&str, &str); 15] = [
+const SEEDED: [(&str, &str); 18] = [
     (REVIEW_SKILL, REVIEW_SEED),
     (COS_SKILL, COS_SEED),
     (DRAFT_SKILL, DRAFT_SEED),
@@ -722,6 +732,9 @@ const SEEDED: [(&str, &str); 15] = [
     (WATCH_SWEEP_SKILL, WATCH_SWEEP_SEED),
     (WATCH_DIGEST_SKILL, WATCH_DIGEST_SEED),
     (WATCH_IMPACT_SKILL, WATCH_IMPACT_SEED),
+    (BUDGET_POSITION_SKILL, BUDGET_POSITION_SEED),
+    (BUDGET_RUNWAY_SKILL, BUDGET_RUNWAY_SEED),
+    (BUDGET_ALERT_SKILL, BUDGET_ALERT_SEED),
 ];
 
 /// The standing rule of the whole mode, as a runbook.
@@ -2325,6 +2338,360 @@ the person or by the round limit that ends a turn, is a comparison you did not
 make — leave that line out and return `status: needs_you`.
 "#;
 
+/// What is held and what is owed (PLAN 7.3, Phase 19, pack 4).
+pub const BUDGET_POSITION_SKILL: &str = "budget.position";
+
+/// `budget.position`, the status file § 7.3 asks this pack for.
+///
+/// The first runbook in the library whose material is **arithmetic** rather
+/// than prose, which is a different failure and a worse one. A model asked to
+/// total a column returns a plausible number, formatted beautifully, and
+/// nothing about the artefact looks wrong — a wrong review argues with you, a
+/// wrong total does not.
+///
+/// So the rule is that a figure is either **copied** from a line somebody else
+/// wrote or **shown** as an arithmetic a reader can redo, and there is no third
+/// kind. That is also the answer to the obvious objection: this pack declares
+/// no `shell_exec`, so nothing here runs a calculator. It does not need one. A
+/// model that shows its addends and reconciles them against the statement's own
+/// stated total is caught when it adds wrong; one that reports only the total
+/// never is. Where the arithmetic should be done by a program, that program is
+/// a connector the operator installs (Phase 18), and it replaces where the
+/// number is computed rather than the procedure (PLAN 7.6).
+///
+/// The other half is staleness, which is the failure specific to money: a
+/// figure with no date is not a figure, and a position is only as current as
+/// its oldest input. So the file leads with the stalest as-of date among its
+/// sources rather than with today's.
+const BUDGET_POSITION_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# budget.position
+
+## When to use it
+
+When exports have arrived and somebody needs one page saying what is held and
+what is owed. One run turns them into one position file.
+
+The exports are files you put there: a bank CSV, a broker statement, an invoice
+ledger, a spreadsheet saved as text. Nothing here connects to an account, and
+nothing here places an order — this is surveillance, and Aegis is not a broker.
+
+## Inputs required and tools it will call
+
+- The folder the exports are in — `.aegis/briefs/` unless you were given
+  another. `fs_list` it first, so the position covers what is on disk.
+- Which currency the position is written in, if more than one appears. Without
+  one, keep the currencies apart rather than picking.
+
+Calls `fs_list`, `fs_read` for the exports, and `fs_write` for the position
+file. Nothing here runs a program, reaches an account, or trades.
+
+## Steps
+
+1. `fs_list` the folder and `fs_read` each export. For each, find its **as-of
+   date** — the statement date, the export timestamp, the last row's date — and
+   write it down before reading a figure out of it. An export with no date in it
+   is dated *unknown*, which is a fact about the position and not a gap to fill
+   with the file's modification time.
+2. Copy figures; do not restate them. Every line of the position carries the
+   number as the export wrote it, the export's file name, and where in it —
+   an account, a row, a label. A figure that cannot name where it came from does
+   not go in the file.
+3. Two exports usually overlap, and the same transaction in two files is one
+   transaction. Match on the three things that identify it — account, date,
+   amount — and where two lines match on all three, take one and say which file
+   you took it from. Where they nearly match, take neither and list it as a
+   discrepancy.
+4. Do the arithmetic **in the open**. A total appears with its addends beside
+   it, so a reader can redo it. Then reconcile: if the export states its own
+   total, compare yours to it and put both in the file. If they differ, the
+   difference goes in the file as a number, and this run returns `needs_you`.
+   Do not round the difference away and do not adjust a line to make it close.
+5. Do not add across currencies unless you were given a rate and the date of
+   that rate, and then say both on the line where you used them. Two currencies
+   summed at a rate nobody named is a number that looks like money and is not.
+6. Separate what is **held** from what is **owed** and from what is
+   **committed** — money that exists, money somebody else is owed, and money
+   already spoken for by a standing commitment. Anything you cannot place in one
+   of the three goes in a fourth list called *unplaced*, with its source.
+7. `fs_write` `.aegis/artefacts/position-<date>.md`. Its first line is the
+   **stalest** as-of date among the sources, not today's, because that is how
+   current the position actually is. Then the four lists, then the
+   reconciliation, then the exports by file name and date.
+8. Stop. Do not act on any of it, do not propose a trade, do not cancel
+   anything, and do not tell anybody what to buy.
+
+## How to validate
+
+Every figure names the export and the place in it that it came from. Every total
+shows its addends. Every reconciliation shows both numbers and their difference.
+No figure appears without a date. Nothing is summed across currencies without a
+named rate and the date of that rate. The first line of the file is the oldest
+as-of date in it.
+
+## What to return
+
+`skill_return` with `status: done`, the position file in `artefacts`, the export
+paths in `evidence`, and a summary of at most five lines: what is held, what is
+owed, as of when, and what did not reconcile.
+
+`status: needs_you` whenever a total does not reconcile, whenever two exports
+disagree about the same transaction, and whenever an export carries no date. All
+three are the same fact — the position rests on something that has to be looked
+at by a person — and a position file that quietly picked one side of any of them
+is worse than one that stops.
+
+## What requires approval
+
+One `fs_write` inside the workspace. There is no tool here that reaches an
+account, moves money, or places an order, and a connector installed later does
+not change that: a read-only connector replaces where the figures come from, and
+buying, selling and paying stay behind a human gate (`PLAN.md` § 7.4). This
+runbook has no later version that ends in an order.
+
+## What to do if the source is missing
+
+If the folder is not there or holds no exports, return `status: blocked` and say
+which folder you listed. Do not write a position from what the session said the
+balance was: a number nobody exported is not a number, and money is the one
+place where a confident guess is indistinguishable from a fact.
+
+A read you were refused, by the person or by the round limit that ends a turn,
+leaves an account out of the position. Name it in `open_questions`, leave its
+lines out rather than estimating them, and return `status: needs_you`. A
+position missing an account is useful; a position with an invented one is not.
+"#;
+
+/// How long the money lasts (PLAN 7.3, Phase 19, pack 4).
+pub const BUDGET_RUNWAY_SKILL: &str = "budget.runway";
+
+/// `budget.runway`, the question the status file exists to answer.
+///
+/// Two failures, and both are arithmetic wearing prose. The first is the
+/// annualised commitment counted as a monthly one, or missed because it only
+/// appears once in a year of exports — a subscription billed in March is
+/// invisible in April and is a twelfth of itself every month. The second is the
+/// point estimate: "eleven months" from inputs that support "nine to fourteen"
+/// is a number somebody will plan against, and the honest artefact is the range
+/// plus what would narrow it.
+///
+/// It also refuses to pick its own input, as [`REPLY_SEED`] and
+/// [`WATCH_IMPACT_SEED`] do. A runway computed from whatever position file was
+/// most recently written is a runway for the wrong month, and it will read
+/// perfectly.
+const BUDGET_RUNWAY_SEED: &str = r#"---
+version: 1
+tools: fs_read, fs_write
+---
+
+# budget.runway
+
+## When to use it
+
+When somebody asks how long the money lasts. It reads a position file and the
+standing commitments and answers in months, with the arithmetic shown.
+
+It answers a question; it does not decide anything about it. What to cut, what
+to sell and what to take on are decisions, and they are somebody's.
+
+## Inputs required and tools it will call
+
+- The position file, as a path — one `budget.position` wrote. If you were not
+  given one, that is the end of the run. A runway computed from whatever was
+  written most recently is a runway for the wrong month, and it will read
+  perfectly.
+- The standing commitments: `.aegis/decisions/DECISIONS.md`, a contracts file, a
+  subscriptions list — whatever this workspace keeps them in. And expected
+  income, if any is written down anywhere.
+
+Calls `fs_read` for those and `fs_write` for the note. It runs nothing, reaches
+no account, and moves no money.
+
+## Steps
+
+1. `fs_read` the position file, and read its first line: that is how current
+   this answer can be. A runway computed on a three-month-old position is a
+   three-month-old runway, and it says so in its own first line.
+2. List what goes out, one line each, with **how often** beside it and the file
+   that says so. Monthly, quarterly, annual, one-off. Never a rate you inferred
+   from a single charge: one appearance of a bill is one appearance, and an
+   annual subscription billed in March is invisible for eleven months.
+3. Put everything on the same period before adding anything — an annual figure
+   divided by twelve, and the division shown. This is the step where a runway
+   goes wrong, and it goes wrong quietly.
+4. Do the same for what comes in, and count only what a file supports. Work that
+   is likely, an invoice that will probably be paid, a client who usually
+   renews: none of those is income, and each belongs in a line at the end saying
+   what would change the answer.
+5. Divide, and show the division: what is held, over what goes out net each
+   month, is how many months. Write the numbers out so a reader can redo it.
+6. Give a **range**, not a point. The low end assumes nothing uncertain arrives;
+   the high end assumes all of it does. Say which assumption each end rests on.
+   A single number is what somebody plans against, and the inputs almost never
+   support one.
+7. `fs_write` `.aegis/artefacts/runway-<date>.md`: how current the position is,
+   what goes out, what comes in, the division, the range, and what would narrow
+   it. End with the three things that would change the answer most.
+8. Stop. Do not recommend a cut, do not propose a sale, and do not rank the
+   outgoings by what you would drop first. That is the decision this note exists
+   to inform.
+
+## How to validate
+
+Every outgoing names its file and its frequency. Every period conversion shows
+its division. Nothing counted as income lacks a file behind it. The answer is a
+range, and each end names the assumption it rests on. The note's first line says
+how current the position under it is.
+
+## What to return
+
+`skill_return` with `status: done`, the note in `artefacts`, the position file
+and the commitment files in `evidence`, and a summary of at most five lines: the
+range in months, as of when, and what would narrow it.
+
+`status: needs_you` when the position is older than the period you are dividing
+by — a runway from a position older than a month is arithmetic on something that
+has already changed — and when a commitment is named nowhere in writing. Say
+which in `open_questions`.
+
+## What requires approval
+
+One `fs_write` inside the workspace. Nothing here spends, cancels, sells or
+transfers, and no later version of it does: money leaving is behind a human gate
+(`PLAN.md` § 7.4), and there is no tool in this build that could.
+
+## What to do if the source is missing
+
+No position file, no run: return `status: blocked` and ask for the path. Do not
+build one on the way — that is `budget.position`, it has its own reconciliation,
+and a runway resting on figures nobody reconciled is a confident number with
+nothing under it.
+
+If the commitments are not written down anywhere, say so and answer only from
+what is: a workspace that has not recorded what it pays every month is a fact
+worth the first line of the note. A read you were refused, by the person or by
+the round limit that ends a turn, is an outgoing you did not count — name it,
+leave it out, and return `status: needs_you`, because the runway you would have
+written is too long rather than too short.
+"#;
+
+/// A line was crossed (PLAN 7.3, Phase 19, pack 4).
+pub const BUDGET_ALERT_SKILL: &str = "budget.alert";
+
+/// `budget.alert`, the surveillance half, and the pack's stop.
+///
+/// Delivery stops before the deploy and intake before the send; this stops
+/// before the **order**, which is on the same list (PLAN 7.4) and is the one
+/// this pack is most often one sentence away from. § 7.3 is blunt about it —
+/// *read-only connectors, a status file, alerts. Not a broker* — and the reason
+/// the sentence has to be in the runbook rather than only in the plan is that a
+/// number crossing a line reads as an instruction. An alert that ends in
+/// *consider reducing the position* is an alert that has traded, slowly.
+///
+/// Its own rule is that a threshold is somebody else's. A line the run picked
+/// while writing the note is a line drawn around what happened, which is how a
+/// watch on a portfolio ends up reporting every move as significant.
+const BUDGET_ALERT_SEED: &str = r#"---
+version: 1
+tools: fs_list, fs_read, fs_write
+---
+
+# budget.alert
+
+## When to use it
+
+When a figure has crossed a line somebody set. It says what moved, against what
+threshold and since when. It proposes nothing.
+
+One run covers one threshold. The threshold is one somebody wrote down before
+the move — not one you draw now around what happened.
+
+## Inputs required and tools it will call
+
+- The threshold, and where it is written: a line in `.aegis/decisions/DECISIONS.md`,
+  a limits file, a note from the human. If no file names it, this runbook does
+  not apply, and saying so is the run.
+- The figure, from a position file or the export it came from — the same figure
+  the threshold was written about, not a related one.
+
+Calls `fs_list` and `fs_read` for those and `fs_write` for the note. It runs
+nothing, reaches no account, and places no order.
+
+## Steps
+
+1. `fs_read` the threshold where it is written, and quote it, with the date it
+   was written. A threshold you cannot quote is a threshold nobody set.
+2. `fs_read` the figure and its as-of date. Check it is the figure the threshold
+   names — the same account, the same holding, the same currency. A threshold on
+   one thing compared against another is the most convincing wrong alert there
+   is.
+3. Say by how much, and since when: the value now, the value at the threshold,
+   the difference, and the last date the figure was on the other side of it.
+   Show the subtraction.
+4. Say what it is **not**. A number that crossed a line is not a cause: a
+   currency move, a fee, a transfer between two accounts you are watching
+   separately, a statement that arrived late. Name the ones you could rule out
+   from the files and the ones you could not.
+5. If crossing the line is what the file said would happen when nothing was
+   wrong — a quarterly bill, an annual renewal, a known drawdown — say so in the
+   first line. Most crossings are that.
+6. `fs_write` `.aegis/artefacts/alert-<figure>-<date>.md`: the quoted threshold
+   and its date, the figure and its as-of date, the difference with its
+   arithmetic, what it is not, and the one question a person would need answered
+   to decide. One question, not a list.
+7. Stop. **No proposal.** Not *consider reducing*, not *it may be worth
+   reviewing*, not an ordering of options. Aegis has no tool that buys, sells,
+   transfers or cancels, this runbook has no later version that ends in one, and
+   an alert that ends in a recommendation is a trade being placed one sentence
+   at a time.
+
+## How to validate
+
+The threshold in the note is a quotation with the date it was written. The
+figure carries its as-of date and is the one the threshold names. The
+subtraction is shown. There is no sentence in the note recommending an action,
+and there is exactly one question at the end of it.
+
+## What to return
+
+`skill_return` with `status: done`, the note in `artefacts`, the threshold file
+and the figure's source in `evidence`, and a summary of at most five lines: what
+crossed what, by how much, since when, and the one question.
+
+`status: needs_you` when acting on it would be irreversible and time matters —
+which is most of why a threshold was set — with the question in `open_questions`
+and still no recommendation attached to it. The human decides and the human
+acts; this run has done its whole job by being read in time.
+
+`status: blocked` when no file names the threshold. Do not infer one from the
+history of the figure. A line drawn around what already happened turns every
+move into a crossing, and a watch that alerts on everything is a watch nobody
+reads.
+
+## What requires approval
+
+One `fs_write` inside the workspace. Nothing else, and nothing else is possible:
+there is no tool in this build that trades, pays or transfers, and a read-only
+connector installed later replaces where the figure comes from rather than what
+may be done with it (`PLAN.md` § 7.6). Money moving is a human act, every time
+(§ 7.4).
+
+## What to do if the source is missing
+
+If the figure's source is not there, return `status: blocked` and name the path.
+Do not alert on a number from the conversation: an alert is the artefact people
+act on fastest and check least, which is exactly why it may not rest on
+something nobody can go and read.
+
+If you could read the threshold but not the figure, say so and return
+`status: needs_you` — a threshold with no current figure beside it is a reason
+to go and look, and that is a sentence worth writing. The other way round is
+`blocked`.
+"#;
+
 /// `inbox.triage`, seeded into a workspace by the shared-files convention.
 ///
 /// The stub PLAN 7.3 asks Phase 13 for: file in, status and artefact out. It
@@ -2449,7 +2816,7 @@ mod tests {
     }
 
     /// Every runbook of PLAN 7.3's Phase 19, in the order the packs landed.
-    const PACKS: [&str; 9] = [
+    const PACKS: [&str; 12] = [
         REVIEW_DIFF_SKILL,
         DEPLOY_SKILL,
         ALERT_SKILL,
@@ -2459,6 +2826,9 @@ mod tests {
         WATCH_SWEEP_SKILL,
         WATCH_DIGEST_SKILL,
         WATCH_IMPACT_SKILL,
+        BUDGET_POSITION_SKILL,
+        BUDGET_RUNWAY_SKILL,
+        BUDGET_ALERT_SKILL,
     ];
 
     /// The parsed runbook a seeded name ships with.
@@ -2642,6 +3012,43 @@ mod tests {
             .is_err(),
             "an écart is not something a routine signs for"
         );
+    }
+
+    /// Budget (PLAN 7.3, Phase 19, pack 4) could not reach a broker if it tried.
+    ///
+    /// § 7.3 gives this pack in five words — *read-only connectors, a status
+    /// file, alerts. Not a broker* — and the last three are the ones that need
+    /// enforcing, because they are the ones a convenient edit undoes. So the
+    /// assertion is stronger than intake's: not "no `shell_exec`" but **these
+    /// three tools and no others**. Reading files, listing them, writing one
+    /// back is the whole perimeter of surveillance, and everything outside it is
+    /// something this pack has no use for and a portfolio identity should not
+    /// hold — a shell (a program on PATH is a calculator right up until it is a
+    /// broker's client), a screen, another identity's attention, a connector
+    /// call nobody watched.
+    ///
+    /// Which leaves the arithmetic to be done by the model, and that is the
+    /// point rather than an oversight: the runbooks answer it by showing the
+    /// addends and reconciling against the source's own stated total, so an
+    /// error is *visible*. Where the sum should be computed by a program, that
+    /// program is a connector the operator installs, replacing where the number
+    /// comes from and not the procedure (PLAN 7.6).
+    #[test]
+    fn the_budget_pack_could_not_reach_a_broker_if_it_tried() {
+        let allowed = [tool::FS_LIST, tool::FS_READ, tool::FS_WRITE];
+
+        for name in [
+            BUDGET_POSITION_SKILL,
+            BUDGET_RUNWAY_SKILL,
+            BUDGET_ALERT_SKILL,
+        ] {
+            for declared in seeded(name).tools {
+                assert!(
+                    allowed.contains(&declared.as_str()),
+                    "`{name}` declares `{declared}`; surveillance reads files and writes one back"
+                );
+            }
+        }
     }
 
     #[test]

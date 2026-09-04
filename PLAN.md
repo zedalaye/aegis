@@ -1580,7 +1580,57 @@ the constitution would have to change — that is what a watch is *for* — and 
 an écart, it goes to a person, and the refusal is at the door when the routine is saved rather
 than at four in the morning. The test asserts both halves.
 
-Packs 4–6 are not started, and three pleasant packs are not three reasons to start a fourth.
+*Pack 4 landed as:* three more `SKILL.md` files — `budget.position`, `budget.runway` and
+`budget.alert` — their three entries in `skills::SEEDED`, and the documentation. Fourth boring
+diff, and by now that is the claim rather than a remark: four domains have reached this harness
+and `agent/turn.rs` has not been opened for any of them.
+
+**This is the first pack whose material is arithmetic, and that is a different failure from the
+first three.** A wrong review argues with you; a wrong total does not. A model asked to add a
+column returns a plausible number, formatted exactly like a right one, and nothing about the
+artefact looks off. So the rule across all three runbooks is that a figure is either **copied**
+from a line somebody else wrote — naming the export and the place in it — or **shown** as an
+arithmetic a reader can redo, and there is no third kind. Totals appear with their addends beside
+them, and every total that has a stated total to check against is reconciled against it; a
+difference is written down as a number and returns `needs_you` rather than being rounded away.
+
+**The obvious objection is the design.** The pack declares no `shell_exec`, so nothing here runs a
+calculator — and § 7.3's reason is blunter than convenience: *not a broker*. A program on PATH is
+a calculator right up until it is `ccxt`, and the identity holding a portfolio is the last one to
+give a shell to. Which leaves the arithmetic to the model, deliberately: a run that shows its
+addends and reconciles against the statement's own total is **caught** when it adds wrong, and one
+that reports only the total never is. Where the sum should be computed by a program, that program
+is a read-only connector the operator installs — replacing where the number comes from, not the
+procedure (§ 7.6). `the_budget_pack_could_not_reach_a_broker_if_it_tried` asserts the perimeter as
+a set rather than as a prohibition: `fs_list`, `fs_read`, `fs_write`, and nothing else.
+
+**Staleness is the failure specific to money**, and it gets structure rather than a warning. A
+figure with no date is not a figure; a position is only as current as its oldest input; so
+`position-<date>.md` opens with the **stalest** as-of date among its sources rather than with
+today's, and `budget.runway` returns `needs_you` when the position it is dividing is older than
+the period it is dividing by.
+
+**Three runbooks, because watching money fails three ways.** `budget.position` is the status file
+§ 7.3 asks for: exports in, one page out, overlapping exports de-duplicated on the triple that
+identifies a transaction (account, date, amount), currencies never added without a named rate and
+that rate's date, and four lists — held, owed, committed, and *unplaced* for whatever fits none of
+them. `budget.runway` is the question the status file exists to answer, and its two failures are
+both arithmetic wearing prose: the annual commitment counted monthly (or missed, because a
+subscription billed in March is invisible in April), and the point estimate — "eleven months" from
+inputs that support nine to fourteen is a number somebody plans against, so the answer is a range
+with the assumption at each end named. `budget.alert` is the surveillance output and the pack's
+stop.
+
+**The stop is delivery's, one item further down § 7.4's list: the order.** A number crossing a line
+reads as an instruction, which is why the sentence has to be in the runbook and not only in this
+plan — an alert that ends in *consider reducing the position* is an alert that has traded, slowly.
+So the note ends with exactly **one question** and no proposal, no ordering of options and no
+ranking of what to cut. Its other rule is that a threshold is somebody else's: it has to be
+quotable, with the date it was written, from a file that predates the move. A line drawn now around
+what already happened turns every move into a crossing, and a watch that alerts on everything is a
+watch nobody reads.
+
+Packs 5 and 6 are not started.
 
 § 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
 after Phase 13. § 7.13 (skill promotion) may run after Phase 17. § 7.14 (cabinet
