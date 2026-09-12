@@ -546,16 +546,16 @@ async fn stream_gemini(
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    if !thought && !text.is_empty() {
-                        if tx
+                    if !thought
+                        && !text.is_empty()
+                        && tx
                             .send(ModelEvent::TextDelta {
                                 text: text.to_owned(),
                             })
                             .await
                             .is_err()
-                        {
-                            return;
-                        }
+                    {
+                        return;
                     }
                 }
 
