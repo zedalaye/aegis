@@ -151,6 +151,7 @@ impl App {
             &transcript::Context {
                 agent,
                 workspace: Some(&self.workspace),
+                exec_host: None,
                 memories: None,
                 skills: None,
                 world: None,
@@ -209,6 +210,7 @@ impl App {
             session_id: session_id.to_owned(),
             turn_id: turn_id.to_owned(),
             workspace: Some(self.workspace.clone()),
+            exec_host: None,
         };
         let reason = Turn {
             agent,
@@ -487,6 +489,7 @@ fn a_session_written_before_identities_is_the_assistant_it_always_was() {
         &transcript::Context {
             agent: &resolved,
             workspace: Some(&workspace),
+            exec_host: None,
             memories: None,
             skills: None,
             world: None,

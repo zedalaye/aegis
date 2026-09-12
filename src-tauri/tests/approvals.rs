@@ -204,6 +204,7 @@ impl App {
             session_id: self.session_id.clone(),
             turn_id: turn_id.to_owned(),
             workspace: Some(self.workspace.clone()),
+            exec_host: None,
         }
     }
 

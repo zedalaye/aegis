@@ -174,7 +174,10 @@ on another). Keys stay in the OS keyring / env, never in the WebView.
 A CoS without (1) recites. Do not build (2) first.
 
 Chrome polish is `PLAN.md` § 7.10. Workspace versioning (`git init` on scaffold,
-never an auto-commit) is § 7.11. Execution host (WSL) is § 7.12. Skill promotion
+never an auto-commit) is § 7.11. Execution host (WSL) is § 7.12, and it has
+landed: opt-in per project, nothing infers it from a `\\wsl$\` folder, `fs_*`
+is unchanged, and a distro that cannot take the command refuses rather than
+falling back to this computer. Skill promotion
 (a proposal file, then apply; writing is still not granting) is § 7.13. Cabinet
 founding (a founder skill writes a roster proposal; apply is the grant; no
 wizard, no seeded identities) is § 7.14. A read-only workspace explorer

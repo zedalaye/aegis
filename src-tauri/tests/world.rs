@@ -153,6 +153,7 @@ impl App {
             &transcript::Context {
                 agent: &agent,
                 workspace: Some(&self.workspace),
+                exec_host: None,
                 memories: None,
                 skills: None,
                 world: world.as_deref(),
@@ -203,6 +204,7 @@ impl App {
             session_id: self.session_id.clone(),
             turn_id: turn_id.to_owned(),
             workspace: Some(self.workspace.clone()),
+            exec_host: None,
         };
         // A brief is what makes a run a specialist's, and it is a fact about the
         // *run* rather than about the identity: the same built-in assistant is

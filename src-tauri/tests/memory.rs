@@ -161,6 +161,7 @@ impl App {
             &transcript::Context {
                 agent,
                 workspace: Some(&self.workspace),
+                exec_host: None,
                 memories: block.as_deref(),
                 skills: None,
                 world: None,
@@ -254,6 +255,7 @@ impl App {
             session_id: session_id.to_owned(),
             turn_id: turn_id.to_owned(),
             workspace: Some(self.workspace.clone()),
+            exec_host: None,
         };
         let sink = Recorder::default();
 

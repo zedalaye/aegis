@@ -60,6 +60,7 @@ use crate::agent::{StopReason, TurnRegistry};
 use crate::approval::ApprovalRegistry;
 use crate::audit::AuditLog;
 use crate::commands::session::WindowSink;
+use crate::exec_host::ExecHost;
 use crate::handoff::{self, bus, Brief};
 use crate::mcp::Connectors;
 use crate::policy::GrantStore;
@@ -135,17 +136,30 @@ pub struct Delegating {
     from_session_id: String,
     /// That session's workspace root, or `None` when the folder is gone.
     workspace: Option<PathBuf>,
+    /// Where the project's commands run (PLAN 7.12).
+    ///
+    /// Carried with the workspace, because a specialist works in the same
+    /// folder on the same machine: one workspace, one team, one toolchain. A
+    /// delegated run that spawned on Windows while the session that briefed it
+    /// ran in a distribution would be two different projects.
+    exec_host: Option<ExecHost>,
     /// The session opened for each brief, keyed on its place in the fan-out.
     sessions: Mutex<HashMap<usize, String>>,
 }
 
 impl Delegating {
     /// A record of one session's delegations, with none yet made.
-    pub fn new(project_id: String, from_session_id: String, workspace: Option<PathBuf>) -> Self {
+    pub fn new(
+        project_id: String,
+        from_session_id: String,
+        workspace: Option<PathBuf>,
+        exec_host: Option<ExecHost>,
+    ) -> Self {
         Self {
             project_id,
             from_session_id,
             workspace,
+            exec_host,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -265,6 +279,7 @@ impl Delegating {
             session_id: session_id.clone(),
             turn_id: turn_id.clone(),
             workspace: self.workspace.clone(),
+            exec_host: self.exec_host.clone(),
         };
 
         let reason = Turn {
@@ -370,10 +385,11 @@ impl<R: Runtime> AppRunner<R> {
         project_id: String,
         from_session_id: String,
         workspace: Option<PathBuf>,
+        exec_host: Option<ExecHost>,
     ) -> Self {
         Self {
             app,
-            inner: Delegating::new(project_id, from_session_id, workspace),
+            inner: Delegating::new(project_id, from_session_id, workspace, exec_host),
         }
     }
 }

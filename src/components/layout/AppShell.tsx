@@ -28,6 +28,7 @@ import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachAuditEvents } from "../../state/audit";
 import { attachBoardEvents, useBoard } from "../../state/board";
+import { useHosts } from "../../state/hosts";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 import { attachSettingsEvents, useSettings } from "../../state/settings";
 import { useSkills } from "../../state/skills";
@@ -75,12 +76,14 @@ function ErrorBanner() {
   const approvalError = useApprovals((s) => s.error);
   const settingsError = useSettings((s) => s.error);
   const workspaceError = useWorkspace((s) => s.error);
+  const hostError = useHosts((s) => s.error);
   const agentError = useAgents((s) => s.error);
   const dismissProject = useProjects((s) => s.dismissError);
   const dismissSession = useSessions((s) => s.dismissError);
   const dismissApproval = useApprovals((s) => s.dismissError);
   const dismissSettings = useSettings((s) => s.dismissError);
   const dismissWorkspace = useWorkspace((s) => s.dismissError);
+  const dismissHosts = useHosts((s) => s.dismissError);
   const dismissAgents = useAgents((s) => s.dismissError);
 
   // The most recent one wins. Stacking banners pushes the thing the user was
@@ -92,6 +95,7 @@ function ErrorBanner() {
     approvalError ??
     settingsError ??
     agentError ??
+    hostError ??
     workspaceError ??
     sessionError ??
     projectError;
@@ -117,6 +121,7 @@ function ErrorBanner() {
           dismissApproval();
           dismissSettings();
           dismissAgents();
+          dismissHosts();
           dismissWorkspace();
           dismissSession();
           dismissProject();

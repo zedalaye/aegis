@@ -26,6 +26,7 @@ use crate::audit::{AuditEntry, AuditLog};
 use crate::board::trace::RunTrace;
 use crate::board::{self, trace};
 use crate::error::{AppError, AppResult};
+use crate::exec_host::ExecHost;
 use crate::mcp::{ConnectorView, Connectors};
 use crate::oauth;
 use crate::policy::GrantStore;
@@ -691,6 +692,31 @@ impl AppState {
             .find(|project| project.id == project_id)
             .filter(|project| project.workspace_exists)
             .map(|project| PathBuf::from(project.workspace_path))
+    }
+
+    /// Where a project's commands run (PLAN 7.12).
+    ///
+    /// `None` is this process, which is a project with no host and also a
+    /// project id nothing answers to — the second because there is nothing
+    /// useful to do with the distinction here: a turn with no project has no
+    /// workspace either, and every tool call is already a hard denial.
+    pub fn exec_host_for_project(&self, project_id: &str) -> Option<ExecHost> {
+        self.store
+            .list()
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .and_then(|project| project.exec_host)
+    }
+
+    /// Where a session's commands run (PLAN 7.12).
+    ///
+    /// The session-shaped half of [`AppState::exec_host_for_project`]. Sessions
+    /// inherit the host and cannot override it: which operating system the
+    /// toolchain lives in is a fact about the folder, not about a conversation
+    /// held over it.
+    pub fn exec_host_of(&self, session_id: &str) -> Option<ExecHost> {
+        let project_id = self.sessions.project_of(session_id).ok()?;
+        self.exec_host_for_project(&project_id)
     }
 
     /// One identity's memories, most recently touched first.

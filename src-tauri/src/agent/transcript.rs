@@ -98,6 +98,16 @@ pub struct Context<'a> {
     pub agent: &'a Agent,
     /// The session's workspace root, or `None` when the folder is gone.
     pub workspace: Option<&'a Path>,
+    /// Where this project's commands run (PLAN 7.12), already rendered, or
+    /// `None` when they run on this computer.
+    ///
+    /// It sits with the workspace rather than with the slow-changing blocks
+    /// below, and directly after it, because it is the same kind of fact and
+    /// only makes sense beside it: the folder is where the file tools work, and
+    /// this is the machine a command in that folder runs on. A model that has
+    /// not been told will reach for `pnpm.cmd` and pass a Windows path as an
+    /// argument — two rounds spent discovering one sentence.
+    pub exec_host: Option<&'a str>,
     /// What this identity has learned (PLAN 7.3, Phase 14), or `None` when it
     /// has learned nothing yet.
     pub memories: Option<&'a str>,
@@ -208,6 +218,16 @@ pub fn system_message(ctx: &Context<'_>) -> String {
             "\n\nThis session has no workspace folder right now, so no tool can \
              run. Say so if the user asks for anything that would need one.",
         ),
+    }
+
+    // Immediately after, because it qualifies what was just said: the folder
+    // above is where the file tools work, and this is where a command over it
+    // runs (PLAN 7.12). Absent for every project on this computer, which is
+    // every project that has not been given a host — so a default install's
+    // system message is byte for byte the one before this slice.
+    if let Some(host) = ctx.exec_host {
+        prompt.push_str("\n\n");
+        prompt.push_str(host);
     }
 
     prompt.push_str(&format!(
@@ -406,6 +426,7 @@ mod tests {
         Context {
             agent,
             workspace,
+            exec_host: None,
             memories: None,
             skills: None,
             world: None,

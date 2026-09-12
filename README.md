@@ -512,6 +512,68 @@ tool call.
 
 ---
 
+## Where commands run
+
+By default a command runs **here** — in this process, on this operating system. `shell_exec`
+looks the program up on your PATH and spawns it, and on Windows that is the Windows toolchain.
+
+That is the wrong toolchain for one common arrangement: a Windows machine whose software projects
+live in a WSL distribution. Opening the code folder already works — `fs_read`, `fs_write` and
+`fs_list` see those files over `\\wsl$\…`, or under `C:\` which WSL mounts at `/mnt/c` — but the
+`git`, the `node`, the `cargo` and the test runner the repository is actually built with are in
+the distribution, not on Windows. Running `pnpm test` on the Windows side of that folder is not
+the same command.
+
+So a project can name an **execution host**. The picker is *Commands run in* in the sidebar, and
+it lists this computer plus whatever `wsl -l -q` reports. It is Windows-only, and the list is
+asked for each time you open a project rather than remembered, because you install distributions
+in a terminal and this window is never told.
+
+**Nothing is inferred.** A project has no host until you pick one. Opening a folder under
+`\\wsl$\` does not set one — picking a folder is picking a folder — and a finance or watch
+workspace never gets a distribution. This repository's own default is unchanged.
+
+Once a project has one, exactly one thing changes:
+
+- `shell_exec` runs `wsl -d <distro> --cd <dir> --exec <program> <args>`. There is still no
+  shell: `--exec` is what keeps the arguments a vector, so pipes, `&&`, globbing and variable
+  expansion are as absent as they were before.
+- PATH, HOME and the user are the distribution's. `pnpm` is the Linux binary, not `pnpm.cmd`;
+  PATHEXT and the `.cmd` shims apply only when the host is this Windows process. Nothing is run
+  as root, and `-u root` is not passed.
+- The approval dialog names the distribution, shows the directory **in it** the command will
+  start in, and keeps the Windows spelling of the same folder beside it. *Allow for this session*
+  is still keyed on the program — `git` is `git` — and never on `wsl.exe`, which is not a program
+  you are ever asked about. The model cannot call `wsl`: wrapping is the runtime's, the same way
+  launching a `.cmd` shim through `cmd.exe` is.
+- **Stop** and the two-minute deadline end the Linux process, not only the relay that launched
+  it. A `cargo build` left running in the distribution after you pressed Stop would be a Stop
+  button that lied.
+- The model is told, in the system message, which distribution it is in and what the workspace's
+  path is from inside it — otherwise its first move is to pass a `C:\` path as an argument.
+
+**The file tools do not move.** Containment is still the Windows-canonical workspace, `fs_read`
+of a file in that folder still goes through Windows, and a capture is still this display. There
+is no second filesystem here, only a second way to spell the same one.
+
+**It never falls back.** A distribution that is not installed, a WSL service that will not answer,
+or a folder the distribution has no path for fails with `E_EXEC_HOST` before anything is spawned
+— it does not quietly run the command on Windows instead, which would be the wrong operating
+system reporting success. The working directory is probed inside the distribution first, because
+`wsl --cd` answers a directory it cannot find by starting in `/` and saying nothing: a command
+approved for one folder must not run in another.
+
+Clearing the host puts the project back on this computer. Sessions inherit whatever the project
+says and cannot override it — which operating system the toolchain lives in is a fact about the
+folder, not about a conversation held over it. Routines and delegated runs inherit it too, so an
+unattended run at 03:00 uses the same toolchain as the one you watched.
+
+What this is **not**: a second Aegis, a second agent loop, a Linux VM this app manages, or a way
+to run Aegis itself under WSLg. It is where `shell_exec` lands, and nothing else. `docker` inside
+the distribution is an ordinary `shell_exec` once the host is set. `PLAN.md` § 7.12.
+
+---
+
 ## Shared workspace files
 
 Aegis' own data is above. This is the other half: files that live in **your** workspace folder,
@@ -2202,6 +2264,17 @@ Read this before pointing Aegis at anything you care about.
   through `PATHEXT` with the same function `shell_exec` uses, so `npx` finds `npx.cmd` and the
   launch goes through `cmd.exe` with the arguments escaped by the Rust standard library. Your
   arguments are still a vector, not a command line.
+- **A command in WSL says the distribution is not there.** `E_EXEC_HOST` means the project names
+  an execution host it cannot use — the distribution was uninstalled or renamed, the WSL service
+  is not running, or the workspace is somewhere that distribution cannot see. The picker in the
+  rail names what is installed; setting it back to *This computer* runs commands on Windows again.
+  Aegis never falls back on its own, because a command that was approved for Ubuntu and ran on
+  Windows would be a different command.
+- **A WSL project's commands are slower to start.** Every hosted call first asks the distribution
+  whether the working directory is there (`wsl -d … --exec test -d …`, about 150 ms warm, longer
+  when the distribution has to start). That is deliberate: `wsl --cd` answers a directory it
+  cannot find by starting in `/` and saying nothing, so without the check a command approved for
+  one folder could run in another.
 - **`echo` and `dir` are not programs.** They are `cmd.exe` builtins, so `shell_exec` cannot find
   them on `PATH` and says so, naming the builtin. Run `cmd` with `["/c", "dir"]` if you want one —
   and note that `cmd` then parses those arguments itself, which the direct path does not.

@@ -51,6 +51,7 @@ pub(crate) mod commands;
 pub mod compact;
 mod display;
 mod error;
+pub mod exec_host;
 pub mod handoff;
 pub mod mcp;
 pub mod oauth;
@@ -79,6 +80,7 @@ pub use board::trace::{Run, RunKind, RunRef, RunStatus, SessionLedger};
 pub use board::{Board, Facts as BoardFacts, Item as BoardItem, Source as BoardSource};
 pub use compact::Plan as CompactionPlan;
 pub use error::{AppError, AppResult, ErrorCode};
+pub use exec_host::{ExecHost, ExecHostOption, ExecTarget};
 pub use handoff::runner::{Delegating, Host as HandoffHost};
 pub use handoff::{Brief, Plan as HandoffPlan, Priority, ReturnFormat};
 pub use mcp::{Catalog as ConnectorCatalog, ConnectorView, Connectors, State as ConnectorState};
@@ -185,6 +187,8 @@ pub fn run() {
             commands::project::project_list,
             commands::project::project_open,
             commands::project::project_delete,
+            commands::project::project_list_exec_hosts,
+            commands::project::project_set_exec_host,
             commands::agent::agent_list,
             commands::agent::agent_create,
             commands::agent::agent_update,

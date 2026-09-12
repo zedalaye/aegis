@@ -9,20 +9,24 @@
  * session list the thing they change constantly, which is why the sessions sit
  * closer to the conversation they belong to.
  *
- * The shared-file panel sits between them, on the project's side of that line:
- * `briefs/`, `status/`, `artefacts/` and `decisions/` belong to the folder, not
- * to any one conversation (PLAN 7.3, Phase 11). The world is below it, for the
- * same reason and one stronger: it is the slowest-changing thing here.
+ * Between them, on the project's side of that line, are three panels that
+ * belong to the folder rather than to any one conversation: where its commands
+ * run (PLAN 7.12), the shared files `briefs/`, `status/`, `artefacts/` and
+ * `decisions/` (PLAN 7.3, Phase 11), and the world. The execution host is first
+ * because it is the one to settle before any work starts; the world is last,
+ * for the opposite reason and one stronger — it is the slowest-changing thing
+ * here.
  *
- * All four are {@link Section}s, so any of them can be folded away and stays
- * that way. Four stacks is more than a laptop screen holds at once, and which
- * one matters is a question about what somebody is doing this week — the world
+ * All of them are {@link Section}s, so any can be folded away and stays that
+ * way. The whole stack is more than a laptop screen holds at once, and which
+ * part matters is a question about what somebody is doing this week — the world
  * while founding one, the sessions the rest of the time.
  */
 
 import { useProjects } from "../../state/projects";
 import Section from "./Section";
 import RailAdd from "./RailAdd";
+import ExecHost from "../projects/ExecHost";
 import ProjectPicker from "../projects/ProjectPicker";
 import SharedFiles from "../projects/SharedFiles";
 import WorldPanel from "../projects/WorldPanel";
@@ -116,6 +120,8 @@ export default function Sidebar() {
 
         <ProjectPicker />
       </Section>
+
+      <ExecHost />
 
       <SharedFiles />
 

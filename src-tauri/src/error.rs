@@ -54,6 +54,17 @@ pub enum ErrorCode {
     Timeout,
     /// The tool ran and failed on its own terms.
     ToolFailed,
+    /// The project's execution host cannot take the command (PLAN 7.12).
+    ///
+    /// Distinct from [`ErrorCode::ToolFailed`] on purpose, and the distinction
+    /// is the whole point of the code: the command did not run *anywhere*. A
+    /// distribution that is not installed, a WSL service that will not answer,
+    /// a workspace the distribution has no path for — each of those is a fact
+    /// about where the project says its commands go, not about the program,
+    /// and the fix is on the project rather than in the call. Retrying it
+    /// unchanged cannot work, and running it on this computer instead would be
+    /// the wrong operating system.
+    ExecHost,
     /// The provider answered with a non-success HTTP status.
     ProviderHttp,
     /// The provider's response could not be parsed.
@@ -87,6 +98,7 @@ impl ErrorCode {
             Self::ApprovalStale => "E_APPROVAL_STALE",
             Self::Timeout => "E_TIMEOUT",
             Self::ToolFailed => "E_TOOL_FAILED",
+            Self::ExecHost => "E_EXEC_HOST",
             Self::ProviderHttp => "E_PROVIDER_HTTP",
             Self::ProviderParse => "E_PROVIDER_PARSE",
             Self::NoApiKey => "E_NO_API_KEY",
@@ -114,6 +126,7 @@ impl ErrorCode {
             | Self::GrantNotAllowed
             | Self::ApprovalStale
             | Self::ToolFailed
+            | Self::ExecHost
             | Self::NoApiKey
             | Self::KeyringUnavailable
             | Self::Cancelled
@@ -452,6 +465,19 @@ pub enum AppError {
         reason: String,
     },
 
+    /// An execution host was set on a project and cannot be used (PLAN 7.12).
+    ///
+    /// Raised by the picker, not by a tool call: a distribution that is not
+    /// installed, a build that is not Windows, a workspace the distribution has
+    /// no path for. Refused at the moment somebody chooses it, because the
+    /// alternative is a project that looks configured and fails on every
+    /// command afterwards — and the reason is written for the person choosing.
+    #[error("that execution host cannot be used: {reason}")]
+    ExecHost {
+        /// Why it cannot, in words somebody can act on.
+        reason: String,
+    },
+
     /// A runtime invariant broke somewhere outside the agent and tool
     /// domains — a channel that closed, a resource that vanished mid-call.
     ///
@@ -507,6 +533,7 @@ impl AppError {
             | Self::Routine { .. }
             | Self::Connector { .. } => ErrorCode::InvalidSetting,
             Self::Keyring => ErrorCode::KeyringUnavailable,
+            Self::ExecHost { .. } => ErrorCode::ExecHost,
             Self::RevealOutside { .. } => ErrorCode::PathOutsideWorkspace,
             Self::RevealPath { .. } => ErrorCode::PathInvalid,
             Self::WindowUnavailable { .. }
@@ -684,7 +711,7 @@ mod tests {
 
     #[test]
     fn codes_are_unique_and_prefixed() {
-        const ALL: [ErrorCode; 18] = [
+        const ALL: [ErrorCode; 19] = [
             ErrorCode::TurnBusy,
             ErrorCode::NoWorkspace,
             ErrorCode::PathOutsideWorkspace,
@@ -694,6 +721,7 @@ mod tests {
             ErrorCode::ApprovalStale,
             ErrorCode::Timeout,
             ErrorCode::ToolFailed,
+            ErrorCode::ExecHost,
             ErrorCode::ProviderHttp,
             ErrorCode::ProviderParse,
             ErrorCode::NoApiKey,

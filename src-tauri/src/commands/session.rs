@@ -140,6 +140,10 @@ pub fn session_send(
         session_id: session_id.clone(),
         turn_id: turn_id.clone(),
         workspace,
+        // Read once, here, with the workspace: the project owns both, and a
+        // turn that re-read either mid-round could describe one machine to the
+        // model and run its commands on another (PLAN 7.12).
+        exec_host: state.exec_host_of(&session_id),
     };
 
     tauri::async_runtime::spawn(async move {
@@ -231,6 +235,7 @@ async fn run_turn<R: Runtime>(
                     project_id,
                     plan.session_id.clone(),
                     plan.workspace.clone(),
+                    plan.exec_host.clone(),
                 )) as Arc<dyn bus::Runner>
             });
 
