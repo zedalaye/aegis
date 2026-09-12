@@ -576,6 +576,12 @@ sees it, can explain itself and try something else. The turn continues.
 `E_PROVIDER_PARSE`, `E_NO_API_KEY`, `E_KEYRING_UNAVAILABLE`, `E_CANCELLED`,
 `E_TOO_MANY_TOOL_ROUNDS`, `E_SCREEN_PERMISSION`.
 
+`E_EXEC_HOST` joins them with § 7.12, and is the dedicated code that section left open. It is
+worth its own string rather than folding into `E_TOOL_FAILED` because it says something no other
+code does: the command did not run *anywhere*. The project's execution host is what has to
+change, not the call — and the one wrong answer, running it on this computer instead, is a
+different operating system reporting success.
+
 ---
 
 ## 5. Platform risks — WebView, tray, screenshots, secrets
@@ -2105,7 +2111,7 @@ that already is one does not create a nested repo; a later `fs_write`
 still does not commit. `git` absent from PATH does not block the
 directories.
 
-### 7.12 Execution host (WSL) — not a CoS phase
+### 7.12 Execution host (WSL) — not a CoS phase *(landed)*
 
 Not a step in § 7.3. Not Phase 22. Not a second Aegis. Not a Linux
 microVM (§ 7.9). Not outbound SSH (§ 7.8).
@@ -2192,6 +2198,39 @@ existing `projects.json` rows have no host and must keep working.
 - delaying Phases 14–16 until this exists. Do not hard-wire
   `shell.rs` so this cannot sit behind the same `ToolSpec`
   (§ 7.1 *Tool executor*).
+
+**As built** (landed). Four decisions the sketch left open, and the
+measurements behind them:
+
+- **Translation is a string rule, not a `wslpath` round trip** — the
+  "or the equivalent" above. `\\wsl$\<distro>\…` and
+  `\\wsl.localhost\<distro>\…` lose the share; `C:\…` becomes
+  `/mnt/c/…`. Pure, testable, no child process in the decision table.
+  A UNC naming *another* distro is refused rather than translated.
+- **The probe is not optional.** `wsl.exe --cd` answers a directory it
+  cannot find by starting in `/` and saying nothing — measured, not
+  assumed. So a `rm -rf build` approved for `/home/p/proj` would run
+  somewhere else and report success. Every hosted call therefore spends
+  one `wsl -d <distro> --exec test -d <cwd>` first (~160 ms warm):
+  exit 0 runs, exit 1 is "not a folder in that distro", anything else
+  (WSL returns -1) is "not a distro a command can run in". That one
+  probe covers all three pre-spawn failures the section asks for, and
+  it is also what makes an automount root that is not `/mnt` a refusal
+  rather than a command in the wrong place.
+- **`--cd <linux cwd>` and no `current_dir`.** Two answers to "where"
+  is one too many: `wsl.exe` would translate a Windows working
+  directory by its own rules, which can differ from the path the dialog
+  showed.
+- **Stop already reaches the Linux process.** The child is `wsl.exe`, a
+  relay, and the program is in the distro's namespace where `taskkill`
+  has never heard of it — but ending the relay ends the session it
+  opened. Measured: `pgrep sleep` inside the distro finds nothing after
+  the tree kill. No new machinery; the Windows `taskkill /T /F` that
+  Phase 7 added for `.cmd` shims is what covers it.
+
+`project_list_exec_hosts` reads `wsl.exe -l -q`, whose output is
+UTF-16LE — the one place in this runtime where that is true, and why it
+does not go through the shell tool's code-page decoder.
 
 **Exit:** a project pointed at a folder in Ubuntu, with exec host
 `Ubuntu`, can `shell_exec` `git` / `ls` / a test runner that exists

@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::ErrorCode;
+use crate::exec_host::{ExecHost, ExecTarget};
 use crate::handoff;
 use crate::mcp;
 use crate::store::connectors;
@@ -154,6 +155,16 @@ pub enum ApprovalDetail {
         /// `args` directly, with no shell in between (PLAN 5.1). This string
         /// exists so a user can read one line instead of five fields.
         shell_line: String,
+        /// The distribution this lands in, and the working directory as that
+        /// distribution spells it (PLAN 7.12).
+        ///
+        /// `None` — and every dialog before this slice — is this computer, and
+        /// then `cwd` above is the whole answer. When it is `Some`, `cwd` is
+        /// still true and still the folder policy contained the call against,
+        /// but it is no longer the directory the command starts in: the dialog
+        /// has to show both, or a user would be approving a path the command
+        /// never sees.
+        host: Option<ExecTarget>,
     },
     /// Capturing a display.
     Screen {
@@ -370,12 +381,25 @@ pub enum ResolvedCall {
     },
     /// `shell_exec`, with the working directory resolved.
     ShellExec {
-        /// The program, as named. Phase 7 resolves it through PATH.
+        /// The program, as named. Phase 7 resolves it through PATH — this
+        /// process' PATH, or the distribution's when there is a `host`.
         program: String,
         /// Its arguments, passed as a vector — never through a shell.
         args: Vec<String>,
-        /// The resolved working directory.
+        /// The resolved working directory, on this computer.
         cwd: PathBuf,
+        /// Where the command lands, when it is not this process (PLAN 7.12).
+        ///
+        /// Resolved here, with the path, and for the same reason: the
+        /// distribution and the Linux working directory the user read in the
+        /// dialog are the ones carried to the tool, so there is no second
+        /// translation anywhere that could answer differently.
+        ///
+        /// Boxed for the reason [`ResolvedCall::SkillReturn`]'s report is: two
+        /// strings in the widest variant is size every other call would
+        /// otherwise pay for, and this enum travels inside a `Result` through
+        /// the whole decision table.
+        host: Option<Box<ExecTarget>>,
         /// Caller's deadline; the tool applies the hard ceiling.
         timeout_ms: Option<u64>,
     },
@@ -1047,6 +1071,20 @@ pub struct PolicyCtx<'a> {
     /// — and it means a connector call has nothing to resolve against, which
     /// the table refuses rather than asks about.
     pub connectors: Option<&'a mcp::Catalog>,
+    /// Where this project's commands run (PLAN 7.12).
+    ///
+    /// `None` is this process, which is every project that has not been given a
+    /// host and every test written before this slice. Supplied by the caller
+    /// rather than read here, for the reason [`PolicyCtx::screen`] is: the
+    /// table stays a pure function of its inputs, and a decision about a WSL
+    /// workspace stays testable on a machine that has never had WSL.
+    ///
+    /// It changes exactly one row — `shell_exec` — and it changes it in one
+    /// way: the working directory is translated into the distribution's own
+    /// spelling, and a folder that cannot be translated is refused here rather
+    /// than asked about. Nothing else in the table reads it, because nothing
+    /// else in the table leaves this process.
+    pub exec_host: Option<&'a ExecHost>,
     /// The identity the call is made under, and the tools it holds.
     ///
     /// `None` is "no identity is bound to this decision", which means every
@@ -1067,6 +1105,7 @@ impl<'a> PolicyCtx<'a> {
             self_exe: None,
             screen: None,
             connectors: None,
+            exec_host: None,
             delegated: false,
             unattended: false,
             identity: None,
@@ -1105,6 +1144,13 @@ impl<'a> PolicyCtx<'a> {
     #[must_use]
     pub const fn with_connectors(mut self, connectors: Option<&'a mcp::Catalog>) -> Self {
         self.connectors = connectors;
+        self
+    }
+
+    /// Names where this project's commands run (PLAN 7.12).
+    #[must_use]
+    pub const fn with_exec_host(mut self, host: Option<&'a ExecHost>) -> Self {
+        self.exec_host = host;
         self
     }
 
@@ -1659,6 +1705,143 @@ mod tests {
                 assert_eq!(request.risk, Risk::High);
             }
             other => panic!("expected an ask, got {other:?}"),
+        }
+    }
+    /// Without a host nothing moves: the row a `shell_exec` produces is the one
+    /// every phase before PLAN 7.12 produced, and the dialog has one working
+    /// directory to show because there is one.
+    #[test]
+    fn a_project_on_this_computer_draws_the_row_it_always_did() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        let grants = GrantStore::new();
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants);
+
+        match decide(&ctx, tool::SHELL_EXEC, json!({ "program": "git" })) {
+            Decision::Ask { call, request } => {
+                assert!(matches!(call, ResolvedCall::ShellExec { host: None, .. }));
+                match request.detail {
+                    ApprovalDetail::Shell { host, cwd, .. } => {
+                        assert_eq!(host, None);
+                        assert_eq!(cwd, root.display().to_string());
+                    }
+                    other => panic!("expected a shell row, got {other:?}"),
+                }
+            }
+            other => panic!("expected an ask, got {other:?}"),
+        }
+    }
+
+    /// With a host, the dialog names the distribution and the directory *in
+    /// it* — the one the command actually starts in — and keeps the Windows
+    /// folder beside it, which is what containment was measured against.
+    ///
+    /// The grant is unchanged: a user who allows `git` for the session allowed
+    /// running git, and `wsl.exe` is not a program anybody was asked about.
+    #[cfg(windows)]
+    #[test]
+    fn a_wsl_host_puts_the_distro_and_the_linux_directory_in_the_dialog() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        let grants = GrantStore::new();
+        let host = crate::exec_host::ExecHost::Wsl {
+            distro: "Ubuntu".to_owned(),
+        };
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants).with_exec_host(Some(&host));
+
+        let expected = crate::exec_host::linux_path("Ubuntu", &root)
+            .expect("a temp dir is on a drive, and a drive is automounted");
+
+        match decide(&ctx, tool::SHELL_EXEC, json!({ "program": "git" })) {
+            Decision::Ask { call, request } => {
+                match &call {
+                    ResolvedCall::ShellExec { host, program, .. } => {
+                        assert_eq!(program, "git", "the model still names the program");
+                        let host = host.as_ref().expect("a host reaches the tool");
+                        assert_eq!(host.distro, "Ubuntu");
+                        assert_eq!(host.cwd, expected);
+                    }
+                    other => panic!("expected a shell call, got {other:?}"),
+                }
+                assert_eq!(request.grant, Some(Grant::shell("git")));
+                assert!(request.reason.contains("Ubuntu"), "{}", request.reason);
+                match request.detail {
+                    ApprovalDetail::Shell { host, cwd, .. } => {
+                        assert_eq!(
+                            host.map(|host| host.cwd),
+                            Some(expected),
+                            "the dialog shows the directory the command starts in"
+                        );
+                        assert_eq!(
+                            cwd,
+                            root.display().to_string(),
+                            "and the folder the file tools use, beside it"
+                        );
+                    }
+                    other => panic!("expected a shell row, got {other:?}"),
+                }
+            }
+            other => panic!("expected an ask, got {other:?}"),
+        }
+    }
+
+    /// A folder the distribution has no path for is refused here, before
+    /// anybody is asked. There is no answer a user could give that would make
+    /// the command runnable, and the one thing that must not happen — running
+    /// it on this computer instead — is not offered.
+    ///
+    /// The Windows case is a real directory belonging to *another*
+    /// distribution: it exists, it resolves, and it is still not somewhere this
+    /// project's distribution can start a command.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_folder_of_another_distro_is_refused_rather_than_asked_about() {
+        let Some(installed) = crate::exec_host::installed().await.into_iter().next() else {
+            return;
+        };
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        let grants = GrantStore::new();
+        let host = crate::exec_host::ExecHost::Wsl {
+            distro: "aegis-not-a-distro".to_owned(),
+        };
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants).with_exec_host(Some(&host));
+
+        match decide(
+            &ctx,
+            tool::SHELL_EXEC,
+            json!({ "program": "git", "cwd": format!(r"\\wsl$\{installed}\etc") }),
+        ) {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::ExecHost, "{reason}");
+                assert!(reason.contains("aegis-not-a-distro"), "{reason}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// The same rule arriving by a different road. A build with no WSL cannot
+    /// honour a WSL host, and every folder on it is one the distribution has no
+    /// path for — so the refusal is the whole behaviour, and it is a refusal
+    /// rather than the command quietly running here.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_wsl_host_on_a_build_without_wsl_refuses_before_asking() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        let grants = GrantStore::new();
+        let host = crate::exec_host::ExecHost::Wsl {
+            distro: "Ubuntu".to_owned(),
+        };
+        let ctx = PolicyCtx::new("s1", Some(&root), &grants).with_exec_host(Some(&host));
+
+        match decide(&ctx, tool::SHELL_EXEC, json!({ "program": "git" })) {
+            Decision::Deny { code, reason } => {
+                assert_eq!(code, ErrorCode::ExecHost);
+                assert!(reason.contains("Ubuntu"), "{reason}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
         }
     }
 }

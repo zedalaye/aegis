@@ -15,6 +15,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::error::{AppError, AppResult};
+use crate::exec_host::{self, ExecHost, ExecHostOption};
 use crate::state::AppState;
 use crate::store::{self, Project, ProjectDetail};
 
@@ -104,6 +105,74 @@ pub fn project_open(state: State<'_, AppState>, project_id: String) -> AppResult
     // the turn registry, which only `AppState` can see (PLAN 2.1).
     detail.sessions = state.session_list(&project_id);
     Ok(detail)
+}
+
+/// Every execution host this machine can offer right now (PLAN 7.12).
+///
+/// This computer first, then whatever `wsl.exe -l -q` can see — asked on each
+/// call rather than cached, because distributions are installed and removed in
+/// a terminal and a list that is confidently out of date is worse than one that
+/// takes a moment. A machine without WSL, and every build that is not Windows,
+/// gets the one row: there is nowhere else for a command to go.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn project_list_exec_hosts() -> AppResult<Vec<ExecHostOption>> {
+    Ok(exec_host::options().await)
+}
+
+/// Says where this project's commands run, or puts them back on this computer.
+///
+/// Explicit, never inferred. A workspace under `\\wsl$\` is not consent —
+/// picking a folder is picking a folder — so a project has no host until
+/// somebody chooses one here, and `shell_exec` stays the spawn it has always
+/// been until they do.
+///
+/// Three refusals, and all three are the same promise: a project that says it
+/// runs its commands in Ubuntu has to actually be able to.
+///
+/// * A build that is not Windows has no WSL, and takes the host rather than
+///   quietly ignoring it.
+/// * A distribution nobody has installed is named against the ones that are,
+///   so a typo reads as a typo.
+/// * A workspace the distribution has no path for would fail on every command
+///   afterwards, with nothing on screen to say why — so it is caught at the
+///   moment the two are put together. A project whose folder has gone is
+///   exempt: there is nothing to translate, and the badge already says so.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn project_set_exec_host(
+    state: State<'_, AppState>,
+    project_id: String,
+    host: Option<ExecHost>,
+) -> AppResult<Project> {
+    let project = state.store().get(&project_id)?;
+
+    if let Some(ExecHost::Wsl { distro }) = &host {
+        if !exec_host::supported() {
+            return Err(AppError::ExecHost {
+                reason: "WSL is a Windows feature, and this is not a Windows build".to_owned(),
+            });
+        }
+
+        let installed = exec_host::installed().await;
+        if !installed.iter().any(|name| name == distro) {
+            return Err(AppError::ExecHost {
+                reason: if installed.is_empty() {
+                    format!("`{distro}` is not installed, and neither is any other distribution")
+                } else {
+                    format!(
+                        "`{distro}` is not installed. This machine has {}",
+                        installed.join(", ")
+                    )
+                },
+            });
+        }
+
+        if project.workspace_exists {
+            exec_host::linux_path(distro, project.workspace_path.as_ref())
+                .map_err(|reason| AppError::ExecHost { reason })?;
+        }
+    }
+
+    state.store().set_exec_host(&project_id, host)
 }
 
 /// Forgets a project, and its sessions and routines with it.

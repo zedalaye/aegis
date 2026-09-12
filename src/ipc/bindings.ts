@@ -166,7 +166,19 @@ cwd: string,
  * `args` directly, with no shell in between (PLAN 5.1). This string
  * exists so a user can read one line instead of five fields.
  */
-shell_line: string, } | { "kind": "screen", 
+shell_line: string, 
+/**
+ * The distribution this lands in, and the working directory as that
+ * distribution spells it (PLAN 7.12).
+ *
+ * `None` — and every dialog before this slice — is this computer, and
+ * then `cwd` above is the whole answer. When it is `Some`, `cwd` is
+ * still true and still the folder policy contained the call against,
+ * but it is no longer the directory the command starts in: the dialog
+ * has to show both, or a user would be approving a path the command
+ * never sees.
+ */
+host: ExecTarget | null, } | { "kind": "screen", 
 /**
  * Which display, named the way the dialog should say it.
  */
@@ -820,6 +832,50 @@ from_session_id: string,
 brief: string | null, };
 
 /**
+ * Where a project's commands run.
+ *
+ * `Option<ExecHost>` is the whole type: `None` — an absent field on disk — is
+ * this process, which is what every project had before this slice and what
+ * every project still has until somebody says otherwise.
+ */
+export type ExecHost = { "kind": "wsl", 
+/**
+ * The distribution's name — `Ubuntu`, `Debian`, `Ubuntu-24.04`.
+ */
+distro: string, };
+
+/**
+ * One choice on the picker.
+ *
+ * Deliberately not `Option<ExecHost>`: a list of hosts has to be able to say
+ * "this computer" as a row like any other, and a `null` in an array is not a
+ * row somebody can click.
+ */
+export type ExecHostOption = { "kind": "host" } | { "kind": "wsl", 
+/**
+ * The distribution's name.
+ */
+distro: string, };
+
+/**
+ * Where one command will actually land, once policy has resolved it.
+ *
+ * Built by the decision table, carried on the resolved call, drawn by the
+ * approval dialog and read by the tool — one value, so the distribution and
+ * the working directory the user *read* are the ones that are *run*, with no
+ * second translation anywhere to disagree with the first.
+ */
+export type ExecTarget = { 
+/**
+ * The distribution the command runs in.
+ */
+distro: string, 
+/**
+ * The working directory, as a path inside that distribution.
+ */
+cwd: string, };
+
+/**
  * One `allow_session` grant.
  *
  * The variants are the scopes, not the tools: `fs_read` appears only as
@@ -1093,7 +1149,17 @@ last_opened_at: string | null,
 /**
  * Whether the workspace folder is present *right now*. Never stored.
  */
-workspace_exists: boolean, };
+workspace_exists: boolean, 
+/**
+ * Where this project's commands run (PLAN 7.12).
+ *
+ * `None` is this process — the default, what every project had before this
+ * slice, and what a project keeps unless somebody chooses otherwise.
+ * Sessions inherit it; they do not override it, because "which operating
+ * system does the toolchain live in" is a fact about the folder rather
+ * than about a conversation in it.
+ */
+exec_host: ExecHost | null, };
 
 /**
  * What opening a project yields: the project plus its sessions, newest first.

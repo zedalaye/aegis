@@ -689,6 +689,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         session_id: session.id.clone(),
         turn_id: turn_id.to_owned(),
         workspace: Some(dunce::canonicalize(&workspace).expect("canonical workspace")),
+        exec_host: None,
     };
 
     let reason = Turn {

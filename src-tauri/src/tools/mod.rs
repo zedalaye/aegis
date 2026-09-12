@@ -743,8 +743,20 @@ pub async fn run(
             program,
             args,
             cwd,
+            host,
             timeout_ms,
-        } => shell::exec(program, args, cwd, *timeout_ms, ctx.progress, ctx.cancel).await,
+        } => {
+            shell::exec(
+                program,
+                args,
+                cwd,
+                host.as_deref(),
+                *timeout_ms,
+                ctx.progress,
+                ctx.cancel,
+            )
+            .await
+        }
         // On a blocking thread, not inline: a capture is a round trip to the
         // window server, and on a compositor that raises its own consent
         // prompt it is a round trip through a person. Neither belongs on a

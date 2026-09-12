@@ -218,6 +218,7 @@ impl TestRunner {
                 "project-1".to_owned(),
                 from_session_id.to_owned(),
                 Some(app.workspace.clone()),
+                None,
             ),
             script,
         })
@@ -720,6 +721,7 @@ async fn an_ordinary_session_is_not_offered_the_tool_that_closes_a_brief() {
             session_id: session_id.clone(),
             turn_id: "turn-1".to_owned(),
             workspace: Some(app.workspace.clone()),
+            exec_host: None,
         },
         &cancel,
     )

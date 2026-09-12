@@ -1121,6 +1121,7 @@ mod tests {
             &transcript::Context {
                 agent: &agent,
                 workspace: Some(&root),
+                exec_host: None,
                 memories: None,
                 skills: None,
                 world: None,
@@ -1170,6 +1171,7 @@ mod tests {
             &transcript::Context {
                 agent: &agent,
                 workspace: None,
+                exec_host: None,
                 memories: None,
                 skills: None,
                 world: None,

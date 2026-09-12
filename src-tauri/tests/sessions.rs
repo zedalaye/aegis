@@ -130,6 +130,7 @@ impl App {
             session_id: session_id.to_owned(),
             turn_id: turn_id.clone(),
             workspace: Some(self.workspace.clone()),
+            exec_host: None,
         };
 
         let reason = Turn {
@@ -447,6 +448,7 @@ async fn a_transcript_left_open_by_a_cancel_still_builds_a_valid_request() {
         &transcript::Context {
             agent: &agent,
             workspace: Some(&app.workspace),
+            exec_host: None,
             memories: None,
             skills: None,
             world: None,

@@ -135,9 +135,33 @@ export default function DiffPreview({
             <Field label="Program" mono>
               {detail.program}
             </Field>
-            <Field label="Working directory" mono>
-              {detail.cwd}
-            </Field>
+            {/*
+              With an execution host (PLAN 7.12) there are two true answers to
+              "where", and showing one of them would be a dialog describing a
+              directory the command never sees. The Linux path is the working
+              directory the program actually starts in; the Windows path is the
+              same folder as the file tools spell it, and as containment
+              measured it. Which machine it is stands between them, because
+              without that the two paths look like a contradiction.
+            */}
+            {detail.host === null ? (
+              <Field label="Working directory" mono>
+                {detail.cwd}
+              </Field>
+            ) : (
+              <>
+                <Field label="Runs in">
+                  {detail.host.distro} — a WSL distribution on this machine, not
+                  Windows
+                </Field>
+                <Field label="Working directory" mono>
+                  {detail.host.cwd}
+                </Field>
+                <Field label="Same folder on Windows" mono>
+                  {detail.cwd}
+                </Field>
+              </>
+            )}
           </dl>
           {detail.args.length === 0 ? null : (
             <ol className="args" aria-label="Arguments">

@@ -19,7 +19,8 @@
  * (PLAN 7.3, Phase 16), the project's board and the runs its audit log folds
  * into (PLAN 7.3, Phase 17), the external MCP servers whose tools reach
  * the model through the same gate as this build's own (PLAN 7.3, Phase 18),
- * and revealing a workspace folder in the OS file manager (PLAN 7.10).
+ * revealing a workspace folder in the OS file manager (PLAN 7.10), and the
+ * execution host a project's commands land in (PLAN 7.12).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -40,6 +41,8 @@ import type {
   ConnectorDraft,
   ConnectorView,
   Decision,
+  ExecHost,
+  ExecHostOption,
   Grant,
   MaskedSettings,
   ModelCatalog,
@@ -147,6 +150,35 @@ export function projectOpen(projectId: string): Promise<ProjectDetail> {
 /** Forgets a project. The workspace folder on disk is never touched. */
 export function projectDelete(projectId: string): Promise<void> {
   return call<void>("project_delete", { project_id: projectId });
+}
+
+/**
+ * Every place this machine could run a project's commands (PLAN 7.12).
+ *
+ * This computer first, then the WSL distributions `wsl.exe -l -q` can see.
+ * A machine without WSL — and every build that is not Windows — answers with
+ * the one row, because there is nowhere else for a command to go.
+ */
+export function projectListExecHosts(): Promise<ExecHostOption[]> {
+  return call<ExecHostOption[]>("project_list_exec_hosts");
+}
+
+/**
+ * Says where a project's commands run, or puts them back on this computer.
+ *
+ * `null` is this computer. Rejects with `E_EXEC_HOST` when the distribution is
+ * not installed, when this is not a Windows build, or when the project's folder
+ * is one that distribution has no path for — each of which would otherwise be a
+ * project that looks configured and fails on every command afterwards.
+ */
+export function projectSetExecHost(
+  projectId: string,
+  host: ExecHost | null,
+): Promise<Project> {
+  return call<Project>("project_set_exec_host", {
+    project_id: projectId,
+    host,
+  });
 }
 /**
  * Every identity: the built-in one first, then the rest by name.

@@ -21,6 +21,7 @@ use uuid::Uuid;
 use super::sessions::SessionSummary;
 use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
+use crate::exec_host::ExecHost;
 
 /// Name of the document under the application-data directory.
 const PROJECTS_FILE: &str = "projects.json";
@@ -52,6 +53,14 @@ pub struct Project {
     pub last_opened_at: Option<String>,
     /// Whether the workspace folder is present *right now*. Never stored.
     pub workspace_exists: bool,
+    /// Where this project's commands run (PLAN 7.12).
+    ///
+    /// `None` is this process — the default, what every project had before this
+    /// slice, and what a project keeps unless somebody chooses otherwise.
+    /// Sessions inherit it; they do not override it, because "which operating
+    /// system does the toolchain live in" is a fact about the folder rather
+    /// than about a conversation in it.
+    pub exec_host: Option<ExecHost>,
 }
 
 /// What opening a project yields: the project plus its sessions, newest first.
@@ -92,6 +101,14 @@ struct StoredProject {
     created_at: String,
     #[serde(default)]
     last_opened_at: Option<String>,
+    /// Where this project's commands run (PLAN 7.12).
+    ///
+    /// Absent rather than null when there is none, and `#[serde(default)]` on
+    /// the way in: every row written before this slice has no such field, and a
+    /// document those rows still round-trip through unchanged is what makes
+    /// "existing projects keep working" a property rather than a hope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exec_host: Option<ExecHost>,
 }
 
 impl StoredProject {
@@ -104,6 +121,7 @@ impl StoredProject {
             created_at: self.created_at.clone(),
             last_opened_at: self.last_opened_at.clone(),
             workspace_exists: Path::new(&self.workspace_path).is_dir(),
+            exec_host: self.exec_host.clone(),
         }
     }
 }
@@ -250,6 +268,7 @@ impl Store {
             workspace_path,
             created_at: now(),
             last_opened_at: None,
+            exec_host: None,
         };
         let created = project.to_project();
 
@@ -285,6 +304,34 @@ impl Store {
             // project store has no business knowing either.
             sessions: Vec::new(),
         })
+    }
+
+    /// Says where this project's commands run, or clears it (PLAN 7.12).
+    ///
+    /// `None` puts the project back on this process, which is where every
+    /// project starts. Whether the host is one this machine can actually use is
+    /// settled by the command above this — the store's job is to remember what
+    /// was chosen, and a store that also validated would be a second opinion
+    /// that can disagree with the first.
+    ///
+    /// Deliberately not part of `open`: choosing a host is a decision somebody
+    /// makes once, and stamping recency for it would reorder the sidebar
+    /// underneath them.
+    pub fn set_exec_host(&self, id: &str, host: Option<ExecHost>) -> AppResult<Project> {
+        let mut projects = self.projects();
+
+        let project = projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| AppError::ProjectNotFound { id: id.to_owned() })?;
+
+        project.exec_host = host;
+        let updated = project.to_project();
+
+        self.save(&projects)?;
+
+        tracing::info!(id, host = ?updated.exec_host, "execution host set");
+        Ok(updated)
     }
 
     /// Forgets a project. The workspace folder itself is never touched.
@@ -459,6 +506,7 @@ mod tests {
                 created_at: "2026-08-28T09:41:07.412Z".to_owned(),
                 last_opened_at: None,
                 workspace_exists: true,
+                exec_host: None,
             },
             sessions: vec![SessionSummary {
                 agent_id: crate::store::DEFAULT_AGENT_ID.to_owned(),
@@ -505,6 +553,7 @@ mod tests {
                 "created_at",
                 "last_opened_at",
                 "workspace_exists",
+                "exec_host",
             ])
         );
         assert_eq!(
@@ -678,6 +727,79 @@ mod tests {
         assert!(matches!(opened, AppError::ProjectNotFound { .. }));
         assert!(matches!(got, AppError::ProjectNotFound { .. }));
         assert!(matches!(deleted, AppError::ProjectNotFound { .. }));
+    }
+
+    /// A host is chosen once and has to still be there next week, which is
+    /// the whole reason it lives on the project rather than on a session.
+    #[test]
+    fn an_execution_host_survives_a_restart_and_can_be_taken_back() {
+        let fx = Fixture::new();
+        let created = fx
+            .store
+            .create("Alpha", &fx.workspace("alpha"))
+            .expect("create");
+        assert_eq!(created.exec_host, None, "a project starts on this computer");
+
+        let host = ExecHost::Wsl {
+            distro: "Ubuntu".to_owned(),
+        };
+        let set = fx
+            .store
+            .set_exec_host(&created.id, Some(host.clone()))
+            .expect("set");
+        assert_eq!(set.exec_host, Some(host.clone()));
+
+        assert_eq!(
+            fx.reload().list().first().and_then(|p| p.exec_host.clone()),
+            Some(host)
+        );
+
+        fx.store.set_exec_host(&created.id, None).expect("clear");
+        assert_eq!(
+            fx.reload().list().first().and_then(|p| p.exec_host.clone()),
+            None,
+            "clearing puts the project back on this computer"
+        );
+    }
+
+    /// The rule that lets this field be added to a document already on
+    /// someone's disk: a row written before it existed still loads, and a
+    /// project with no host writes no field at all — so the two documents are
+    /// the same bytes and a downgrade loses nothing.
+    #[test]
+    fn rows_from_before_the_host_existed_still_load() {
+        let fx = Fixture::new();
+        fs::create_dir_all(&fx.data).expect("data dir");
+        fs::write(
+            fx.document(),
+            br#"{"version":1,"projects":[{"id":"x","name":"X","workspace_path":"/tmp","created_at":"2026-01-01T00:00:00.000Z"}]}"#,
+        )
+        .expect("write an older document");
+
+        let listed = fx.reload().list();
+        assert_eq!(listed.len(), 1, "the row is read, not quarantined");
+        assert_eq!(listed[0].exec_host, None);
+
+        fx.store
+            .create("Alpha", &fx.workspace("alpha"))
+            .expect("create");
+        let raw = fs::read_to_string(fx.document()).expect("read document");
+        assert!(
+            !raw.contains("exec_host"),
+            "a project on this computer writes no host: {raw}"
+        );
+    }
+
+    #[test]
+    fn setting_a_host_on_an_unknown_project_is_refused() {
+        let fx = Fixture::new();
+
+        let refused = fx
+            .store
+            .set_exec_host("nope", None)
+            .expect_err("set must fail");
+
+        assert!(matches!(refused, AppError::ProjectNotFound { .. }));
     }
 
     /// Windows editors write a BOM; the store must read what they produce.

@@ -49,6 +49,7 @@ use crate::approval::ApprovalRegistry;
 use crate::audit::AuditLog;
 use crate::commands::session::WindowSink;
 use crate::error::{AppError, AppResult};
+use crate::exec_host::ExecHost;
 use crate::mcp::Connectors;
 use crate::policy::GrantStore;
 use crate::skills::{self, Reported};
@@ -192,6 +193,13 @@ impl Scheduler {
 struct Ready {
     agent: Agent,
     workspace: PathBuf,
+    /// Where the project's commands run (PLAN 7.12). `None` is this process.
+    ///
+    /// Taken from the project record beside the workspace, on the same tick:
+    /// an unattended run is an ordinary session under the same rules, and one
+    /// that spawned on Windows because nobody was watching would be running a
+    /// different toolchain from every run somebody did watch.
+    exec_host: Option<ExecHost>,
     skill: crate::skills::Skill,
 }
 
@@ -207,13 +215,14 @@ fn ready(host: &Host<'_>, routine: &Routine) -> Result<Ready, String> {
         .get(&routine.agent_id)
         .map_err(|_| "the identity this runs as is no longer on file".to_owned())?;
 
-    let workspace = host
+    let project = host
         .projects
         .get(&routine.project_id)
         .ok()
         .filter(|project| project.workspace_exists)
-        .map(|project| PathBuf::from(project.workspace_path))
         .ok_or_else(|| "this project's folder is not there".to_owned())?;
+    let exec_host = project.exec_host.clone();
+    let workspace = PathBuf::from(project.workspace_path);
 
     let catalog = skills::catalog(host.skills, Some(&workspace));
     let skill = skills::find(&catalog, &routine.skill)
@@ -233,6 +242,7 @@ fn ready(host: &Host<'_>, routine: &Routine) -> Result<Ready, String> {
     Ok(Ready {
         agent,
         workspace,
+        exec_host,
         skill,
     })
 }
@@ -352,6 +362,7 @@ async fn drive(
         session_id: session_id.to_owned(),
         turn_id: turn_id.clone(),
         workspace: Some(ready.workspace.clone()),
+        exec_host: ready.exec_host.clone(),
     };
 
     let reason = Turn {

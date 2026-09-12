@@ -68,6 +68,7 @@ use crate::approval::{Answer, ApprovalRegistry, Decision as Answered, ResolvedBy
 use crate::audit::{AuditDecision, AuditLog, Outcome};
 use crate::compact;
 use crate::error::ErrorCode;
+use crate::exec_host::{self, ExecHost};
 use crate::handoff::{self, bus};
 use crate::mcp::{self, Connectors};
 use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
@@ -324,6 +325,18 @@ pub struct TurnPlan {
     /// hard `E_NO_WORKSPACE` denial (PLAN 3.2), and the system message says so
     /// rather than letting the model find out one refusal at a time.
     pub workspace: Option<PathBuf>,
+    /// Where this project's commands run (PLAN 7.12).
+    ///
+    /// `None` is this process, which is every project that has not been given a
+    /// host. Resolved by the caller and held for the turn, for the reason the
+    /// identity and the provider are: an operator can change it between two
+    /// messages, and a loop that re-read it mid-round could tell the model one
+    /// thing in the system message and run its commands somewhere else.
+    ///
+    /// Beside the workspace rather than folded into it, because they answer
+    /// different questions: the workspace is what the *file* tools may touch,
+    /// and this is where a *command* lands. Only `shell_exec` reads it.
+    pub exec_host: Option<ExecHost>,
 }
 
 /// Everything the loop borrows for the length of one turn.
@@ -560,6 +573,14 @@ impl Turn<'_> {
         let remembered = self.memories.list_for(&self.agent.id);
         let memory_block = memories::prompt_block(&remembered, remembered.len());
 
+        // Once per turn, not per round: the host is settled before the first
+        // request (see `TurnPlan::exec_host`), and so is the Linux spelling of
+        // the workspace it names.
+        let host_block = plan
+            .exec_host
+            .as_ref()
+            .map(|host| exec_host::prompt_block(host, plan.workspace.as_deref()));
+
         // Per-turn, like the delta counter, and shared with every tool call in
         // the turn — the UI drops anything out of order, and a counter that
         // restarted per call would make two calls' frames indistinguishable
@@ -614,6 +635,7 @@ impl Turn<'_> {
                 &transcript::Context {
                     agent: self.agent,
                     workspace: plan.workspace.as_deref(),
+                    exec_host: host_block.as_deref(),
                     memories: memory_block.as_deref(),
                     skills: skill_block.as_deref(),
                     world: world.as_deref(),
@@ -1118,6 +1140,7 @@ impl Turn<'_> {
             let policy_ctx =
                 PolicyCtx::new(&plan.session_id, plan.workspace.as_deref(), self.grants)
                     .with_self_exe(self.self_exe)
+                    .with_exec_host(plan.exec_host.as_ref())
                     .with_screen(screen.as_ref())
                     .with_connectors(Some(connectors))
                     .with_identity(Identity {
@@ -1711,6 +1734,7 @@ mod tests {
                 session_id: self.session_id.clone(),
                 turn_id: TURN_ID.to_owned(),
                 workspace: Some(self.workspace.clone()),
+                exec_host: None,
             }
         }
 

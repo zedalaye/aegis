@@ -53,6 +53,29 @@
 //!
 //! Children are also spawned with `CREATE_NO_WINDOW`, or every call flashes a
 //! console window on the user's screen.
+//!
+//! ## An execution host
+//!
+//! All of the above describes *this* process as the place a command lands,
+//! which is the default and is every project until somebody says otherwise. A
+//! project may instead name an execution host — today, a WSL distribution
+//! (PLAN 7.12) — and then the program is looked up on that distribution's PATH
+//! and run there, by `wsl.exe -d <distro> --cd <dir> --exec <program> <args>`.
+//!
+//! What that changes here is deliberately small. The schema does not move: the
+//! model still sends `program`, `args` and `cwd`, and never a distribution and
+//! never `wsl`. The arguments stay a vector, and `--exec` is what keeps them
+//! one — there is no login shell between `wsl.exe` and the program, so the
+//! absence of a metacharacter layer survives the crossing. PATHEXT, the `.cmd`
+//! shims and `CreateProcess`' inability to launch them are facts about the
+//! Windows host and apply only when the host *is* Windows.
+//!
+//! What it must never do is fall back. A distribution that is not there, or a
+//! working directory it cannot see, fails with `E_EXEC_HOST` before anything is
+//! spawned — checked by an explicit probe, because `wsl.exe --cd` answers a
+//! directory it cannot find by silently starting in `/`, and a command that ran
+//! in the wrong place having been approved for the right one is the one outcome
+//! worse than a refusal.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -67,6 +90,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Produced, ProgressSink, Stream, EXEC_MAX_BYTES};
 use crate::error::ErrorCode;
+use crate::exec_host::ExecTarget;
 use crate::policy::matrix::shell_line;
 use crate::policy::tool;
 
@@ -114,8 +138,21 @@ const PIPE_CHUNK: usize = 8 * 1024;
 const PIPE_QUEUE: usize = 16;
 
 /// `CREATE_NO_WINDOW` — the child gets no console (PLAN 5.1).
+///
+/// Shared with [`exec_host`](crate::exec_host), which spawns `wsl.exe` to ask
+/// what is installed and would otherwise flash a console of its own.
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// How long the execution-host probe may take before it is written off
+/// (PLAN 7.12).
+///
+/// Generous, because the first command into a stopped distribution starts it,
+/// and that is seconds rather than milliseconds. Short enough that a broken
+/// WSL service is a refusal rather than the caller's whole deadline spent
+/// waiting for one.
+#[cfg(windows)]
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// JSON Schema for `shell_exec` arguments (PLAN 4.1).
 pub fn exec_schema() -> Value {
@@ -160,19 +197,25 @@ pub fn exec_schema() -> Value {
 /// and it is deliberate. Containment does not apply to it: the row the user
 /// approved is about the *working directory*, and `git` living in `/usr/bin`
 /// is not a fact anyone was asked about.
+///
+/// `host` is where the command lands (PLAN 7.12). `None` is this process, and
+/// then everything above is true as written. `Some` is a distribution, and then
+/// the program is *not* resolved here at all: PATH belongs to the distribution,
+/// and a lookup done on Windows would be answering about the wrong machine.
 pub(crate) async fn exec(
     program: &str,
     args: &[String],
     cwd: &Path,
+    host: Option<&ExecTarget>,
     timeout_ms: Option<u64>,
     progress: &dyn ProgressSink,
     cancel: &CancellationToken,
 ) -> Produced {
     let line = shell_line(program, args);
 
-    let resolved = match resolve(program, cwd) {
-        Ok(path) => path,
-        Err(message) => return Produced::failed(tool::SHELL_EXEC, ErrorCode::ToolFailed, message),
+    let launch = match plan(program, args, cwd, host, cancel).await {
+        Ok(launch) => launch,
+        Err(refused) => return *refused,
     };
 
     let budget = Duration::from_millis(
@@ -181,10 +224,14 @@ pub(crate) async fn exec(
             .clamp(1, TIMEOUT_CEILING_MS),
     );
 
-    let mut command = Command::new(&resolved);
+    let Launch {
+        mut command,
+        program: shown,
+        cwd: directory,
+        distro,
+    } = launch;
+
     command
-        .args(args)
-        .current_dir(cwd)
         // A command that reads stdin would otherwise wait for input nobody can
         // type, and look exactly like a hang until the deadline killed it.
         .stdin(Stdio::null())
@@ -202,16 +249,16 @@ pub(crate) async fn exec(
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            tracing::debug!(%err, program = %resolved.display(), "a command would not start");
+            tracing::debug!(%err, program = %shown, "a command would not start");
             return Produced::failed(
                 tool::SHELL_EXEC,
                 ErrorCode::ToolFailed,
-                spawn_failure(&resolved, &err),
+                spawn_failure(Path::new(&shown), &err),
             );
         }
     };
 
-    tracing::info!(program = %resolved.display(), cwd = %cwd.display(), "running a command");
+    tracing::info!(program = %shown, cwd = %directory, host = %distro.as_deref().unwrap_or("this computer"), "running a command");
 
     let started = Instant::now();
     let run = Run {
@@ -225,13 +272,19 @@ pub(crate) async fn exec(
     // `as` saturates at `u64::MAX`, which is 584 million years.
     #[allow(clippy::cast_possible_truncation)]
     let duration_ms = started.elapsed().as_millis() as u64;
-    let meta = json!({
-        "program": resolved.display().to_string(),
-        "cwd": cwd.display().to_string(),
+    let mut meta = json!({
+        "program": shown,
+        "cwd": directory,
         "duration_ms": duration_ms,
         "exit_code": ended.exit_code(),
         "bytes": capture.total,
     });
+    // Added rather than always present: a command on this computer produces the
+    // envelope every phase before this one produced, and a model reading
+    // `exec_host` at all is a model whose command really did land elsewhere.
+    if let Some(distro) = &distro {
+        meta["exec_host"] = json!(distro);
+    }
 
     match ended {
         Ended::Cancelled => Produced::cancelled(
@@ -269,6 +322,222 @@ pub(crate) async fn exec(
             ErrorCode::ToolFailed,
             format!("`{line}` ran, but its result could not be read: {message}"),
         ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where it lands
+// ---------------------------------------------------------------------------
+
+/// A configured child, and the words for what it is about to do.
+///
+/// The three strings are what the envelope's `meta` and the log will say, and
+/// they are built beside the command rather than derived from it afterwards:
+/// which program was found and which working directory it starts in are
+/// answered differently by the two hosts, and a second derivation is a second
+/// chance for the record to disagree with the run.
+struct Launch {
+    /// The child, short of its pipes.
+    command: Command,
+    /// The program, as the record should name it: the resolved path on this
+    /// computer, the name as given inside a distribution.
+    program: String,
+    /// The working directory, in the spelling of the host it runs on.
+    cwd: String,
+    /// The distribution, when the command lands in one.
+    distro: Option<String>,
+}
+
+/// Decides where the command lands and prepares it, or refuses.
+///
+/// `Err` is a finished envelope rather than a message, because the two failures
+/// that live here are of different kinds: a program that is nowhere is
+/// `E_TOOL_FAILED`, and an execution host that cannot take the command is
+/// `E_EXEC_HOST` — and the probe in between can also be *stopped*, which is
+/// neither. It is boxed because an envelope is a wide thing to carry in the
+/// unhappy half of a `Result` that every call passes through.
+async fn plan(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    host: Option<&ExecTarget>,
+    cancel: &CancellationToken,
+) -> Result<Launch, Box<Produced>> {
+    let Some(target) = host else {
+        let resolved = resolve(program, cwd).map_err(|message| {
+            Box::new(Produced::failed(
+                tool::SHELL_EXEC,
+                ErrorCode::ToolFailed,
+                message,
+            ))
+        })?;
+
+        let mut command = Command::new(&resolved);
+        command.args(args).current_dir(cwd);
+
+        return Ok(Launch {
+            command,
+            program: resolved.display().to_string(),
+            cwd: cwd.display().to_string(),
+            distro: None,
+        });
+    };
+
+    wsl(program, args, target, cancel).await
+}
+
+/// Prepares a command to run inside a WSL distribution (PLAN 7.12).
+///
+/// `--exec` rather than a bare command line: it is what stops WSL putting a
+/// login shell between itself and the program, so `args` stays a vector on both
+/// sides of the crossing and there is still no metacharacter layer. `--cd`
+/// names the working directory in the distribution's own spelling — the one the
+/// user read in the dialog.
+///
+/// The probe before it is the whole reason this is `async` and not four lines.
+#[cfg(windows)]
+async fn wsl(
+    program: &str,
+    args: &[String],
+    target: &ExecTarget,
+    cancel: &CancellationToken,
+) -> Result<Launch, Box<Produced>> {
+    let Some(wsl) = crate::exec_host::wsl_exe() else {
+        return Err(Box::new(Produced::failed(
+            tool::SHELL_EXEC,
+            ErrorCode::ExecHost,
+            "this project runs its commands in a WSL distribution, and `wsl.exe` is not on this \
+             machine"
+                .to_owned(),
+        )));
+    };
+
+    probe(&wsl, target, cancel).await?;
+
+    let mut command = Command::new(&wsl);
+    command
+        .args(["-d", &target.distro, "--cd", &target.cwd, "--exec", program])
+        .args(args);
+    // Deliberately no `current_dir`: `--cd` has already said where this starts,
+    // and a Windows working directory would be a second answer to the same
+    // question — one that `wsl.exe` translates by its own rules and that can
+    // therefore differ from the path the dialog showed.
+
+    Ok(Launch {
+        command,
+        program: program.to_owned(),
+        cwd: target.cwd.clone(),
+        distro: Some(target.distro.clone()),
+    })
+}
+
+/// Prepares a command to run inside a WSL distribution. Never, off Windows.
+///
+/// Not unreachable: a `projects.json` written on Windows and opened on another
+/// machine carries the host with it. Refusing is the point — the alternative is
+/// running the command on this computer instead, which is the wrong operating
+/// system and would look exactly like success.
+#[cfg(not(windows))]
+async fn wsl(
+    _program: &str,
+    _args: &[String],
+    target: &ExecTarget,
+    _cancel: &CancellationToken,
+) -> Result<Launch, Box<Produced>> {
+    Err(Box::new(Produced::failed(
+        tool::SHELL_EXEC,
+        ErrorCode::ExecHost,
+        format!(
+            "this project runs its commands in the `{}` WSL distribution, and WSL is a Windows \
+             feature. Clear the execution host to run them on this computer instead",
+            target.distro
+        ),
+    )))
+}
+
+/// Asks the distribution whether it exists and can see the working directory.
+///
+/// Both questions at once, because `wsl.exe` answers them in the same breath:
+/// `test -d` exits 0 for a directory that is there and 1 for one that is not,
+/// and anything else — including the `-1` WSL returns for a name nobody is
+/// registered under — is WSL itself refusing before the program ran.
+///
+/// It is a spawn the caller pays for on every hosted call, and it buys the one
+/// guarantee this slice cannot do without. `wsl.exe --cd` answers a directory
+/// it cannot find by starting in `/` and saying nothing: without this, a
+/// `rm -rf build` approved for `/home/p/proj` would run somewhere else and
+/// report success.
+#[cfg(windows)]
+async fn probe(
+    wsl: &Path,
+    target: &ExecTarget,
+    cancel: &CancellationToken,
+) -> Result<(), Box<Produced>> {
+    let refused = |message: String| {
+        Box::new(Produced::failed(
+            tool::SHELL_EXEC,
+            ErrorCode::ExecHost,
+            message,
+        ))
+    };
+
+    let mut command = Command::new(wsl);
+    command
+        .args(["-d", &target.distro, "--exec", "test", "-d", &target.cwd])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .creation_flags(CREATE_NO_WINDOW);
+
+    let asked = tokio::select! {
+        biased;
+        () = cancel.cancelled() => {
+            return Err(Box::new(Produced::cancelled(
+                tool::SHELL_EXEC,
+                "it was stopped before the distribution had answered".to_owned(),
+            )));
+        }
+        () = tokio::time::sleep(PROBE_TIMEOUT) => {
+            return Err(refused(format!(
+                "`{}` did not answer within {} seconds, so nothing was run",
+                target.distro,
+                PROBE_TIMEOUT.as_secs()
+            )));
+        }
+        asked = command.output() => asked,
+    };
+
+    let asked = asked.map_err(|err| {
+        refused(format!(
+            "`wsl.exe` would not start, so `{}` could not be reached: {err}",
+            target.distro
+        ))
+    })?;
+
+    match asked.status.code() {
+        Some(0) => Ok(()),
+        // `test` said no. The distribution is there; the folder is not.
+        Some(1) => Err(refused(format!(
+            "`{}` is not a folder inside the `{}` distribution, so the command was not run. The \
+             workspace may be on a drive that distribution does not mount",
+            target.cwd, target.distro
+        ))),
+        // WSL's own refusal — no such distribution, the service is not
+        // running, the virtual machine would not start. Its words, because
+        // they name which of those it was.
+        _ => {
+            let said = crate::exec_host::message(&asked.stderr);
+            let said = if said.is_empty() {
+                String::new()
+            } else {
+                format!(": {said}")
+            };
+            Err(refused(format!(
+                "`{}` is not a distribution a command can be run in right now{said}",
+                target.distro
+            )))
+        }
     }
 }
 
@@ -403,6 +672,14 @@ impl Run<'_> {
     /// what the user was told would run in the ordinary case. A script that
     /// spawns and then waits is not covered; that needs process groups, and it
     /// is noted in the README rather than half-done here.
+    ///
+    /// A command in a WSL distribution is the Windows case and is covered by
+    /// it, which is worth saying because it is not obvious: the child here is
+    /// `wsl.exe`, a relay, and the program is a Linux process in the
+    /// distribution's own namespace that `taskkill` has never heard of. Ending
+    /// the relay ends the session it opened, and the Linux process goes with
+    /// it — so Stop kills `cargo`, and not only the thing that launched it
+    /// (PLAN 7.12).
     async fn terminate(&mut self) {
         #[cfg(windows)]
         if let Some(pid) = self.child.id() {
@@ -1150,6 +1427,8 @@ fn bytes_phrase(bytes: u64) -> String {
 mod tests {
     use super::*;
 
+    use crate::tools::NullProgress;
+
     /// A sink that keeps what it was given.
     #[derive(Debug, Default)]
     struct Recorder {
@@ -1486,6 +1765,176 @@ mod tests {
                 .and_then(|extension| extension.to_str())
                 .map(str::to_lowercase),
             Some("exe".to_owned())
+        );
+    }
+
+    /// An execution host on a build that has no WSL is refused, not quietly
+    /// run here instead. The distinction is the whole point of the code: the
+    /// project says its commands belong in a Linux distribution, and running
+    /// them on this machine would be the wrong operating system reporting
+    /// success.
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn a_wsl_host_off_windows_refuses_rather_than_falling_back() {
+        let target = ExecTarget {
+            distro: "Ubuntu".to_owned(),
+            cwd: "/home/p/proj".to_owned(),
+        };
+        let cwd = std::env::current_dir().expect("a working directory");
+
+        let produced = exec(
+            "true",
+            &[],
+            &cwd,
+            Some(&target),
+            Some(1000),
+            &NullProgress,
+            &CancellationToken::new(),
+        )
+        .await;
+        let result = produced.result;
+
+        assert!(!result.ok);
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::ExecHost)
+        );
+        assert!(
+            result
+                .error
+                .as_ref()
+                .is_some_and(|error| error.message.contains("Ubuntu")),
+            "{result:?}"
+        );
+    }
+
+    /// The first distribution this machine has, or nothing to test against.
+    ///
+    /// A machine without WSL is an ordinary machine, and the two tests below
+    /// are about behaviour that only exists on one that has it. They skip
+    /// rather than fail, the same way the code-page assertions above do.
+    #[cfg(windows)]
+    async fn a_distro() -> Option<String> {
+        crate::exec_host::installed().await.into_iter().next()
+    }
+
+    /// The exit condition of PLAN 7.12, at the level that does the work: a
+    /// command runs *inside* the distribution, in the directory it was told,
+    /// with that distribution's own filesystem under it.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_command_runs_in_the_distro_and_in_the_directory_it_was_given() {
+        let Some(distro) = a_distro().await else {
+            return;
+        };
+        let target = ExecTarget {
+            distro: distro.clone(),
+            // `/etc` rather than the workspace: every distribution has one, and
+            // what is being proved is that the working directory crosses over,
+            // not that this machine's folders do.
+            cwd: "/etc".to_owned(),
+        };
+        let cwd = std::env::current_dir().expect("a working directory");
+
+        let produced = exec(
+            "pwd",
+            &[],
+            &cwd,
+            Some(&target),
+            Some(60_000),
+            &NullProgress,
+            &CancellationToken::new(),
+        )
+        .await;
+        let result = produced.result;
+
+        assert!(result.ok, "{result:?}");
+        assert_eq!(result.content.trim(), "/etc", "{result:?}");
+        assert_eq!(result.meta["exit_code"], 0);
+        assert_eq!(result.meta["cwd"], "/etc");
+        assert_eq!(
+            result.meta["exec_host"], distro,
+            "the record says which machine ran it"
+        );
+    }
+
+    /// The failure `wsl.exe --cd` would otherwise hide. Asked for a directory
+    /// that is not there, WSL starts in `/` and says nothing — so a command
+    /// approved for one folder would run in another and report success. The
+    /// probe is what turns that into a refusal.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_directory_the_distro_cannot_see_refuses_instead_of_running() {
+        let Some(distro) = a_distro().await else {
+            return;
+        };
+        let target = ExecTarget {
+            distro,
+            cwd: "/definitely-not-a-directory-9k2".to_owned(),
+        };
+        let cwd = std::env::current_dir().expect("a working directory");
+
+        let produced = exec(
+            "pwd",
+            &[],
+            &cwd,
+            Some(&target),
+            Some(60_000),
+            &NullProgress,
+            &CancellationToken::new(),
+        )
+        .await;
+        let result = produced.result;
+
+        assert!(!result.ok, "{result:?}");
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::ExecHost)
+        );
+        assert!(
+            result.content.is_empty(),
+            "nothing ran, so there is nothing it said: {result:?}"
+        );
+    }
+
+    /// A distribution nobody has installed is named and refused, rather than
+    /// reaching the model as a program that exited non-zero — which is what it
+    /// would look like if `wsl.exe`'s own complaint were treated as output.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn an_unknown_distro_is_a_host_failure_and_not_an_exit_code() {
+        if a_distro().await.is_none() {
+            return;
+        }
+        let target = ExecTarget {
+            distro: "definitely-not-a-distro-9k2".to_owned(),
+            cwd: "/".to_owned(),
+        };
+        let cwd = std::env::current_dir().expect("a working directory");
+
+        let produced = exec(
+            "pwd",
+            &[],
+            &cwd,
+            Some(&target),
+            Some(60_000),
+            &NullProgress,
+            &CancellationToken::new(),
+        )
+        .await;
+        let result = produced.result;
+
+        assert!(!result.ok, "{result:?}");
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::ExecHost)
+        );
+        assert!(
+            result
+                .error
+                .as_ref()
+                .is_some_and(|error| error.message.contains("definitely-not-a-distro-9k2")),
+            "{result:?}"
         );
     }
 

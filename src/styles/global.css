@@ -575,6 +575,52 @@ body {
   gap: 0.4rem;
 }
 
+/*
+ * Where this project's commands run (PLAN 7.12).
+ *
+ * A label, a picker and one sentence. The sentence is the part that earns its
+ * space: a control that silently rerouted every `shell_exec` to another
+ * operating system with nothing beside it saying so would be the most
+ * consequential unlabelled switch in the application.
+ */
+.host__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.host__select {
+  width: 100%;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.host__select:disabled {
+  opacity: 0.6;
+}
+
+.host__note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.host__note code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* A project pointing at a distribution this machine no longer has. Every
+   command will be refused until somebody changes it, so it is not a hint. */
+.host__note--warn {
+  color: var(--warning);
+}
+
 .shared__list {
   margin: 0;
   padding: 0;

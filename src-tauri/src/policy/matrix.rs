@@ -36,6 +36,7 @@ use super::{
     ScreenGeometry, ToolCall,
 };
 use crate::error::ErrorCode;
+use crate::exec_host::{self, ExecHost, ExecTarget};
 use crate::handoff::{self, bus};
 use crate::workspace;
 use crate::world;
@@ -406,17 +407,37 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
+            // Where it lands, before it is drawn (PLAN 7.12). A folder the
+            // distribution has no path for is refused here rather than put to
+            // the user: there is no answer they could give that would make the
+            // command runnable, and the one thing that must not happen is for
+            // it to run on Windows instead.
+            let host = match ctx.exec_host {
+                Some(ExecHost::Wsl { distro }) => {
+                    match exec_host::linux_path(distro, &directory.path) {
+                        Ok(cwd) => Some(ExecTarget {
+                            distro: distro.clone(),
+                            cwd,
+                        }),
+                        Err(reason) => return Err(Decision::deny(ErrorCode::ExecHost, reason)),
+                    }
+                }
+                None => None,
+            };
+
             let line = shell_line(&program, &args);
             let detail = ApprovalDetail::Shell {
                 program: program.clone(),
                 args: args.clone(),
                 cwd: directory.path.display().to_string(),
                 shell_line: line.clone(),
+                host: host.clone(),
             };
             let call = ResolvedCall::ShellExec {
                 program: program.clone(),
                 args,
                 cwd: directory.path.clone(),
+                host: host.map(Box::new),
                 timeout_ms,
             };
 
@@ -436,7 +457,19 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
+            // The grant is keyed on the program either way — `git` is `git`
+            // whichever operating system runs it, and `wsl.exe` is not a
+            // program anybody was asked about. What the host changes is what
+            // the user is told they are agreeing to.
             let grant = Grant::shell(&program);
+            let reason = match ctx.exec_host {
+                Some(ExecHost::Wsl { distro }) => format!(
+                    "a command runs in `{distro}` as that distribution's own user, and is not                      sandboxed"
+                ),
+                None => {
+                    "a command runs with your own privileges and is not sandboxed".to_owned()
+                }
+            };
             Ok(ask(
                 call,
                 AskRequest {
@@ -447,8 +480,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                     detail,
                     scope_label: scope_label(Some(&grant)),
                     grant: Some(grant),
-                    reason: "a command runs with your own privileges and is not sandboxed"
-                        .to_owned(),
+                    reason,
                 },
             ))
         }
