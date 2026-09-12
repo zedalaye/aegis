@@ -7,6 +7,15 @@
  * reorders projects by recency and deduplicates workspaces, and guessing at
  * those rules here is how the two drift apart.
  *
+ * The one thing this store does decide is the *display* order, and it is a
+ * presentation concern rather than a second opinion about recency. The runtime
+ * lists most-recently-opened first, which is right for the question "where was
+ * I", asked once, at startup. It is wrong for a list somebody is clicking:
+ * opening a project stamps it, so the row jumps to the top under the cursor and
+ * the next click lands on a different project than the one aimed at. So the
+ * order is taken from the runtime once and then held for the lifetime of the
+ * window — see `stabilize`.
+ *
  * Errors are held rather than thrown. Every action resolves; a failure lands
  * in `error` for the shell to render, because there is no boundary above these
  * calls that could do anything better with a rejection.
@@ -51,7 +60,12 @@ export type PendingWorkspace = {
 type Outcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false };
 
 export type ProjectsState = {
-  /** Every project, most recently opened first. */
+  /**
+   * Every project, in a stable display order.
+   *
+   * Most recently opened first when the window starts; held in that order
+   * afterwards, so clicking a project does not move it.
+   */
   readonly projects: readonly Project[];
   /** The open project and its sessions, or `null` when none is open. */
   readonly detail: ProjectDetail | null;
@@ -89,6 +103,31 @@ export type ProjectsState = {
 };
 
 export const useProjects = create<ProjectsState>((set, get) => {
+  /**
+   * The order the sidebar is showing, as project ids.
+   *
+   * Seeded from the runtime's own order the first time a list arrives, and
+   * amended only by what actually changed: an id that has gone is dropped, and
+   * one that is new goes to the top, which is where somebody who has just added
+   * a workspace looks for it. A project the user merely *opened* keeps its
+   * place, which is the whole point.
+   */
+  let order: readonly string[] = [];
+
+  /** Reorders a freshly fetched list into the order the window is showing. */
+  const stabilize = (projects: readonly Project[]): readonly Project[] => {
+    const byId = new Map(projects.map((project) => [project.id, project]));
+    const known = order
+      .map((id) => byId.get(id))
+      .filter((project): project is Project => project !== undefined);
+    const knownIds = new Set(known.map((project) => project.id));
+    const fresh = projects.filter((project) => !knownIds.has(project.id));
+
+    const next = [...fresh, ...known];
+    order = next.map((project) => project.id);
+    return next;
+  };
+
   /** Runs a command, holding any failure in `error` and always clearing `busy`. */
   const guard = async <T>(
     command: string,
@@ -114,18 +153,22 @@ export const useProjects = create<ProjectsState>((set, get) => {
    */
   const refresh = async (preferredId?: string): Promise<void> => {
     const projects = await projectList();
+    // Before `stabilize`, because falling back to "the most recently opened"
+    // is a question about recency and the runtime's order is the answer to it.
+    // Only the *display* order is frozen.
     const target = projects.find((p) => p.id === preferredId) ?? projects.at(0);
 
     if (target === undefined) {
-      set({ projects, detail: null, status: "ready" });
+      set({ projects: stabilize(projects), detail: null, status: "ready" });
       return;
     }
 
     // Opening stamps `last_opened_at`, so the list is refetched afterwards
-    // rather than before: the order the sidebar shows must be the order the
-    // runtime now holds.
+    // rather than before: what the runtime now holds is what a later start will
+    // read. `stabilize` then puts it back into the order already on screen, so
+    // the row the user just clicked does not move out from under them.
     const detail = await projectOpen(target.id);
-    set({ projects: await projectList(), detail, status: "ready" });
+    set({ projects: stabilize(await projectList()), detail, status: "ready" });
   };
 
   return {
