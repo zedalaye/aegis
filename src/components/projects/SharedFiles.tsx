@@ -3,11 +3,10 @@
  *
  * Five directories inside the open project's `.aegis/` — `briefs/`, `status/`,
  * `artefacts/`, `decisions/` and, from Phase 13, `skills/` — with one button to
- * lay down whatever is missing. That is the whole surface. The files themselves
- * are read and written by the conversation, through `fs_write` and the approval
- * dialog, which is why there is no editor here: a panel that could rewrite
- * `DECISIONS.md` without passing the gate would be a second write path around
- * it.
+ * lay down whatever is missing. That is this panel. Seeing the files is PLAN
+ * 7.15 (a read-only explorer of the folder); this surface stays the scaffold.
+ * There is no editor here: a panel that could rewrite `DECISIONS.md` without
+ * passing the gate would be a second write path around it.
  *
  * One directory rather than five at the root, because five things somebody did
  * not ask for beside their `src/` is five things too many. The one that is

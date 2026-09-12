@@ -5,7 +5,7 @@
  * input, and the WebView holds the whole UI — rendering it as markup would put
  * whatever the model said one escaping bug away from the DOM. `white-space:
  * pre-wrap` keeps the paragraphs and line breaks a reader needs; a markdown
- * renderer is a Phase 10 question, and it will need a sanitizer with it.
+ * renderer is `IDEAS.md` § 14, and it will need a sanitizer with it.
  */
 
 import type { Message } from "../../ipc/bindings";

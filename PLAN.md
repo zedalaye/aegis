@@ -806,7 +806,7 @@ What the MVP already is, vs what § 7.3 still has to add.
 | --- | --- | --- |
 | 1. Agent registry (role, tools, skills, ACL) | one implicit assistant | `agents/` store: id, role, provider binding, tool allow-list, skill allow-list, memory path |
 | 2. Handoff bus with a fixed schema | a single session transcript | typed `Handoff` / `HandoffResult` objects (`COS.md` *Handoff*), not "read my thread" |
-| 3. `/workspace` as shared memory | user-picked folder; no convention | two layers in that folder, different mutation rules. **Cabinet** (Phase 11): `briefs/`, `status/`, `artefacts/`, `decisions/`, `skills/`, all under `.aegis/` — in-flight work, rewritten often, the harness's working surface over a project. **Constitution** (`world/`, the missed half of Phase 11, at the *root* because it is the project rather than the tool's view of it): what the thing *is*, specialists read, they do not write. Opt-in; empty templates in a workspace with no essence are theatre. The WebView does not grow a file tree or an editor — files stay ordinary files. § 7.11 versions the folder with git when the convention is laid down. § 7.10 reveals it in the OS file manager. Phase 17 is the structured read of `/status`. How the CoS uses both layers is the rest of this subsection |
+| 3. `/workspace` as shared memory | user-picked folder; no convention | two layers in that folder, different mutation rules. **Cabinet** (Phase 11): `briefs/`, `status/`, `artefacts/`, `decisions/`, `skills/`, all under `.aegis/` — in-flight work, rewritten often, the harness's working surface over a project. **Constitution** (`world/`, the missed half of Phase 11, at the *root* because it is the project rather than the tool's view of it): what the thing *is*, specialists read, they do not write. Opt-in; empty templates in a workspace with no essence are theatre. Files stay ordinary files. The WebView does not grow an editor — a save from there is a second write around the gate. A read-only explorer of the folder is § 7.15: the agent is in the system (`fs_list` / `fs_read`), the operator is not. § 7.11 versions the folder with git when the convention is laid down. § 7.10 reveals it in the OS file manager. Phase 17 is the structured read of `/status`. How the CoS uses both layers is the rest of this subsection |
 | 4. Memory store per agent | none (transcript only) | CRUD + search + forget, scoped to that agent; CoS sees summaries, not dumps |
 | 5. Skill runner (`SKILL.md`) | none | catalog always cheap; body loaded only on `run skill:…`; authoring is a file write, not a `skill_create` command; see § 7.6 |
 | 6. Scheduler of routines | none; tray process already stays alive | cron/trigger on top of (5); never automate a still-fuzzy workflow |
@@ -1031,7 +1031,7 @@ written: the constitution is policed by policy, not by a lockfile.
 Each phase ends in something you can run. No phase depends on a later one. Domain connectors
 are last on purpose.
 
-Five slices are **not** steps in this list:
+Six slices are **not** steps in this list:
 
 - **§ 7.10** chrome (title-bar icons, a button that reveals the folder in the OS file manager)
 - **§ 7.11** workspace versioning (`git init` when the convention is laid down, never an
@@ -1040,8 +1040,10 @@ Five slices are **not** steps in this list:
   says so
 - **§ 7.13** skill promotion (`PROPOSAL.md` then apply; writing is still not granting)
 - **§ 7.14** cabinet founding (a founder skill writes a roster proposal; apply is the grant)
+- **§ 7.15** workspace explorer (read-only tree + preview of the open folder; drop lands
+  a brief). Not an editor.
 
-§ 7.10–7.12 may start once Phase 13 has landed, and must not delay Phases 14–16.
+§ 7.10–7.12 and § 7.15 may start once Phase 13 has landed, and must not delay Phases 14–16.
 § 7.13 waits for Phase 17 (the CoS board). It must not delay Phases 15–17, and it
 is not a number between 15 and 16. § 7.14 waits for Phases 12, 13, 16 and 17
 (identities, skills, routines, board). It must not delay remaining domain packs,
@@ -1744,10 +1746,10 @@ identity and ticks the boxes. That is the whole of what *domain packs as skills,
 supposed to mean, and the way to tell is that nothing in `src-tauri` learned what a client, a
 mailbox, a release note, a statement, a timeline or a goal is.
 
-§ 7.10 (chrome), § 7.11 (versioning) and § 7.12 (execution host) may run at any time
-after Phase 13. § 7.13 (skill promotion) may run after Phase 17. § 7.14 (cabinet
-founding) may run after Phases 12, 13, 16 and 17. They do not insert here, and they
-are not Phases 20, 21, 22, 23 and 24.
+§ 7.10 (chrome), § 7.11 (versioning), § 7.12 (execution host) and § 7.15
+(explorer) may run at any time after Phase 13. § 7.13 (skill promotion) may
+run after Phase 17. § 7.14 (cabinet founding) may run after Phases 12, 13, 16
+and 17. They do not insert here, and they are not Phases 20–25.
 
 ### 7.4 Hard rules that survive every later phase
 
@@ -1761,10 +1763,11 @@ are not Phases 20, 21, 22, 23 and 24.
 - A messaging surface is not an agent.
 - Trading, X monetization, and the wish list are **funding goals expressed as files**. They
   are not a reason to put a broker or a poster in `src-tauri`.
-- Files stay ordinary files. The WebView does not grow a file tree or an editor. A session
-  writes a runbook the same way it writes a decision: `fs_write`, under the gate, on the
-  audit log. A workspace laid down by the convention is a git work tree (§ 7.11); a
-  commit is still a gated `shell_exec`.
+- Files stay ordinary files. The WebView may list and preview them (§ 7.15); it
+  does not grow an editor. A session writes a runbook the same way it writes a
+  decision: `fs_write`, under the gate, on the audit log. A workspace laid down
+  by the convention is a git work tree (§ 7.11); a commit is still a gated
+  `shell_exec`.
 - The UI host OS is not assumed to be the tool host OS. A WSL distro is an execution
   host on the project (§ 7.12), not a second runtime and not outbound SSH.
 - Specialists read `world/`; they do not write it. An écart escalates. Amending
@@ -1817,9 +1820,11 @@ are not Phases 20, 21, 22, 23 and 24.
 - Dumping a procedure into a system prompt or a chat, then scheduling it. That is not a skill.
   A skill is a file the runner can name, load, validate and audit. Until that file exists,
   the work stays manual.
-- Building an in-app file tree or a markdown editor "so you can see the project". Aegis is
-  not an IDE. The folder is the operator's; § 7.10 reveals it in the file manager. Phase 17
-  is the structured read of `/status`. Listing `node_modules/` in the rail is the wrong tree.
+- An in-app editor, Monaco, or a save path from the WebView "so you can see the
+  project". That is a second write around the gate. Seeing the files is § 7.15
+  (preview in, save out). Reveal is § 7.10. Phase 17 is the structured read of
+  `/status`. Listing `node_modules/` in the rail as the default tree is still
+  the wrong tree.
 - A `skill_create` command, or a WebView write into the skill library, around the gate and
   off the audit log. That is a second way to change what the agent will do.
 - A session that grants itself a skill it just wrote. Writing the file is not an allow-list
@@ -1835,10 +1840,11 @@ are not Phases 20, 21, 22, 23 and 24.
   UI fact; the documents stay where they are. If two cabinets need the
   same identity with different grants, that is a binding (`IDEAS.md`),
   not a second settings file.
-- Inserting chrome polish, `git init`, WSL, a skill-proposal queue, or a founding
-  wizard into § 7.3 as Phase 13.5 / 15.5 / 19.5, or delaying memory, handoff, the
-  scheduler, or the board for icons, a repository, a distro, an authoring UX, or a
-  roster. Those slices are § 7.10, § 7.11, § 7.12, § 7.13 and § 7.14.
+- Inserting chrome polish, `git init`, WSL, a skill-proposal queue, a founding
+  wizard, or a file explorer into § 7.3 as Phase 13.5 / 15.5 / 19.5, or delaying
+  memory, handoff, the scheduler, or the board for icons, a repository, a distro,
+  an authoring UX, a roster, or a tree. Those slices are § 7.10, § 7.11, § 7.12,
+  § 7.13, § 7.14 and § 7.15.
 - Teaching the model to call `wsl.exe` or `bash -c` so Linux folders "just work". The
   distro is a project field; wrapping is `shell_exec`'s, like `.cmd` shims (§ 5.1,
   § 7.12). Silent fallback to Windows `CreateProcess` when WSL is missing is the
@@ -2207,17 +2213,15 @@ WebView are refused.
 
 **Out of this slice**
 
-- A file tree of the repo (`src/`, `node_modules/`, `.git/`). If the
-  workspace is a code repo, the operator already has an editor. If it is
-  a CoS folder, the convention directories *are* the tree, and Shared
-  files already says whether they exist.
-- An in-app editor, Monaco, or a save path from the WebView. Writing
-  `DECISIONS.md` or a `SKILL.md` that way would be a second write path
-  around the gate (Phase 11 / § 7.6 *Authoring*).
-- Listing the contents of `.aegis/briefs/` / `.aegis/artefacts/` / `skills/`, or a
-  read-only markdown preview. Those are the next honest steps after
-  "I cannot even see where the project is", not this slice. They still
-  are not an editor: preview in, save out.
+- A workspace explorer, a listing of `.aegis/briefs/` /
+  `.aegis/artefacts/` / `skills/`, or a read-only preview. Those
+  are § 7.15, the next honest steps after "I cannot even see
+  where the project is". They still are not an editor: preview
+  in, save out.
+- An in-app editor, Monaco, or a save path from the WebView.
+  Writing `DECISIONS.md` or a `SKILL.md` that way would be a
+  second write path around the gate (Phase 11 / § 7.6
+  *Authoring*). Stays refused in § 7.15 too.
 - "Open in VS Code" / `cursor .` as the default. A later optional
   "open with" command in Settings is allowed; it is not the first click.
 - The Phase 17 status board.
@@ -2225,8 +2229,8 @@ WebView are refused.
 **Exit:** the title bar is icon-only for those actions, each named
 to a screen reader; the open project has an Open button next to its
 path; pressing it shows that folder in the file manager on Windows and
-macOS (best-effort Linux). No new plugin permission. No file tree. No
-editor.
+macOS (best-effort Linux). No new plugin permission. No explorer in
+this slice. No editor.
 
 ### 7.11 Workspace versioning — not a CoS phase
 
@@ -2699,3 +2703,88 @@ world; a name that already exists is skipped; the built-in
 Assistant is unchanged; a routine still cannot be saved
 without a witnessed run; a session cannot apply. No new tool.
 No wizard. The grant is the apply.
+
+### 7.15 Workspace explorer — not a CoS phase
+
+Not a step in § 7.3. Not Phase 25. Not an IDE.
+
+The agent is *in* the system: `fs_list`, `fs_read`, the digest.
+The operator is not. Shared memory is files. A UI that cannot
+show them makes the transcript the place a person looks — the
+thing the convention exists to stop being. § 7.10 reveals the
+folder in the OS file manager; on macOS Finder hides `.aegis/`
+until ⌘⇧. Reveal is not seeing.
+
+An earlier cut bundled "a file tree or a markdown editor" and
+refused both (§ 7.2, § 7.5, § 7.10). The editor half is
+load-bearing: a save path from the WebView is a second write
+around the gate (§ 7.6 *Authoring*). The explorer half was a
+slogan. "If it is a code repo the operator already has an
+editor" fails § 7.1 (a project is not assumed to be a software
+repo) and fails the person who is in *this* window. "The
+convention directories *are* the tree" fails `COS.md`: a
+brief's inputs are paths anywhere in the workspace, never
+paste.
+
+This slice may start once Phase 13 has landed (the cabinet
+includes `skills/`). It must not delay Phases 14–16. It is
+not § 7.10 (icons and reveal). It is not Phase 17 (the
+structured read of `/status`). Do not insert it as Phase
+13.5, and do not smuggle it into chrome polish.
+
+**In scope**
+
+- **A tree of the open workspace.** Hide `.git`,
+  `node_modules`, and gitignored junk by default. Show
+  `.aegis/` (the dot was one root entry, not invisibility)
+  and `world/` when it exists. Mark the cabinet directories
+  as the working surface without making them the only rows.
+- **Preview in, save out.** Click a file: markdown / text as
+  read-only with a sanitizer (no raw HTML, no remote images,
+  no `file://`); images as bytes through a Rust command,
+  rendered as a blob URL the WebView created, never
+  `file://`; unknown / binary as name, size, type, and the
+  reveal-this-file button § 7.10 already allowed later.
+  `world/` is preview-only.
+- **Drop a file onto the project, or onto `.aegis/briefs/`
+  in the tree.** A Rust command copies it into
+  `.aegis/briefs/` under a sanitized name. Copy, do not
+  move. Source may be outside the workspace: the operator
+  chose it. The WebView does not read the bytes. Drops onto
+  `.aegis/artefacts/` or `world/` refuse. If `.aegis/briefs/`
+  is missing, refuse (or offer scaffold) — do not create the
+  convention because something was dropped. This write is
+  the operator's, like *Set up shared files*, not the
+  agent's approval dialog. An audit line that a brief
+  arrived from outside is still worth having. Do not wrap
+  the file in generated markdown. Do not infer a skill from
+  the extension. Do not start a turn.
+
+**The commands.** Listing, preview bytes, and import-brief
+are Rust commands contained to the open project's canonical
+workspace (import's *destination* is; the source is a path
+the OS drop already handed this process). The WebView never
+opens `file://`, never gains `fs:` / `shell:` / opener
+plugin permissions (same flag as § 7.10). Arbitrary paths
+from the WebView are refused. The listing is not a generic
+`fs_list` the WebView aims at anywhere.
+
+**Out of this slice**
+
+- An in-app editor, Monaco, a cursor, or a save path from
+  the WebView. Writing `DECISIONS.md` or a `SKILL.md` that
+  way remains a second write path around the gate.
+- Listing `node_modules/` and `.git` as the default tree.
+- Markdown in the chat bubble (`IDEAS.md` § 14). That is
+  untrusted model output, a different sanitizer question.
+- A dump onto `world/sources.yml`. That is constitution
+  re-perception (`COS.md` *Work*), not a brief.
+- "Open in VS Code" as the default (same as § 7.10).
+- The Phase 17 status board.
+
+**Exit:** with a project open, the operator can see a brief,
+an artefact, an image, and a file a brief points at, without
+leaving the app; dropping a file from outside lands in
+`.aegis/briefs/` and not in artefacts or `world/`; nothing
+in the WebView saves a file. No new plugin permission. No
+editor.

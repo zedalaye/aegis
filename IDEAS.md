@@ -467,3 +467,188 @@ founding look finished.
 wants to grant a tool the existing Reviewer does not hold, *and* taking
 it away from the first project would be wrong. Measure that by trying to
 found a second cabinet, not by designing the table.
+
+## Transcript display
+
+The bubble already names this as a deferred question
+(`src/components/chat/MessageBubble.tsx`). The comment still says
+"Phase 10". Phase 10 landed without it. This is the investigation so
+the next person does not treat the comment as a plan, or treat PLAN
+§ 7.10's file preview as the same work.
+
+### 14. Markdown in the bubble, with a sanitizer
+
+**The gap.** Assistant text is drawn as a `<p>` with `white-space:
+pre-wrap`. Headings, lists, fences and emphasis stay as punctuation.
+A coding turn of any length is harder to read than the same text in
+the operator's editor. That is the whole complaint.
+
+**Why it was not done.** The model's output is untrusted input, and
+the WebView is the whole UI — sessions, the approval dialog, `invoke`.
+`DiffPreview` and `ToolCallCard` stay in `<pre>` for the same reason:
+a renderer that puts the model's words into the DOM is one escaping
+bug away from that surface. `pre-wrap` was the MVP's honest
+substitute, not a missing stylesheet.
+
+**What it is not.** PLAN § 7.15's read-only preview of a workspace
+file. A file the operator owns, shown in the explorer. An in-app
+editor is refused there and stays refused here. Chat markdown is a
+*display* of a stored string; the transcript on disk does not
+change.
+
+**The change.** A parser in the bubble, not `dangerouslySetInnerHTML`
+of a model's HTML. A subset is enough: headings, lists, emphasis,
+inline code, fences, links-as-text or links that leave the WebView
+through a Rust command. Raw HTML in the source stays inert (`html:
+false`). Remote images (`![](url)`) do not load — that would be the
+model choosing who the WebView talks to. Syntax highlighting is a
+second dependency and a second HTML path; fences as a `<pre>` already
+buy most of the readability. The stored `Message.text` stays the
+plain string it is today.
+
+**Two things that will trip whoever does it.** Streaming: the caret
+sits in a growing buffer, and a fence that has not closed yet is
+legal CommonMark that looks like a broken page if you re-parse every
+token. Debounce, or treat an unclosed fence as a `<pre>` until it
+closes, and keep the caret. Links: an `<a href>` in this WebView can
+navigate the app away, or hit a `tauri:` / `file:` scheme. Default
+closed — render the URL as text — until a command exists that opens
+it in the OS browser, same shape as `workspace_reveal` (the WebView
+never gains opener permissions, PLAN § 7.10).
+
+**What it would buy.** Readable replies. Fences are the thing a
+person actually cannot scan as punctuation; lists and headings are
+second.
+
+**Unknown:** whether a sanitizer plus `html: false` plus no remote
+images is a closed set, or whether the next CommonMark extension
+(tables, footnotes, raw HTML "passthrough") reopens it. Pick the
+library by that test, not by GitHub stars. User messages: the same
+renderer is fine — the operator can type markdown — but paste is
+still untrusted in the DOM sense, so the sanitizer does not become
+optional on `role: user`. Do not start this in order to make the
+transcript look like a chat product. Start it when a long fenced
+reply is the thing someone cannot read, and ship the sanitizer in
+the same change.
+
+## Seeing the workspace
+
+**Moved to PLAN § 7.15.** The contract no longer refuses a
+workspace explorer. What follows is the investigation that made
+the old cut the wrong one, so nobody puts "no file tree" back.
+
+Asked more than once. Shared files still only says whether the five
+directories exist, then collapses to a sentence. `workspace_reveal`
+opens the OS file manager — and on macOS Finder hides `.aegis/`
+until ⌘⇧. (`workspace.rs` records that cost). The reveal works;
+the UI that owns the folder still cannot show a file.
+
+PLAN bundled two asks with an "or" and refused both: "a file tree
+or a markdown editor", "Aegis is not an IDE", `node_modules/` as
+the scare. The editor half is load-bearing. The explorer half was
+a slogan. § 7.10 was right to keep a tree *out of the chrome
+slice*; it was wrong to treat that as an invariant. The drop zone
+is a third thing, and it is a brief.
+
+### 15. A workspace explorer is not an IDE; an editor is
+
+**Moved to PLAN § 7.15.** Spec, commands, exit criteria: there.
+The gap and the slogan stay here so the next person does not
+re-derive them.
+
+**The gap.** The agent can `fs_list` / `fs_read`; the operator
+cannot, except by leaving the app. Shared memory is files. A UI
+that cannot show them makes the transcript the place you look
+again — the thing the convention exists to stop being.
+
+**What is actually load-bearing — keep.** No Monaco, no cursor, no
+save path from the WebView. Writing `DECISIONS.md` or a `SKILL.md`
+that way is a second write path around the gate (`AGENTS.md`,
+PLAN § 7.6 *Authoring*). No `file://`, no `fs:` / opener plugin
+(capabilities stay a review flag, PLAN § 5.4 / § 7.10). Files stay
+ordinary files: the tree *shows* them, it does not become their
+store. Listing `node_modules/` and `.git` as the default tree is
+still the wrong default.
+
+**What was a slogan — drop.** "If it is a code repo the operator
+already has an editor": they are in *this* window, and PLAN § 7.1
+already says a project is not assumed to be a software repo. A
+watch folder, a budget, an inbox, a wish list often have no
+editor open at all. "The convention directories *are* the tree":
+a brief's inputs are *paths* anywhere in the workspace (`COS.md`,
+never paste). A cabinet-only list cannot show the CSV at the
+root, the dump, the compose file a deploy runbook reads. Equating
+a read-only listing with VS Code.
+
+**The change.** PLAN § 7.15. A tree of the open workspace,
+preview in / save out, `.aegis/` visible, gitignore for the
+noise. The one write from this surface is § 16 / the drop in
+that same slice.
+
+**What it would buy.** The operator can see the work the digest
+already names, and the inputs a brief merely points at. An
+artefact from `skill_return` becomes a thing you can open. The
+Phase 19 packs stop depending on a hidden folder.
+
+**Unknown:** depth and size on a monorepo (gitignore is the
+first bound; a "recent in `.aegis/artefacts/`" grouping is a
+measurement if the tree is still slow). Whether the tree is a
+rail panel or a mode like Board. Whether it watches the disk or
+refreshes on focus / after a turn. Do not let preview grow a
+cursor and a Save — that is the editor, and that refusal stands.
+
+### 16. Drop a file onto the project → a brief, never an artefact
+
+**Moved to PLAN § 7.15** (the drop is in-scope there, not a
+second slice). The destination rule stays here so a later
+explorer does not grow a drop onto artefacts.
+
+**Yes, a brief.** `.aegis/briefs/` is work going *in*: a delegated
+piece of work, or the material a pack already accepts as input (a
+saved page, an `.eml`, a CSV, a note). `.aegis/artefacts/` is work
+coming *out* — a draft, a report, a patch, written by a skill or a
+handoff under the gate. The operator does not drop artefacts. A
+connector later replaces the *source* of a brief, not the folder
+(PLAN § 7.6: "a markdown file in `.aegis/briefs/` is a valid input").
+
+**A third destination, not this drop.** A new dump or log declared
+in `world/sources.yml` is the operator dropping a source artefact
+(`COS.md` *Work*, PLAN § 7.2). That is the only legitimate
+re-perception of a world. It is not a brief and it is not this
+target. Mixing them would put intake into the constitution.
+
+**The change.** PLAN § 7.15. A drop target on the open project,
+and on `.aegis/briefs/` in the tree. Drops onto
+`.aegis/artefacts/` or `world/` refuse. Copy, do not move. Source
+may be outside the workspace: the operator chose it, which is the
+same class as picking the folder in the first place, not an agent
+`fs_read` of `~/Desktop`. The WebView does not read the bytes. If
+`.aegis/briefs/` is missing, refuse (or offer scaffold) — do not
+create the convention because something was dropped.
+
+This write is the operator's, like *Set up shared files*, not the
+agent's. It does not go through the approval dialog. An audit line
+that a brief arrived from outside is still worth having, so the
+board can see intake that no session wrote.
+
+**What it would buy.** The intake path the packs already describe,
+without asking anyone to find a dot-directory. Watch, mail, budget
+all start with "get the material onto disk".
+
+**Two things that will trip whoever does it.** Name collisions
+(keep both, do not overwrite — same promise as scaffold). A
+canonical brief is goal + input *paths* + definition of done; a
+raw CSV in `briefs/` is also how those packs work today. Do not
+wrap every drop in a generated markdown file "to make it a real
+brief": the file *is* the input, and the next turn's `fs_list` of
+`.aegis/briefs/` is how the runbook finds it. Drag-and-drop in
+Tauri is a capability question; the command takes a path the OS
+already handed the process, not an arbitrary string from the
+WebView.
+
+**Unknown:** whether a drop should also start a turn, or only land
+the file and leave the operator to say what to do with it. Landing
+only is the smaller thing and matches "a markdown file is a valid
+input". Starting a `mail.triage` because the name ended in `.eml`
+is a skill the operator did not grant on this drop. Do not infer
+the runbook from the extension.
