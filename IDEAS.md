@@ -372,6 +372,15 @@ auditable, and testable, which a judge is not. Do that before considering any
 of the above; if it is not enough afterwards, the residue is the honest brief
 for a judge.
 
+**The git half of that landed as a tighten, not as the allow-list.** A session
+grant on `git` still exists, and still covers `status` / `log` / `diff` /
+`show`. A verb that moves the tree (`checkout`, `merge`, `push`, `reset`, …)
+offers no grant, so the earlier approval cannot collapse it. Found twice on
+`review.diff` against this worktree: 2026-09-03 (`IDEAS.md` § 10) and
+2026-09-12, both times `git checkout -- src/ipc/bindings.ts` after a filtered
+`cargo test` had truncated that file. The cargo-test bait is still there;
+the silent checkout is not.
+
 ## Settings, identities, and project scope
 
 Asked directly: Settings feel global, and everything else wants to become

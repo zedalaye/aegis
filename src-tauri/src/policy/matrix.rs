@@ -436,6 +436,33 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
+            // A session grant is the program, not the line — except git, where
+            // "any arguments" is how `git status` silently covered `git
+            // checkout` twice on a review.diff run (IDEAS.md § 12; PLAN 3.3).
+            // A verb that moves the tree offers no grant, so an earlier
+            // approval cannot collapse it: the user sees the exact line again.
+            let git_args = match &call {
+                ResolvedCall::ShellExec { args, .. } => args.as_slice(),
+                _ => &[],
+            };
+            if git_moves_the_tree(&program, git_args) {
+                return Ok(ask(
+                    call,
+                    AskRequest {
+                        tool: tool::SHELL_EXEC.to_owned(),
+                        risk: Risk::High,
+                        title: "Run shell command",
+                        summary: line,
+                        detail,
+                        grant: None,
+                        scope_label: scope_label(None),
+                        reason: "this git command changes the working tree or the refs, and \
+                                 allowing git for the session does not cover that"
+                            .to_owned(),
+                    },
+                ));
+            }
+
             let grant = Grant::shell(&program);
             Ok(ask(
                 call,
@@ -955,6 +982,90 @@ fn nearest_existing(path: &Path) -> Option<&Path> {
     path.ancestors().find(|ancestor| ancestor.exists())
 }
 
+/// Git subcommands that change the working tree or the refs.
+///
+/// PLAN 3.3: the user reads the exact args before anything mutating runs. A
+/// session grant keyed on the basename `git` would otherwise auto-allow
+/// `checkout` after someone approved `status`. This list is not a denylist
+/// that refuses the call — it is the set of verbs that still open a dialog.
+const GIT_MOVES_THE_TREE: &[&str] = &[
+    "add",
+    "am",
+    "apply",
+    "checkout",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "commit",
+    "merge",
+    "mv",
+    "pull",
+    "push",
+    "rebase",
+    "reset",
+    "restore",
+    "revert",
+    "rm",
+    "stash",
+    "switch",
+    "worktree",
+];
+
+/// Git flags that take a value, so the next argument is not the subcommand.
+const GIT_VALUE_FLAGS: &[&str] = &[
+    "--config-env",
+    "--git-dir",
+    "--list-cmds",
+    "--namespace",
+    "--super-prefix",
+    "--work-tree",
+    "-C",
+    "-c",
+];
+
+/// Whether this is a `git` invocation whose subcommand moves the repository.
+///
+/// Unknown verbs stay on the ordinary grant: the list above is the ones we
+/// have watched a session grant cover by accident, not a parser of git.
+fn git_moves_the_tree(program: &str, args: &[String]) -> bool {
+    if Grant::shell(program) != Grant::shell("git") {
+        return false;
+    }
+    git_subcommand(args).is_some_and(|verb| GIT_MOVES_THE_TREE.contains(&verb))
+}
+
+/// The first non-option argument, skipping `git`'s own flags.
+fn git_subcommand(args: &[String]) -> Option<&str> {
+    let mut skip_value = false;
+    for arg in args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if arg == "--" {
+            continue;
+        }
+        if GIT_VALUE_FLAGS.contains(&arg.as_str()) {
+            skip_value = true;
+            continue;
+        }
+        if arg.starts_with("--git-dir=")
+            || arg.starts_with("--work-tree=")
+            || arg.starts_with("--namespace=")
+            || arg.starts_with("--super-prefix=")
+            || arg.starts_with("--config-env=")
+            || (arg.starts_with("-c") && arg.len() > 2)
+        {
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        return Some(arg.as_str());
+    }
+    None
+}
+
 /// Whether the program names this application's own binary.
 ///
 /// Compared through [`Grant::shell`], so the comparison folds exactly the same
@@ -1176,5 +1287,43 @@ mod tests {
         let preview = preview(&content).expect("a preview is always produced");
         assert!(preview.len() <= PREVIEW_BYTES);
         assert!(content.starts_with(&preview));
+    }
+
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn git_subcommand_skips_the_flags_that_are_not_the_verb() {
+        assert_eq!(git_subcommand(&args(&["status"])), Some("status"));
+        assert_eq!(
+            git_subcommand(&args(&["--no-pager", "diff", "HEAD"])),
+            Some("diff")
+        );
+        assert_eq!(
+            git_subcommand(&args(&["-C", "/tmp/repo", "checkout", "--", "a"])),
+            Some("checkout")
+        );
+        assert_eq!(
+            git_subcommand(&args(&["--git-dir=.git", "log"])),
+            Some("log")
+        );
+        assert_eq!(git_subcommand(&args(&["--no-pager"])), None);
+    }
+
+    #[test]
+    fn only_git_verbs_that_move_the_tree_are_flagged() {
+        assert!(!git_moves_the_tree("git", &args(&["status"])));
+        assert!(!git_moves_the_tree("git", &args(&["log", "--oneline"])));
+        assert!(!git_moves_the_tree("git", &args(&["diff", "HEAD"])));
+        assert!(!git_moves_the_tree("git", &args(&["show", "HEAD"])));
+        assert!(!git_moves_the_tree("git", &args(&["branch", "--show-current"])));
+        assert!(git_moves_the_tree("git", &args(&["checkout", "--", "a"])));
+        assert!(git_moves_the_tree(
+            "git.exe",
+            &args(&["--no-pager", "checkout", "main"])
+        ));
+        assert!(git_moves_the_tree("git", &args(&["push", "origin", "HEAD"])));
+        assert!(!git_moves_the_tree("cargo", &args(&["test"])));
     }
 }

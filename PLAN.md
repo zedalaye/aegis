@@ -426,6 +426,10 @@ An `allow_session` grant lives in `policy::grants`, keyed by session id, and is:
 - **narrow** — the key is `(tool, scope)`, not the tool alone: `fs_write` → the WS subtree;
   `shell_exec` → the resolved program basename (`git`, `pnpm`); `screen_capture` → the tool.
   `scope_label` states this in words on the request, so the user approves what they read.
+  A `git` grant is the read-only verbs (`status`, `log`, `diff`, `show`, …). A verb that
+  moves the tree (`checkout`, `merge`, `push`, `reset`, …) offers no grant, so an earlier
+  `git status` cannot collapse it — PLAN 3.3, the user reads the exact args before
+  anything mutating runs.
 - **session-lifetime only** — never persisted, dropped on session close and app exit. There is
   no "always allow forever" in the MVP.
 - **revocable** — Settings lists the open session's active grants with a Revoke button.
@@ -2283,10 +2287,10 @@ for a commit. There is no third path.
 2. **You, in the session.** "Commit the status update." The identity
    needs `shell_exec`. It runs `git add` / `git commit` as ordinary
    calls: cwd in the workspace, program `git`, args in the approval
-   dialog. `allow_session` is keyed on the basename `git` (§ 3.1), so
-   a later `git push` or `git reset` in that session still shows the
-   exact line. Constructing a commit by `fs_write` into `.git/` is the
-   high-risk row (ask every time, no grant) and is the wrong shape.
+   dialog. A session grant on `git` covers the read-only verbs (§ 3.1);
+   `add`, `commit`, `push` and `reset` still ask, with the exact line,
+   and offer no grant. Constructing a commit by `fs_write` into `.git/`
+   is the high-risk row (ask every time, no grant) and is the wrong shape.
 
 A later skill (e.g. `workspace.checkpoint`) may sequence status + add +
 commit with a strict message. It still does not auto-fire from

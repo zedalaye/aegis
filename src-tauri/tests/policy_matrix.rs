@@ -603,6 +603,43 @@ fn a_shell_grant_covers_one_program_and_no_other() {
     assert_eq!(ask(other).grant, Some(Grant::shell("rm")));
 }
 
+/// A session grant on `git` is the program, not the line (PLAN 3.1) — except
+/// for a verb that moves the tree. Approving `git status` used to auto-allow
+/// `git checkout`; PLAN 3.3 says the user reads the exact args before anything
+/// mutating runs, so those verbs offer no grant and cannot be collapsed.
+#[test]
+fn a_git_session_grant_does_not_cover_a_verb_that_moves_the_tree() {
+    let fixture = Fixture::new();
+    fixture.grants.insert("session-1", Grant::shell("git"));
+
+    let checkout = decide(
+        &fixture.ctx(),
+        tool::SHELL_EXEC,
+        json!({ "program": "git", "args": ["checkout", "--", "src/ipc/bindings.ts"] }),
+    );
+    let request = ask(checkout);
+    assert_eq!(request.grant, None, "a grant on git must not cover checkout");
+    assert!(
+        request.reason.contains("does not cover"),
+        "{}",
+        request.reason
+    );
+
+    let push = decide(
+        &fixture.ctx(),
+        tool::SHELL_EXEC,
+        json!({ "program": "git", "args": ["push", "origin", "HEAD"] }),
+    );
+    assert_eq!(ask(push).grant, None);
+
+    let status = decide(
+        &fixture.ctx(),
+        tool::SHELL_EXEC,
+        json!({ "program": "git", "args": ["status"] }),
+    );
+    assert!(matches!(auto(status), ResolvedCall::ShellExec { .. }));
+}
+
 #[test]
 fn a_grant_belongs_to_the_session_that_made_it() {
     let fixture = Fixture::new();

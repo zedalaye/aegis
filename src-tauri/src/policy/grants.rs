@@ -5,7 +5,8 @@
 //! about, and all three are enforced here rather than in the UI:
 //!
 //! * **Narrow.** The key is `(tool, scope)`, never the tool alone. Approving
-//!   `git` does not approve `rm`; approving writes in the workspace does not
+//!   `git` does not approve `rm`, and a `git` grant does not cover `checkout`;
+//!   approving writes in the workspace does not
 //!   approve writes to `.git/` or anywhere outside it. Every grant carries a
 //!   [`Grant::scope_label`] that says, in words, exactly what it covers — the
 //!   same sentence the approval dialog showed before it was created.
@@ -164,6 +165,11 @@ impl Grant {
             Self::WorldAmend => {
                 "amend world/, this workspace's constitution, for the rest of this session — \
                  every other file is still asked about on its own"
+                    .to_owned()
+            }
+            Self::Shell { program } if program == "git" => {
+                "run read-only `git` in this workspace (status, log, diff, show, …) for the rest \
+                 of this session — checkout, merge, push and reset are still asked about"
                     .to_owned()
             }
             Self::Shell { program } => format!(
