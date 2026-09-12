@@ -580,7 +580,7 @@ sees it, can explain itself and try something else. The turn continues.
 `E_PROVIDER_PARSE`, `E_NO_API_KEY`, `E_KEYRING_UNAVAILABLE`, `E_CANCELLED`,
 `E_TOO_MANY_TOOL_ROUNDS`, `E_SCREEN_PERMISSION`.
 
-`E_EXEC_HOST` joins them with § 7.12, and is the dedicated code that section left open. It is
+`E_EXEC_HOST` joins them with § 7.12, and is the dedicated code that section named. It is
 worth its own string rather than folding into `E_TOOL_FAILED` because it says something no other
 code does: the command did not run *anywhere*. The project's execution host is what has to
 change, not the call — and the one wrong answer, running it on this computer instead, is a
@@ -1041,15 +1041,16 @@ Six slices are **not** steps in this list:
 
 - **§ 7.10** chrome (title-bar icons, a button that reveals the folder in the OS file manager)
 - **§ 7.11** workspace versioning (`git init` when the convention is laid down, never an
-  auto-commit)
+  auto-commit) — *(landed)*
 - **§ 7.12** execution host (WSL). Windows UI; `shell_exec` in the distro when the project
-  says so
+  says so — *(landed)*
 - **§ 7.13** skill promotion (`PROPOSAL.md` then apply; writing is still not granting)
 - **§ 7.14** cabinet founding (a founder skill writes a roster proposal; apply is the grant)
 - **§ 7.15** workspace explorer (read-only tree + preview of the open folder; drop lands
   a brief). Not an editor.
 
-§ 7.10–7.12 and § 7.15 may start once Phase 13 has landed, and must not delay Phases 14–16.
+§ 7.11 and § 7.12 have landed. § 7.10 and § 7.15 may start once Phase 13 has landed, and
+must not delay Phases 14–16.
 § 7.13 waits for Phase 17 (the CoS board). It must not delay Phases 15–17, and it
 is not a number between 15 and 16. § 7.14 waits for Phases 12, 13, 16 and 17
 (identities, skills, routines, board). It must not delay remaining domain packs,
@@ -1064,6 +1065,8 @@ honest.
 
 The files are meant to be committed. `git init` on scaffold, and the rule that a write is
 not a commit, are § 7.11 — one missed half of this phase, not a new number in this list.
+It has **landed**.
+
 The other missed half was `world/` (§ 7.2): the constitution, opt-in, specialists
 read and do not write. It was not Phase 20, and it has **landed** — see the note at the
 end of § 7.2.
@@ -1752,10 +1755,11 @@ identity and ticks the boxes. That is the whole of what *domain packs as skills,
 supposed to mean, and the way to tell is that nothing in `src-tauri` learned what a client, a
 mailbox, a release note, a statement, a timeline or a goal is.
 
-§ 7.10 (chrome), § 7.11 (versioning), § 7.12 (execution host) and § 7.15
-(explorer) may run at any time after Phase 13. § 7.13 (skill promotion) may
-run after Phase 17. § 7.14 (cabinet founding) may run after Phases 12, 13, 16
-and 17. They do not insert here, and they are not Phases 20–25.
+§ 7.11 (versioning) and § 7.12 (execution host) have landed. § 7.10 (chrome)
+and § 7.15 (explorer) may run at any time after Phase 13. § 7.13 (skill
+promotion) may run after Phase 17. § 7.14 (cabinet founding) may run after
+Phases 12, 13, 16 and 17. They do not insert here, and they are not
+Phases 20–25.
 
 ### 7.4 Hard rules that survive every later phase
 
@@ -2238,7 +2242,7 @@ path; pressing it shows that folder in the file manager on Windows and
 macOS (best-effort Linux). No new plugin permission. No explorer in
 this slice. No editor.
 
-### 7.11 Workspace versioning — not a CoS phase
+### 7.11 Workspace versioning — not a CoS phase *(landed)*
 
 Not a step in § 7.3. Not Phase 21. Not a GitHub product.
 
@@ -2249,10 +2253,9 @@ to stop being. The files were always meant to be committed (`git log`,
 not the chat). Phase 11 laid down the directories and never created the
 repository.
 
-This slice may start once Phase 13 has landed. It must not delay
-Phases 14–16. It is not § 7.10 (that reveals the folder). It is not
-Phase 18 (that is an MCP connector, which is how `gh` would enter, if
-it does).
+This slice has landed (`src-tauri/src/git.rs`, from `workspace_scaffold`).
+It is not § 7.10 (that reveals the folder). It is not Phase 18 (that is
+an MCP connector, which is how `gh` would enter, if it does).
 
 **Default.** A workspace whose convention is laid down is a git work
 tree. Versioning the files is not the same as being a software project
@@ -2378,10 +2381,9 @@ code folder is the workspace: `fs_*` already sees those files (UNC
 today is `CreateProcess` on Windows (§ 5.1). That is the Windows
 toolchain. It is not `git` / `docker` / the test runner in the distro.
 
-This slice may start once Phase 13 has landed. It must not delay
-Phases 14–16. It is not § 7.9 (containment for *our* tools). It is
-not Phase 19 (Coolify / deploy). It is how `shell_exec` reaches the
-OS the repo already uses.
+This slice has landed (`src-tauri/src/exec_host.rs`). It is not
+§ 7.9 (containment for *our* tools). It is not Phase 19 (Coolify /
+deploy). It is how `shell_exec` reaches the OS the repo already uses.
 
 **Default.** A project has no execution host. `shell_exec` stays
 today's spawn (Windows `CreateProcess`, macOS/Linux `exec`). This
