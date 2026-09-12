@@ -440,28 +440,44 @@ pub enum AppError {
     #[error("your system's credential store could not be used")]
     Keyring,
 
-    /// The window asked to reveal a path that is not inside the open
-    /// project's workspace (PLAN 7.10).
+    /// The window asked to reveal, list or preview a path that is not inside
+    /// the open project's workspace (PLAN 7.10, PLAN 7.15).
     ///
     /// Arbitrary paths from the WebView are refused rather than opened. The
     /// argument is echoed because it is what the window sent, not a location
-    /// discovered on the machine.
+    /// discovered on the machine. One variant for reveal and the explorer,
+    /// because they are one door: both resolve through
+    /// [`reveal::target`](crate::reveal::target).
     #[error("`{path}` is not inside this workspace")]
     RevealOutside {
         /// The path as the window sent it.
         path: String,
     },
 
-    /// The window asked to reveal a path that could not be opened.
+    /// The window asked to reveal, list or preview a path that could not be
+    /// opened.
     ///
     /// Distinct from [`AppError::RevealOutside`]: this one never resolved to a
-    /// location, or the location has gone. Opening it is not a containment
-    /// miss, it is a path that is not there to show.
+    /// location, or the location has gone, or it is the wrong kind of thing —
+    /// a folder asked to preview, a text file asked for as an image. Not a
+    /// containment miss; a path that is not there to show.
     #[error("`{path}` cannot be opened: {reason}")]
     RevealPath {
         /// The path as the window sent it, or as it resolved.
         path: String,
         /// Why it cannot be opened, in words a user can act on.
+        reason: String,
+    },
+
+    /// A drop could not become a brief (PLAN 7.15).
+    ///
+    /// For the whole drop, not one file of it — those are refusals inside the
+    /// report. The workspace has no `.aegis/briefs/`, the one it has points
+    /// elsewhere, or the drop was held too long. Coded as a path that cannot be
+    /// used, which is what each of them is.
+    #[error("the drop could not become a brief: {reason}")]
+    BriefImport {
+        /// Why, in words somebody can act on.
         reason: String,
     },
 
@@ -535,7 +551,7 @@ impl AppError {
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::ExecHost { .. } => ErrorCode::ExecHost,
             Self::RevealOutside { .. } => ErrorCode::PathOutsideWorkspace,
-            Self::RevealPath { .. } => ErrorCode::PathInvalid,
+            Self::RevealPath { .. } | Self::BriefImport { .. } => ErrorCode::PathInvalid,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
             | Self::WorkspaceScaffold { .. }

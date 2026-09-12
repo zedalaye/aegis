@@ -86,7 +86,10 @@ const REDACT_MAX_CHARS: usize = 96;
 /// say what a run left on disk, and a path cut at ninety-six characters names
 /// nothing. It is a list of paths under a different key, not a new kind of
 /// value.
-const KEPT_WHOLE: &[&str] = &["path", "cwd", "program", "display", "artefacts"];
+///
+/// `from` joined in PLAN 7.15 for the same reason: a brief dropped onto the
+/// project records where it was copied from, and that is a path.
+const KEPT_WHOLE: &[&str] = &["path", "cwd", "program", "display", "artefacts", "from"];
 
 /// Argument keys replaced by their size rather than recorded.
 ///
@@ -108,6 +111,16 @@ pub enum AuditDecision {
     AllowSession,
     /// The user, or policy, refused it.
     Deny,
+    /// A person did it themselves, in the window, with no model involved
+    /// (PLAN 7.15).
+    ///
+    /// Not an approval: nothing asked, and no gate stood between the act and
+    /// the file. It exists for the one such act that writes into a workspace —
+    /// a file dropped onto the project and copied in as a brief — so that intake
+    /// no session wrote is still on the record. Such a line carries no session,
+    /// identity or turn, and a board fold, which is scoped by session, leaves
+    /// it out.
+    Operator,
 }
 
 /// How a tool call ended (PLAN 2.1, `AuditEntry.outcome`).

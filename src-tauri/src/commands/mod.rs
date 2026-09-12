@@ -14,7 +14,10 @@
 //! `board` — the structured read of a project's status, and the runs its audit
 //! log folds into, and from Phase 18 `connector` — the external MCP servers
 //! this installation runs, which is the one command domain that names a
-//! program to start and is therefore the one with no tool behind it.
+//! program to start and is therefore the one with no tool behind it. And
+//! `explorer` (PLAN 7.15): the read-only tree and preview of the open
+//! project's folder, and the one write the operator makes from it — a dropped
+//! file, copied in as a brief.
 //!
 //! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
 //! accept `camelCase` from JavaScript and rename it, so every command taking
@@ -26,6 +29,7 @@ pub mod approval;
 pub mod audit;
 pub mod board;
 pub mod connector;
+pub mod explorer;
 pub mod memory;
 pub mod project;
 pub mod routine;

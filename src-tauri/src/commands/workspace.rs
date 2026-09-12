@@ -19,6 +19,12 @@
 //! in the OS file manager. The WebView never opens `file://` and never gains
 //! an opener permission; the argument is this project's workspace, or a path
 //! already checked to sit inside it.
+//!
+//! Seeing the files, rather than revealing the folder, is the explorer
+//! (PLAN 7.15) in [`explorer`](super::explorer). It resolves its paths through
+//! the same [`project_root`] and the same containment.
+
+use std::path::PathBuf;
 
 use tauri::State;
 
@@ -106,7 +112,21 @@ pub fn workspace_reveal(
     project_id: String,
     path: Option<String>,
 ) -> AppResult<()> {
-    let project = state.store().get(&project_id)?;
+    let root = project_root(&state, &project_id)?;
+    let target = reveal::target(&root, path.as_deref())?;
+    reveal::open(&target)
+}
+
+/// A project's workspace, canonical and present, for a command that is about
+/// to resolve a path the window sent against it.
+///
+/// Re-canonicalized rather than trusted from the store, for the reason
+/// [`workspace_scaffold`] gives: a folder replaced by a link since it was
+/// registered is caught at the door. Shared by reveal (PLAN 7.10) and the
+/// explorer (PLAN 7.15), which are the two surfaces that take a path from the
+/// window at all.
+pub(super) fn project_root(state: &AppState, project_id: &str) -> AppResult<PathBuf> {
+    let project = state.store().get(project_id)?;
 
     if !project.workspace_exists {
         return Err(AppError::WorkspacePath {
@@ -115,9 +135,7 @@ pub fn workspace_reveal(
         });
     }
 
-    let root = canonical_workspace(&project.workspace_path)?;
-    let target = reveal::target(&root, path.as_deref())?;
-    reveal::open(&target)
+    canonical_workspace(&project.workspace_path)
 }
 
 /// Whether this project's workspace holds a world, and what is true of it.

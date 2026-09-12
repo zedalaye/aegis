@@ -92,6 +92,9 @@ pub struct AppState {
     self_exe: Option<PathBuf>,
     captures: PathBuf,
     skills: PathBuf,
+    /// The files the OS last dropped on the window, until the window names
+    /// them (PLAN 7.15). In memory only: a drop is a gesture, not a record.
+    drops: crate::intake::Drops,
 }
 
 impl AppState {
@@ -146,7 +149,17 @@ impl AppState {
             // which is what lets a user write, edit and delete a runbook with
             // their own editor.
             skills: prepare_skills(data_dir),
+            drops: crate::intake::Drops::new(),
         }
+    }
+
+    /// The drop being held for the window (PLAN 7.15).
+    ///
+    /// Filled by the window-event handler in `lib.rs` with paths the OS handed
+    /// this process, and emptied by `workspace_import_brief`. The WebView names
+    /// a drop by id and never supplies a path.
+    pub fn drops(&self) -> &crate::intake::Drops {
+        &self.drops
     }
 
     /// The session store: transcripts and titles.

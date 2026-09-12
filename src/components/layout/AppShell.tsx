@@ -28,7 +28,9 @@ import { useProjects } from "../../state/projects";
 import { attachApprovalEvents, useApprovals } from "../../state/approvals";
 import { attachAuditEvents } from "../../state/audit";
 import { attachBoardEvents, useBoard } from "../../state/board";
+import { attachExplorerEvents, useExplorer } from "../../state/explorer";
 import { useHosts } from "../../state/hosts";
+import { attachProjectDropEvents } from "../../state/intake";
 import { attachSessionEvents, useSessions } from "../../state/sessions";
 import { attachSettingsEvents, useSettings } from "../../state/settings";
 import { useSkills } from "../../state/skills";
@@ -37,6 +39,7 @@ import { attachWorkspaceEvents, useWorkspace } from "../../state/workspace";
 import AuditDrawer from "../audit/AuditDrawer";
 import BoardPanel from "../board/BoardPanel";
 import ChatPane from "../chat/ChatPane";
+import ExplorerPanel from "../explorer/ExplorerPanel";
 import SettingsPanel from "../settings/SettingsPanel";
 import Sidebar from "./Sidebar";
 import TitleBar from "./TitleBar";
@@ -78,6 +81,9 @@ function ErrorBanner() {
   const workspaceError = useWorkspace((s) => s.error);
   const hostError = useHosts((s) => s.error);
   const agentError = useAgents((s) => s.error);
+  // A tree that would not load. A file that would not preview is the pane's
+  // to say, and never reaches this.
+  const explorerError = useExplorer((s) => s.error);
   const dismissProject = useProjects((s) => s.dismissError);
   const dismissSession = useSessions((s) => s.dismissError);
   const dismissApproval = useApprovals((s) => s.dismissError);
@@ -85,6 +91,7 @@ function ErrorBanner() {
   const dismissWorkspace = useWorkspace((s) => s.dismissError);
   const dismissHosts = useHosts((s) => s.dismissError);
   const dismissAgents = useAgents((s) => s.dismissError);
+  const dismissExplorer = useExplorer((s) => s.dismissError);
 
   // The most recent one wins. Stacking banners pushes the thing the user was
   // looking at off the screen, and the later ones are usually a consequence of
@@ -96,6 +103,7 @@ function ErrorBanner() {
     settingsError ??
     agentError ??
     hostError ??
+    explorerError ??
     workspaceError ??
     sessionError ??
     projectError;
@@ -122,6 +130,7 @@ function ErrorBanner() {
           dismissSettings();
           dismissAgents();
           dismissHosts();
+          dismissExplorer();
           dismissWorkspace();
           dismissSession();
           dismissProject();
@@ -148,6 +157,7 @@ export default function AppShell() {
   const loadAgents = useAgents((s) => s.load);
   const loadRoutines = useRoutines((s) => s.load);
   const boardOpen = useBoard((s) => s.open);
+  const filesOpen = useExplorer((s) => s.open);
   // The *set* of projects, as a value that only changes when one is added or
   // removed — not on every refetch, which hands back a new array each time.
   const projectIds = useProjects((s) =>
@@ -199,6 +209,8 @@ export default function AppShell() {
       attachConnectorEvents(),
       attachBoardEvents(),
       attachWorkspaceEvents(),
+      attachExplorerEvents(),
+      attachProjectDropEvents(),
     ];
     return () => {
       for (const pending of attaching) {
@@ -240,13 +252,15 @@ export default function AppShell() {
         <Sidebar />
         <main className="shell__main">
           {/* Settings first: it is reachable with no project open, and a
-              board is about one. The board then wins over the transcript,
-              because opening it is a deliberate act and the chat is where the
-              window returns when it is closed. */}
+              board is about one. The board and Files then win over the
+              transcript, because opening either is a deliberate act and the
+              chat is where the window returns when it is closed. */}
           {settingsOpen ? (
             <SettingsPanel />
           ) : boardOpen ? (
             <BoardPanel />
+          ) : filesOpen ? (
+            <ExplorerPanel />
           ) : projectId === null ? (
             <NoProject />
           ) : (

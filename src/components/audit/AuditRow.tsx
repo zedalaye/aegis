@@ -37,6 +37,9 @@ const DECISION: Record<AuditDecision, string> = {
   allow_once: "allowed once",
   allow_session: "allowed for the session",
   deny: "refused",
+  // A person did it in the window — a file dropped onto the project and
+  // copied in as a brief (PLAN 7.15). Nothing asked, because nothing had to.
+  operator: "by you",
 };
 
 /** How a call ended. */
@@ -195,9 +198,11 @@ export default function AuditRow({
             )}
           </dl>
           <p className="auditrow__note">
-            {failed
-              ? "The tool ran and failed on its own terms. The line above is the whole record; nothing of what it read or wrote is kept here."
-              : "Arguments are the ones the model sent, shortened — file content is replaced by its size, never quoted. The digest is over them in full."}
+            {entry.decision === "operator"
+              ? "Done by a person in the window, not by a model: no session, identity or turn made it. The arguments say where the file came from and where it is now, never what it says."
+              : failed
+                ? "The tool ran and failed on its own terms. The line above is the whole record; nothing of what it read or wrote is kept here."
+                : "Arguments are the ones the model sent, shortened — file content is replaced by its size, never quoted. The digest is over them in full."}
           </p>
         </div>
       ) : null}

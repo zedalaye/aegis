@@ -3,8 +3,9 @@
  *
  * Five directories inside the open project's `.aegis/` — `briefs/`, `status/`,
  * `artefacts/`, `decisions/` and, from Phase 13, `skills/` — with one button to
- * lay down whatever is missing. That is this panel. Seeing the files is PLAN
- * 7.15 (a read-only explorer of the folder); this surface stays the scaffold.
+ * lay down whatever is missing. That is this panel. Seeing the files is *Files*
+ * in the title bar (PLAN 7.15, a read-only explorer of the folder); this
+ * surface stays the scaffold.
  * There is no editor here: a panel that could rewrite `DECISIONS.md` without
  * passing the gate would be a second write path around it.
  *

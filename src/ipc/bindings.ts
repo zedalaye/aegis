@@ -358,7 +358,7 @@ height: number, };
 /**
  * How a tool call came to run, or not (PLAN 2.1, `AuditEntry.decision`).
  */
-export type AuditDecision = "auto" | "allow_once" | "allow_session" | "deny";
+export type AuditDecision = "auto" | "allow_once" | "allow_session" | "deny" | "operator";
 
 /**
  * One line of the log.
@@ -618,6 +618,36 @@ run: RunRef | null, };
 export type BoardSource = "status" | "approval" | "session" | "routine" | "run";
 
 /**
+ * One file that arrived.
+ */
+export type BriefArrival = { 
+/**
+ * The name it had where the operator keeps it.
+ */
+from: string, 
+/**
+ * Where it is now, relative to the workspace root.
+ */
+path: string, 
+/**
+ * How much was copied.
+ */
+bytes: number, };
+
+/**
+ * One file that did not.
+ */
+export type BriefRefusal = { 
+/**
+ * The name it had where the operator keeps it.
+ */
+name: string, 
+/**
+ * Why it was not copied, in words somebody can act on.
+ */
+reason: string, };
+
+/**
  * What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
  *
  * A pointer and a summary, never a deletion: `through_message_id` names the
@@ -832,6 +862,11 @@ from_session_id: string,
 brief: string | null, };
 
 /**
+ * What a row of the tree is.
+ */
+export type EntryKind = "dir" | "file" | "other";
+
+/**
  * Where a project's commands run.
  *
  * `Option<ExecHost>` is the whole type: `None` — an absent field on disk — is
@@ -876,6 +911,35 @@ distro: string,
 cwd: string, };
 
 /**
+ * One file, as the preview pane draws it.
+ */
+export type FilePreview = { 
+/**
+ * Relative to the workspace root, with `/`.
+ */
+path: string, 
+/**
+ * The file's own name.
+ */
+name: string, 
+/**
+ * Its size on disk.
+ */
+bytes: number, 
+/**
+ * When it last changed, RFC3339 UTC, when the filesystem says.
+ */
+modified: string | null, 
+/**
+ * Which part of the convention it is in.
+ */
+zone: Zone, 
+/**
+ * What there is to show.
+ */
+body: PreviewBody, };
+
+/**
  * One `allow_session` grant.
  *
  * The variants are the scopes, not the tools: `fs_read` appears only as
@@ -917,6 +981,23 @@ return_format: string,
  * How many paths and links it starts from.
  */
 inputs: number, };
+
+/**
+ * What one drop did.
+ *
+ * Two lists, for the reason scaffold's report has two: the operator dropped
+ * several things, and the answer to "did they all arrive" has to name the ones
+ * that did not.
+ */
+export type ImportReport = { 
+/**
+ * Files copied into `.aegis/briefs/`, in the order they were dropped.
+ */
+arrived: Array<BriefArrival>, 
+/**
+ * Files left where they were, and why.
+ */
+refused: Array<BriefRefusal>, };
 
 /**
  * Where the key in use came from (PLAN 2.1, `MaskedSettings`).
@@ -1112,6 +1193,31 @@ message: string, };
  * How a tool call ended (PLAN 2.1, `AuditEntry.outcome`).
  */
 export type Outcome = "ok" | "error" | "denied" | "cancelled";
+
+/**
+ * What a preview shows.
+ */
+export type PreviewBody = { "kind": "text", 
+/**
+ * The first [`TEXT_MAX_BYTES`] of the file, decoded.
+ */
+text: string, 
+/**
+ * Whether the file is longer than `text`.
+ */
+truncated: boolean, 
+/**
+ * Whether the name says it is markdown.
+ */
+markdown: boolean, } | { "kind": "image", 
+/**
+ * The type its first bytes say it is.
+ */
+mime: string, } | { "kind": "binary", 
+/**
+ * The type its first bytes say it is, when they say.
+ */
+mime: string | null, };
 
 /**
  * How soon a brief wants attention.
@@ -2126,6 +2232,63 @@ export type TrayActivate = {
 action: string, };
 
 /**
+ * One row of the tree.
+ */
+export type TreeEntry = { 
+/**
+ * The entry's own name.
+ */
+name: string, 
+/**
+ * Relative to the workspace root, with `/`. What the window sends back to
+ * expand or preview it.
+ */
+path: string, 
+/**
+ * What it is.
+ */
+kind: EntryKind, 
+/**
+ * A file's size. `None` for everything else.
+ */
+bytes: number | null, 
+/**
+ * Whether it is hidden by default: `.git`, `node_modules`, or named by an
+ * ignore file — itself or a folder above it.
+ */
+ignored: boolean, 
+/**
+ * A link that lands outside the workspace. Listed so the folder is not
+ * misdescribed, and never expanded or previewed.
+ */
+outside: boolean, 
+/**
+ * Which part of the convention it is in.
+ */
+zone: Zone, };
+
+/**
+ * One folder of the tree.
+ */
+export type TreeListing = { 
+/**
+ * The folder, relative to the workspace root. Empty for the root.
+ */
+dir: string, 
+/**
+ * Folders first, then files, by name.
+ */
+entries: Array<TreeEntry>, 
+/**
+ * Ignored entries left out of `entries`. Zero when they were asked for.
+ */
+hidden: number, 
+/**
+ * Entries past [`LISTING_MAX_ENTRIES`].
+ */
+more: number, };
+
+/**
  * What one turn spent, as the provider reported it (PLAN 7.3, Phase 17).
  *
  * One record per finished turn, whatever the turn did — a reply that only
@@ -2369,6 +2532,31 @@ at: string | null, };
 export type WorkTree = "here" | "ancestor" | "unversioned";
 
 /**
+ * `workspace:dropped` — the OS put files on the window.
+ *
+ * Names and a position, never bytes. The position is in physical pixels from
+ * the top left of the webview, as the OS reported it; the window divides by
+ * its own scale to find which row the drop landed on.
+ */
+export type WorkspaceDropped = { 
+/**
+ * What `workspace_import_brief` is called with.
+ */
+drop_id: string, 
+/**
+ * The dropped files' own names, for the line that reports them.
+ */
+names: Array<string>, 
+/**
+ * Physical pixels from the left of the webview.
+ */
+x: number, 
+/**
+ * Physical pixels from the top of the webview.
+ */
+y: number, };
+
+/**
  * One directory of the convention, as the UI sees it.
  *
  * Both flags are measured on every read and never stored: a user can create
@@ -2504,3 +2692,14 @@ drifted: boolean,
  * Why `sources.yml` could not be read as written, when it could not.
  */
 problem: string | null, };
+
+/**
+ * Which part of the workspace a path is in, as far as a drop is concerned.
+ *
+ * Measured here rather than in the window so the convention's names are
+ * spelled in one language. The window uses it for two things: marking the
+ * cabinet as the working surface, and refusing a drop before it asks —
+ * [`intake`](crate::intake) takes no destination at all, so a refusal there
+ * is the window being honest about a target, not the enforcement.
+ */
+export type Zone = "plain" | "briefs" | "artefacts" | "cabinet" | "world";

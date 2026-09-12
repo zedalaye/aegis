@@ -19,8 +19,9 @@
  * (PLAN 7.3, Phase 16), the project's board and the runs its audit log folds
  * into (PLAN 7.3, Phase 17), the external MCP servers whose tools reach
  * the model through the same gate as this build's own (PLAN 7.3, Phase 18),
- * revealing a workspace folder in the OS file manager (PLAN 7.10), and the
- * execution host a project's commands land in (PLAN 7.12).
+ * revealing a workspace folder in the OS file manager (PLAN 7.10), the
+ * execution host a project's commands land in (PLAN 7.12), and the read-only
+ * explorer of a project's folder with the one drop it accepts (PLAN 7.15).
  *
  * Argument keys are `snake_case`, matching the Rust parameter names — the
  * commands are declared `rename_all = "snake_case"`, so the camelCase Tauri
@@ -43,7 +44,9 @@ import type {
   Decision,
   ExecHost,
   ExecHostOption,
+  FilePreview,
   Grant,
+  ImportReport,
   MaskedSettings,
   ModelCatalog,
   Memory,
@@ -59,6 +62,7 @@ import type {
   SessionDetail,
   SessionSummary,
   Skill,
+  TreeListing,
   TurnHandle,
   WorkspaceLayout,
   WorldStatus,
@@ -582,6 +586,75 @@ export function workspaceReveal(
   return call<void>("workspace_reveal", {
     project_id: projectId,
     path: path ?? null,
+  });
+}
+
+/**
+ * One folder of the open project's workspace (PLAN 7.15).
+ *
+ * `dir` omitted is the root. `ignored` lists `.git`, `node_modules` and what
+ * the ignore files name, marked, instead of counting them in `hidden`. A path
+ * outside the workspace rejects with `E_PATH_OUTSIDE_WORKSPACE`: this is not a
+ * listing the window can aim anywhere.
+ */
+export function workspaceTree(
+  projectId: string,
+  dir?: string,
+  ignored?: boolean,
+): Promise<TreeListing> {
+  return call<TreeListing>("workspace_tree", {
+    project_id: projectId,
+    dir: dir ?? null,
+    ignored: ignored ?? null,
+  });
+}
+
+/**
+ * One file of the open project: name, size, type, and its text when it is
+ * text.
+ *
+ * Read-only, and there is deliberately no counterpart that saves. Changing a
+ * file is the operator's editor, or `fs_write` through the approval dialog.
+ */
+export function workspacePreview(
+  projectId: string,
+  path: string,
+): Promise<FilePreview> {
+  return call<FilePreview>("workspace_preview", {
+    project_id: projectId,
+    path,
+  });
+}
+
+/**
+ * One image's bytes, for a blob URL the window creates.
+ *
+ * Arrives as an `ArrayBuffer` — a binary response, not base64 in JSON. The
+ * window never loads a workspace file through `file://` or `asset:`.
+ */
+export function workspaceImage(
+  projectId: string,
+  path: string,
+): Promise<ArrayBuffer> {
+  return call<ArrayBuffer>("workspace_image", { project_id: projectId, path });
+}
+
+/**
+ * Copies the files of one drop into the project's `.aegis/briefs/`.
+ *
+ * `dropId` is what `workspace:dropped` carried; the runtime holds the paths the
+ * OS handed it, and the window never sends one. Copies, never moves, never
+ * overwrites, and never creates `.aegis/briefs/` — a workspace without one
+ * rejects with `E_PATH_INVALID` and keeps the drop, briefly, so it can still be
+ * added once the shared files are set up.
+ */
+export function workspaceImportBrief(
+  projectId: string,
+  dropId: string,
+): Promise<ImportReport> {
+  return call<ImportReport>("workspace_import_brief", {
+    project_id: projectId,
+    drop_id: dropId,
   });
 }
 

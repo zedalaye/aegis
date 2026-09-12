@@ -20,10 +20,14 @@
  * button that lived in the rail beside the project rows would read as "open
  * this project" rather than "show me its board".
  *
- * Settings and the board are two modes of one work area, so opening either
- * closes the other. That is decided here rather than in the shell's render
- * chain: a chain that merely preferred one would leave the other's button
- * drawn as pressed with nothing behind it, which is a button that lies.
+ * Files (PLAN 7.15) is the other one about a project, and here for the board's
+ * reason: seeing the folder is a mode the work area takes over, not a row in
+ * the rail.
+ *
+ * Settings, the board and Files are three modes of one work area, so opening
+ * one closes the others. That is decided here rather than in the shell's render
+ * chain: a chain that merely preferred one would leave another's button drawn
+ * as pressed with nothing behind it, which is a button that lies.
  *
  * The actions on the right are icon buttons (PLAN 7.10). Each keeps its name
  * as `aria-label` and as a tooltip — never an icon alone. Settings, Audit and
@@ -38,12 +42,14 @@ import type { ReactNode } from "react";
 import { appQuit, windowHasTray, windowHide } from "../../ipc/commands";
 import { useAudit } from "../../state/audit";
 import { useBoard } from "../../state/board";
+import { useExplorer } from "../../state/explorer";
 import { useProjects } from "../../state/projects";
 import { useSettings } from "../../state/settings";
 import WorkspaceBadge from "../projects/WorkspaceBadge";
 import {
   AuditIcon,
   BoardIcon,
+  FilesIcon,
   FolderIcon,
   HideIcon,
   QuitIcon,
@@ -90,6 +96,9 @@ export default function TitleBar() {
   const boardOpen = useBoard((s) => s.open);
   const openBoard = useBoard((s) => s.openPanel);
   const closeBoard = useBoard((s) => s.closePanel);
+  const filesOpen = useExplorer((s) => s.open);
+  const openFiles = useExplorer((s) => s.openPanel);
+  const closeFiles = useExplorer((s) => s.closePanel);
   const [hasTray, setHasTray] = useState(true);
 
   useEffect(() => {
@@ -129,6 +138,24 @@ export default function TitleBar() {
 
       <div className="titlebar__actions">
         <IconButton
+          label="Files"
+          pressed={filesOpen}
+          // Disabled with nothing open, for the board's reason: the files are
+          // a project's, and there is no folder to show without one.
+          disabled={project === null}
+          onClick={() => {
+            if (filesOpen) {
+              closeFiles();
+            } else {
+              closeSettings();
+              closeBoard();
+              void openFiles(project?.id ?? null);
+            }
+          }}
+        >
+          <FilesIcon />
+        </IconButton>
+        <IconButton
           label="Board"
           pressed={boardOpen}
           // Disabled with nothing open rather than hidden: a board is a fact
@@ -140,6 +167,7 @@ export default function TitleBar() {
               closeBoard();
             } else {
               closeSettings();
+              closeFiles();
               void openBoard(project?.id ?? null);
             }
           }}
@@ -161,6 +189,7 @@ export default function TitleBar() {
               closeSettings();
             } else {
               closeBoard();
+              closeFiles();
               void openSettings();
             }
           }}

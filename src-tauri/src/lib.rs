@@ -41,7 +41,10 @@
 //! external MCP servers, started by this process, whose tools reach the model
 //! through the same registry and the same approval dialog as `fs_write`. It
 //! is the first phase whose tools this repository did not write, which is why
-//! every one of them asks.
+//! every one of them asks. PLAN 7.15 is not a phase, and it is the one change
+//! here to the window's own event handling: a file dropped on the window is
+//! held by the runtime until the window names it, then copied into
+//! `.aegis/briefs/` — beside the explorer's read-only tree and preview.
 
 pub mod agent;
 pub mod approval;
@@ -52,8 +55,10 @@ pub mod compact;
 mod display;
 mod error;
 pub mod exec_host;
+pub mod explorer;
 pub mod git;
 pub mod handoff;
+pub mod intake;
 pub mod mcp;
 pub mod oauth;
 pub mod policy;
@@ -139,6 +144,10 @@ fn init_tracing() {
 /// hide-on-close would strand the same way, so the window is allowed to
 /// close and the process ends with it.
 fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &WindowEvent) {
+    if let WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event {
+        on_drop(window, paths, *position);
+        return;
+    }
     let WindowEvent::CloseRequested { api, .. } = event else {
         return;
     };
@@ -157,6 +166,72 @@ fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &WindowE
         Ok(()) => tracing::debug!("close request on the main window handled as hide"),
         Err(err) => tracing::warn!(%err, "could not hide the main window on close"),
     }
+}
+
+/// Holds the files the OS dropped on the main window, and tells the window
+/// (PLAN 7.15).
+///
+/// The paths are kept here, under an id, and only the id and the names go to
+/// the WebView. `workspace_import_brief` then copies exactly these paths and
+/// nothing the window could have typed — which is what "the command takes a
+/// path the OS already handed the process" means in practice.
+///
+/// It also undoes something Tauri does on the way. Its own drop handler
+/// widens the `asset:` protocol scope to every dropped path, recursively for a
+/// folder, so the WebView could load them. Nothing here wants that: the scope
+/// is the capture directory and nothing else (`setup`, below), and a brief is
+/// copied by the runtime rather than read by the window. A forbidden pattern
+/// beats an allowed one in that scope whichever is registered first, so the
+/// order the two handlers run in does not matter. A path that is, or holds,
+/// the capture directory is left alone, or a drop of the data folder would
+/// blank every thumbnail in the transcript.
+fn on_drop<R: tauri::Runtime>(
+    window: &tauri::Window<R>,
+    paths: &[std::path::PathBuf],
+    position: tauri::PhysicalPosition<f64>,
+) {
+    if window.label() != MAIN_WINDOW || paths.is_empty() {
+        return;
+    }
+    let Some(state) = window.try_state::<AppState>() else {
+        return;
+    };
+
+    let scope = window.asset_protocol_scope();
+    for path in paths {
+        if path.starts_with(state.captures()) || state.captures().starts_with(path) {
+            continue;
+        }
+        let forbidden = if path.is_dir() {
+            scope.forbid_directory(path, true)
+        } else {
+            scope.forbid_file(path)
+        };
+        if let Err(err) = forbidden {
+            tracing::warn!(%err, path = %path.display(), "a dropped path stays readable by the window");
+        }
+    }
+
+    let names = paths
+        .iter()
+        .map(|path| {
+            path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
+    let drop_id = state.drops().record(paths.to_vec());
+
+    use agent::event::EventSink as _;
+    commands::session::WindowSink::new(window.app_handle().clone()).emit(
+        agent::Event::WorkspaceDropped(intake::WorkspaceDropped {
+            drop_id,
+            names,
+            x: position.x,
+            y: position.y,
+        }),
+    );
 }
 
 /// Builds and runs the Tauri application.
@@ -220,6 +295,10 @@ pub fn run() {
             commands::workspace::workspace_scaffold,
             commands::workspace::workspace_reveal,
             commands::workspace::world_status,
+            commands::explorer::workspace_tree,
+            commands::explorer::workspace_preview,
+            commands::explorer::workspace_image,
+            commands::explorer::workspace_import_brief,
             commands::skill::skill_list,
             commands::memory::memory_list,
             commands::memory::memory_save,

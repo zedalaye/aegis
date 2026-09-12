@@ -106,6 +106,11 @@ base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # `cargo test`, so nothing generates during a release build; the `TS` impls are
 # all that reach the binary. See `.cargo/config.toml` for where the file lands.
 ts-rs = "12"
+# The workspace explorer (PLAN 7.15) hides what the repository's own ignore
+# files name. The crate behind ripgrep, rather than a matcher written here:
+# negation, anchoring, a rule in a parent folder and `core.excludesFile` are
+# exactly where a second implementation would disagree with `git status`.
+ignore = "0.4"
 
 # Console programs on Windows do not write UTF-8. `cmd`, `dir`, `ver` and most
 # of the built-in tooling emit the system OEM code page (437, 850, 932 …), so

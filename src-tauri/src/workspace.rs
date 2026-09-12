@@ -99,6 +99,13 @@ pub const CABINET_DIR: &str = ".aegis";
 /// it hands out and refuses to invent the directory if it is not already there.
 pub const BRIEFS_DIR: &str = ".aegis/briefs";
 
+/// Where produced work is kept: work coming *out*, written under the gate.
+///
+/// Named for the explorer (PLAN 7.15), which has to tell it apart from
+/// [`BRIEFS_DIR`]: a file dropped onto the project is a brief, and a drop
+/// aimed at this directory is refused rather than quietly redirected.
+pub const ARTEFACTS_DIR: &str = ".aegis/artefacts";
+
 /// The state file a session reads first: what is true now.
 pub const STATUS_FILE: &str = ".aegis/status/STATUS.md";
 
@@ -804,7 +811,7 @@ mod tests {
     #[test]
     fn every_convention_path_is_under_the_cabinet() {
         let prefix = format!("{CABINET_DIR}/");
-        for path in [BRIEFS_DIR, STATUS_FILE, DECISIONS_FILE] {
+        for path in [BRIEFS_DIR, ARTEFACTS_DIR, STATUS_FILE, DECISIONS_FILE] {
             assert!(
                 path.starts_with(&prefix),
                 "{path} is not under {CABINET_DIR}"
@@ -820,6 +827,7 @@ mod tests {
         // stop doing.
         assert_eq!(BRIEFS_DIR, CONVENTION[0].rel_dir());
         assert_eq!(STATUS_FILE, CONVENTION[1].rel_file());
+        assert_eq!(ARTEFACTS_DIR, CONVENTION[2].rel_dir());
         assert_eq!(DECISIONS_FILE, CONVENTION[3].rel_file());
     }
 

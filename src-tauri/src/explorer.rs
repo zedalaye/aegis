@@ -1,0 +1,952 @@
+//! The workspace explorer (PLAN 7.15): a read-only tree of the open project,
+//! and a preview of one file in it.
+//!
+//! The agent is *in* the system — `fs_list`, `fs_read`, the digest. The
+//! operator was not: shared memory is files, and a window that could not show
+//! them made the transcript the place a person looked, which is the thing the
+//! convention exists to stop being. Revealing the folder (PLAN 7.10) is not
+//! seeing it — on macOS Finder hides `.aegis/` until ⌘⇧. is pressed.
+//!
+//! This module is the read half of that, and it is deliberately only a read.
+//! There is no save path here and there will not be one: a WebView that could
+//! write `DECISIONS.md` or a `SKILL.md` would be a second write around the
+//! approval gate (PLAN 7.6, *Authoring*). The one write the slice allows is a
+//! brief arriving from a drop, and that is [`intake`](crate::intake), not this.
+//!
+//! Three rules shape it.
+//!
+//! * **Contained, like reveal.** Every path the window sends goes through
+//!   [`reveal::target`], the containment `workspace_reveal` already uses, so a
+//!   listing or a preview cannot be aimed outside the project — through `..`,
+//!   through an absolute path, or through a link. This is not a generic
+//!   `fs_list` the window can point anywhere.
+//! * **One directory at a time.** A monorepo is the first thing somebody opens,
+//!   and a tree built eagerly is a walk of `node_modules`. A folder is listed
+//!   when it is expanded, capped at [`LISTING_MAX_ENTRIES`], and what was left
+//!   out is counted rather than silently dropped.
+//! * **Ignored is hidden by default, never unreachable.** `.git`,
+//!   `node_modules`, and whatever the repository's own ignore files name are
+//!   left out unless asked for. `.aegis/` is shown: its dot is one root entry,
+//!   not invisibility. And a brief may point at a gitignored dump, so a preview
+//!   never asks whether a file is ignored.
+//!
+//! Bytes never become markup here. Text comes back as a string for the window
+//! to render as elements; an image comes back as bytes the window turns into a
+//! blob URL it created itself. Nothing is ever handed over as a `file://` URL.
+
+use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
+use std::fs;
+use std::io::{self, Read as _};
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use serde::Serialize;
+use ts_rs::TS;
+
+use crate::error::{AppError, AppResult};
+use crate::reveal;
+use crate::workspace::{ARTEFACTS_DIR, BRIEFS_DIR, CABINET_DIR};
+use crate::world::WORLD_DIR;
+
+/// Most entries one listing returns.
+///
+/// A person scrolls a folder of a thousand files; they do not read one. What is
+/// past the cap is counted on the listing, so the tree can say so.
+pub const LISTING_MAX_ENTRIES: usize = 1000;
+
+/// Most bytes of a file a text preview carries.
+///
+/// A preview is for reading, and half a megabyte of text is more than anyone
+/// reads in a pane. A longer file says it was cut, and the reveal button beside
+/// it is how the rest is reached.
+pub const TEXT_MAX_BYTES: u64 = 512 * 1024;
+
+/// Largest image the window is handed as bytes.
+///
+/// The bytes cross the IPC channel once, as a binary response rather than
+/// base64, and become a blob URL. A photograph straight off a camera fits; a
+/// scan of a book does not need to.
+pub const IMAGE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// How much of a file is looked at to decide whether it is text.
+const SNIFF_BYTES: usize = 8 * 1024;
+
+/// Names hidden wherever they appear, whatever the ignore files say.
+///
+/// `.git` because it is the repository's store, not the project's files; and
+/// `node_modules` because a folder that is not a git work tree has no ignore
+/// file to name it, and it is still the one directory that makes a tree
+/// useless. Both are shown, marked, when ignored entries are asked for.
+const ALWAYS_IGNORED: [&str; 2] = [".git", "node_modules"];
+
+/// Which part of the workspace a path is in, as far as a drop is concerned.
+///
+/// Measured here rather than in the window so the convention's names are
+/// spelled in one language. The window uses it for two things: marking the
+/// cabinet as the working surface, and refusing a drop before it asks —
+/// [`intake`](crate::intake) takes no destination at all, so a refusal there
+/// is the window being honest about a target, not the enforcement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
+pub enum Zone {
+    /// An ordinary part of the project.
+    Plain,
+    /// `.aegis/briefs/` and below: work going in, and where a drop lands.
+    Briefs,
+    /// `.aegis/artefacts/` and below: work coming out, written under the gate.
+    Artefacts,
+    /// The rest of `.aegis/`: status, decisions, the project's runbooks.
+    Cabinet,
+    /// `world/` and below: the constitution. Preview-only, like everything
+    /// here, and never a drop target.
+    World,
+}
+
+impl Zone {
+    /// The zone of a workspace-relative path written with `/`.
+    ///
+    /// Only the first segment decides `world/`, matching the policy rule: a
+    /// repository's own `src/world/` is an ordinary folder.
+    pub fn of(rel: &str) -> Self {
+        let rel = rel.trim_matches('/');
+        let under = |dir: &str| {
+            rel == dir
+                || rel
+                    .strip_prefix(dir)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        };
+
+        if under(WORLD_DIR) {
+            Self::World
+        } else if under(BRIEFS_DIR) {
+            Self::Briefs
+        } else if under(ARTEFACTS_DIR) {
+            Self::Artefacts
+        } else if under(CABINET_DIR) {
+            Self::Cabinet
+        } else {
+            Self::Plain
+        }
+    }
+}
+
+/// What a row of the tree is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
+pub enum EntryKind {
+    /// A folder, or a link to one inside the workspace. Expandable.
+    Dir,
+    /// A file, or a link to one inside the workspace. Previewable.
+    File,
+    /// Anything else: a socket, a device, a dangling link.
+    Other,
+}
+
+/// One row of the tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct TreeEntry {
+    /// The entry's own name.
+    pub name: String,
+    /// Relative to the workspace root, with `/`. What the window sends back to
+    /// expand or preview it.
+    pub path: String,
+    /// What it is.
+    pub kind: EntryKind,
+    /// A file's size. `None` for everything else.
+    #[ts(type = "number | null")]
+    pub bytes: Option<u64>,
+    /// Whether it is hidden by default: `.git`, `node_modules`, or named by an
+    /// ignore file — itself or a folder above it.
+    pub ignored: bool,
+    /// A link that lands outside the workspace. Listed so the folder is not
+    /// misdescribed, and never expanded or previewed.
+    pub outside: bool,
+    /// Which part of the convention it is in.
+    pub zone: Zone,
+}
+
+/// One folder of the tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct TreeListing {
+    /// The folder, relative to the workspace root. Empty for the root.
+    pub dir: String,
+    /// Folders first, then files, by name.
+    pub entries: Vec<TreeEntry>,
+    /// Ignored entries left out of `entries`. Zero when they were asked for.
+    pub hidden: u32,
+    /// Entries past [`LISTING_MAX_ENTRIES`].
+    pub more: u32,
+}
+
+/// What a preview shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
+pub enum PreviewBody {
+    /// Text, to be shown read-only. Markdown is rendered by the window as
+    /// elements, never as HTML.
+    Text {
+        /// The first [`TEXT_MAX_BYTES`] of the file, decoded.
+        text: String,
+        /// Whether the file is longer than `text`.
+        truncated: bool,
+        /// Whether the name says it is markdown.
+        markdown: bool,
+    },
+    /// An image the window can fetch as bytes with `workspace_image`.
+    Image {
+        /// The type its first bytes say it is.
+        mime: String,
+    },
+    /// Neither. Name, size and type are all a preview says about it.
+    Binary {
+        /// The type its first bytes say it is, when they say.
+        mime: Option<String>,
+    },
+}
+
+/// One file, as the preview pane draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct FilePreview {
+    /// Relative to the workspace root, with `/`.
+    pub path: String,
+    /// The file's own name.
+    pub name: String,
+    /// Its size on disk.
+    #[ts(type = "number")]
+    pub bytes: u64,
+    /// When it last changed, RFC3339 UTC, when the filesystem says.
+    pub modified: Option<String>,
+    /// Which part of the convention it is in.
+    pub zone: Zone,
+    /// What there is to show.
+    pub body: PreviewBody,
+}
+
+// ---------------------------------------------------------------------------
+// Listing
+// ---------------------------------------------------------------------------
+
+/// One folder of the workspace, or the root when `dir` is empty.
+///
+/// `show_ignored` includes what is hidden by default, marked. It is a view
+/// toggle and not a permission: nothing hidden here is secret from the
+/// operator, who can open the same folder in their own file manager.
+pub fn list(root: &Path, dir: Option<&str>, show_ignored: bool) -> AppResult<TreeListing> {
+    let rel_dir = normalize(dir.unwrap_or(""));
+    let target = reveal::target(root, Some(&rel_dir))?;
+    if !target.is_dir() {
+        return Err(AppError::RevealPath {
+            path: rel_dir,
+            reason: "it is not a folder".to_owned(),
+        });
+    }
+
+    // Only worth the walk when ignored rows are being drawn: otherwise an
+    // ignored folder is never shown, so nobody expands one.
+    let parent_ignored = show_ignored && inside_ignored(root, &rel_dir);
+    let visible = visible_names(&target);
+    let read = fs::read_dir(&target).map_err(|err| unreadable(&rel_dir, &err))?;
+
+    let mut entries = Vec::new();
+    let mut hidden: u32 = 0;
+    for entry in read.filter_map(Result::ok) {
+        let os_name = entry.file_name();
+        let name = os_name.to_string_lossy().into_owned();
+        let ignored = parent_ignored
+            || ALWAYS_IGNORED.contains(&name.as_str())
+            || !visible.contains(&os_name);
+
+        if ignored && !show_ignored {
+            hidden = hidden.saturating_add(1);
+            continue;
+        }
+
+        let path = join(&rel_dir, &name);
+        let (kind, bytes, outside) = describe(root, &entry, &path);
+        entries.push(TreeEntry {
+            zone: Zone::of(&path),
+            name,
+            path,
+            kind,
+            bytes,
+            ignored,
+            outside,
+        });
+    }
+
+    entries.sort_by(|left, right| {
+        (left.kind != EntryKind::Dir)
+            .cmp(&(right.kind != EntryKind::Dir))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let total = entries.len();
+    entries.truncate(LISTING_MAX_ENTRIES);
+    Ok(TreeListing {
+        dir: rel_dir,
+        more: u32::try_from(total - entries.len()).unwrap_or(u32::MAX),
+        hidden,
+        entries,
+    })
+}
+
+/// The names directly inside `dir` that the ignore files leave visible.
+///
+/// The `ignore` crate rather than a hand-rolled matcher: gitignore semantics —
+/// negation, anchoring, a rule in a parent directory, `core.excludesFile` — are
+/// exactly where a second implementation would disagree with `git status`.
+/// Rules apply the way git applies them, inside a work tree only, and a
+/// `.gitignore` in a folder that is not one names nothing.
+fn visible_names(dir: &Path) -> HashSet<OsString> {
+    let mut builder = ignore::WalkBuilder::new(dir);
+    builder
+        .max_depth(Some(1))
+        .hidden(false)
+        .parents(true)
+        .ignore(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .require_git(true)
+        .follow_links(false);
+
+    let mut names = HashSet::new();
+    for item in builder.build() {
+        match item {
+            Ok(entry) if entry.depth() == 1 => {
+                names.insert(entry.file_name().to_owned());
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::debug!(%err, dir = %dir.display(), "an ignore rule could not be applied");
+            }
+        }
+    }
+    names
+}
+
+/// Whether some folder on the way down to `rel_dir` is itself ignored.
+///
+/// A folder the ignore files name hides everything under it, but asking the
+/// walker about its *children* directly finds nothing that names them. So the
+/// question is asked of each folder on the way down instead.
+fn inside_ignored(root: &Path, rel_dir: &str) -> bool {
+    let mut at = root.to_path_buf();
+    for segment in rel_dir.split('/').filter(|s| !s.is_empty() && *s != ".") {
+        if ALWAYS_IGNORED.contains(&segment) || !visible_names(&at).contains(OsStr::new(segment)) {
+            return true;
+        }
+        at.push(segment);
+    }
+    false
+}
+
+/// What one directory entry is, judged where it lands.
+fn describe(root: &Path, entry: &fs::DirEntry, rel: &str) -> (EntryKind, Option<u64>, bool) {
+    let Ok(file_type) = entry.file_type() else {
+        return (EntryKind::Other, None, false);
+    };
+
+    if file_type.is_symlink() {
+        // Through the same door as a preview, so a link that climbs out is
+        // drawn as what it is rather than as a folder that cannot be opened.
+        let Ok(target) = reveal::target(root, Some(rel)) else {
+            return (EntryKind::Other, None, true);
+        };
+        return match fs::metadata(&target) {
+            Ok(meta) if meta.is_dir() => (EntryKind::Dir, None, false),
+            Ok(meta) if meta.is_file() => (EntryKind::File, Some(meta.len()), false),
+            _ => (EntryKind::Other, None, false),
+        };
+    }
+
+    if file_type.is_dir() {
+        (EntryKind::Dir, None, false)
+    } else if file_type.is_file() {
+        (
+            EntryKind::File,
+            entry.metadata().ok().map(|meta| meta.len()),
+            false,
+        )
+    } else {
+        (EntryKind::Other, None, false)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+// ---------------------------------------------------------------------------
+
+/// One file of the workspace, as something to show.
+///
+/// A folder, a missing file and a path outside the workspace are refused —
+/// the last as [`AppError::RevealOutside`], the same answer reveal gives.
+pub fn preview(root: &Path, raw: &str) -> AppResult<FilePreview> {
+    let rel = normalize(raw);
+    let file = contained_file(root, &rel)?;
+    let meta = fs::metadata(&file).map_err(|err| unreadable(&rel, &err))?;
+    let head = read_head(&file, TEXT_MAX_BYTES).map_err(|err| unreadable(&rel, &err))?;
+
+    let body = match sniff(&head) {
+        Some(mime) if mime.starts_with("image/") && meta.len() <= IMAGE_MAX_BYTES => {
+            PreviewBody::Image {
+                mime: mime.to_owned(),
+            }
+        }
+        Some(mime) => PreviewBody::Binary {
+            mime: Some(mime.to_owned()),
+        },
+        None => match as_text(&head) {
+            Some(text) => PreviewBody::Text {
+                text,
+                truncated: meta.len() > TEXT_MAX_BYTES,
+                markdown: is_markdown(&rel),
+            },
+            None => PreviewBody::Binary { mime: None },
+        },
+    };
+
+    Ok(FilePreview {
+        name: rel.rsplit('/').next().unwrap_or(&rel).to_owned(),
+        bytes: meta.len(),
+        modified: meta
+            .modified()
+            .ok()
+            .map(|at| DateTime::<Utc>::from(at).to_rfc3339_opts(SecondsFormat::Secs, true)),
+        zone: Zone::of(&rel),
+        path: rel,
+        body,
+    })
+}
+
+/// The bytes of one image, and the type they are.
+///
+/// Refuses anything whose first bytes are not an image this window draws — a
+/// name ending `.png` is not evidence — and anything over [`IMAGE_MAX_BYTES`].
+/// SVG is deliberately not here: it is markup, and it is previewed as text.
+pub fn image(root: &Path, raw: &str) -> AppResult<(Vec<u8>, &'static str)> {
+    let rel = normalize(raw);
+    let file = contained_file(root, &rel)?;
+    let meta = fs::metadata(&file).map_err(|err| unreadable(&rel, &err))?;
+    if meta.len() > IMAGE_MAX_BYTES {
+        return Err(AppError::RevealPath {
+            path: rel,
+            reason: "it is too large to preview".to_owned(),
+        });
+    }
+
+    let bytes = read_head(&file, IMAGE_MAX_BYTES).map_err(|err| unreadable(&rel, &err))?;
+    match sniff(&bytes) {
+        Some(mime) if mime.starts_with("image/") => Ok((bytes, mime)),
+        _ => Err(AppError::RevealPath {
+            path: rel,
+            reason: "it is not an image this window can show".to_owned(),
+        }),
+    }
+}
+
+/// A contained, existing file, or why not.
+fn contained_file(root: &Path, rel: &str) -> AppResult<PathBuf> {
+    if rel.is_empty() {
+        return Err(AppError::RevealPath {
+            path: String::new(),
+            reason: "no file was named".to_owned(),
+        });
+    }
+
+    let path = reveal::target(root, Some(rel))?;
+    if path.is_file() {
+        return Ok(path);
+    }
+    Err(AppError::RevealPath {
+        path: rel.to_owned(),
+        reason: if path.is_dir() {
+            "it is a folder"
+        } else {
+            "it is not there any more"
+        }
+        .to_owned(),
+    })
+}
+
+/// At most `cap` bytes from the start of a file.
+fn read_head(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(cap).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// The type a file's first bytes declare, for the few types a preview treats
+/// differently from text.
+fn sniff(head: &[u8]) -> Option<&'static str> {
+    const SIGNATURES: [(&[u8], &str); 8] = [
+        (b"\x89PNG\r\n\x1a\n", "image/png"),
+        (b"\xFF\xD8\xFF", "image/jpeg"),
+        (b"GIF87a", "image/gif"),
+        (b"GIF89a", "image/gif"),
+        (b"\x00\x00\x01\x00", "image/x-icon"),
+        (b"%PDF-", "application/pdf"),
+        (b"PK\x03\x04", "application/zip"),
+        (b"\x1F\x8B", "application/gzip"),
+    ];
+
+    if let Some((_, mime)) = SIGNATURES
+        .iter()
+        .find(|(signature, _)| head.starts_with(signature))
+    {
+        return Some(mime);
+    }
+    if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    // Two letters are a word as often as they are a bitmap, so the header's
+    // reserved bytes have to be zero as well.
+    if head.len() >= 26 && head.starts_with(b"BM") && head[6..10] == [0, 0, 0, 0] {
+        return Some("image/bmp");
+    }
+    None
+}
+
+/// The bytes as text, or `None` when they are not text.
+///
+/// A NUL in the first few kilobytes is the one signal worth trusting: text
+/// files do not carry them, and UTF-16 — which does — is rare enough in a
+/// workspace to be shown as a binary rather than as spaced-out garbage. A file
+/// that is not UTF-8 but has no NUL is usually a legacy code page, a CSV out of
+/// a spreadsheet, and it is shown with the odd replacement character rather
+/// than refused — unless replacements are so common it was never text at all.
+fn as_text(head: &[u8]) -> Option<String> {
+    if head[..head.len().min(SNIFF_BYTES)].contains(&0) {
+        return None;
+    }
+
+    let text = match std::str::from_utf8(head) {
+        Ok(text) => text.to_owned(),
+        // The cap cut the last character in half; the file is still text.
+        Err(err) if err.error_len().is_none() => {
+            String::from_utf8_lossy(&head[..err.valid_up_to()]).into_owned()
+        }
+        Err(_) => {
+            let lossy = String::from_utf8_lossy(head);
+            let total = lossy.chars().count().max(1);
+            let replaced = lossy
+                .chars()
+                .filter(|c| *c == char::REPLACEMENT_CHARACTER)
+                .count();
+            if replaced * 10 > total {
+                return None;
+            }
+            lossy.into_owned()
+        }
+    };
+
+    Some(
+        text.strip_prefix('\u{FEFF}')
+            .map(str::to_owned)
+            .unwrap_or(text),
+    )
+}
+
+/// Whether the name says markdown.
+fn is_markdown(rel: &str) -> bool {
+    Path::new(rel)
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
+
+/// A path from the window, in the one spelling rows are keyed by.
+///
+/// Separators become `/`, a leading `./` and a trailing `/` go. Nothing here
+/// decides containment — that is [`reveal::target`] — so a `..` is left for it
+/// to refuse.
+fn normalize(raw: &str) -> String {
+    let mut rel = raw.trim().replace('\\', "/");
+    while let Some(rest) = rel.strip_prefix("./") {
+        rel = rest.to_owned();
+    }
+    let trimmed = rel.trim_end_matches('/');
+    if trimmed == "." {
+        String::new()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// `dir/name`, or `name` at the root.
+fn join(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// An `io::Error` about somebody's file, as something they can act on.
+fn unreadable(rel: &str, err: &io::Error) -> AppError {
+    tracing::debug!(%err, rel, "a workspace path could not be read for the explorer");
+    AppError::RevealPath {
+        path: rel.to_owned(),
+        reason: match err.kind() {
+            io::ErrorKind::NotFound => "it is not there any more",
+            io::ErrorKind::PermissionDenied => "it is not readable",
+            _ => "it could not be read",
+        }
+        .to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::TempDir;
+
+    fn workspace() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("temp dir");
+        let root = dir.path().join("work");
+        fs::create_dir_all(&root).expect("workspace dir");
+        let root = dunce::canonicalize(&root).expect("canonical workspace");
+        (dir, root)
+    }
+
+    fn names(listing: &TreeListing) -> Vec<&str> {
+        listing
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect()
+    }
+
+    fn write(root: &Path, rel: &str, bytes: &[u8]) {
+        let path = root.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("parent dir");
+        }
+        fs::write(path, bytes).expect("write");
+    }
+
+    #[test]
+    fn the_cabinet_is_shown_and_the_repositorys_store_is_not() {
+        let (_dir, root) = workspace();
+        fs::create_dir_all(root.join(".git")).expect("a repository");
+        fs::create_dir_all(root.join("node_modules/left-pad")).expect("dependencies");
+        write(&root, ".aegis/briefs/README.md", b"# briefs");
+        write(&root, "world/essence.md", b"# essence");
+        write(&root, "data.csv", b"a,b\n");
+
+        let listing = list(&root, None, false).expect("listed");
+
+        assert_eq!(names(&listing), [".aegis", "world", "data.csv"]);
+        assert_eq!(listing.hidden, 2, ".git and node_modules");
+        assert_eq!(listing.entries[0].zone, Zone::Cabinet);
+        assert_eq!(listing.entries[1].zone, Zone::World);
+        assert_eq!(listing.entries[2].bytes, Some(4));
+    }
+
+    #[test]
+    fn gitignored_entries_are_hidden_by_default_and_marked_when_asked_for() {
+        let (_dir, root) = workspace();
+        fs::create_dir_all(root.join(".git")).expect("a repository");
+        write(&root, ".gitignore", b"build/\n*.log\n");
+        write(&root, "build/out.bin", b"x");
+        write(&root, "debug.log", b"x");
+        write(&root, "notes.md", b"x");
+
+        let hiding = list(&root, None, false).expect("listed");
+        assert_eq!(names(&hiding), [".gitignore", "notes.md"]);
+        assert_eq!(hiding.hidden, 3);
+
+        let showing = list(&root, None, true).expect("listed");
+        assert_eq!(showing.hidden, 0);
+        let ignored: Vec<&str> = showing
+            .entries
+            .iter()
+            .filter(|entry| entry.ignored)
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(ignored, [".git", "build", "debug.log"]);
+    }
+
+    /// A rule written at the root still applies to a folder listed on its own.
+    #[test]
+    fn a_subfolder_is_listed_under_the_roots_ignore_rules() {
+        let (_dir, root) = workspace();
+        fs::create_dir_all(root.join(".git")).expect("a repository");
+        write(&root, ".gitignore", b"*.tmp\n");
+        write(&root, "src/keep.rs", b"x");
+        write(&root, "src/scratch.tmp", b"x");
+
+        let listing = list(&root, Some("src"), false).expect("listed");
+
+        assert_eq!(names(&listing), ["keep.rs"]);
+        assert_eq!(listing.dir, "src");
+        assert_eq!(listing.entries[0].path, "src/keep.rs");
+    }
+
+    #[test]
+    fn everything_inside_an_ignored_folder_is_marked_ignored() {
+        let (_dir, root) = workspace();
+        fs::create_dir_all(root.join(".git")).expect("a repository");
+        write(&root, ".gitignore", b"target/\n");
+        write(&root, "target/debug/app", b"x");
+
+        let listing = list(&root, Some("target"), true).expect("listed");
+
+        assert_eq!(names(&listing), ["debug"]);
+        assert!(listing.entries[0].ignored);
+    }
+
+    /// A `.gitignore` in a folder that is not a work tree names nothing, which
+    /// is what `git` itself would say about it.
+    #[test]
+    fn outside_a_work_tree_only_the_two_fixed_names_are_hidden() {
+        let (_dir, root) = workspace();
+        write(&root, ".gitignore", b"*.log\n");
+        write(&root, "debug.log", b"x");
+        fs::create_dir_all(root.join("node_modules")).expect("dependencies");
+
+        let listing = list(&root, None, false).expect("listed");
+
+        assert_eq!(names(&listing), [".gitignore", "debug.log"]);
+        assert_eq!(listing.hidden, 1);
+    }
+
+    #[test]
+    fn folders_come_first_and_names_sort_without_case() {
+        let (_dir, root) = workspace();
+        write(&root, "b.txt", b"x");
+        write(&root, "A.txt", b"x");
+        write(&root, "zeta/x", b"x");
+
+        assert_eq!(
+            names(&list(&root, None, false).expect("listed")),
+            ["zeta", "A.txt", "b.txt"]
+        );
+    }
+
+    #[test]
+    fn a_huge_folder_is_capped_and_says_how_much_is_missing() {
+        let (_dir, root) = workspace();
+        for n in 0..LISTING_MAX_ENTRIES + 5 {
+            write(&root, &format!("many/{n:05}.txt"), b"");
+        }
+
+        let listing = list(&root, Some("many"), false).expect("listed");
+
+        assert_eq!(listing.entries.len(), LISTING_MAX_ENTRIES);
+        assert_eq!(listing.more, 5);
+    }
+
+    #[test]
+    fn a_listing_cannot_be_aimed_outside_the_workspace() {
+        let (dir, root) = workspace();
+        let elsewhere = dunce::canonicalize(dir.path()).expect("canonical");
+
+        assert!(matches!(
+            list(&root, Some(".."), false),
+            Err(AppError::RevealOutside { .. })
+        ));
+        assert!(matches!(
+            list(&root, Some(&elsewhere.to_string_lossy()), false),
+            Err(AppError::RevealOutside { .. })
+        ));
+        assert!(matches!(
+            preview(&root, "../secret.txt"),
+            Err(AppError::RevealOutside { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_that_climbs_out_is_listed_as_outside_and_never_opened() {
+        let (dir, root) = workspace();
+        fs::write(dir.path().join("secret.txt"), "not yours").expect("write");
+        std::os::unix::fs::symlink(dir.path().join("secret.txt"), root.join("link.txt"))
+            .expect("symlink");
+
+        let listing = list(&root, None, false).expect("listed");
+        assert!(listing.entries[0].outside, "{listing:?}");
+        assert!(matches!(
+            preview(&root, "link.txt"),
+            Err(AppError::RevealOutside { .. })
+        ));
+    }
+
+    #[test]
+    fn zones_follow_the_convention_and_only_the_first_segment_is_the_world() {
+        assert_eq!(Zone::of(".aegis/briefs"), Zone::Briefs);
+        assert_eq!(Zone::of(".aegis/briefs/intake.csv"), Zone::Briefs);
+        assert_eq!(Zone::of(".aegis/artefacts/report.md"), Zone::Artefacts);
+        assert_eq!(Zone::of(".aegis/status/STATUS.md"), Zone::Cabinet);
+        assert_eq!(Zone::of(".aegis"), Zone::Cabinet);
+        assert_eq!(Zone::of(".aegis-old/briefs"), Zone::Plain);
+        assert_eq!(Zone::of(".aegis/briefsx"), Zone::Cabinet);
+        assert_eq!(Zone::of("world/essence.md"), Zone::World);
+        assert_eq!(Zone::of("src/world/map.rs"), Zone::Plain);
+        assert_eq!(Zone::of(""), Zone::Plain);
+    }
+
+    #[test]
+    fn markdown_is_text_that_says_it_is_markdown() {
+        let (_dir, root) = workspace();
+        write(
+            &root,
+            ".aegis/briefs/intake.md",
+            "# Intake\n\ninputs: `data.csv`\n".as_bytes(),
+        );
+
+        let shown = preview(&root, ".aegis/briefs/intake.md").expect("previewed");
+
+        assert_eq!(shown.name, "intake.md");
+        assert_eq!(shown.zone, Zone::Briefs);
+        assert_eq!(
+            shown.body,
+            PreviewBody::Text {
+                text: "# Intake\n\ninputs: `data.csv`\n".to_owned(),
+                truncated: false,
+                markdown: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_long_file_is_cut_and_says_so() {
+        let (_dir, root) = workspace();
+        write(&root, "long.txt", &vec![b'x'; TEXT_MAX_BYTES as usize + 10]);
+
+        let shown = preview(&root, "long.txt").expect("previewed");
+
+        match shown.body {
+            PreviewBody::Text {
+                text, truncated, ..
+            } => {
+                assert!(truncated);
+                assert_eq!(text.len(), TEXT_MAX_BYTES as usize);
+            }
+            other => panic!("expected text, got {other:?}"),
+        }
+        assert_eq!(shown.bytes, TEXT_MAX_BYTES + 10);
+    }
+
+    #[test]
+    fn a_file_with_nul_bytes_is_binary_whatever_it_is_called() {
+        let (_dir, root) = workspace();
+        write(&root, "notes.md", b"looks like text\0but is not");
+
+        assert_eq!(
+            preview(&root, "notes.md").expect("previewed").body,
+            PreviewBody::Binary { mime: None }
+        );
+    }
+
+    #[test]
+    fn a_legacy_code_page_is_still_shown_as_text() {
+        let (_dir, root) = workspace();
+        // "café;prix" in Windows-1252.
+        write(&root, "export.csv", b"caf\xe9;prix\n");
+
+        match preview(&root, "export.csv").expect("previewed").body {
+            PreviewBody::Text { text, .. } => assert!(text.starts_with("caf")),
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_image_is_known_by_its_bytes_not_its_name() {
+        let (_dir, root) = workspace();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        write(&root, "shot.dat", png);
+        write(&root, "fake.png", b"just words");
+
+        assert_eq!(
+            preview(&root, "shot.dat").expect("previewed").body,
+            PreviewBody::Image {
+                mime: "image/png".to_owned()
+            }
+        );
+        let (bytes, mime) = image(&root, "shot.dat").expect("bytes");
+        assert_eq!(bytes, png);
+        assert_eq!(mime, "image/png");
+
+        assert!(matches!(
+            image(&root, "fake.png"),
+            Err(AppError::RevealPath { .. })
+        ));
+    }
+
+    #[test]
+    fn svg_is_markup_and_is_previewed_as_text() {
+        let (_dir, root) = workspace();
+        write(
+            &root,
+            "logo.svg",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        );
+
+        assert!(matches!(
+            preview(&root, "logo.svg").expect("previewed").body,
+            PreviewBody::Text {
+                markdown: false,
+                ..
+            }
+        ));
+        assert!(image(&root, "logo.svg").is_err());
+    }
+
+    #[test]
+    fn a_pdf_is_named_and_not_shown() {
+        let (_dir, root) = workspace();
+        write(&root, "contract.pdf", b"%PDF-1.7\n...");
+
+        assert_eq!(
+            preview(&root, "contract.pdf").expect("previewed").body,
+            PreviewBody::Binary {
+                mime: Some("application/pdf".to_owned())
+            }
+        );
+    }
+
+    #[test]
+    fn a_folder_or_a_missing_file_is_not_a_preview() {
+        let (_dir, root) = workspace();
+        fs::create_dir_all(root.join("src")).expect("dir");
+
+        assert!(matches!(
+            preview(&root, "src"),
+            Err(AppError::RevealPath { .. })
+        ));
+        assert!(matches!(
+            preview(&root, "gone.md"),
+            Err(AppError::RevealPath { .. })
+        ));
+        assert!(matches!(
+            preview(&root, ""),
+            Err(AppError::RevealPath { .. })
+        ));
+    }
+
+    #[test]
+    fn paths_from_the_window_are_normalized_before_they_are_keyed() {
+        assert_eq!(normalize("./.aegis\\briefs/"), ".aegis/briefs");
+        assert_eq!(normalize("."), "");
+        assert_eq!(normalize("  "), "");
+        assert_eq!(
+            normalize("../x"),
+            "../x",
+            "containment is reveal's to refuse"
+        );
+    }
+}

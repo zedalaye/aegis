@@ -28,6 +28,18 @@ function Svg({ children }: { readonly children: ReactNode }) {
   );
 }
 
+/** A page with a folded corner: the files themselves, to read, not to edit. */
+export function FilesIcon() {
+  return (
+    <Svg>
+      <path d="M4 1.5h5.5L12.5 4.5v10h-8.5z" />
+      <path d="M9.5 1.5v3h3" />
+      <path d="M6 8h4.5" />
+      <path d="M6 10.5h4.5" />
+    </Svg>
+  );
+}
+
 /** Three columns: the board is a read of status, not a spreadsheet. */
 export function BoardIcon() {
   return (

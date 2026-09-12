@@ -65,6 +65,8 @@ pub mod name {
     pub const ROUTINE_UPDATED: &str = "routine:updated";
     /// A connector's row changed.
     pub const CONNECTOR_UPDATED: &str = "connector:updated";
+    /// The OS dropped files on the window.
+    pub const WORKSPACE_DROPPED: &str = "workspace:dropped";
 }
 
 /// `turn:started`.
@@ -348,6 +350,12 @@ pub enum Event {
     /// an `npx` finally resolved a package. A panel that could only poll would
     /// show whatever was true when it was drawn.
     ConnectorUpdated(Box<ConnectorView>),
+    /// `workspace:dropped` (PLAN 7.15).
+    ///
+    /// The third event that is not about a turn, and the only one a person
+    /// causes directly. The paths stay in the runtime; this says a drop is
+    /// being held, under which id, and where on the window it landed.
+    WorkspaceDropped(crate::intake::WorkspaceDropped),
 }
 
 impl Event {
@@ -370,6 +378,7 @@ impl Event {
             Self::AuditAppended(_) => name::AUDIT_APPENDED,
             Self::RoutineUpdated(_) => name::ROUTINE_UPDATED,
             Self::ConnectorUpdated(_) => name::CONNECTOR_UPDATED,
+            Self::WorkspaceDropped(_) => name::WORKSPACE_DROPPED,
         }
     }
 
@@ -402,6 +411,8 @@ impl Event {
             // empty id matches nothing, which is what a sink filtering by
             // session should do with it.
             Self::ConnectorUpdated(_) => "",
+            // A drop lands on the window, not in a conversation.
+            Self::WorkspaceDropped(_) => "",
         }
     }
 
@@ -428,6 +439,7 @@ impl Event {
             Self::AuditAppended(payload) => serde_json::to_value(payload),
             Self::RoutineUpdated(payload) => serde_json::to_value(payload),
             Self::ConnectorUpdated(payload) => serde_json::to_value(payload),
+            Self::WorkspaceDropped(payload) => serde_json::to_value(payload),
         };
 
         rendered.unwrap_or_else(|err| {

@@ -40,6 +40,7 @@ import type {
   TurnFinished,
   TurnMessage,
   TurnStarted,
+  WorkspaceDropped,
 } from "./bindings";
 
 /**
@@ -118,6 +119,12 @@ export type EventPayloads = {
    * watching.
    */
   "connector:updated": ConnectorView;
+  /**
+   * The OS dropped files on the window (PLAN 7.15). Names, an id and where it
+   * landed, in physical pixels — never the paths' bytes, and never a path the
+   * window is expected to send back: `workspace_import_brief` takes the id.
+   */
+  "workspace:dropped": WorkspaceDropped;
   /** The tray brought the window forward. */
   "tray:activate": TrayActivate;
 };
