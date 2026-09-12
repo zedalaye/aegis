@@ -82,6 +82,16 @@ ever sent to it.
 > recorded writes `.aegis/decisions/DECISIONS.md` through the ordinary approval dialog: no new tool, no
 > privileged path, no hidden store beside your folder. See *Shared workspace files*.
 >
+> **And those files get a history.** Setting them up also makes the folder a git repository, if it
+> is not already in one — because a `STATUS.md` rewritten in place with nothing behind it means
+> yesterday's board is gone and the transcript is the only log again, which is the thing the
+> convention exists to stop being. It is `git init` and nothing else: no remote, no `.gitignore`,
+> no name and email invented for you, and **no commit, then or ever**. A folder that is already
+> inside a repository is left alone rather than given a second one. When you want a snapshot you
+> ask for it — in your own terminal, or in the session, where `git commit` is an ordinary command
+> in the approval dialog. There is no Commit button, and nothing commits on a timer. See
+> *Shared workspace files*.
+>
 > **A session now runs as an identity.** *Settings → Identities* creates one: a name, a line
 > saying what it is for, instructions it carries into every request, and — the part that matters
 > — a tick-list of the tools it may use. Open a session as it from the **+** next to
@@ -533,7 +543,7 @@ in a terminal and this window is never told.
 `\\wsl$\` does not set one — picking a folder is picking a folder — and a finance or watch
 workspace never gets a distribution. This repository's own default is unchanged.
 
-Once a project has one, exactly one thing changes:
+Once a project has one, this is what changes for a command:
 
 - `shell_exec` runs `wsl -d <distro> --cd <dir> --exec <program> <args>`. There is still no
   shell: `--exec` is what keeps the arguments a vector, so pipes, `&&`, globbing and variable
@@ -555,6 +565,12 @@ Once a project has one, exactly one thing changes:
 **The file tools do not move.** Containment is still the Windows-canonical workspace, `fs_read`
 of a file in that folder still goes through Windows, and a capture is still this display. There
 is no second filesystem here, only a second way to spell the same one.
+
+**One other thing follows the host**, and it is the only other program this runtime starts by
+itself: the `git init` behind *Set up shared files* (see
+[They are versioned](#they-are-versioned)). It is reached through the same `wsl.exe` wrapping and
+the same probe, because a Windows `git` writing a `.git` into a distribution's tree is the same
+wrong toolchain as a Windows `pnpm`.
 
 **It never falls back.** A distribution that is not installed, a WSL service that will not answer,
 or a folder the distribution has no path for fails with `E_EXEC_HOST` before anything is spawned
@@ -634,6 +650,59 @@ Why bother: a chat is forgotten and a file is not. A decision that lives only in
 cannot be found later, cannot be corrected, and does not survive the conversation being
 compacted or restarted. `COS.md` is the reasoning in full; `PLAN.md` § 7.3 is where this sits in
 the sequence.
+
+### They are versioned
+
+Pressing that button also makes the folder a **git work tree**, when it is not in one already.
+The reason is the same one the convention has: `STATUS.md` is a board rewritten in place, and a
+board with no history behind it means yesterday is gone and the transcript is the only log left —
+which is what these files exist to stop being. Versioning your files is not a claim that your
+project is software: a finance folder and a watch folder get a repository on exactly the same
+terms as a folder full of Rust.
+
+Three cases, and the panel says which one you are in:
+
+| | What the button does |
+| --- | --- |
+| The folder is already a repository | leaves it, and says so |
+| The folder is **inside** somebody's repository | leaves it, and names the folder above that holds the history. Never a second `.git` inside the first — an inner one splits a history and hides the outer |
+| Neither | `git init` here, and says so |
+
+It runs `git init` and stops. **No commit** — not then, not on a timer, not when a session
+writes a file: approving a write is approval to write a file, not to put it on a branch. No
+remote, no `.gitignore` in a language you did not name, and no `user.name` or `user.email`
+invented on your behalf. Aegis' own records — projects, sessions, your skill library — are never
+in this repository; they stay in the application-data directory described above.
+
+**How you commit**, when you want a snapshot filed:
+
+- **In your own terminal, or a Git GUI, or your editor.** These are ordinary files. The folder
+  button in the title bar is how you get there.
+- **In the session.** "Commit the status update." The identity needs `shell_exec`, and then it is
+  an ordinary command: the approval dialog shows `git` with its exact arguments and the working
+  directory. Allowing `git` for the session covers only the verbs that read — `status`, `log`,
+  `diff`. `add`, `commit`, `push` and `reset` move the tree, so they ask every time and offer no
+  grant at all: an earlier `git status` can never collapse into a commit you did not read.
+
+There is no Commit button in the window, and that is deliberate: a commit from the runtime would
+be a second write path around the dialog the agent already goes through. The panel reports
+whether the folder is a work tree, and nothing else — no log, no staging, no push, no branch.
+
+**It is your project's `git`, not this computer's.** A project that runs its commands in a WSL
+distribution is initialised by that distribution's `git`, through the same `wsl.exe` wrapping and
+the same "can you see this folder" check that every other command goes through — a Windows
+`git init` on a `\\wsl$\` tree writes a repository the toolchain on the other side then has to
+live with. A distribution that cannot be reached leaves the folder unversioned and says so; it
+never quietly falls back to the `git` on this side.
+
+**If you set the shared files up before this existed**, the panel says the folder has no history
+and offers a *Make it a git repository* link beside it. It is the same button by another name —
+the files are already there, so all that is left is the repository.
+
+If `git` is not on this machine's PATH, the directories are still created and the panel says the
+folder is not versioned. Nothing fails. And the first `git commit` in a new repository needs a
+git identity: if yours is not set, git says so in the approval dialog's result, and you fix it —
+in your global config, or with a `git config` under the same gate.
 
 ---
 
@@ -2081,6 +2150,8 @@ src-tauri/
                capped digest every request carries
     world.rs   the other layer in that same folder: what the project *is*, read and never
                written by a session, and the declared sources it was perceived from
+    git.rs     whether that folder is in a git work tree, and the one `git init` that makes
+               it one — never a commit, never a nested repository, never a git client
     compact.rs the older half of a transcript, derived into state — no summarizer,
                and nothing deleted
     approval.rs  pending approvals: the channel a turn parks on until you answer
@@ -2204,6 +2275,14 @@ Read this before pointing Aegis at anything you care about.
   put something in `STATUS.md` you would not paste into a chat. Only those two files are read,
   capped at 2 KB each; `.aegis/briefs/` and `.aegis/artefacts/` contribute file *names* and never content. A
   workspace with none of those directories sends nothing extra, and nothing creates them for you.
+- **Nothing commits for you.** Setting the shared files up leaves a `.git` in a folder that is
+  not already in a work tree — and that is the whole of it. No commit is ever made by the
+  runtime: not when the button is pressed, not when a session writes a file, and not on any
+  timer. Approving a write is approval to write a file, not to put it on a branch. A commit is a
+  `git` command under the same approval dialog as any other, asked for by you; there is no
+  Commit button and no privileged git path. Nothing writes a remote, a `.gitignore`, or a
+  `user.name` / `user.email` on your behalf, and Aegis' own records stay in the application-data
+  directory rather than in your repository.
 - **Keys stay out of the WebView.** The API key lives in the OS credential store (or in
   `AEGIS_API_KEY`) and is read only by the Rust runtime, which attaches it to the request as a
   header marked so it cannot be printed. There is no command that returns a key: the UI can save

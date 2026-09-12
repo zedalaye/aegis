@@ -16,9 +16,18 @@
  * It sits in the rail rather than the work area because it is a fact about the
  * project, not about the session — and it stays collapsed to a single line once
  * everything is there, since a convention that is already in place is not
- * something to look at every day.
+ * something to look at every day. "Everything" is both halves: the directories
+ * and the repository behind them (PLAN 7.11). A workspace laid down before that
+ * slice existed has every tick and no history, and collapsing on the ticks
+ * alone would leave it nothing to press.
+ *
+ * The one thing it says beyond the ticks is whether the folder is a git work
+ * tree (PLAN 7.11) — measured, like everything else here, rather than
+ * remembered. See {@link Versioned} for why that is a fact about the convention
+ * and not the first corner of a git client.
  */
 
+import type { Versioning } from "../../ipc/bindings";
 import Section from "../layout/Section";
 import { useProjects } from "../../state/projects";
 import { useSkills } from "../../state/skills";
@@ -54,12 +63,62 @@ function Entry({
   );
 }
 
+/**
+ * Whether the folder these files live in has a history (PLAN 7.11).
+ *
+ * A fact about the convention, like the ticks above it: a `STATUS.md` is a
+ * board rewritten in place, and without a repository behind it yesterday's
+ * board is gone and the transcript is the only log again.
+ *
+ * One sentence, and deliberately not the start of a git client. There is no
+ * log here, no stage, no push and no Commit button — a commit from this window
+ * would be a second write path around the dialog the session already goes
+ * through. Committing is asked for: in your own terminal, or in the session.
+ */
+function Versioned({ versioning }: { readonly versioning: Versioning }) {
+  if (versioning.tree === "here") {
+    return (
+      <p className="shared__note">
+        A git repository, so these files have a history. Nothing here commits —
+        ask in the session and <code>git</code> goes through the approval
+        dialog.
+      </p>
+    );
+  }
+
+  if (versioning.tree === "ancestor") {
+    return (
+      <p className="shared__note">
+        {/*
+          "a second repository", not "a second one": this line sits beside a
+          control whose whole job is to create something inside that repo, and
+          the promise being made is only about `.git`.
+        */}
+        Versioned by <code>{versioning.at}</code>, above this folder. Nothing
+        here will make a second repository inside it.
+      </p>
+    );
+  }
+
+  // One sentence for both controls below — the wide button when the files are
+  // missing too, the link when only this is. What each one does is on its own
+  // label; what they both promise is here.
+  return (
+    <p className="shared__note">
+      Not a git repository, so these files have no history. Making one never
+      commits and never adds a remote.
+    </p>
+  );
+}
+
 export default function SharedFiles() {
   const project = useProjects((s) => s.detail?.project ?? null);
   const layout = useWorkspace((s) => s.layout);
   const status = useWorkspace((s) => s.status);
   const busy = useWorkspace((s) => s.busy);
   const created = useWorkspace((s) => s.created);
+  const initialized = useWorkspace((s) => s.initialized);
+  const problem = useWorkspace((s) => s.problem);
   const scaffolded = useWorkspace((s) => s.scaffolded);
   const scaffold = useWorkspace((s) => s.scaffold);
   const loadSkills = useSkills((s) => s.loadFor);
@@ -75,23 +134,35 @@ export default function SharedFiles() {
     return null;
   }
 
+  // The convention is laid down *and* the folder has a history. Both halves,
+  // because a workspace scaffolded before PLAN 7.11 existed has every tick and
+  // no repository — and a panel that called that done would strand it with
+  // nothing to press (`complete` alone used to, and did).
+  const versioned = layout.versioning.tree !== "unversioned";
+  const settled = layout.complete && versioned;
+
+  // One door for both halves: `workspace_scaffold` creates what is missing and
+  // versions the folder, so a folder needing only the second half asks for the
+  // same command. A second command would be a second thing to keep in step.
+  const press = () =>
+    void scaffold(project.id).then(() => loadSkills(project.id));
+
   return (
     <Section
       id="shared"
       title="Shared files"
       className="shared"
       badge={
-        layout.complete ? null : (
+        settled ? null : (
           <span className="rail__count rail__count--attention">set up</span>
         )
       }
     >
       {layout.complete ? (
         <p className="shared__note">
-          Briefs, status, artefacts, decisions and this project's own runbooks
-          are in <code>.aegis/</code> here. Ask for a decision to be recorded and
-          it goes in <code>DECISIONS.md</code>; the runbooks in{" "}
-          <code>.aegis/skills/</code> are listed under{" "}
+          Briefs, status, artefacts, decisions and this project's runbooks are
+          in <code>.aegis/</code>. Ask for a decision to be recorded and it goes
+          in <code>DECISIONS.md</code>; the runbooks are under{" "}
           <em>Settings → Skills</em>.
         </p>
       ) : (
@@ -115,9 +186,7 @@ export default function SharedFiles() {
             // surface and would otherwise be stale until someone thought to
             // press *Re-read* — which is a thing nobody thinks to do about a
             // folder they have just been told was created for them.
-            onClick={() =>
-              void scaffold(project.id).then(() => loadSkills(project.id))
-            }
+            onClick={press}
             disabled={busy}
             // Said on the control rather than in a confirmation: the promise
             // the user needs before pressing it is that nothing of theirs is
@@ -129,11 +198,35 @@ export default function SharedFiles() {
         </>
       )}
 
+      <Versioned versioning={layout.versioning} />
+
+      {/*
+        A link rather than the wide button, because the files are already
+        there: what is left is one small missing thing, not a set-up step. It
+        calls the same command — scaffolding is idempotent, and the report then
+        says everything was already there and what it did about the repository.
+      */}
+      {layout.complete && !versioned ? (
+        <button type="button" className="link" onClick={press} disabled={busy}>
+          {busy ? "Working…" : "Make it a git repository"}
+        </button>
+      ) : null}
+
       {scaffolded ? (
         <p className="shared__note" role="status">
           {created.length === 0
-            ? "Everything was already there; nothing was changed."
-            : `Created ${created.join(", ")}.`}
+            ? "Everything was already there."
+            : `Created ${created.join(", ")}.`}{" "}
+          {/*
+            Said in the same breath as what was created, because it is the same
+            answer to the same question — what did pressing that do to my
+            folder. "It", not "this folder is a git repository": the line above
+            has just said that, and the half worth reading twice is the promise
+            at the end. A run that found a repository already there says
+            neither.
+          */}
+          {initialized ? "Made it a repository; nothing was committed." : null}
+          {problem === null ? null : `Not versioned: ${problem}.`}
         </p>
       ) : null}
 
@@ -148,9 +241,9 @@ export default function SharedFiles() {
           {layout.strays.map((dir) => `${dir}/`).join(", ")}{" "}
           {layout.strays.length === 1 ? "is" : "are"} at the top of this folder,
           from the earlier layout. Move{" "}
-          {layout.strays.length === 1 ? "it" : "them"} into{" "}
-          <code>.aegis/</code> and the contents are found again. Nothing here
-          will move {layout.strays.length === 1 ? "it" : "them"} for you.
+          {layout.strays.length === 1 ? "it" : "them"} into <code>.aegis/</code>{" "}
+          and the contents are found again; nothing here will move{" "}
+          {layout.strays.length === 1 ? "it" : "them"} for you.
         </p>
       ) : null}
     </Section>

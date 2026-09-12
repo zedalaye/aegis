@@ -44,7 +44,11 @@
 //! * **scaffold** — [`scaffold`] creates what is missing and never touches what
 //!   is there. It is opt-in: a workspace is a folder someone already owns, and
 //!   writing four directories into it because an app was pointed at it would be
-//!   the wrong default.
+//!   the wrong default. It is also where the folder becomes a git work tree
+//!   (PLAN 7.11), because the same press is the same consent: a board rewritten
+//!   in place with no history is a transcript again, which is the thing this
+//!   convention exists to stop being. See [`git`](crate::git) — the repository
+//!   is created and never committed to.
 //! * **read** — [`digest`] is retrieved at the start of every model request, so
 //!   the current state reaches the model as *state* rather than as a chat
 //!   history to be re-read.
@@ -72,6 +76,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::error::{AppError, AppResult};
+use crate::git::{self, Versioning};
 use crate::policy::path;
 use crate::skills;
 
@@ -343,6 +348,14 @@ pub struct WorkspaceLayout {
     /// Empty for every workspace that never had the old layout, which is the
     /// ordinary case and draws nothing.
     pub strays: Vec<String>,
+    /// Whether the folder is in a git work tree, and whose (PLAN 7.11).
+    ///
+    /// A fact about the convention, like the four ticks, and reported for the
+    /// same reason: these files are a shared memory, and a shared memory with
+    /// no history is a board nobody can read backwards. It is not the start of
+    /// a git client — there is no log here, no stage and no push, and the only
+    /// thing that ever changes it is the button beside it.
+    pub versioning: Versioning,
 }
 
 /// What one scaffolding run did.
@@ -360,6 +373,37 @@ pub struct ScaffoldReport {
     pub created: Vec<String>,
     /// Files that were already there and were left exactly as they were.
     pub kept: Vec<String>,
+    /// Where the history of these files is kept, measured after the run.
+    pub versioning: Versioning,
+    /// Whether this run is what made the folder a work tree.
+    ///
+    /// Separate from `versioning` because they answer different questions and a
+    /// person needs both: *is it versioned* is about the folder, *did you just
+    /// do that to my folder* is about this press. A repository that was already
+    /// there reports `versioning` and `initialized: false`.
+    pub initialized: bool,
+    /// Why the folder is still not versioned, when it is not.
+    ///
+    /// `git` missing from PATH is the ordinary reason and it is not a failure:
+    /// the directories were the job, they were created, and this is the line
+    /// that says the other half did not happen.
+    pub problem: Option<String>,
+}
+
+impl ScaffoldReport {
+    /// Folds the versioning half of the press into the report.
+    ///
+    /// The two halves are measured in different places on purpose — the files
+    /// are a fact about a path, and whose `git` may write there is a fact about
+    /// the project (PLAN 7.12) — and this is the one named seam where they
+    /// meet, so a report can never be half-assembled by a caller that forgot.
+    #[must_use]
+    pub fn versioned(mut self, ensured: git::Ensured) -> Self {
+        self.versioning = ensured.versioning;
+        self.initialized = ensured.initialized;
+        self.problem = ensured.problem;
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +437,10 @@ pub fn layout(root: &Path) -> WorkspaceLayout {
             .iter()
             .all(|entry| entry.dir_exists && entry.file_exists),
         strays: strays(root),
+        // A walk for a `.git`, not a `git rev-parse`: this runs on every render
+        // of the rail and after every turn, and it has to answer on a machine
+        // that has no git at all (PLAN 7.11).
+        versioning: git::measure(root),
         entries,
     }
 }
@@ -605,6 +653,13 @@ fn window(path: &Path, digest: Digest) -> io::Result<(String, u64)> {
 /// Stops at the first failure rather than pressing on. A workspace where three
 /// of four directories appeared is a state the user then has to reason about; a
 /// clear error naming the one that failed is not.
+///
+/// The files only. Making the folder a git work tree is the other half of the
+/// same press (PLAN 7.11) and it is [`git::ensure`], called by the command:
+/// which `git` may write here depends on the project's execution host
+/// (PLAN 7.12), and a project is not something this function has. The report
+/// leaves here carrying what the folder already is, for the command to
+/// complete.
 pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
     let mut created = Vec::new();
     let mut kept = Vec::new();
@@ -646,6 +701,14 @@ pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
         root: root.display().to_string(),
         created,
         kept,
+        // Measured, not acted on. This function has a path and no project, and
+        // *whose* `git` may write here is a fact about the project (PLAN 7.12).
+        // So the report leaves here saying truthfully what the folder is and
+        // that this run did nothing about it, and the command that does hold
+        // the project folds its answer in with [`ScaffoldReport::versioned`].
+        versioning: git::measure(root),
+        initialized: false,
+        problem: None,
     })
 }
 
@@ -998,6 +1061,88 @@ mod tests {
             digest.len()
         );
         assert!(digest.contains("and 29 more"), "{digest}");
+    }
+
+    /// PLAN 7.11: scaffolding reports what the folder already is, and leaves
+    /// the initialising to the command that knows whose `git` may run here.
+    #[test]
+    fn scaffolding_reports_the_versioning_it_found_and_changes_none_of_it() {
+        let (_dir, root) = workspace();
+        assert_eq!(
+            layout(&root).versioning.tree,
+            git::WorkTree::Unversioned,
+            "a folder nobody asked about has no repository"
+        );
+
+        let report = scaffold(&root).expect("scaffolded");
+
+        assert_eq!(report.versioning.tree, git::WorkTree::Unversioned);
+        assert!(!report.initialized);
+        assert_eq!(report.problem, None);
+        assert!(
+            !root.join(".git").exists(),
+            "and the files half spawns nothing"
+        );
+        assert!(layout(&root).complete, "the directories are there");
+    }
+
+    /// The other half, folded in the way the command folds it.
+    #[tokio::test]
+    async fn a_scaffolded_folder_is_versioned_by_the_press_that_made_it() {
+        let (_dir, root) = workspace();
+
+        let report = scaffold(&root)
+            .expect("scaffolded")
+            .versioned(git::ensure(&root, None).await);
+
+        // A machine without `git` takes the other row of PLAN 7.11's table,
+        // and the claim there is the same one: the directories were the job.
+        if let Some(problem) = &report.problem {
+            assert!(!report.initialized, "{problem}");
+            assert_eq!(report.versioning.tree, git::WorkTree::Unversioned);
+        } else {
+            assert!(report.initialized, "{report:?}");
+            assert_eq!(report.versioning.tree, git::WorkTree::Here);
+            assert_eq!(layout(&root).versioning.tree, git::WorkTree::Here);
+        }
+
+        assert!(
+            layout(&root).complete,
+            "and the directories are there either way"
+        );
+    }
+
+    /// Versioning is the only thing that press does about git. Nothing writes
+    /// a `.gitignore`, a remote or a commit — approving a write is not
+    /// approving a commit (PLAN 7.11).
+    #[tokio::test]
+    async fn scaffolding_writes_nothing_of_gits_beyond_the_repository() {
+        let (_dir, root) = workspace();
+        let report = scaffold(&root)
+            .expect("scaffolded")
+            .versioned(git::ensure(&root, None).await);
+
+        assert!(report.problem.is_some() || report.initialized);
+        assert!(!root.join(".gitignore").exists());
+        assert!(!root.join(".gitattributes").exists());
+        assert!(!root.join(".gitmodules").exists());
+    }
+
+    /// A workspace inside somebody's monorepo is already versioned by it, and
+    /// an inner `.git` would split that history.
+    #[tokio::test]
+    async fn scaffolding_inside_a_repository_reports_the_ancestor_and_nests_nothing() {
+        let (dir, root) = workspace();
+        fs::create_dir(dir.path().join(".git")).expect("a repository above");
+
+        let report = scaffold(&root)
+            .expect("scaffolded")
+            .versioned(git::ensure(&root, None).await);
+
+        assert!(!report.initialized);
+        assert_eq!(report.problem, None);
+        assert_eq!(report.versioning.tree, git::WorkTree::Ancestor);
+        assert!(!root.join(".git").exists(), "no nested repository");
     }
 
     /// A file that is not valid UTF-8 is a thing a workspace can contain. It

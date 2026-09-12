@@ -17,7 +17,9 @@
 //!    message of the next request, and what is not in the files is not.
 //! 3. The write path is the ordinary one. A turn that writes
 //!    `.aegis/decisions/DECISIONS.md` is gated, audited and durable, and the decision
-//!    is in the following request.
+//!    is in the following request — and it does not commit, which is the
+//!    PLAN 7.11 half: the folder gets a repository when the convention is laid
+//!    down, and nothing in the runtime ever puts anything on a branch.
 //!
 //! The command layer above this needs a running Tauri application and is not
 //! reachable from a test binary. Everything below it is, against real files in
@@ -274,6 +276,48 @@ fn scaffolding_lays_down_what_is_missing_and_keeps_what_is_not() {
     assert!(again.created.is_empty(), "{:?}", again.created);
 }
 
+/// PLAN 7.11: the convention is laid down *and* the folder is versioned, in
+/// one press. Nothing is committed by it.
+///
+/// The two halves are folded here the way `workspace_scaffold` folds them —
+/// the command itself needs a running Tauri application and is not reachable
+/// from a test binary, so what is exercised is everything under it.
+#[tokio::test]
+async fn scaffolding_leaves_a_repository_with_no_commits_in_it() {
+    let app = App::new();
+
+    let report = workspace::scaffold(&app.workspace)
+        .expect("scaffolded")
+        .versioned(aegis_lib::git::ensure(&app.workspace, None).await);
+
+    // A machine with no `git` takes the other row of the table: the
+    // directories are the job, they were done, and the report says the rest
+    // did not happen. Everything below is about the row this machine is on.
+    let Some(problem) = report.problem else {
+        assert!(report.initialized, "{report:?}");
+        assert!(app.workspace.join(".git").is_dir(), "there is a repository");
+        assert!(
+            !app.workspace.join(".git/index").exists(),
+            "nothing was staged"
+        );
+        assert_eq!(
+            std::fs::read_dir(app.workspace.join(".git/refs/heads"))
+                .map(Iterator::count)
+                .unwrap_or(0),
+            0,
+            "nothing was committed"
+        );
+        assert!(!app.workspace.join(".gitignore").exists());
+        return;
+    };
+
+    assert!(!report.initialized, "{problem}");
+    assert!(
+        workspace::layout(&app.workspace).complete,
+        "the directories were laid down anyway"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 2. The read path
 // ---------------------------------------------------------------------------
@@ -338,6 +382,20 @@ async fn a_decision_is_filed_with_fs_write_and_comes_back_in_the_next_request() 
     assert!(
         app.next_system_message().contains("keep the tray"),
         "and in the request the next turn will send"
+    );
+
+    // And the write did not become a commit (PLAN 7.11). Approving an
+    // `fs_write` is approval to write that file, not to put it on a branch,
+    // and there is no path in the runtime that stages or commits anything.
+    let heads = app.workspace.join(".git/refs/heads");
+    assert_eq!(
+        std::fs::read_dir(&heads).map(Iterator::count).unwrap_or(0),
+        0,
+        "a gated write leaves the history exactly where it was"
+    );
+    assert!(
+        !app.workspace.join(".git/index").exists(),
+        "and stages nothing"
     );
 }
 

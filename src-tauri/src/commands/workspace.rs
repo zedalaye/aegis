@@ -23,6 +23,7 @@
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::git;
 use crate::reveal;
 use crate::state::AppState;
 use crate::store::canonical_workspace;
@@ -46,7 +47,7 @@ pub fn workspace_layout(
     Ok(workspace::layout(project.workspace_path.as_ref()))
 }
 
-/// Creates the missing directories and seed files, and nothing else.
+/// Creates the missing directories and seed files, and versions the folder.
 ///
 /// Explicit, never automatic. A workspace is a folder the user already owns —
 /// often a repository with its own layout — and four directories appearing in
@@ -54,13 +55,27 @@ pub fn workspace_layout(
 /// The report names what was created and what was left alone, so the answer to
 /// "did it touch my files" is on screen rather than in a promise.
 ///
+/// This is also the one command that may leave a `.git` in somebody's folder
+/// (PLAN 7.11), and for the same reason it may leave five directories there:
+/// the press is the consent. `project_create` never does — picking a folder is
+/// not consent to mutate it. What it leaves is an empty repository and nothing
+/// else: no commit, no remote, no identity, then or ever.
+///
+/// The two halves meet here rather than in [`workspace::scaffold`] because this
+/// is the layer that holds a *project*: which `git` may write in that folder is
+/// the project's execution host (PLAN 7.12), and a Windows `git init` on a
+/// distribution's tree is the wrong git. `async` for the same reason — a WSL
+/// distribution is asked whether it can see the folder before anything runs
+/// there, and a virtual machine that is still coming up takes seconds to
+/// answer.
+///
 /// The path is re-canonicalized here rather than trusted from the store. The
 /// stored path was canonical when it was registered, and this is the one
 /// command that then writes through it: a folder that has since been replaced
 /// by a symlink is worth catching at the door, and the check also gives the
 /// missing-folder case a message that says which folder.
 #[tauri::command(rename_all = "snake_case")]
-pub fn workspace_scaffold(
+pub async fn workspace_scaffold(
     state: State<'_, AppState>,
     project_id: String,
 ) -> AppResult<ScaffoldReport> {
@@ -74,7 +89,8 @@ pub fn workspace_scaffold(
     }
 
     let root = canonical_workspace(&project.workspace_path)?;
-    workspace::scaffold(&root)
+    let report = workspace::scaffold(&root)?;
+    Ok(report.versioned(git::ensure(&root, project.exec_host.as_ref()).await))
 }
 
 /// Opens a workspace path in the OS file manager (PLAN 7.10).

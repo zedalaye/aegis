@@ -52,6 +52,7 @@ pub mod compact;
 mod display;
 mod error;
 pub mod exec_host;
+pub mod git;
 pub mod handoff;
 pub mod mcp;
 pub mod oauth;
@@ -81,6 +82,7 @@ pub use board::{Board, Facts as BoardFacts, Item as BoardItem, Source as BoardSo
 pub use compact::Plan as CompactionPlan;
 pub use error::{AppError, AppResult, ErrorCode};
 pub use exec_host::{ExecHost, ExecHostOption, ExecTarget};
+pub use git::{Versioning, WorkTree};
 pub use handoff::runner::{Delegating, Host as HandoffHost};
 pub use handoff::{Brief, Plan as HandoffPlan, Priority, ReturnFormat};
 pub use mcp::{Catalog as ConnectorCatalog, ConnectorView, Connectors, State as ConnectorState};

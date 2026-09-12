@@ -67,6 +67,24 @@ export type WorkspaceState = {
    * the button did anything.
    */
   readonly created: readonly string[];
+  /**
+   * Whether the last run is what made the folder a git work tree (PLAN 7.11).
+   *
+   * Kept beside {@link created} rather than derived from `layout.versioning`,
+   * because they answer different questions: the layout says whether the folder
+   * is versioned *now*, and this says whether pressing the button is what did
+   * that. Only the second is worth reporting back to somebody who has just
+   * pressed it.
+   */
+  readonly initialized: boolean;
+  /**
+   * Why the folder is still not versioned, when it is not.
+   *
+   * `git` missing from PATH is the ordinary reason, and it is not an error:
+   * the directories were the job and they were created. So it is held here and
+   * said in the panel, rather than raised as a failed command.
+   */
+  readonly problem: string | null;
   /** Whether a scaffolding run has finished since the panel was last loaded. */
   readonly scaffolded: boolean;
   readonly error: IpcError | null;
@@ -94,6 +112,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   status: "idle",
   busy: false,
   created: [],
+  initialized: false,
+  problem: null,
   scaffolded: false,
   error: null,
 
@@ -105,13 +125,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         world: null,
         status: "idle",
         created: [],
+        initialized: false,
+        problem: null,
         scaffolded: false,
         error: null,
       });
       return;
     }
 
-    set({ projectId, status: "loading", created: [], scaffolded: false });
+    set({
+      projectId,
+      status: "loading",
+      created: [],
+      initialized: false,
+      problem: null,
+      scaffolded: false,
+    });
     try {
       const [layout, world] = await Promise.all([
         workspaceLayout(projectId),
@@ -177,6 +206,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         world,
         status: "ready",
         created: report.created,
+        initialized: report.initialized,
+        problem: report.problem,
         scaffolded: true,
       });
     } catch (cause) {

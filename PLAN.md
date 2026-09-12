@@ -2275,6 +2275,33 @@ init is a line in the report, not a failed scaffold. When the project
 has an execution host (§ 7.12), this `git` is that host's `git`. A
 Windows `git init` on a `\\wsl$\` tree is the wrong git.
 
+**Reading it is not running it.** *Landed* as `src-tauri/src/git.rs`.
+`git init` is the only thing that spawns a program; the question "is
+this folder in a work tree" is a walk for a `.git` — a directory in a
+clone, a *file* in a linked worktree or a submodule — from the root
+upwards. That is what lets `workspace_layout` answer it on every render
+of the rail and after every turn without a subprocess, and what lets it
+answer at all on a machine with no `git` installed, which is exactly
+the row of the table where an answer from `git` is unavailable and the
+question still has one. The walk does not copy git's
+`GIT_CEILING_DIRECTORIES` or its refusal to cross a filesystem
+boundary: an ancestor repository across a mount point reads here as
+*versioned by it*, the init is declined, and the report names the
+ancestor — visible rather than silent.
+
+`git init` is the project's `git`, not this computer's (§ 7.12, now
+landed). A project with an execution host initialises through
+`wsl.exe -d <distro> --cd <dir> --exec git init`, behind the same
+`test -d` probe `shell_exec` runs — `wsl.exe --cd` answers a folder it
+cannot find by starting in the user's home and saying nothing, and a
+repository in somebody's `~` instead of their project is the one
+failure here that looks like success. Off Windows a recorded host
+refuses rather than falling back to the local `git`. `workspace_scaffold`
+is therefore `async` and owns both halves: `workspace::scaffold` has a
+path and no project, and whose `git` may write in a folder is a fact
+about the project. [`measure`] needs none of it — `fs_*` already sees a
+distribution's files over the UNC path, and so does a walk for `.git`.
+
 **Never**
 
 - a nested repository (an inner `.git` splits history and hides the
@@ -2328,6 +2355,16 @@ work tree leaves a `.git` there and says so; pressing it on a folder
 that already is one does not create a nested repo; a later `fs_write`
 still does not commit. `git` absent from PATH does not block the
 directories.
+
+*Done* in the panel is both halves. A workspace scaffolded before this
+slice has five ticks and no repository, and collapsing on the ticks
+alone stranded it — every tick, a line saying it has no history, and
+nothing to press. So the panel is settled only when the convention is
+laid down **and** the folder is versioned; a folder needing just the
+second half gets a link rather than the set-up button, onto the same
+`workspace_scaffold`. One command for both halves: scaffolding is
+idempotent, and a second command would be a second thing to keep in
+step.
 
 ### 7.12 Execution host (WSL) — not a CoS phase *(landed)*
 

@@ -1514,7 +1514,28 @@ created: Array<string>,
 /**
  * Files that were already there and were left exactly as they were.
  */
-kept: Array<string>, };
+kept: Array<string>, 
+/**
+ * Where the history of these files is kept, measured after the run.
+ */
+versioning: Versioning, 
+/**
+ * Whether this run is what made the folder a work tree.
+ *
+ * Separate from `versioning` because they answer different questions and a
+ * person needs both: *is it versioned* is about the folder, *did you just
+ * do that to my folder* is about this press. A repository that was already
+ * there reports `versioning` and `initialized: false`.
+ */
+initialized: boolean, 
+/**
+ * Why the folder is still not versioned, when it is not.
+ *
+ * `git` missing from PATH is the ordinary reason and it is not a failure:
+ * the directories were the job, they were created, and this is the line
+ * that says the other half did not happen.
+ */
+problem: string | null, };
 
 /**
  * When a routine fires.
@@ -2310,6 +2331,33 @@ completion_tokens: number,
 total_tokens: number, };
 
 /**
+ * Where the history of a workspace's files is kept, if anywhere.
+ */
+export type Versioning = { 
+/**
+ * Whether the workspace is in a work tree, and whose.
+ */
+tree: WorkTree, 
+/**
+ * The folder holding the `.git`, absolute — `None` when there is none.
+ *
+ * Named rather than left implicit because the answer a person needs from
+ * [`WorkTree::Ancestor`] is *which* folder: "this is inside a repository"
+ * is only useful once you can see whether it is the one you meant.
+ */
+at: string | null, };
+
+/**
+ * Whether the folder is in a work tree, and whose.
+ *
+ * Three answers rather than a boolean because the middle one changes what the
+ * panel should say and what [`ensure`] must not do: a workspace inside a
+ * larger repository is already versioned, and initialising it would split the
+ * history it is already part of.
+ */
+export type WorkTree = "here" | "ancestor" | "unversioned";
+
+/**
  * One directory of the convention, as the UI sees it.
  *
  * Both flags are measured on every read and never stored: a user can create
@@ -2368,7 +2416,17 @@ complete: boolean,
  * Empty for every workspace that never had the old layout, which is the
  * ordinary case and draws nothing.
  */
-strays: Array<string>, };
+strays: Array<string>, 
+/**
+ * Whether the folder is in a git work tree, and whose (PLAN 7.11).
+ *
+ * A fact about the convention, like the four ticks, and reported for the
+ * same reason: these files are a shared memory, and a shared memory with
+ * no history is a board nobody can read backwards. It is not the start of
+ * a git client — there is no log here, no stage and no push, and the only
+ * thing that ever changes it is the button beside it.
+ */
+versioning: Versioning, };
 
 /**
  * One file of the constitution, as the panel sees it.
