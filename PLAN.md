@@ -1047,9 +1047,9 @@ Six slices are **not** steps in this list:
 - **§ 7.13** skill promotion (`PROPOSAL.md` then apply; writing is still not granting)
 - **§ 7.14** cabinet founding (a founder skill writes a roster proposal; apply is the grant)
 - **§ 7.15** workspace explorer (read-only tree + preview of the open folder; drop lands
-  a brief). Not an editor.
+  a brief). Not an editor — *(landed)*
 
-§ 7.11 and § 7.12 have landed. § 7.10 and § 7.15 may start once Phase 13 has landed, and
+§ 7.11, § 7.12 and § 7.15 have landed. § 7.10 may start once Phase 13 has landed, and
 must not delay Phases 14–16.
 § 7.13 waits for Phase 17 (the CoS board). It must not delay Phases 15–17, and it
 is not a number between 15 and 16. § 7.14 waits for Phases 12, 13, 16 and 17
@@ -1755,8 +1755,8 @@ identity and ticks the boxes. That is the whole of what *domain packs as skills,
 supposed to mean, and the way to tell is that nothing in `src-tauri` learned what a client, a
 mailbox, a release note, a statement, a timeline or a goal is.
 
-§ 7.11 (versioning) and § 7.12 (execution host) have landed. § 7.10 (chrome)
-and § 7.15 (explorer) may run at any time after Phase 13. § 7.13 (skill
+§ 7.11 (versioning), § 7.12 (execution host) and § 7.15 (explorer) have
+landed. § 7.10 (chrome) may run at any time after Phase 13. § 7.13 (skill
 promotion) may run after Phase 17. § 7.14 (cabinet founding) may run after
 Phases 12, 13, 16 and 17. They do not insert here, and they are not
 Phases 20–25.
@@ -2791,9 +2791,13 @@ Assistant is unchanged; a routine still cannot be saved
 without a witnessed run; a session cannot apply. No new tool.
 No wizard. The grant is the apply.
 
-### 7.15 Workspace explorer — not a CoS phase
+### 7.15 Workspace explorer — not a CoS phase *(landed)*
 
 Not a step in § 7.3. Not Phase 25. Not an IDE.
+
+This slice has landed (`src-tauri/src/explorer.rs`, `src-tauri/src/intake.rs`,
+`commands/explorer.rs`; *Files* in the title bar). What it settled is at the
+end of this section, under *As landed*.
 
 The agent is *in* the system: `fs_list`, `fs_read`, the digest.
 The operator is not. Shared memory is files. A UI that cannot
@@ -2875,3 +2879,65 @@ leaving the app; dropping a file from outside lands in
 `.aegis/briefs/` and not in artefacts or `world/`; nothing
 in the WebView saves a file. No new plugin permission. No
 editor.
+
+**As landed.** The unknowns `IDEAS.md` § 15–16 left open, and
+how each was closed.
+
+- **A mode, not a rail panel.** *Files* takes the work area
+  the way Board and Settings do, and the three close each
+  other. A preview needs a transcript's width.
+- **One folder at a time.** `workspace_tree` lists a folder
+  when it is expanded, capped at 1,000 entries, and says how
+  many it hid (ignored) and how many it left out (the cap).
+  No watcher: it re-reads on `turn:finished`, after a drop,
+  and on *Refresh*.
+- **Ignored is git's answer.** The `ignore` crate (ripgrep's)
+  applies `.gitignore`, `.git/info/exclude` and the global
+  excludes file, inside a work tree only. `.git` and
+  `node_modules` are hidden everywhere. *Show ignored* lists
+  them, marked. A preview never asks whether a file is
+  ignored: a brief may point at a gitignored dump.
+- **Containment is reveal's.** Every path goes through
+  `reveal::target`, so `..`, an absolute path elsewhere and a
+  link that leads out are refused the same way. A link out is
+  listed as *outside* and never opened.
+- **Preview.** Text up to 512 KiB, marked as cut beyond that.
+  A NUL means binary. Invalid UTF-8 is shown lossily unless
+  more than a tenth is replaced. Images are known by their
+  first bytes, not their extension (PNG, JPEG, GIF, WebP,
+  BMP, ICO, up to 16 MiB), and cross IPC once as a binary
+  `tauri::ipc::Response`. The CSP's `img-src` gained `blob:`,
+  which is a config line, not a permission. SVG is markup and
+  is previewed as text.
+- **The sanitizer is a parser, not a library.**
+  `src/lib/markdown.ts` builds a typed tree and the component
+  draws elements, with no HTML string anywhere. Raw HTML is
+  text, images are their alt text, and web links are shown,
+  not followed. A relative link, or a backticked path, to a
+  workspace file opens that file in the preview. That is how
+  "a file a brief points at" is one click.
+- **The drop.** Tauri's window event gives the runtime the
+  paths. `lib.rs` holds them under an id for two minutes and
+  emits `workspace:dropped` with names and a position. The
+  window finds the row under the position and names the id.
+  The command takes no source path and no destination. It
+  checks `.aegis/briefs/` *before* claiming the drop, so
+  *Set up shared files and add it* works without a second
+  drop. Rows in `.aegis/artefacts/`, the rest of `.aegis/`
+  and `world/` refuse. Any other row is the project. A project
+  row in the rail is a target too: a drop there lands in
+  *that* project's briefs, open or not, and a project with no
+  cabinet refuses in the runtime's words. Names
+  are made safe for every OS the repository may be cloned to,
+  and a taken name keeps both (`notes (2).md`).
+- **The audit line.** One per arrival: tool `brief_import`,
+  and a new decision, `operator`, with no session, identity
+  or turn. It records `from` and `path`, never content. The
+  board's fold is scoped by session, so it leaves these lines
+  out. Showing intake on the board is still open.
+- **The asset scope stays the captures.** Tauri's own drop
+  handler widens the `asset:` scope to every dropped path,
+  recursively for a folder. It always has, because drag-drop
+  is on by default. `lib.rs` now forbids those paths again on
+  every drop. A forbidden pattern wins whichever is
+  registered first. The captures directory is exempt.

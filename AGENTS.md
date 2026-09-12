@@ -185,8 +185,12 @@ command refuses rather than falling back to this computer — which is also whos
 (a proposal file, then apply; writing is still not granting) is § 7.13. Cabinet
 founding (a founder skill writes a roster proposal; apply is the grant; no
 wizard, no seeded identities) is § 7.14. A read-only workspace explorer
-(preview in, save out; a drop lands a brief) is § 7.15: the agent is in
-the system, the operator is not. The `world/` constitution was the
+(preview in, save out; a drop lands a brief) is § 7.15, and it has landed:
+the agent was in the system and the operator was not, so *Files* lists the
+open folder one directory at a time and previews without a save path. A
+file dropped on it is copied into `.aegis/briefs/` by the runtime, from the
+path the OS handed over. That write is the operator's, audited, and never
+onto artefacts or `world/`. The `world/` constitution was the
 missed half of Phase 11 (`PLAN.md` § 7.2), not a Phase 20, and it has landed:
 opt-in, nothing scaffolds it, the frame is a harness injection, and a
 specialist's write into it is refused rather than asked. None of these is a

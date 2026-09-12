@@ -711,6 +711,32 @@ folder is not versioned. Nothing fails. And the first `git commit` in a new repo
 git identity: if yours is not set, git says so in the approval dialog's result, and you fix it —
 in your global config, or with a `git config` under the same gate.
 
+### Seeing them
+
+**Files** in the title bar shows the open project's folder. You can read what is in it without
+leaving the window. The agent could already `fs_list` and `fs_read` it; this gives you the same
+view. It matters most for `.aegis/`, which macOS Finder hides.
+
+- **The tree** lists one folder at a time, as you open it. `.aegis/` and `world/` are shown and
+  marked. `.git`, `node_modules`, and whatever the repository's ignore files name are hidden
+  unless you tick *Show ignored*. A folder of more than a thousand entries says how many it left
+  out.
+- **The preview is read-only.** Markdown is shown formatted, with limits: HTML in the file stays
+  text, remote images are not loaded, and web links are shown, not followed. A link or a
+  backticked path to another file in the workspace opens that file, so the inputs a brief names
+  are one click away. Other text is shown as it is and images are shown. Anything else gets its
+  name, size and type, and *Show in folder* opens it in your file manager. There is no Save: to
+  change a file, use your editor or ask in a session.
+- **Drop a file onto the project** to copy it into `.aegis/briefs/`. Anywhere on the Files panel
+  counts, or `.aegis/briefs/` itself — or a project's row in the sidebar, which copies it into
+  *that* project's briefs whether or not it is open, and refuses if it has no `.aegis/briefs/`. The original stays where it is, and a name that is already
+  taken keeps both. Drops onto `.aegis/artefacts/`, the rest of `.aegis/`, or `world/` are
+  refused: a dropped file is work going in, not work that came out, and not the constitution.
+  Nothing else happens. No session starts and no runbook is guessed from the extension; the file
+  waits for whatever you ask next. A workspace without `.aegis/briefs/` refuses and offers to set
+  up the shared files and add the drop. Each arrival is one line in the audit log, marked *by
+  you*.
+
 ---
 
 ## The world
@@ -2131,7 +2157,7 @@ src/           React app — presentation and typed IPC glue only
   ipc/         invoke() / listen() wrappers; bindings.ts is generated from the Rust structs
   state/       zustand stores
   components/  layout, chat, sessions, approvals, projects, agents, skills, memory,
-               routines, connectors, board, settings, audit
+               routines, connectors, board, explorer, settings, audit
 src-tauri/
   src/
     commands/  one module per IPC command domain
@@ -2159,6 +2185,9 @@ src-tauri/
                written by a session, and the declared sources it was perceived from
     git.rs     whether that folder is in a git work tree, and the one `git init` that makes
                it one — never a commit, never a nested repository, never a git client
+    explorer.rs  the read-only tree and preview of that folder, one directory at a time,
+               through the same containment as the folder button
+    intake.rs  a file dropped on the window: held by id, copied into .aegis/briefs/, audited
     compact.rs the older half of a transcript, derived into state — no summarizer,
                and nothing deleted
     approval.rs  pending approvals: the channel a turn parks on until you answer
@@ -2290,6 +2319,14 @@ Read this before pointing Aegis at anything you care about.
   Commit button and no privileged git path. Nothing writes a remote, a `.gitignore`, or a
   `user.name` / `user.email` on your behalf, and Aegis' own records stay in the application-data
   directory rather than in your repository.
+- **The window shows your files; it does not write them.** *Files* lists and previews the open
+  workspace through the same containment as the folder button: a path outside it, or a link that
+  leads out, is refused. The window gains no filesystem or opener permission. Markdown is drawn
+  as elements, never as HTML, so a file cannot run script or load a remote image. The one write
+  is a file you drop. The runtime copies it into `.aegis/briefs/` from the path the OS gave it;
+  the window never sends a source path. By default Tauri makes a dropped file readable through
+  the `asset:` protocol. Aegis takes that back on every drop, so the window can still read
+  captures and nothing else.
 - **Keys stay out of the WebView.** The API key lives in the OS credential store (or in
   `AEGIS_API_KEY`) and is read only by the Rust runtime, which attaches it to the request as a
   header marked so it cannot be printed. There is no command that returns a key: the UI can save

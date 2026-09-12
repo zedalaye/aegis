@@ -533,7 +533,8 @@ the same change.
 
 ## Seeing the workspace
 
-**Moved to PLAN § 7.15.** The contract no longer refuses a
+**Moved to PLAN § 7.15, which has landed** (its *As landed*
+closes the unknowns below). The contract no longer refuses a
 workspace explorer. What follows is the investigation that made
 the old cut the wrong one, so nobody puts "no file tree" back.
 
