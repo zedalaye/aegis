@@ -13,6 +13,13 @@
  * machine's toolchain the work is done with — and because a person setting up a
  * project wants it before they start rather than after the first `pnpm` fails.
  *
+ * When the folder itself lives in a distribution, that row says so. It is a
+ * label, not a decision: PLAN 7.12 forbids flipping the host from a `\wsl$\`
+ * path, because picking a folder is not consent — and because the inference
+ * would only catch one of the two spellings, `C:\work` being just as reachable
+ * from the distribution at `/mnt/c/work`. Marking the row makes the likely
+ * answer findable and still leaves the choosing to the person.
+ *
  * The panel draws nothing at all on a machine with no distributions, unless the
  * project already names one. A picker with a single row is not a choice, and on
  * macOS, on Linux, and on a Windows box without WSL there genuinely is only one
@@ -49,6 +56,17 @@ export default function ExecHost() {
   const installed = options.flatMap((option) =>
     option.kind === "wsl" ? [option.distro] : [],
   );
+
+  // The distribution this folder is *in*, when it is in one — measured from the
+  // path, never acted on. Only worth naming while it is not already the host:
+  // once it is chosen, the note below says where commands go, and saying it
+  // twice would read as two different facts.
+  const inside =
+    project.workspace_distro !== null &&
+    project.workspace_distro !== chosen &&
+    installed.includes(project.workspace_distro)
+      ? project.workspace_distro
+      : null;
 
   // Nothing to offer, and nothing to undo.
   if (installed.length === 0 && chosen === null) {
@@ -99,7 +117,9 @@ export default function ExecHost() {
           <option key={distro} value={distro}>
             {distro === chosen && missing
               ? `${distro} — not installed`
-              : `${distro} (WSL)`}
+              : distro === inside
+                ? `${distro} (WSL) — this folder is in it`
+                : `${distro} (WSL)`}
           </option>
         ))}
       </select>
@@ -120,6 +140,14 @@ export default function ExecHost() {
           </>
         )}
       </p>
+
+      {inside === null ? null : (
+        <p className="host__note" role="status">
+          This folder is inside <code>{inside}</code>. Commands still run on
+          this computer until you pick it — opening a folder is not the same as
+          choosing where its commands go.
+        </p>
+      )}
 
       {missing ? (
         <p className="host__note host__note--warn" role="status">

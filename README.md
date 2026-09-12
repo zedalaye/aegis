@@ -543,6 +543,13 @@ in a terminal and this window is never told.
 `\\wsl$\` does not set one — picking a folder is picking a folder — and a finance or watch
 workspace never gets a distribution. This repository's own default is unchanged.
 
+What the picker does do is **point**: when the folder is inside a distribution, that row reads
+*Ubuntu (WSL) — this folder is in it*, and a line under the control says commands still run on
+this computer until you pick it. A label, not a decision. It stops there for a reason beyond the
+principle: `C:\work\proj` is reachable from the distribution too, at `/mnt/c/work/proj`, and is
+just as likely to be built with its toolchain — so a picker that set itself for one spelling and
+not the other would be harder to learn than one that never does.
+
 Once a project has one, this is what changes for a command:
 
 - `shell_exec` runs `wsl -d <distro> --cd <dir> --exec <program> <args>`. There is still no

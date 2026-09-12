@@ -245,6 +245,56 @@ pub fn wsl_exe() -> Option<PathBuf> {
 ///
 /// `Err` carries a sentence for the person reading the approval dialog, not a
 /// parser's complaint.
+/// A path in its ordinary Windows spelling, verbatim prefixes removed.
+///
+/// Verbatim prefixes should never reach here — every workspace is canonicalized
+/// through `dunce` — but a path that arrived another way (a `canonicalize` on a
+/// UNC share hands back `\\?\UNC\…`) is better understood than refused.
+fn plain(text: &str) -> String {
+    text.strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .unwrap_or_else(|| {
+            text.strip_prefix(r"\\?\")
+                .unwrap_or(text)
+                .replace('/', r"\")
+        })
+}
+
+/// The distribution whose filesystem this path is in, when it is in one.
+///
+/// The inverse of [`linux_path`], and it exists for one purpose: making the
+/// right row of the picker *findable*. A folder opened at
+/// `\\wsl$\Ubuntu\home\…` is unambiguously inside `Ubuntu`, and a picker that
+/// knows it can say so.
+///
+/// What it must never become is the host itself. PLAN 7.12 is explicit —
+/// *auto-detecting WSL from a `\\wsl$\` path and flipping the host (picking a
+/// folder is not consent)* — and the reasoning survives contact with this
+/// function: the inference only catches one of the two spellings, since
+/// `C:\work\proj` is just as reachable from the distribution at
+/// `/mnt/c/work/proj` and just as likely to be built with its toolchain. A
+/// picker that fired by itself for one and not the other would be harder to
+/// understand than one that never does. So this returns a *fact about the
+/// path*, and what is done with it is a click.
+///
+/// `None` for every ordinary path, which is nearly all of them: a drive letter,
+/// a share that is not WSL's, or anything that is not a UNC path at all.
+pub fn distro_of(path: &Path) -> Option<String> {
+    let rest = plain(path.to_str()?);
+    let rest = rest.strip_prefix(r"\\")?;
+
+    let mut parts = rest.splitn(3, '\\');
+    let share = parts.next()?;
+    if !share.eq_ignore_ascii_case("wsl$") && !share.eq_ignore_ascii_case("wsl.localhost") {
+        return None;
+    }
+
+    // `\\wsl$\` alone names no distribution, and neither does a trailing
+    // separator with nothing after it.
+    let named = parts.next().unwrap_or_default();
+    (!named.is_empty()).then(|| named.to_owned())
+}
+
 pub fn linux_path(distro: &str, path: &Path) -> Result<String, String> {
     let Some(text) = path.to_str() else {
         return Err(format!(
@@ -253,17 +303,7 @@ pub fn linux_path(distro: &str, path: &Path) -> Result<String, String> {
         ));
     };
 
-    // Verbatim prefixes should never reach here — every workspace is
-    // canonicalized through `dunce` — but a path that arrived another way is
-    // better understood than refused.
-    let text = text
-        .strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .unwrap_or_else(|| {
-            text.strip_prefix(r"\\?\")
-                .unwrap_or(text)
-                .replace('/', r"\")
-        });
+    let text = plain(text);
 
     if let Some(rest) = text.strip_prefix(r"\\") {
         let mut parts = rest.splitn(3, '\\');
@@ -352,6 +392,42 @@ pub fn prompt_block(host: &ExecHost, workspace: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The picker's half of PLAN 7.12: which distribution a folder is in, for
+    /// the row that should be easy to find. Never the host itself.
+    #[test]
+    fn a_unc_path_names_the_distribution_it_is_inside() {
+        for spelling in [
+            r"\\wsl$\Ubuntu\home\p\proj",
+            r"\\wsl.localhost\Ubuntu\home\p\proj",
+            r"\\?\UNC\wsl.localhost\Ubuntu\home\p\proj",
+            r"\\?\UNC\wsl$\Ubuntu\home\p\proj",
+            r"\\wsl$\Ubuntu",
+        ] {
+            assert_eq!(
+                distro_of(Path::new(spelling)).as_deref(),
+                Some("Ubuntu"),
+                "{spelling}"
+            );
+        }
+    }
+
+    /// An ordinary folder is in no distribution, and that includes the one a
+    /// distribution can still reach: `C:\work` is mounted at `/mnt/c/work`, and
+    /// calling it "inside Ubuntu" would make the picker fire for one spelling
+    /// of the same situation and not the other.
+    #[test]
+    fn an_ordinary_path_names_none() {
+        for spelling in [
+            r"C:\work\proj",
+            r"\\?\C:\work\proj",
+            r"\\server\share\proj",
+            r"/home/p/proj",
+            r"\\wsl$",
+        ] {
+            assert_eq!(distro_of(Path::new(spelling)), None, "{spelling}");
+        }
+    }
 
     /// A workspace that lives in the distribution: the share name is the
     /// distribution, and what follows it is already the Linux path.

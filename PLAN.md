@@ -2443,7 +2443,16 @@ existing `projects.json` rows have no host and must keep working.
   like `.cmd` shims;
 - `bash -c` / `wsl … sh -c` around a model-supplied string;
 - auto-detecting WSL from a `\\wsl$\` path and flipping the host
-  (picking a folder is not consent);
+  (picking a folder is not consent). The picker may *mark* the row —
+  `distro_of` reads the distribution out of a UNC workspace path, and
+  `Project.workspace_distro` carries it beside `workspace_exists`,
+  derived on read and never stored — because a fact on a label is not a
+  decision. Two reasons it stops there. The consent one is the line
+  above. The practical one is that the inference only catches one of the
+  two spellings: `C:\work\proj` is reachable from the distribution at
+  `/mnt/c/work/proj` and is just as likely to be built with its
+  toolchain, so a picker that fired by itself for one and not the other
+  would be harder to learn than one that never does;
 - running Aegis itself under WSLg as the way to operate Linux
   projects (display is second-class, § 5.3; this Windows app is
   the UI);

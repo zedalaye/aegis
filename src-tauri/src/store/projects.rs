@@ -21,7 +21,7 @@ use uuid::Uuid;
 use super::sessions::SessionSummary;
 use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
-use crate::exec_host::ExecHost;
+use crate::exec_host::{self, ExecHost};
 
 /// Name of the document under the application-data directory.
 const PROJECTS_FILE: &str = "projects.json";
@@ -53,6 +53,15 @@ pub struct Project {
     pub last_opened_at: Option<String>,
     /// Whether the workspace folder is present *right now*. Never stored.
     pub workspace_exists: bool,
+    /// The WSL distribution whose filesystem the folder is in, if any.
+    ///
+    /// Derived from the path on every read, like `workspace_exists`, and never
+    /// stored — it is a fact about where the folder is, not a decision anybody
+    /// made. It is emphatically **not** `exec_host` and never sets it: PLAN
+    /// 7.12 forbids flipping the host from a `\\wsl$\` path, because picking a
+    /// folder is not consent. All it does is let the picker mark the row a
+    /// person is most likely to want, which still takes their click.
+    pub workspace_distro: Option<String>,
     /// Where this project's commands run (PLAN 7.12).
     ///
     /// `None` is this process — the default, what every project had before this
@@ -121,6 +130,7 @@ impl StoredProject {
             created_at: self.created_at.clone(),
             last_opened_at: self.last_opened_at.clone(),
             workspace_exists: Path::new(&self.workspace_path).is_dir(),
+            workspace_distro: exec_host::distro_of(Path::new(&self.workspace_path)),
             exec_host: self.exec_host.clone(),
         }
     }
@@ -506,6 +516,7 @@ mod tests {
                 created_at: "2026-08-28T09:41:07.412Z".to_owned(),
                 last_opened_at: None,
                 workspace_exists: true,
+                workspace_distro: None,
                 exec_host: None,
             },
             sessions: vec![SessionSummary {
@@ -553,6 +564,7 @@ mod tests {
                 "created_at",
                 "last_opened_at",
                 "workspace_exists",
+                "workspace_distro",
                 "exec_host",
             ])
         );

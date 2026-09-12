@@ -1151,6 +1151,17 @@ last_opened_at: string | null,
  */
 workspace_exists: boolean, 
 /**
+ * The WSL distribution whose filesystem the folder is in, if any.
+ *
+ * Derived from the path on every read, like `workspace_exists`, and never
+ * stored — it is a fact about where the folder is, not a decision anybody
+ * made. It is emphatically **not** `exec_host` and never sets it: PLAN
+ * 7.12 forbids flipping the host from a `\\wsl$\` path, because picking a
+ * folder is not consent. All it does is let the picker mark the row a
+ * person is most likely to want, which still takes their click.
+ */
+workspace_distro: string | null, 
+/**
  * Where this project's commands run (PLAN 7.12).
  *
  * `None` is this process — the default, what every project had before this
