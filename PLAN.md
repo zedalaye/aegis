@@ -1040,6 +1040,7 @@ are last on purpose.
 Six slices are **not** steps in this list:
 
 - **§ 7.10** chrome (title-bar icons, a button that reveals the folder in the OS file manager)
+  — *(landed)*
 - **§ 7.11** workspace versioning (`git init` when the convention is laid down, never an
   auto-commit) — *(landed)*
 - **§ 7.12** execution host (WSL). Windows UI; `shell_exec` in the distro when the project
@@ -1049,8 +1050,7 @@ Six slices are **not** steps in this list:
 - **§ 7.15** workspace explorer (read-only tree + preview of the open folder; drop lands
   a brief). Not an editor — *(landed)*
 
-§ 7.11, § 7.12 and § 7.15 have landed. § 7.10 may start once Phase 13 has landed, and
-must not delay Phases 14–16.
+§ 7.10, § 7.11, § 7.12 and § 7.15 have landed.
 § 7.13 waits for Phase 17 (the CoS board). It must not delay Phases 15–17, and it
 is not a number between 15 and 16. § 7.14 waits for Phases 12, 13, 16 and 17
 (identities, skills, routines, board). It must not delay remaining domain packs,
@@ -1755,11 +1755,10 @@ identity and ticks the boxes. That is the whole of what *domain packs as skills,
 supposed to mean, and the way to tell is that nothing in `src-tauri` learned what a client, a
 mailbox, a release note, a statement, a timeline or a goal is.
 
-§ 7.11 (versioning), § 7.12 (execution host) and § 7.15 (explorer) have
-landed. § 7.10 (chrome) may run at any time after Phase 13. § 7.13 (skill
-promotion) may run after Phase 17. § 7.14 (cabinet founding) may run after
-Phases 12, 13, 16 and 17. They do not insert here, and they are not
-Phases 20–25.
+§ 7.10 (chrome), § 7.11 (versioning), § 7.12 (execution host) and
+§ 7.15 (explorer) have landed. § 7.13 (skill promotion) may run after
+Phase 17. § 7.14 (cabinet founding) may run after Phases 12, 13, 16
+and 17. They do not insert here, and they are not Phases 20–25.
 
 ### 7.4 Hard rules that survive every later phase
 
@@ -2181,16 +2180,18 @@ installed them. § 7.12 routes `shell_exec` there; it does not isolate.
 A later microVM for a Unix workspace is still the containment seam;
 WSL is how we reach the OS the repo already uses.
 
-### 7.10 Chrome polish — not a CoS phase
+### 7.10 Chrome polish — not a CoS phase *(landed)*
 
 Not a step in § 7.3. Not Phase 20. Not an IDE.
 
 Phase 10 already polished the MVP (audit drawer, empty states, README).
 This slice is the chrome that started to hurt once a workspace path, four
 title-bar labels, and the shared-file convention had to share one window.
-It may start once Phase 13 has landed. It must not delay Phases 14–16
-(memory, handoff, scheduler). Phase 17 remains the structured read of
-`/status`; this slice does not pre-build that board.
+
+This slice has landed (`src-tauri/src/reveal.rs`, title-bar icons,
+`workspace_reveal`). Phase 17 is the structured read of `/status`; this
+slice did not pre-build that board. The per-file button on a skill row
+or an approval path was "later"; the explorer's preview grew it.
 
 **In scope**
 
@@ -2817,11 +2818,9 @@ convention directories *are* the tree" fails `COS.md`: a
 brief's inputs are paths anywhere in the workspace, never
 paste.
 
-This slice may start once Phase 13 has landed (the cabinet
-includes `skills/`). It must not delay Phases 14–16. It is
-not § 7.10 (icons and reveal). It is not Phase 17 (the
-structured read of `/status`). Do not insert it as Phase
-13.5, and do not smuggle it into chrome polish.
+This slice has landed. It is not § 7.10 (icons and reveal).
+It is not Phase 17 (the structured read of `/status`). It
+was not Phase 13.5, and it was not chrome polish.
 
 **In scope**
 

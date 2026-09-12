@@ -173,7 +173,9 @@ on another). Keys stay in the OS keyring / env, never in the WebView.
 
 A CoS without (1) recites. Do not build (2) first.
 
-Chrome polish is `PLAN.md` § 7.10. Workspace versioning (`git init` on scaffold,
+Chrome polish is `PLAN.md` § 7.10, and it has landed: title-bar icons,
+each named, and Open reveals the folder in the file manager — the
+WebView never opens `file://`. Workspace versioning (`git init` on scaffold,
 never an auto-commit) is § 7.11, and it has landed: *Set up shared files* leaves
 a `.git` in a folder that is not already in a work tree, nests nothing inside one
 that is, and commits nothing then or ever. A commit is `shell_exec` of `git`
