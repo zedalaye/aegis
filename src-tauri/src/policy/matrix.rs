@@ -1349,13 +1349,19 @@ mod tests {
         assert!(!git_moves_the_tree("git", &args(&["log", "--oneline"])));
         assert!(!git_moves_the_tree("git", &args(&["diff", "HEAD"])));
         assert!(!git_moves_the_tree("git", &args(&["show", "HEAD"])));
-        assert!(!git_moves_the_tree("git", &args(&["branch", "--show-current"])));
+        assert!(!git_moves_the_tree(
+            "git",
+            &args(&["branch", "--show-current"])
+        ));
         assert!(git_moves_the_tree("git", &args(&["checkout", "--", "a"])));
         assert!(git_moves_the_tree(
             "git.exe",
             &args(&["--no-pager", "checkout", "main"])
         ));
-        assert!(git_moves_the_tree("git", &args(&["push", "origin", "HEAD"])));
+        assert!(git_moves_the_tree(
+            "git",
+            &args(&["push", "origin", "HEAD"])
+        ));
         assert!(!git_moves_the_tree("cargo", &args(&["test"])));
     }
 }

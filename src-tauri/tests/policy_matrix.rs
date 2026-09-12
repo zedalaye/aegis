@@ -618,7 +618,10 @@ fn a_git_session_grant_does_not_cover_a_verb_that_moves_the_tree() {
         json!({ "program": "git", "args": ["checkout", "--", "src/ipc/bindings.ts"] }),
     );
     let request = ask(checkout);
-    assert_eq!(request.grant, None, "a grant on git must not cover checkout");
+    assert_eq!(
+        request.grant, None,
+        "a grant on git must not cover checkout"
+    );
     assert!(
         request.reason.contains("does not cover"),
         "{}",
