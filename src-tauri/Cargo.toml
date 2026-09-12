@@ -9,11 +9,13 @@ license = "MIT"
 publish = false
 
 # The library carries the whole runtime; `main.rs` is a thin entry point.
-# The `staticlib`/`cdylib` crate types keep the door open for a mobile
-# target later without another restructure.
+# Desktop only needs `rlib` (the binary and the tests link it). `staticlib`
+# and `cdylib` are the mobile crate types; they produced a 1.3 GB `.lib`
+# per rebuild and are out of MVP (`AGENTS.md`). They come back with a
+# mobile target, not as a door left open in every debug build.
 [lib]
 name = "aegis_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -141,6 +143,17 @@ tempfile = "3"
 # against a hand-fed byte slice, which is the half of it that could otherwise
 # be wrong in a way no unit test would notice.
 tokio = { version = "1", features = ["test-util", "net"] }
+
+# Debuginfo is why `target/debug` was 20 GB: full PDBs on every test
+# binary, and a `windows` rlib at 118 MB. Line tables keep a useful
+# backtrace; type info does not earn its gigabytes. Dependencies get
+# none — a panic in tokio is still a frame. Incremental stays on;
+# stale units are `cargo clean`, not a slower `tauri dev`.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 codegen-units = 1
