@@ -188,7 +188,8 @@ command refuses rather than falling back to this computer — which is also whos
 has landed: a session files `.aegis/skills/<name>/PROPOSAL.md`, the catalog
 never reads it, and copying it to `SKILL.md` is an `fs_write` that is asked
 every time, never replaces a runbook, and grants it to no identity. Cabinet
-founding (a founder skill writes a roster proposal; apply is the grant; no
+founding (a founder skill, granted to a row the human made — never the
+built-in Assistant; a roster proposal, then apply is the grant; no
 wizard, no seeded identities) is § 7.14. A read-only workspace explorer
 (preview in, save out; a drop lands a brief) is § 7.15, and it has landed:
 the agent was in the system and the operator was not, so *Files* lists the

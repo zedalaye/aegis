@@ -2676,29 +2676,46 @@ runbooks is the same undo with no dialog.
 
 **What is actually missing** is the analog of § 7.13 for a *team*.
 Skills are files; identities are a document in application data
-(`agents.json`). There is a way for the Assistant to draft a
-runbook (`fs_write` under the gate). There is no way for it to
-propose a Chief, a Reviewer and the grants each should hold, as a
-file a human applies. That is the hell: the pattern is known, the
-apply surface is not.
+(`agents.json`). There is a way to draft a runbook (`fs_write`
+under the gate, including as the built-in Assistant). There is no
+way to propose a Chief, a Reviewer and the grants each should hold,
+as a file a human applies. That is the hell: the pattern is known,
+the apply surface is not.
 
 **A founder skill, then apply.** Not a fourth identity. `COS.md`
 *Roles* is three: Chief of Staff, specialist, human. Founding is
-what the built-in Assistant is for — it holds every tool, it drafts
-files, it is not the CoS. The skill is `cabinet.found`, seeded into
-the library beside `cos.loop`. None of this is granted by being
-there.
+drafting, which is the Assistant *shape* — every tool, files, not
+the CoS — not the built-in row. Phase 12 made that row a constant:
+`agent_update` refuses it, nothing about it is stored, the form
+has no Edit, and `Agent::allows_skill` is never "the built-in may
+run everything". The form already ships the escape hatch:
+Duplicate. The skill is `cabinet.found`, seeded into the library
+beside `cos.loop`. None of this is granted by being there.
 
-**When.** An identity — typically the built-in Assistant, after
-someone ticks `cabinet.found` on it — runs the skill in a project
-that already has a workspace. The empty state in Settings →
-Identities names that one tick; it does not perform it. There is
-no bypass in `Agent::allows_skill`. The built-in identity still
-holds no skills until a human says so, for the same reason it
-holds none today: handing it every runbook the moment one appears
-would change what the default identity means under the sessions
-already using it. Founding is one named grant, then a conversation,
-not forty checkboxes and not zero.
+**When.** An identity the human made — typically a Duplicate of
+the built-in Assistant, after someone ticks `cabinet.found` on
+the copy — runs the skill in a project that already has a
+workspace. The empty state in Settings → Identities names
+Duplicate and that one tick; it does not perform them, and it
+does not offer Edit on the built-in row. There is no bypass in
+`Agent::allows_skill`, and there is no overlay of skills on
+`Agent::builtin`. The built-in identity holds no skills, for the
+same reason it holds none today: handing it a runbook would
+change what the default identity means under the sessions already
+using it, and would require storing something about a constant.
+Founding is one named grant on a row that is not `default`, then
+a conversation, not forty checkboxes and not zero.
+
+Any identity that holds `fs_write`, `skill_run`, `skill_return`
+and the tick can found. Duplicate is the usual way because the
+copy already has every tool. Naming the copy Founder is the
+operator's; it is not a fourth role in `COS.md`, and apply does
+not create it.
+
+§ 7.13's "typically the built-in Assistant" is an `fs_write`.
+This slice is a `skill_run`. Copying that phrase onto the founder
+skill was the contradiction this paragraph closes: a tick on the
+built-in is `agent_update` of a constant.
 
 The runbook asks what this cabinet is for (which domains, whether
 there is a world, whether anything should ever run unattended) and
@@ -2824,7 +2841,10 @@ did not propose.
 - seeding identity rows into `agents.json` the way runbooks
   are seeded into the library;
 - granting `cabinet.found` (or `cos.loop`, or anything) to
-  the built-in Assistant by construction;
+  the built-in Assistant: not by construction, not by
+  `agent_update`, not by a stored overlay on `Agent::builtin`,
+  not by a bypass in `Agent::allows_skill`. Phase 12 made it a
+  constant; Duplicate is how a skill reaches that shape;
 - an `agent_create` / `agent_update` / `roster_apply` tool a
   session can call;
 - apply that also writes `routines.json`, starts a connector,
@@ -2840,14 +2860,15 @@ did not propose.
 - delaying remaining packs until this exists, or inserting
   it into § 7.3.
 
-**Exit:** the built-in Assistant, once granted `cabinet.found`,
-can file `.aegis/roster/PROPOSAL.md` in a workspace; applying
-it in Settings creates the named identities with the named
-allow-lists and does not create routines, connectors, or a
-world; a name that already exists is skipped; the built-in
-Assistant is unchanged; a routine still cannot be saved
-without a witnessed run; a session cannot apply. No new tool.
-No wizard. The grant is the apply.
+**Exit:** a Duplicate of the built-in Assistant, once granted
+`cabinet.found`, can file `.aegis/roster/PROPOSAL.md` in a
+workspace; applying it in Settings creates the named identities
+with the named allow-lists and does not create routines,
+connectors, or a world; a name that already exists is skipped;
+the built-in Assistant is unchanged and still holds no skills;
+a routine still cannot be saved without a witnessed run; a
+session cannot apply. No new tool. No wizard. No Edit on the
+built-in row. The grant is the apply.
 
 ### 7.15 Workspace explorer — not a CoS phase *(landed)*
 
