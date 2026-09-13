@@ -234,7 +234,8 @@ type ApprovalRequest = {
 type ApprovalDetail =
   | { kind: "fs_read";  path: string; bytes: number | null }
   | { kind: "fs_list";  path: string }
-  | { kind: "fs_write"; path: string; bytes: number; exists: boolean; preview: string | null }
+  | { kind: "fs_write"; path: string; bytes: number; exists: boolean; preview: string | null;
+      applies: string | null }    // § 7.13: the skill a proposal apply makes live
   | { kind: "shell";    program: string; args: string[]; cwd: string; shell_line: string }
   | { kind: "screen";   display: string; width: number; height: number }
   | { kind: "memory";   memory_kind: MemoryKind; text: string; source: string | null };
@@ -1046,13 +1047,14 @@ Six slices are **not** steps in this list:
 - **§ 7.12** execution host (WSL). Windows UI; `shell_exec` in the distro when the project
   says so — *(landed)*
 - **§ 7.13** skill promotion (`PROPOSAL.md` then apply; writing is still not granting)
+  — *(landed)*
 - **§ 7.14** cabinet founding (a founder skill writes a roster proposal; apply is the grant)
 - **§ 7.15** workspace explorer (read-only tree + preview of the open folder; drop lands
   a brief). Not an editor — *(landed)*
 
-§ 7.10, § 7.11, § 7.12 and § 7.15 have landed.
-§ 7.13 waits for Phase 17 (the CoS board). It must not delay Phases 15–17, and it
-is not a number between 15 and 16. § 7.14 waits for Phases 12, 13, 16 and 17
+§ 7.10, § 7.11, § 7.12, § 7.13 and § 7.15 have landed.
+§ 7.13 waited for Phase 17 (the CoS board), and it is not a number between 15 and
+16. § 7.14 waits for Phases 12, 13, 16 and 17
 (identities, skills, routines, board). It must not delay remaining domain packs,
 and it is not a number after 19.
 
@@ -1755,9 +1757,8 @@ identity and ticks the boxes. That is the whole of what *domain packs as skills,
 supposed to mean, and the way to tell is that nothing in `src-tauri` learned what a client, a
 mailbox, a release note, a statement, a timeline or a goal is.
 
-§ 7.10 (chrome), § 7.11 (versioning), § 7.12 (execution host) and
-§ 7.15 (explorer) have landed. § 7.13 (skill promotion) may run after
-Phase 17. § 7.14 (cabinet founding) may run after Phases 12, 13, 16
+§ 7.10 (chrome), § 7.11 (versioning), § 7.12 (execution host),
+§ 7.13 (skill promotion) and § 7.15 (explorer) have landed. § 7.14 (cabinet founding) may run after Phases 12, 13, 16
 and 17. They do not insert here, and they are not Phases 20–25.
 
 ### 7.4 Hard rules that survive every later phase
@@ -2505,10 +2506,14 @@ only in the distro; the approval line shows the Linux cwd; Stop
 kills that command; a project with no host is unchanged. `fs_read`
 of a file in that folder still does not go through WSL.
 
-### 7.13 Skill promotion — not a CoS phase
+### 7.13 Skill promotion — not a CoS phase *(landed)*
 
 Not a step in § 7.3. Not Phase 23. Not a skill marketplace. Not an
 in-app editor. Not OpenClaw's Skill Workshop as a product.
+
+This slice has landed (`skills::proposals`, `skills::apply_of`, the apply
+row in `policy/matrix.rs`, `commands::skill::skill_proposals`). What it
+settled is at the end of this section, under *As landed*.
 
 Phase 13 already runs skills. § 7.6 already authors them: the
 operator's editor, or `fs_write` to `SKILL.md` under the gate.
@@ -2580,6 +2585,58 @@ the catalog lists; `skill_run` still needs the name ticked on an
 identity; a proposal is never runnable; a handwritten skill is
 untouched; a routine still cannot name a proposal. No new tool. No
 editor. No grant.
+
+**As landed.** What the text above left open, and how each was
+closed.
+
+- **The path is under the cabinet.** "`skills/<name>/`" is the
+  leaf. Workspace runbooks moved under `.aegis/` before this
+  slice, so a proposal is `.aegis/skills/<name>/PROPOSAL.md`,
+  beside where its `SKILL.md` would go. `skills::workspace_dir`
+  is the one spelling, shared with the catalog.
+- **An apply is recognised by what it is, not declared.** An
+  `fs_write` of `.aegis/skills/<name>/SKILL.md` whose content
+  is the `PROPOSAL.md` beside it, byte for byte, is an apply
+  (`skills::apply_of`). There is no flag to set and no argument
+  to add. Any other write of a `SKILL.md` is § 7.6's
+  handwritten path and is judged exactly as before. The fixed
+  segments are case-folded, so a different spelling on a
+  case-folding filesystem is still an apply.
+- **The apply row.** It lives in the `fs_write` branch of the
+  matrix, after `world/` and before `.git/`. It is an ask at
+  `high` with **no grant**. A held `Grant::FsWrite` does not
+  cover it, so allowing writes for a session never makes a
+  runbook live unseen. The dialog is titled *Apply a skill
+  proposal*, and `ApprovalDetail::FsWrite` gained `applies`
+  so the preview can say which skill goes live and that it
+  grants it to nobody.
+- **Refused, not asked.** An apply is refused when the proposal
+  will not parse ("never applied") or when a `SKILL.md` is
+  already there ("never replaces a runbook"). Refused in a brief
+  (`ctx.delegated`), where the answer is to return the proposal
+  in `artefacts`. Unattended, no grant means `decide_call`'s
+  refusal, so a routine cannot apply.
+- **The proposal stays.** `fs_write` cannot delete. After an
+  apply the `PROPOSAL.md` remains, and the listing calls it
+  *applied* (byte-identical to the `SKILL.md`). A different
+  `SKILL.md` beside it makes it *occupied*. Removing it is the
+  operator's.
+- **The listing.** `skill_proposals(project_id)` is its own
+  command, next to `skill_list`, never merged into it. The
+  identity form grants from the catalog, and a proposal there
+  would be one tick from a grant. Settings → Skills lists
+  proposals under the catalog, with state, tools and parse
+  error, and no Apply button. Workspace only: a `PROPOSAL.md`
+  in the library is not listed.
+- **`skill_run` of a proposal.** An identity not granted the
+  name is refused by the allow-list, as before. One granted
+  the name ahead of time is refused by the tool with "only
+  proposed". The catalog never read the file, so this changes
+  only which fix is named. No dialog either way.
+- **The system prompt is unchanged.** Nothing tells the model
+  that proposals exist, and no proposal body reaches a prompt.
+  An operator who wants one asks for it, the way they would
+  ask for a decision.
 
 ### 7.14 Cabinet founding — not a CoS phase
 

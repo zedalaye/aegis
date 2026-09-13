@@ -983,6 +983,34 @@ Three rules, and none of them is inside the runbook:
 - **Every step is an ordinary tool call.** Same matrix, same approval dialog, same audit line. A
   runbook that says "write the file" produces the write prompt you would have got anyway.
 
+### Proposing a skill
+
+A session can **propose** a runbook rather than write one live. It files
+`.aegis/skills/<name>/PROPOSAL.md` in the workspace — an ordinary `fs_write`, through the ordinary
+dialog. A CoS brief that learned a procedure hands the same file back as an artefact.
+
+- **A proposal is never run.** The catalog reads only `SKILL.md`. `skill_run` of a proposed name
+  is refused, even for an identity that was granted the name ahead of time. A routine cannot name
+  one either.
+- **Applying is a copy, signed every time.** Ask a session to write the proposal, byte for byte,
+  to `SKILL.md` beside it. Aegis recognises that write as an apply. The dialog is titled *Apply a
+  skill proposal*, says which skill goes live, and offers no "allow for this session". Having
+  allowed writes for the session does not skip it. Reading the preview is when you sign the
+  seven headings.
+- **Applying grants nothing.** The runbook is in the catalog. No identity may run it until you
+  tick it in Settings. The built-in Assistant, which holds every tool and no skills, can propose
+  and apply a runbook it can never run.
+- **Applying never replaces a runbook.** If a `SKILL.md` is already there, the apply is refused
+  and that file is left alone. A proposal that does not parse is refused too. A brief cannot
+  apply, and neither can a routine.
+
+`Settings → Skills` lists the open project's proposals under the catalog: *not applied*, *applied*,
+or *a runbook is already there*, with the parse error when there is one. There is no Apply
+button. `fs_write` cannot delete, so an applied `PROPOSAL.md` stays until you remove it.
+
+Writing a `SKILL.md` directly, in your editor or through a session, still works the way it
+always did.
+
 ### The return
 
 A run ends with `skill_return`, and it is *checked*, not believed — `COS.md`'s handoff shape:

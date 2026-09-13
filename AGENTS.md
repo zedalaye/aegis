@@ -184,7 +184,10 @@ under the gate, asked for by a person. There is no Commit button. Execution host
 from a `\\wsl$\` folder, `fs_*` is unchanged, and a distro that cannot take the
 command refuses rather than falling back to this computer — which is also whose
 `git` a scaffold runs. Skill promotion
-(a proposal file, then apply; writing is still not granting) is § 7.13. Cabinet
+(a proposal file, then apply; writing is still not granting) is § 7.13, and it
+has landed: a session files `.aegis/skills/<name>/PROPOSAL.md`, the catalog
+never reads it, and copying it to `SKILL.md` is an `fs_write` that is asked
+every time, never replaces a runbook, and grants it to no identity. Cabinet
 founding (a founder skill writes a roster proposal; apply is the grant; no
 wizard, no seeded identities) is § 7.14. A read-only workspace explorer
 (preview in, save out; a drop lands a brief) is § 7.15, and it has landed:
