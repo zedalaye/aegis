@@ -916,3 +916,114 @@ fn a_status_that_is_not_one_of_the_three_is_answered_with_the_three() {
         }
     }
 }
+
+// -------------------------------------------------------- skill proposals --
+
+/// PLAN 7.13: applying a proposal is signed every time. A session that allowed
+/// writes so it could file artefacts has not agreed to make a runbook live.
+#[test]
+fn applying_a_proposal_asks_every_time_even_with_writes_allowed() {
+    let fixture = Fixture::new();
+    fixture.file(
+        ".aegis/skills/brief.digest/PROPOSAL.md",
+        aegis_lib::skills::TRIAGE_SEED,
+    );
+    fixture.grants.insert("session-1", Grant::FsWrite);
+
+    let request = ask(decide(
+        &fixture.ctx(),
+        tool::FS_WRITE,
+        json!({
+            "path": ".aegis/skills/brief.digest/SKILL.md",
+            "content": aegis_lib::skills::TRIAGE_SEED,
+        }),
+    ));
+
+    assert_eq!(request.grant, None);
+    assert_eq!(request.risk, Risk::High);
+    assert!(
+        request.reason.contains("grants it to no identity"),
+        "{}",
+        request.reason
+    );
+    assert!(
+        matches!(
+            &request.detail,
+            ApprovalDetail::FsWrite { applies: Some(name), .. } if name == "brief.digest"
+        ),
+        "{:?}",
+        request.detail
+    );
+
+    // The same file with anything else in it is the handwritten path of
+    // PLAN 7.6, which this slice does not touch: the grant still covers it.
+    auto(decide(
+        &fixture.ctx(),
+        tool::FS_WRITE,
+        json!({
+            "path": ".aegis/skills/brief.digest/SKILL.md",
+            "content": "written by hand",
+        }),
+    ));
+}
+
+#[test]
+fn a_proposal_is_never_applied_over_a_runbook_or_from_a_broken_file() {
+    let fixture = Fixture::new();
+
+    fixture.file(".aegis/skills/inbox.triage/SKILL.md", "handwritten");
+    fixture.file(
+        ".aegis/skills/inbox.triage/PROPOSAL.md",
+        aegis_lib::skills::TRIAGE_SEED,
+    );
+    let decision = decide(
+        &fixture.ctx(),
+        tool::FS_WRITE,
+        json!({
+            "path": ".aegis/skills/inbox.triage/SKILL.md",
+            "content": aegis_lib::skills::TRIAGE_SEED,
+        }),
+    );
+    assert_eq!(denied(decision), ErrorCode::Denied);
+
+    fixture.file(".aegis/skills/half/PROPOSAL.md", "no front matter");
+    let decision = decide(
+        &fixture.ctx(),
+        tool::FS_WRITE,
+        json!({ "path": ".aegis/skills/half/SKILL.md", "content": "no front matter" }),
+    );
+    assert_eq!(denied(decision), ErrorCode::Denied);
+}
+
+/// A brief hands a proposal back; it does not apply it. And a routine has
+/// nobody in it to sign one, so no standing approval reaches the row.
+#[test]
+fn neither_a_brief_nor_a_routine_can_apply_a_proposal() {
+    let fixture = Fixture::new();
+    fixture.file(
+        ".aegis/skills/brief.digest/PROPOSAL.md",
+        aegis_lib::skills::TRIAGE_SEED,
+    );
+    let apply = json!({
+        "path": ".aegis/skills/brief.digest/SKILL.md",
+        "content": aegis_lib::skills::TRIAGE_SEED,
+    });
+
+    let mut brief = fixture.ctx();
+    brief.delegated = true;
+    match decide(&brief, tool::FS_WRITE, apply.clone()) {
+        Decision::Deny { code, reason } => {
+            assert_eq!(code, ErrorCode::Denied);
+            assert!(reason.contains("artefacts"), "{reason}");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    fixture.grants.insert("session-1", Grant::FsWrite);
+    let mut routine = fixture.ctx();
+    routine.unattended = true;
+    assert_eq!(
+        denied(decide(&routine, tool::FS_WRITE, apply)),
+        ErrorCode::Denied
+    );
+}

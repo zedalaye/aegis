@@ -1,8 +1,9 @@
 //! Skill commands (PLAN 7.3, Phase 13).
 //!
-//! One command, and the shape of it is the point: the catalog can be *listed*
-//! and nothing else. There is no `skill_create`, no editor, and no command
-//! that runs one.
+//! Two listings, and the shape of them is the point: the catalog and the
+//! proposals waiting beside it (PLAN 7.13) can be *listed* and nothing else.
+//! There is no `skill_create`, no editor, no apply command, and no command that
+//! runs one.
 //!
 //! A runbook is a `SKILL.md` in the user's library or in their workspace, and
 //! writing one is what an editor is for — or, inside a session, an ordinary
@@ -19,7 +20,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::skills::Skill;
+use crate::skills::{Skill, SkillProposal};
 use crate::state::AppState;
 use crate::store::canonical_workspace;
 
@@ -52,4 +53,32 @@ pub fn skill_list(state: State<'_, AppState>, project_id: Option<String>) -> App
     };
 
     Ok(state.skill_catalog(workspace.as_deref()))
+}
+
+/// Every `PROPOSAL.md` in one project's workspace (PLAN 7.13).
+///
+/// A second listing, and still nothing that writes: applying a proposal is an
+/// `fs_write` a session makes under the gate, signed in its dialog, and this is
+/// only where a person sees what is waiting for that. Listed apart from
+/// [`skill_list`] because a proposal is not a skill — the identity form grants
+/// from the catalog, and a proposal in it would be one tick away from a grant.
+///
+/// `None`, or a project whose folder has gone, is an empty list: there is no
+/// workspace to hold one, and the library has no proposals.
+#[tauri::command(rename_all = "snake_case")]
+pub fn skill_proposals(
+    state: State<'_, AppState>,
+    project_id: Option<String>,
+) -> AppResult<Vec<SkillProposal>> {
+    let Some(id) = project_id else {
+        return Ok(Vec::new());
+    };
+    let project = state.store().get(&id)?;
+    if !project.workspace_exists {
+        return Ok(Vec::new());
+    }
+
+    Ok(crate::skills::proposals(&canonical_workspace(
+        &project.workspace_path,
+    )?))
 }

@@ -146,7 +146,16 @@ exists: boolean,
 /**
  * The first few kilobytes of the content, for the diff pane.
  */
-preview: string | null, } | { "kind": "shell", 
+preview: string | null, 
+/**
+ * The skill this write would make live, when it is the apply of a
+ * proposal (PLAN 7.13).
+ *
+ * Set by policy from what the write *is* — the `PROPOSAL.md` beside
+ * the target, copied byte for byte — so the dialog can say that this
+ * is the moment a runbook is signed, and that it grants it to nobody.
+ */
+applies: string | null, } | { "kind": "shell", 
 /**
  * The program as the model named it.
  */
@@ -1294,6 +1303,11 @@ export type ProjectDetail = { project: Project,
 sessions: Array<SessionSummary>, };
 
 /**
+ * Where a proposal stands against the runbook it would become.
+ */
+export type ProposalState = "pending" | "applied" | "occupied";
+
+/**
  * What one attempt to reach the configured server found.
  */
 export type ProviderProbe = { 
@@ -1866,6 +1880,48 @@ shadows: boolean,
  * rather than disappearing: the author is the only person who can fix it,
  * and a skill that vanished would tell them nothing. It is never offered
  * to the model — [`granted`] drops it.
+ */
+problem: string | null, };
+
+/**
+ * One `PROPOSAL.md` in a workspace, as Settings lists it.
+ *
+ * The fields a person decides on — what it is for, what it would call, whether
+ * it parses — and never the body. A proposal's body reaches nobody's system
+ * prompt, and nothing in the window needs it: the path is on the row.
+ */
+export type SkillProposal = { 
+/**
+ * The name it would run under, which is its directory's.
+ */
+name: string, 
+/**
+ * What the author versioned it as. Empty when it will not parse.
+ */
+version: string, 
+/**
+ * The first paragraph of *When to use it*. Empty when it will not parse.
+ */
+summary: string, 
+/**
+ * The tools its steps declare.
+ */
+tools: Array<string>, 
+/**
+ * The `PROPOSAL.md` itself.
+ */
+path: string, 
+/**
+ * The `SKILL.md` applying it would write.
+ */
+target: string, 
+/**
+ * Where it stands.
+ */
+state: ProposalState, 
+/**
+ * Why it would not run, when it would not. A proposal with a problem is
+ * never applied (PLAN 7.13).
  */
 problem: string | null, };
 

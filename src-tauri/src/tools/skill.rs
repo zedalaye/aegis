@@ -79,6 +79,26 @@ pub(crate) fn run(name: &str, ctx: SkillCtx<'_>) -> Produced {
     let catalog = skills::catalog(ctx.library, ctx.workspace);
 
     let Some(skill) = skills::find(&catalog, name) else {
+        // Proposed, and not applied (PLAN 7.13). The catalog never read the
+        // proposal, so this is the refusal a proposal gets by construction;
+        // what is looked up here is only which fix to name.
+        if ctx
+            .workspace
+            .is_some_and(|root| skills::is_proposed(root, name))
+        {
+            return Produced::failed(
+                tool::SKILL_RUN,
+                ErrorCode::Denied,
+                format!(
+                    "`{name}` is only proposed: this workspace has its `{}` and no `{}`. A \
+                     proposal is never run. A person applies it, and granting it is a separate \
+                     act in Settings — say so and carry on without it.",
+                    skills::PROPOSAL_FILE,
+                    skills::SKILL_FILE
+                ),
+            );
+        }
+
         // Granted, but not on disk. Said as two facts rather than one, because
         // they have different fixes: the grant is in Settings, the runbook is
         // in a folder.

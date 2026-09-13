@@ -434,6 +434,7 @@ mod tests {
                 bytes: 12,
                 exists: false,
                 preview: Some("hello".to_owned()),
+                applies: None,
             },
             grant: Some(Grant::FsWrite),
             scope_label: Grant::FsWrite.scope_label(),

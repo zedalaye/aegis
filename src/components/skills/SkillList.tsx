@@ -18,9 +18,14 @@
  * A runbook that will not parse is listed with the reason rather than hidden.
  * The author is the only person who can fix it, and a skill that quietly
  * vanished from the list would tell them nothing at all.
+ *
+ * Proposals (PLAN 7.13) are listed under the catalog, and there is no Apply
+ * button on them either. Applying is a session's `fs_write` of the proposal to
+ * `SKILL.md`, and the approval dialog of that write is where the runbook is
+ * signed — a button here would be a second write around the gate.
  */
 
-import type { Skill } from "../../ipc/bindings";
+import type { Skill, SkillProposal } from "../../ipc/bindings";
 import { useProjects } from "../../state/projects";
 import { useSkills } from "../../state/skills";
 
@@ -77,9 +82,65 @@ function Row({ skill }: { readonly skill: Skill }) {
   );
 }
 
+/** Where a proposal stands, in the words the row can afford. */
+const PROPOSAL_STATE: Record<SkillProposal["state"], string> = {
+  pending: "not applied",
+  applied: "applied",
+  occupied: "a runbook is already there",
+};
+
+/** One proposal. */
+function ProposalRow({ proposal }: { readonly proposal: SkillProposal }) {
+  const broken = proposal.problem !== null;
+  const blocked = broken || proposal.state === "occupied";
+
+  return (
+    <li className={`skill${blocked ? " skill--broken" : ""}`}>
+      <div className="skill__head">
+        <code className="skill__name">{proposal.name}</code>
+        <span className="skill__scope">proposed</span>
+        {proposal.version.length === 0 ? null : (
+          <span className="skill__version">v{proposal.version}</span>
+        )}
+        <span className="skill__badge">{PROPOSAL_STATE[proposal.state]}</span>
+      </div>
+
+      {broken ? (
+        <p className="skill__problem" role="status">
+          {proposal.problem} A proposal that will not parse is never applied.
+        </p>
+      ) : (
+        <>
+          <p className="skill__summary">{proposal.summary}</p>
+          {proposal.tools.length === 0 ? null : (
+            <p className="skill__tools">
+              Would call{" "}
+              {proposal.tools.map((tool) => (
+                <code key={tool}>{tool}</code>
+              ))}
+            </p>
+          )}
+        </>
+      )}
+
+      {proposal.state === "occupied" ? (
+        <p className="skill__problem" role="status">
+          A different <code>SKILL.md</code> is already beside it. Applying never
+          replaces a runbook, so this one stays a proposal.
+        </p>
+      ) : null}
+
+      <p className="skill__path" title={proposal.path}>
+        {proposal.path}
+      </p>
+    </li>
+  );
+}
+
 export default function SkillList() {
   const project = useProjects((s) => s.detail?.project ?? null);
   const skills = useSkills((s) => s.skills);
+  const proposals = useSkills((s) => s.proposals);
   const status = useSkills((s) => s.status);
   const loadFor = useSkills((s) => s.loadFor);
 
@@ -113,6 +174,24 @@ export default function SkillList() {
             <Row key={`${skill.scope}:${skill.name}`} skill={skill} />
           ))}
         </ul>
+      )}
+
+      {project === null || proposals.length === 0 ? null : (
+        <>
+          <p className="settings__note">
+            Proposed in <code>{project.name}</code>. A proposal is never run and
+            never offered for granting. To apply one, ask a session to copy its{" "}
+            <code>PROPOSAL.md</code> to <code>SKILL.md</code> beside it: that
+            write is put to you every time, even with writes allowed for the
+            session, and reading it there is when you sign the runbook. Granting
+            it to an identity is still a separate tick above.
+          </p>
+          <ul className="skill__list">
+            {proposals.map((proposal) => (
+              <ProposalRow key={proposal.name} proposal={proposal} />
+            ))}
+          </ul>
+        </>
       )}
 
       <div className="skill__actions">

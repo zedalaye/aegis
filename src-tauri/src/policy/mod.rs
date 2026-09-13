@@ -140,6 +140,13 @@ pub enum ApprovalDetail {
         exists: bool,
         /// The first few kilobytes of the content, for the diff pane.
         preview: Option<String>,
+        /// The skill this write would make live, when it is the apply of a
+        /// proposal (PLAN 7.13).
+        ///
+        /// Set by policy from what the write *is* — the `PROPOSAL.md` beside
+        /// the target, copied byte for byte — so the dialog can say that this
+        /// is the moment a runbook is signed, and that it grants it to nobody.
+        applies: Option<String>,
     },
     /// Running a program.
     Shell {

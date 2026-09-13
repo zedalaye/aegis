@@ -62,6 +62,7 @@ import type {
   SessionDetail,
   SessionSummary,
   Skill,
+  SkillProposal,
   TreeListing,
   TurnHandle,
   WorkspaceLayout,
@@ -694,6 +695,19 @@ export function worldStatus(projectId: string): Promise<WorldStatus> {
  */
 export function skillList(projectId: string | null): Promise<Skill[]> {
   return call<Skill[]>("skill_list", { project_id: projectId });
+}
+
+/**
+ * Every `PROPOSAL.md` waiting in one project's workspace (PLAN 7.13).
+ *
+ * Empty for `null` and for a folder that has gone: the library holds no
+ * proposals. Listing only — applying one is a session's `fs_write`, signed in
+ * its approval dialog, and there is no command for it.
+ */
+export function skillProposals(
+  projectId: string | null,
+): Promise<SkillProposal[]> {
+  return call<SkillProposal[]>("skill_proposals", { project_id: projectId });
 }
 
 /**

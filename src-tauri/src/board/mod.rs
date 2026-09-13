@@ -577,6 +577,7 @@ _Nothing blocked._
                 bytes: 42,
                 exists: true,
                 preview: None,
+                applies: None,
             },
             scope_label: "writes inside this workspace".to_owned(),
             session_grant_allowed: true,

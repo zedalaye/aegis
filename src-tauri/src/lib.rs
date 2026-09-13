@@ -94,7 +94,7 @@ pub use mcp::{Catalog as ConnectorCatalog, ConnectorView, Connectors, State as C
 pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
 pub use schedule::runner::Scheduler;
 pub use secrets::{ApiKey, KeySource, SecretStore};
-pub use skills::{Reported, Returned, Skill, SkillCtx, SkillScope};
+pub use skills::{ProposalState, Reported, Returned, Skill, SkillCtx, SkillProposal, SkillScope};
 pub use state::AppState;
 pub use store::{
     Agent, AgentDraft, AgentStore, AuthKind, AuthPreset, Compaction, Connector, ConnectorDraft,
@@ -300,6 +300,7 @@ pub fn run() {
             commands::explorer::workspace_image,
             commands::explorer::workspace_import_brief,
             commands::skill::skill_list,
+            commands::skill::skill_proposals,
             commands::memory::memory_list,
             commands::memory::memory_save,
             commands::memory::memory_forget,

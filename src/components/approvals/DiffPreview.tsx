@@ -122,6 +122,20 @@ export default function DiffPreview({
               <pre className="preview__body">{detail.preview}</pre>
             </figure>
           )}
+          {/*
+            The apply of a proposal (PLAN 7.13). The runtime recognised it from
+            what the write is — the PROPOSAL.md beside the target, copied byte
+            for byte — so this note is a fact, not the model's description of
+            its own call.
+          */}
+          {detail.applies === null ? null : (
+            <p className="detail__note">
+              This applies the proposal for <code>{detail.applies}</code>: what
+              is shown above becomes a runbook in this workspace&apos;s catalog.
+              Read it as the runbook you are signing. It is granted to no
+              identity by this — that is still a tick in Settings.
+            </p>
+          )}
         </>
       );
 

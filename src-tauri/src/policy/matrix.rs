@@ -38,6 +38,7 @@ use super::{
 use crate::error::ErrorCode;
 use crate::exec_host::{self, ExecHost, ExecTarget};
 use crate::handoff::{self, bus};
+use crate::skills;
 use crate::workspace;
 use crate::world;
 
@@ -232,11 +233,17 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 human_bytes(bytes),
                 if exists { "overwrite" } else { "new file" }
             );
+            // Whether this is the apply of a proposal (PLAN 7.13), measured
+            // before the detail is built so the dialog can say so.
+            let apply = target
+                .relative_to(workspace)
+                .and_then(|relative| skills::apply_of(workspace, &relative, &content));
             let detail = ApprovalDetail::FsWrite {
                 path: target.path.display().to_string(),
                 bytes,
                 exists,
                 preview: preview(&content),
+                applies: apply.as_ref().and_then(|apply| apply.clone().ok()),
             };
             let call = ResolvedCall::FsWrite {
                 path: target.path.clone(),
@@ -317,6 +324,49 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                         reason: "this is `world/`, the workspace's constitution: what the \
                                  project is, and what everything else is checked against"
                             .to_owned(),
+                    },
+                ));
+            }
+
+            // Applying a proposal (PLAN 7.13). The same tool, the same matrix
+            // and the same audit line as any other write — what differs is
+            // that this one is signed every time.
+            //
+            // No grant is offered, and a held `Grant::FsWrite` does not cover
+            // it: allowing writes so a session could file artefacts is not
+            // agreeing to make a runbook live, and the DiffPreview of *this*
+            // call is the moment a person reads the seven headings. Unattended,
+            // no grant means `decide_call` refuses, so a routine cannot apply.
+            //
+            // Inside a brief it is refused outright. A specialist that learned
+            // a procedure hands back the `PROPOSAL.md` as an artefact; the
+            // cabinet does not apply its own proposals on the way through.
+            if let Some(apply) = apply {
+                let name = apply.map_err(|reason| Decision::deny(ErrorCode::Denied, reason))?;
+                if ctx.delegated {
+                    return Err(Decision::deny(
+                        ErrorCode::Denied,
+                        format!(
+                            "you are working on a brief, and a brief does not apply a proposal. \
+                             Return `.aegis/skills/{name}/PROPOSAL.md` in `artefacts` and leave \
+                             applying it to a person"
+                        ),
+                    ));
+                }
+                return Ok(ask(
+                    call,
+                    AskRequest {
+                        tool: tool::FS_WRITE.to_owned(),
+                        risk: Risk::High,
+                        title: "Apply a skill proposal",
+                        summary,
+                        detail,
+                        grant: None,
+                        scope_label: scope_label(None),
+                        reason: format!(
+                            "this copies a proposal to `SKILL.md`, which makes `{name}` a runbook \
+                             in this workspace's catalog. It grants it to no identity"
+                        ),
                     },
                 ));
             }

@@ -83,6 +83,15 @@ pub const LIBRARY_DIR: &str = "skills";
 /// a checklist — and they belong beside it rather than in a second tree.
 pub const SKILL_FILE: &str = "SKILL.md";
 
+/// A runbook somebody proposed and nobody has applied yet (PLAN 7.13).
+///
+/// Beside where the `SKILL.md` would go, in the same directory, so applying one
+/// is a copy between two names a person can see side by side. The catalog never
+/// reads this name: [`read_dir`] looks for [`SKILL_FILE`] and nothing else, which
+/// is what makes a proposal unrunnable as a property of discovery rather than a
+/// check somebody has to remember.
+pub const PROPOSAL_FILE: &str = "PROPOSAL.md";
+
 /// Longest skill name.
 pub const NAME_MAX_CHARS: usize = 64;
 
@@ -205,8 +214,7 @@ pub fn catalog(library: &Path, workspace: Option<&Path>) -> Vec<Skill> {
         // ([`workspace`](crate::workspace)), and they moved with it. The leaf
         // name is still [`LIBRARY_DIR`], which is what keeps "where do skills
         // go" one answer in both scopes.
-        let scope = root.join(workspace::CABINET_DIR).join(LIBRARY_DIR);
-        for mut skill in read_dir(&scope, SkillScope::Workspace) {
+        for mut skill in read_dir(&workspace_dir(root), SkillScope::Workspace) {
             if let Some(at) = found.iter().position(|other| other.name == skill.name) {
                 tracing::debug!(
                     skill = %skill.name,
@@ -229,6 +237,11 @@ pub fn catalog(library: &Path, workspace: Option<&Path>) -> Vec<Skill> {
         found.truncate(CATALOG_MAX);
     }
     found
+}
+
+/// A workspace's own skills directory: `.aegis/skills/`.
+pub fn workspace_dir(root: &Path) -> std::path::PathBuf {
+    root.join(workspace::CABINET_DIR).join(LIBRARY_DIR)
 }
 
 /// One scope's directory, read into catalog entries.
@@ -324,6 +337,185 @@ pub fn load(skill: &Skill) -> Result<SkillDoc, String> {
 /// The entry a name resolves to.
 pub fn find<'a>(catalog: &'a [Skill], name: &str) -> Option<&'a Skill> {
     catalog.iter().find(|skill| skill.name == name)
+}
+
+// ---------------------------------------------------------------------------
+// Proposals (PLAN 7.13)
+// ---------------------------------------------------------------------------
+
+/// Where a proposal stands against the runbook it would become.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "bindings.ts")]
+pub enum ProposalState {
+    /// There is no `SKILL.md` beside it yet, so it can be applied.
+    Pending,
+    /// The `SKILL.md` beside it is this proposal, byte for byte.
+    ///
+    /// Left listed rather than hidden: `fs_write` cannot delete, so an applied
+    /// proposal stays on disk until a person removes it, and a panel that
+    /// pretended it had gone would be describing a folder that is not theirs.
+    Applied,
+    /// A different `SKILL.md` is already there, and applying never replaces
+    /// one. That runbook was not proposed through this path, so this path does
+    /// not touch it (PLAN 7.13, *Never*).
+    Occupied,
+}
+
+/// One `PROPOSAL.md` in a workspace, as Settings lists it.
+///
+/// The fields a person decides on — what it is for, what it would call, whether
+/// it parses — and never the body. A proposal's body reaches nobody's system
+/// prompt, and nothing in the window needs it: the path is on the row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct SkillProposal {
+    /// The name it would run under, which is its directory's.
+    pub name: String,
+    /// What the author versioned it as. Empty when it will not parse.
+    pub version: String,
+    /// The first paragraph of *When to use it*. Empty when it will not parse.
+    pub summary: String,
+    /// The tools its steps declare.
+    pub tools: Vec<String>,
+    /// The `PROPOSAL.md` itself.
+    pub path: String,
+    /// The `SKILL.md` applying it would write.
+    pub target: String,
+    /// Where it stands.
+    pub state: ProposalState,
+    /// Why it would not run, when it would not. A proposal with a problem is
+    /// never applied (PLAN 7.13).
+    pub problem: Option<String>,
+}
+
+/// Every proposal in this workspace, by name.
+///
+/// The workspace only. A `PROPOSAL.md` in the library is not a proposal this
+/// slice knows about: the library is the outside-the-workspace row, asked every
+/// time, and session-authored runbooks belong in the project (PLAN 7.13,
+/// *Workspace only*).
+///
+/// Never fails, for [`catalog`]'s reason.
+pub fn proposals(root: &Path) -> Vec<SkillProposal> {
+    let dir = workspace_dir(root);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut found: Vec<SkillProposal> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path().join(PROPOSAL_FILE);
+            (is_name(&name) && path.is_file()).then(|| proposal_for(&name, &path))
+        })
+        .collect();
+
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    found
+}
+
+/// One `PROPOSAL.md` as a listed proposal.
+fn proposal_for(name: &str, path: &Path) -> SkillProposal {
+    let target = path.with_file_name(SKILL_FILE);
+    let text = fs::read(path).ok();
+
+    let mut proposal = SkillProposal {
+        name: name.to_owned(),
+        version: String::new(),
+        summary: String::new(),
+        tools: Vec::new(),
+        path: path.display().to_string(),
+        target: target.display().to_string(),
+        state: match (fs::read(&target), &text) {
+            (Err(_), _) => ProposalState::Pending,
+            (Ok(live), Some(proposed)) if &live == proposed => ProposalState::Applied,
+            (Ok(_), _) => ProposalState::Occupied,
+        },
+        problem: None,
+    };
+
+    match read(path) {
+        Ok(doc) => {
+            proposal.version = doc.version;
+            proposal.summary = doc.summary;
+            proposal.tools = doc.tools;
+        }
+        Err(problem) => proposal.problem = Some(problem),
+    }
+
+    proposal
+}
+
+/// Whether a write is the apply of a proposal, and whether that apply may go.
+///
+/// `relative` is the write's target relative to the workspace root; `content` is
+/// what would be written. An apply is recognised by what it *is* — a write of
+/// `.aegis/skills/<name>/SKILL.md` whose content is the `PROPOSAL.md` beside it,
+/// byte for byte — rather than by a flag the model sets, so there is no way to
+/// ask for the apply row without actually copying the proposal.
+///
+/// * `None`: not an apply. Any other write of a `SKILL.md` is the handwritten
+///   path of PLAN 7.6, which this slice does not replace and does not touch.
+/// * `Some(Ok(name))`: an apply that may be put to a person.
+/// * `Some(Err(reason))`: an apply that is refused — the proposal will not
+///   parse, or there is already a runbook there to replace.
+pub fn apply_of(root: &Path, relative: &Path, content: &str) -> Option<Result<String, String>> {
+    let mut parts = relative.components().filter_map(|part| match part {
+        std::path::Component::Normal(name) => name.to_str(),
+        _ => None,
+    });
+    let (Some(cabinet), Some(skills), Some(name), Some(file), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
+        return None;
+    };
+    // Case-folded on the fixed segments, for the filesystems that fold them:
+    // `.Aegis/Skills/x/skill.md` is the same file there, and an apply that could
+    // be dodged by spelling would be a rule about spelling.
+    if !cabinet.eq_ignore_ascii_case(workspace::CABINET_DIR)
+        || !skills.eq_ignore_ascii_case(LIBRARY_DIR)
+        || !file.eq_ignore_ascii_case(SKILL_FILE)
+        || !is_name(name)
+    {
+        return None;
+    }
+
+    let dir = workspace_dir(root).join(name);
+    let proposed = fs::read(dir.join(PROPOSAL_FILE)).ok()?;
+    if proposed != content.as_bytes() {
+        return None;
+    }
+
+    if let Err(problem) = read(&dir.join(PROPOSAL_FILE)) {
+        return Some(Err(format!(
+            "`{name}`'s proposal will not parse, and a proposal that does not parse is never \
+             applied: {problem}. Fix `{PROPOSAL_FILE}` first"
+        )));
+    }
+
+    if dir.join(SKILL_FILE).exists() {
+        return Some(Err(format!(
+            "there is already a `{SKILL_FILE}` for `{name}`, and applying a proposal never \
+             replaces a runbook — that one was not proposed through this path. Leave it as it \
+             is, and say so"
+        )));
+    }
+
+    Some(Ok(name.to_owned()))
+}
+
+/// Whether this workspace holds a proposal of this name.
+///
+/// For the refusal a `skill_run` of one gets, which has a different fix from a
+/// name that is simply nowhere: this one is a person's apply away.
+pub fn is_proposed(root: &Path, name: &str) -> bool {
+    is_name(name) && workspace_dir(root).join(name).join(PROPOSAL_FILE).is_file()
 }
 
 // ---------------------------------------------------------------------------
@@ -3549,6 +3741,139 @@ mod tests {
         assert_eq!(
             found[0].tools,
             vec![tool::FS_LIST, tool::FS_READ, tool::FS_WRITE]
+        );
+    }
+
+    /// Writes `.aegis/skills/<name>/<file>` under a workspace root.
+    fn propose(root: &Path, name: &str, file: &str, text: &str) {
+        let dir = workspace_dir(root).join(name);
+        fs::create_dir_all(&dir).expect("skill dir");
+        fs::write(dir.join(file), text).expect("file");
+    }
+
+    /// PLAN 7.13, *What the catalog sees*: only `SKILL.md`. A proposal is
+    /// listed where a person can apply it and nowhere a model could run it.
+    #[test]
+    fn a_proposal_is_listed_and_never_reaches_the_catalog() {
+        let root = TempDir::new().expect("workspace");
+        let empty = TempDir::new().expect("library");
+        propose(root.path(), "inbox.triage", PROPOSAL_FILE, TRIAGE_SEED);
+
+        assert!(catalog(empty.path(), Some(root.path())).is_empty());
+        assert!(is_proposed(root.path(), "inbox.triage"));
+
+        let listed = proposals(root.path());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "inbox.triage");
+        assert_eq!(listed[0].state, ProposalState::Pending);
+        assert_eq!(listed[0].version, "1");
+        assert_eq!(listed[0].problem, None);
+        assert!(
+            listed[0].target.ends_with(SKILL_FILE),
+            "{}",
+            listed[0].target
+        );
+    }
+
+    #[test]
+    fn a_proposal_says_whether_it_was_applied_or_would_replace_a_runbook() {
+        let root = TempDir::new().expect("workspace");
+        propose(root.path(), "applied", PROPOSAL_FILE, TRIAGE_SEED);
+        propose(root.path(), "applied", SKILL_FILE, TRIAGE_SEED);
+        propose(root.path(), "occupied", PROPOSAL_FILE, TRIAGE_SEED);
+        propose(root.path(), "occupied", SKILL_FILE, REVIEW_SEED);
+
+        let states: Vec<(String, ProposalState)> = proposals(root.path())
+            .into_iter()
+            .map(|proposal| (proposal.name, proposal.state))
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                ("applied".to_owned(), ProposalState::Applied),
+                ("occupied".to_owned(), ProposalState::Occupied),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_proposal_that_will_not_parse_is_listed_with_the_reason() {
+        let root = TempDir::new().expect("workspace");
+        propose(root.path(), "half", PROPOSAL_FILE, "no front matter here");
+
+        let listed = proposals(root.path());
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].problem.is_some());
+    }
+
+    /// An apply is recognised by what the write is — the proposal, copied — and
+    /// every other write of a `SKILL.md` is the handwritten path, left alone.
+    #[test]
+    fn an_apply_is_a_copy_of_the_proposal_and_nothing_else_is_one() {
+        let root = TempDir::new().expect("workspace");
+        propose(root.path(), "inbox.triage", PROPOSAL_FILE, TRIAGE_SEED);
+        let target = Path::new(".aegis/skills/inbox.triage/SKILL.md");
+
+        assert_eq!(
+            apply_of(root.path(), target, TRIAGE_SEED),
+            Some(Ok("inbox.triage".to_owned()))
+        );
+        // Spelled the way a case-folding filesystem would still reach.
+        assert_eq!(
+            apply_of(
+                root.path(),
+                Path::new(".Aegis/Skills/inbox.triage/skill.md"),
+                TRIAGE_SEED
+            ),
+            Some(Ok("inbox.triage".to_owned()))
+        );
+
+        // A handwritten runbook, and the proposal written somewhere else.
+        assert_eq!(apply_of(root.path(), target, REVIEW_SEED), None);
+        assert_eq!(
+            apply_of(root.path(), Path::new("notes/SKILL.md"), TRIAGE_SEED),
+            None
+        );
+        assert_eq!(
+            apply_of(
+                root.path(),
+                Path::new(".aegis/skills/other/SKILL.md"),
+                TRIAGE_SEED
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_apply_is_refused_over_a_runbook_or_from_a_broken_proposal() {
+        let root = TempDir::new().expect("workspace");
+
+        propose(root.path(), "broken", PROPOSAL_FILE, "no front matter here");
+        let refused = apply_of(
+            root.path(),
+            Path::new(".aegis/skills/broken/SKILL.md"),
+            "no front matter here",
+        );
+        let reason = refused.expect("an apply").expect_err("refused");
+        assert!(reason.contains("never applied"), "{reason}");
+
+        propose(root.path(), "handwritten", PROPOSAL_FILE, TRIAGE_SEED);
+        propose(root.path(), "handwritten", SKILL_FILE, REVIEW_SEED);
+        let refused = apply_of(
+            root.path(),
+            Path::new(".aegis/skills/handwritten/SKILL.md"),
+            TRIAGE_SEED,
+        );
+        let reason = refused.expect("an apply").expect_err("refused");
+        assert!(reason.contains("never replaces"), "{reason}");
+        assert_eq!(
+            fs::read_to_string(
+                workspace_dir(root.path())
+                    .join("handwritten")
+                    .join(SKILL_FILE)
+            )
+            .expect("still there"),
+            REVIEW_SEED
         );
     }
 
