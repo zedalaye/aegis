@@ -1,31 +1,14 @@
 //! The approval registry: where a turn waits for a human (PLAN 4.2, step 3).
 //!
-//! [`policy`](crate::policy) decides *whether* to ask and writes the wording.
-//! This module owns everything that follows from asking: the id the dialog
-//! answers, the deadline, the channel the turn is parked on, and the list a
-//! reopened window re-syncs from. Keeping the two apart is what lets the
-//! decision table stay a pure function of a call and a workspace.
+//! [`policy`](crate::policy) decides whether to ask; this module owns the id,
+//! deadline, parked channel and the list a reopened window re-syncs from.
 //!
-//! Three properties are worth stating plainly, because they are what the shape
-//! of this module is for.
-//!
-//! **A pending approval is a rendezvous, not a queue.** Each request owns one
-//! [`oneshot`] sender, held here until somebody answers. The turn holds the
-//! receiver and is blocked on it. That is why an approval cannot be answered
-//! twice: the answer consumes the sender, and the second attempt finds nothing
-//! to answer.
-//!
-//! **Nothing here can time out on its own.** There is no reaper task. The turn
-//! that is waiting applies the deadline, because the turn is the only party
-//! that can act on it — it has the call to refuse, the transcript to write the
-//! refusal into and the audit line to append. The registry only records
-//! [`Pending::expires_at`] so that a late answer is refused as stale rather
-//! than allowing a call whose prompt is no longer on screen.
-//!
-//! **`allow_session` is checked here, not in the WebView.** A request that
-//! offers no grant carries `session_grant_allowed: false` so the button is not
-//! drawn, and answering it `allow_session` anyway is [`AppError::GrantNotAllowed`]
-//! (PLAN 3.1). The UI is where the rule is *shown*; this is where it holds.
+//! * **A rendezvous**: one [`oneshot`] sender per request, consumed by the
+//!   answer, so nothing is answered twice.
+//! * **No reaper**: the waiting turn enforces the deadline; the registry keeps
+//!   `expires_at` only to refuse late answers as stale.
+//! * **`allow_session` is enforced here** ([`AppError::GrantNotAllowed`],
+//!   PLAN 3.1), not trusted to the WebView.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -41,10 +24,7 @@ use crate::policy::{ApprovalDetail, AskRequest, Grant, Risk};
 
 /// How long a request stays answerable (PLAN 4.2).
 ///
-/// A prompt nobody answered in five minutes is a prompt nobody is looking at —
-/// the user walked away, or the window is behind something. Expiry resolves as
-/// a denial, which is the safe direction: the call does not run, the model is
-/// told why, and the turn carries on.
+/// Expiry resolves as a denial, and the turn carries on.
 pub const APPROVAL_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// What the user answered (PLAN 2.1, `Decision`).
@@ -92,9 +72,7 @@ pub enum ResolvedBy {
 
 /// One approval, as the dialog receives it (PLAN 2.1, `ApprovalRequest`).
 ///
-/// Half of this comes from [`AskRequest`] — the wording, the badge, the
-/// structured detail, the scope — and half is added here: the id to answer
-/// with, and the window during which answering it means anything.
+/// [`AskRequest`]'s content plus the id and the answerable window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ApprovalRequest {
@@ -165,8 +143,7 @@ struct Pending {
 
 /// A registration, held by the turn that is waiting.
 ///
-/// Carries the request so the caller can emit `tool:approval_required` without
-/// looking it up again, and the receiver it then awaits.
+/// The request (for `tool:approval_required`) and the receiver to await.
 #[derive(Debug)]
 pub struct Ticket {
     /// The request as it was registered.
@@ -177,10 +154,7 @@ pub struct Ticket {
 
 /// The approvals every open session is blocked on.
 ///
-/// One per process, held in [`AppState`](crate::AppState) beside the grant
-/// store. Not persisted, for the same reason a grant is not: a request whose
-/// turn died with the process cannot be answered, and offering to answer it
-/// after a restart would be offering to approve a call nothing would run.
+/// One per process in [`AppState`](crate::AppState); not persisted.
 #[derive(Debug, Default)]
 pub struct ApprovalRegistry {
     pending: Mutex<HashMap<String, Pending>>,
@@ -192,12 +166,7 @@ impl ApprovalRegistry {
         Self::default()
     }
 
-    /// Locks the map.
-    ///
-    /// Recovering from a poisoned mutex for the same reason the other stores
-    /// do: what is behind it is a plain map, and turning one panic into a
-    /// runtime that can never approve anything again would be worse than the
-    /// panic.
+    /// Locks the map, recovering from poison.
     fn pending(&self) -> MutexGuard<'_, HashMap<String, Pending>> {
         self.pending
             .lock()
@@ -206,10 +175,7 @@ impl ApprovalRegistry {
 
     /// Registers what policy asked, and hands back the ticket to wait on.
     ///
-    /// The ids come from the call being judged rather than from the request,
-    /// because a request is only ever raised about a call that is already
-    /// identified — inventing a second identity here would give the audit log
-    /// and the transcript two different names for one event.
+    /// Ids come from the call, so the audit log and transcript agree.
     pub fn register(
         &self,
         session_id: &str,
@@ -263,18 +229,9 @@ impl ApprovalRegistry {
 
     /// Answers a request on a user's behalf.
     ///
-    /// Returns the grant the answer created, if it created one, so the caller
-    /// can report it without a second lookup. Three failures, all of them
-    /// [`AppError`] rather than a silent success:
-    ///
-    /// * an id nothing is waiting on — expired, already answered, or from a
-    ///   turn that has since been cancelled — is `E_APPROVAL_STALE`, and the
-    ///   UI's response is to re-sync rather than to branch on it;
-    /// * `allow_session` on a row that offers no grant is `E_GRANT_NOT_ALLOWED`,
-    ///   and the request stays open, because the user has not actually answered
-    ///   the question they were asked;
-    /// * a turn that stopped listening between the lookup and the send is
-    ///   stale too: nothing will run, whatever was clicked.
+    /// Returns any grant the answer created. Errors: `E_APPROVAL_STALE` (nothing
+    /// waiting, or the turn stopped listening) and `E_GRANT_NOT_ALLOWED` (the
+    /// request stays open).
     pub fn resolve(
         &self,
         request_id: &str,
@@ -343,10 +300,7 @@ impl ApprovalRegistry {
 
     /// Everything still waiting, oldest first, optionally for one session.
     ///
-    /// Ordered because it is rendered and because the order is meaningful: a
-    /// turn asks one call at a time, but a second session can be blocked too,
-    /// and the queue a user works through should be the queue in the order it
-    /// arrived.
+    /// In arrival order, across sessions.
     pub fn list(&self, session_id: Option<&str>) -> Vec<ApprovalRequest> {
         let mut open: Vec<ApprovalRequest> = self
             .pending()
@@ -365,9 +319,7 @@ impl ApprovalRegistry {
 
     /// Removes one request without answering it.
     ///
-    /// What a turn calls when it has stopped waiting on its own account — the
-    /// deadline passed, or the turn was cancelled. Dropping the sender is what
-    /// makes any answer that arrives afterwards stale.
+    /// Called by a turn that stopped waiting; later answers become stale.
     pub fn withdraw(&self, request_id: &str) {
         if self.pending().remove(request_id).is_some() {
             tracing::debug!(request_id, "an approval was withdrawn");
@@ -376,9 +328,8 @@ impl ApprovalRegistry {
 
     /// Removes every request a session is blocked on.
     ///
-    /// Called when a session is deleted. The turn is cancelled first and would
-    /// withdraw its own request; this is what covers the gap between the two,
-    /// so a dialog cannot be answered for a session that no longer exists.
+    /// Called when a session is deleted, covering the gap before its cancelled
+    /// turn withdraws.
     pub fn withdraw_session(&self, session_id: &str) {
         let mut pending = self.pending();
         let before = pending.len();

@@ -1,50 +1,21 @@
 //! The MCP client: tools that live in other processes (PLAN 7.3, Phase 18).
 //!
-//! This is the module PLAN 6 left as a seam in Phase 4 and named as a phase in
-//! § 7.3. A **connector** is an external MCP server — a program the operator
-//! installed — and its tools reach the model through the same registry, the
-//! same decision table, the same approval dialog and the same audit line as
-//! `fs_write`. There is no second tool path here, and that is the whole point:
-//! § 7.1 says the runtime must not "special-case policy or the turn loop on
-//! built-in vs MCP", so what this module produces is [`ToolInfo`] values that
-//! [`tools::schemas_for`](crate::tools::schemas_for) turns into schemas, and
-//! what it consumes is a [`ResolvedCall`](crate::policy::ResolvedCall) that
-//! policy has already judged.
+//! A **connector** is an external MCP server the operator installed. Its tools
+//! go through the same registry, matrix, dialog and audit as built-ins
+//! (PLAN 7.1): this module yields [`ToolInfo`] and runs
+//! [`ResolvedCall`](crate::policy::ResolvedCall)s policy already judged.
 //!
-//! **What is new is not a capability, it is a boundary.** Every other tool in
-//! this build is code in this repository: `fs_write` writes the path policy
-//! resolved, and nothing else, because that is what the function does. A
-//! connector's tool is a program somebody else wrote, running as the user, and
-//! Aegis cannot see what it does with its arguments. Three things follow, and
-//! they are the design of this phase rather than caveats on it.
+//! 1. **Every connector call asks**; a server's read-only annotation only
+//!    changes the dialog text (PLAN 7.2 row 7).
+//! 2. **Grants are per tool** (`git__status`); tools added later are offered to
+//!    nobody.
+//! 3. **Installing is a human act** in Settings; granting tools to an identity
+//!    is a second one.
 //!
-//! 1. **Every connector call asks.** There is no auto-allow row and no
-//!    read-only exemption. Servers may annotate a tool as read-only, and this
-//!    module reads that annotation — but it is the thing being gated
-//!    describing its own gate, so it changes the sentence the dialog shows and
-//!    never whether the dialog opens. PLAN 7.2 row 7: a new tool is an ask.
-//! 2. **A session grant is keyed on the tool, not the connector.** Approving
-//!    `git__status` for the session approves `git__status`. A server that adds
-//!    a tool afterwards — servers may, and they say so with
-//!    `notifications/tools/list_changed` — has added something nobody has
-//!    approved and no identity holds, so it is offered to nobody.
-//! 3. **Installing a connector is a human act, in Settings.** There is no
-//!    tool that adds one, because adding one names a program to run. Granting
-//!    its tools to an identity is a second act, on the identity
-//!    (AGENTS.md: "granting it to an identity is a separate act").
-//!
-//! What is deliberately *not* implemented is as much of the phase as what is.
-//! Aegis advertises **no client capabilities** in the handshake: no
-//! `sampling` (a server that could ask our model to generate something would
-//! be an agent loop with no session and no gate), no `roots` (a server does
-//! not get told where the workspace is; if it needs a directory, the operator
-//! passes it as an argument they can read), no `elicitation`. Resources and
-//! prompts are not read either: a connector is here for its tools, and a
-//! resource pulled into a prompt is a channel this phase has no gate for.
-//!
-//! Layout: [`client`] is one connection — process, framing, handshake —
-//! and this module is the roster: what is configured, what is running, what
-//! each one offers, and the one function that makes a call.
+//! No client capabilities are advertised (no `sampling`, `roots`,
+//! `elicitation`), and resources and prompts are not read — see
+//! `docs/guide/connectors.md`. [`client`] is one connection; this module is the
+//! roster.
 
 pub mod client;
 
@@ -61,19 +32,11 @@ use crate::store::connectors::{self, Connector};
 
 pub use client::{Notice, RawTool, ServerInfo, CALL_TIMEOUT, PROTOCOL_VERSION};
 
-/// Most bytes of a connector's answer that reach the model in one envelope.
-///
-/// The same ceiling `shell_exec` puts on a command's output, for the same
-/// reason and with the same consequence: the envelope says it was truncated,
-/// and the number it reports is the size before truncation.
+/// Most bytes of a connector's answer per envelope, like `shell_exec`'s output
+/// cap.
 pub const CALL_MAX_BYTES: u64 = 64 * 1024;
 
-/// Longest description this build will carry from a server into a prompt.
-///
-/// A connector's tool descriptions are somebody else's text arriving in our
-/// system prompt, which is the one place this phase widens what the model
-/// reads. It cannot be sanitized — it has to say what the tool does — but it
-/// can be bounded, so a server cannot spend the context window.
+/// Longest tool description carried from a server into the prompt.
 const DESCRIPTION_MAX_CHARS: usize = 1024;
 
 // ---------------------------------------------------------------------------
@@ -90,23 +53,13 @@ pub struct ToolInfo {
     pub connector_name: String,
     /// The tool's own name, as the server spells it.
     pub name: String,
-    /// The name the model is given: `<connector>__<tool>`.
-    ///
-    /// This is the string an identity's allow-list holds, the string a session
-    /// grant is keyed on, and the string the audit line records. There is one
-    /// spelling, and it is this one.
+    /// `<connector>__<tool>`: the name in allow-lists, grants and audit lines.
     pub full_name: String,
     /// What the server says the tool does. Reaches the prompt verbatim.
     pub description: String,
-    /// Whether the server *claims* the tool only reads.
-    ///
-    /// Shown in the approval dialog, attributed to the server. Nothing in this
-    /// runtime branches on it.
+    /// Whether the server *claims* the tool only reads; display only.
     pub read_only_hint: bool,
-    /// The JSON Schema for its arguments.
-    ///
-    /// Not sent to the WebView: it is between the server and the model, it can
-    /// be large, and there is nothing the panel would draw with it.
+    /// The JSON Schema for its arguments (not sent to the WebView).
     #[serde(skip)]
     #[ts(skip)]
     pub parameters: Value,
@@ -115,9 +68,7 @@ pub struct ToolInfo {
 impl ToolInfo {
     /// The tool as one entry of an OpenAI-compatible `tools` array.
     ///
-    /// The same shape [`ToolSpec::to_schema`](crate::tools::ToolSpec::to_schema)
-    /// produces, because it is the same array: the model is not told which of
-    /// its tools live in this process.
+    /// Same shape as [`ToolSpec::to_schema`](crate::tools::ToolSpec::to_schema).
     pub fn to_schema(&self) -> Value {
         json!({
             "type": "function",
@@ -132,10 +83,7 @@ impl ToolInfo {
 
 /// Every connector tool that is callable right now.
 ///
-/// A snapshot, taken once per turn: the roster can change under a running turn
-/// — a server can be reconnected, a person can disable one in Settings — and a
-/// turn that showed the model one list and judged its calls against another is
-/// the same defect Phase 12 avoided by resolving the identity once.
+/// A per-turn snapshot, so the tools shown and the tools judged match.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Catalog {
     tools: Vec<ToolInfo>,
@@ -170,9 +118,7 @@ impl Catalog {
 
     /// The schemas for the tools an identity holds, in catalog order.
     ///
-    /// The allow-list is matched on the full name, exactly as it is for a
-    /// built-in tool: an identity holds `git__status` or it does not, and
-    /// holding one tool of a connector grants none of the others.
+    /// Matched on the full tool name; one tool grants none of its siblings.
     pub fn schemas_for(&self, allowed: &[String]) -> Vec<Value> {
         self.tools
             .iter()
@@ -211,10 +157,8 @@ pub enum State {
 
 /// A connector and everything measured about it right now.
 ///
-/// The record comes from [`ConnectorStore`](crate::store::ConnectorStore); the
-/// rest is measured on every read, which is why it is one struct rather than a
-/// document with a status column. A stored "connected" is exactly the lie
-/// [`store`](crate::store) refuses to hold.
+/// The record from [`ConnectorStore`](crate::store::ConnectorStore) plus live
+/// measurements, never stored.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ConnectorView {
@@ -226,20 +170,13 @@ pub struct ConnectorView {
     pub tools: Vec<ToolInfo>,
     /// Why it is not connected, when it is not.
     pub error: Option<String>,
-    /// The last lines the server wrote to its stderr.
-    ///
-    /// The panel shows these because an `npx` that could not resolve a package
-    /// says so there and nowhere else, and a row reading only "it would not
-    /// start" is a row nobody can act on.
+    /// The last lines the server wrote to stderr, where start failures appear.
     pub log: Vec<String>,
     /// What the server said about itself, when it got that far.
     pub server: Option<String>,
     /// The protocol version that was agreed.
     pub protocol: Option<String>,
-    /// Variables it names that are not in this application's environment.
-    ///
-    /// Measured, not stored: a token that was exported in the shell Aegis was
-    /// started from is there for this process and gone for the next one.
+    /// Variables it names that this process's environment lacks (measured).
     pub missing_env: Vec<String>,
 }
 
@@ -255,9 +192,8 @@ struct Live {
 
 /// Where a change of state is announced.
 ///
-/// A closure rather than an `AppHandle` for the reason
-/// [`EventSink`](crate::agent::EventSink) is one: a connector has to be
-/// startable in a test with no window behind it.
+/// A closure, like [`EventSink`](crate::agent::EventSink), so tests need no
+/// window.
 pub type Announce = Arc<dyn Fn(ConnectorView) + Send + Sync>;
 
 /// Shared state behind [`Connectors`].
@@ -270,9 +206,7 @@ struct Inner {
 
 /// The roster of connectors: what is running, and what each one offers.
 ///
-/// Cheap to clone — it is an `Arc` inside — because the tasks that supervise a
-/// connection outlive the call that started it, and a supervisor that borrowed
-/// [`AppState`](crate::state::AppState) could not be spawned.
+/// Cheap to clone (an `Arc`), so supervisor tasks can own a copy.
 #[derive(Clone, Default)]
 pub struct Connectors {
     inner: Arc<Inner>,
@@ -310,11 +244,8 @@ impl Connectors {
 
     /// A shared roster with nothing in it, for a caller that has no connectors.
     ///
-    /// Every test written before this phase takes one of these, and so does any
-    /// path that drives a turn without an application behind it. It is a
-    /// `&'static` rather than a value because [`Turn`](crate::agent::Turn) and
-    /// [`ToolCtx`](crate::tools::ToolCtx) borrow their dependencies, and a
-    /// temporary built inside a struct literal would not outlive the statement.
+    /// `&'static`, since [`Turn`](crate::agent::Turn) and
+    /// [`ToolCtx`](crate::tools::ToolCtx) borrow it.
     pub fn none() -> &'static Self {
         static NONE: std::sync::OnceLock<Connectors> = std::sync::OnceLock::new();
         NONE.get_or_init(Connectors::new)
@@ -350,9 +281,7 @@ impl Connectors {
 
     /// Every connector's row, for the Settings panel.
     ///
-    /// `configured` is the stored list, so a connector that has never been
-    /// started still has a row: the panel is where somebody finds out that it
-    /// did not.
+    /// One row per `configured` connector, started or not.
     pub fn views(&self, configured: &[Connector]) -> Vec<ConnectorView> {
         let live = self.inner.live();
         configured
@@ -391,10 +320,7 @@ impl Connectors {
 
     /// Starts a connector, replacing any connection it already had.
     ///
-    /// Returns its row. Never an `Err`: a connector that would not start is a
-    /// row that says why, not a command that fails — the person who typed the
-    /// command needs to read the diagnosis in the panel, next to the field
-    /// they have to change.
+    /// Returns its row; a failed start is a row saying why, never an `Err`.
     pub async fn connect(&self, connector: &Connector) -> ConnectorView {
         self.disconnect(&connector.id).await;
 
@@ -465,9 +391,7 @@ impl Connectors {
 
     /// Starts every connector that is enabled, one after another.
     ///
-    /// Sequential rather than concurrent: a connector's first start is often an
-    /// `npx` fetching a package, and four of those at once on a cold cache is a
-    /// worse first minute than four in a row.
+    /// Sequential, so cold `npx` fetches do not pile up.
     pub async fn connect_all(&self, configured: &[Connector]) {
         for connector in configured {
             if connector.enabled {
@@ -486,8 +410,8 @@ impl Connectors {
 
     /// Makes one call, and returns the server's `result` object.
     ///
-    /// The error is written for the model: it goes back inside an ordinary
-    /// envelope, and the turn carries on (PLAN 4.3).
+    /// The error is written for the model, inside an ordinary envelope
+    /// (PLAN 4.3).
     pub async fn call(
         &self,
         connector: &str,
@@ -536,11 +460,8 @@ impl Connectors {
 
 /// Watches one connection for what the server says on its own initiative.
 ///
-/// Two things arrive here and both matter. `tools/list_changed` is a server
-/// saying its list moved — an authentication that completed, a repository that
-/// was opened — and the catalog is re-read rather than trusted to be what it
-/// was. A closed pipe is the process having gone, and the row says so instead
-/// of the next call timing out.
+/// `tools/list_changed` re-reads the catalog; a closed pipe marks the row as
+/// gone.
 fn supervise(inner: Weak<Inner>, id: String, mut inbox: mpsc::UnboundedReceiver<Notice>) {
     tokio::spawn(async move {
         while let Some(notice) = inbox.recv().await {
@@ -659,10 +580,8 @@ fn catalog_of(connector: &Connector, raw: &[RawTool]) -> Vec<ToolInfo> {
 
 /// Variables every child needs whatever it is.
 ///
-/// Without `PATH` an `npx` cannot find node; without `SystemRoot` a Windows
-/// process cannot load a socket library. This list is the floor, not a
-/// convenience: a connector still gets nothing that is not here or named on
-/// its record.
+/// The floor (`PATH`, `SystemRoot`, ...); nothing else passes unless named on
+/// the record.
 #[cfg(windows)]
 const BASELINE_ENV: &[&str] = &[
     "PATH",
@@ -703,17 +622,9 @@ const BASELINE_ENV: &[&str] = &[
 
 /// The environment one connector's process is given.
 ///
-/// This is the one place a connector is handled more carefully than
-/// `shell_exec` handles a command, and the reason is the difference in
-/// lifetime: a command is read and approved on the spot, and a connector is
-/// started once and answers for the rest of the session. So it gets the
-/// platform's floor plus exactly the variables the operator named on its
-/// record — not this process's environment, which holds whatever the shell
-/// Aegis was launched from happened to export.
-///
-/// A named variable that is not set is left out rather than passed empty: a
-/// server reading an empty token usually fails in a way that is much harder to
-/// read than one reading none, and the missing name is on the Settings row.
+/// The platform floor plus exactly the variables named on the record, not the
+/// inherited environment (a connector is long-lived). Unset names are omitted,
+/// not passed empty.
 pub fn child_env(connector: &Connector) -> Vec<(String, OsString)> {
     let mut env = Vec::new();
     for name in BASELINE_ENV.iter().copied() {
@@ -753,9 +664,7 @@ pub struct Answer {
     pub text: String,
     /// Whether the server said the call failed.
     ///
-    /// `isError` is the tool's own failure, not the transport's: the call was
-    /// made and answered. It becomes an ordinary failed envelope, which is what
-    /// the model already knows how to read.
+    /// `isError`: the tool's own failure, returned as a failed envelope.
     pub failed: bool,
     /// How much text there was before truncation.
     pub bytes: u64,
@@ -765,11 +674,7 @@ pub struct Answer {
 
 /// Renders a `tools/call` result into the text the model sees.
 ///
-/// Non-text content is *described*, never inlined. An image comes back as
-/// base64 in the same JSON object, and pasting a megabyte of it into the
-/// transcript would spend the context window on something the model cannot use
-/// through this path anyway — the same reason `screen_capture` returns a path
-/// and a hash instead of the picture.
+/// Non-text content (e.g. base64 images) is described, never inlined.
 pub fn read_answer(result: &Value) -> Answer {
     let failed = result
         .get("isError")

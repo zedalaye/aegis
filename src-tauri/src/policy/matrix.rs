@@ -1,28 +1,10 @@
-//! The decision table of PLAN 3.
+//! The decision table of PLAN 3: *auto, ask or refuse* is answered here and
+//! nowhere else.
 //!
-//! Six rows over five tools, written out once, plus the two Phase 13 rows for
-//! `skill_run` and `skill_return`, the two Phase 14 rows for `memory_write`
-//! and `memory_search`, the two Phase 15 rows for the handoff, and the one
-//! Phase 18 row that stands for every tool this build did not write. Every branch here answers one question — *auto, ask, or
-//! refuse* — and nothing else in the runtime is allowed to answer it, which is
-//! the point of the table being a single `match` rather than a check inside
-//! each tool.
-//!
-//! Reading order inside each tool matters and is deliberate:
-//!
-//! 1. **Hard denials first** (PLAN 3.2). A path that will not resolve, a link
-//!    that escapes while pretending not to, a write onto a socket, a program
-//!    that is this application — none of these could be meaningfully approved,
-//!    so offering an approval would be theatre.
-//! 2. **Then containment.** Outside the workspace is always an ask, always
-//!    without a session grant, because "the rest of this session" is not a
-//!    scope a user can picture for the whole filesystem.
-//! 3. **Then the specific rows** — sensitive names, size, `.git/`, new versus
-//!    overwrite — which change the wording and the badge.
-//!
-//! The badge is advisory (PLAN 3.3): a `risk` of `high` never blocks anything
-//! and never appears in a condition. What actually gates is the ask itself and
-//! whether a grant is offered.
+//! Order inside each tool: hard denials first (PLAN 3.2), then containment
+//! (outside the workspace always asks, with no grant), then the specific rows,
+//! which change the wording and the badge. The badge is advisory and never a
+//! condition.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -30,6 +12,7 @@ use std::path::{Component, Path};
 
 use crate::store::connectors;
 
+use super::grants;
 use super::path::{self, Resolved};
 use super::{
     tool, ApprovalDetail, AskRequest, Decision, Grant, HandoffRow, PolicyCtx, ResolvedCall, Risk,
@@ -42,24 +25,15 @@ use crate::skills;
 use crate::workspace;
 use crate::world;
 
-/// Above this, a contained read stops being routine and is asked about.
-///
-/// The number is a judgement about attention, not about safety: a megabyte of
-/// file is more than a user can skim in an approval dialog, and it is enough
-/// output to matter in a transcript.
+/// Above this, a contained read is asked about. A judgement about attention,
+/// not safety.
 const READ_ASK_BYTES: u64 = 1024 * 1024;
 
 /// How much of a pending write the dialog gets to show.
 const PREVIEW_BYTES: usize = 4 * 1024;
 
-/// Names that turn an auto-allow into an ask (PLAN 3, sensitive-name
-/// predicate).
-///
-/// `*` is allowed at one end only, which is all these patterns need. Matching
-/// is case-insensitive, so every pattern here is written in lower case.
-///
-/// A match never blocks. It downgrades an auto-allow to an ask and raises the
-/// badge — the user, not the list, decides.
+/// Names that turn an auto-allow into an ask and raise the badge (PLAN 3). Lower
+/// case; `*` at one end only. A match never blocks.
 const SENSITIVE: &[&str] = &[
     ".env*",
     "*.pem",
@@ -152,15 +126,9 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
-            // A declared source artefact of a world that is in force, still
-            // byte for byte what the world was perceived from (PLAN 7.2).
-            // Refused rather than asked about, and it is the one read row that
-            // is: what this file said is in `world/`, so reading it again is
-            // the round-trip the world exists to have paid once, and a dialog
-            // offering to spend a context window on it is a dialog that teaches
-            // people to click through. A source that has *moved* is not in this
-            // state and falls through to the rows below — perceiving that delta
-            // is the one legitimate re-perception there is.
+            // A declared source of a world, unchanged since it was perceived
+            // (PLAN 7.2): refused, because what it says is already in `world/`.
+            // A source that moved falls through, so its delta can be read.
             if let Some(declared) = world::perceived_source(workspace, &target.path) {
                 return Err(Decision::deny(
                     ErrorCode::Denied,
@@ -267,18 +235,9 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
-            // The constitution (PLAN 7.2; `COS.md` *Work*). Which of the two
-            // rows applies is a fact about the *run* and not about the
-            // identity — the same identity is a Chief of Staff in one session
-            // and a specialist in the next — which is why it reads
-            // `ctx.delegated` rather than an allow-list.
-            //
-            // Inside a brief it is a **refusal**, in the same class as a
-            // reviewer calling `fs_write`: specialists read the world and do
-            // not write it, and an ask with a session grant on offer would be
-            // the constitution asking to be overruled by whoever is quickest
-            // to click. The way out of that turn is `needs_you`, not a second
-            // attempt.
+            // The constitution (PLAN 7.2, `COS.md` *Work*). Which row applies
+            // depends on the run, not the identity: inside a brief it is a
+            // refusal, and the specialist returns `needs_you`.
             if in_world_dir(workspace, &target) {
                 if ctx.delegated {
                     return Err(Decision::deny(
@@ -291,25 +250,11 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                     ));
                 }
 
-                // Outside a brief, amending the world is a cabinet act — the
-                // human, or the Chief of Staff in front of them — and `COS.md`
-                // asks for a *human decision*, which is what a dialog is.
-                //
-                // A grant is offered, and it is a narrow one of its own.
-                // Founding a world is six files and amending one is rarely
-                // fewer; six identical High-risk dialogs in a row is how a
-                // person is taught to click through the one that mattered. What
-                // the grant must not be is [`Grant::FsWrite`]: allowing writes
-                // so a session could file artefacts is not agreeing to let it
-                // rewrite what the project is, and the two rows never match each
-                // other's key.
-                //
-                // Unattended, nothing is on offer. A routine has no human in it
-                // to make the decision `COS.md` reserves for one, so the row
-                // falls through to `decide_call`'s refusal, which says exactly
-                // that. It is also unsignable in advance — `schedule::check`
-                // refuses the grant when the routine is saved — so this is the
-                // second of the two places, not the only one.
+                // In a session it is a human decision, so a dialog — with a
+                // grant of its own, never `FsWrite`'s, so founding a world is
+                // not six identical prompts. Unattended there is no grant, so
+                // `decide_call` refuses; `schedule::check` also refuses to store
+                // one on a routine.
                 let grant = (!ctx.unattended).then_some(Grant::WorldAmend);
                 return Ok(ask(
                     call,
@@ -328,19 +273,9 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
-            // Applying a proposal (PLAN 7.13). The same tool, the same matrix
-            // and the same audit line as any other write — what differs is
-            // that this one is signed every time.
-            //
-            // No grant is offered, and a held `Grant::FsWrite` does not cover
-            // it: allowing writes so a session could file artefacts is not
-            // agreeing to make a runbook live, and the DiffPreview of *this*
-            // call is the moment a person reads the seven headings. Unattended,
-            // no grant means `decide_call` refuses, so a routine cannot apply.
-            //
-            // Inside a brief it is refused outright. A specialist that learned
-            // a procedure hands back the `PROPOSAL.md` as an artefact; the
-            // cabinet does not apply its own proposals on the way through.
+            // Applying a skill proposal (PLAN 7.13): asked every time with no
+            // grant, so a held `FsWrite` never makes a runbook live unseen. A
+            // brief hands the proposal back instead; a routine is refused.
             if let Some(apply) = apply {
                 let name = apply.map_err(|reason| Decision::deny(ErrorCode::Denied, reason))?;
                 if ctx.delegated {
@@ -396,10 +331,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 call,
                 AskRequest {
                     tool: tool::FS_WRITE.to_owned(),
-                    // The sensitive-name rule raises the badge here too. It
-                    // changes no gate — a contained write is asked about
-                    // either way — but a user answering a prompt about
-                    // `id_rsa` should be told what the name looks like.
+                    // The badge only: a contained write is asked about anyway.
                     risk: if is_sensitive(workspace, &target) {
                         Risk::High
                     } else {
@@ -457,11 +389,8 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
-            // Where it lands, before it is drawn (PLAN 7.12). A folder the
-            // distribution has no path for is refused here rather than put to
-            // the user: there is no answer they could give that would make the
-            // command runnable, and the one thing that must not happen is for
-            // it to run on Windows instead.
+            // Translate the directory for the host (PLAN 7.12), or refuse:
+            // running the command here instead must never be an option.
             let host = match ctx.exec_host {
                 Some(ExecHost::Wsl { distro }) => {
                     match exec_host::linux_path(distro, &directory.path) {
@@ -473,6 +402,28 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                     }
                 }
                 None => None,
+            };
+
+            // A program named by a path is keyed on where it resolves (PLAN
+            // 3.1) — against the working directory, or in the distribution's
+            // spelling — so a workspace file called `git` is not `git`.
+            let key = if grants::names_a_path(&program) {
+                match &host {
+                    Some(_) if program.starts_with('/') => program.clone(),
+                    Some(target) => format!("{}/{program}", target.cwd.trim_end_matches('/')),
+                    None => path::resolve(&directory.path, &program)
+                        .map_err(|err| {
+                            Decision::deny(
+                                ErrorCode::PathInvalid,
+                                format!("`{program}`: {}", err.reason()),
+                            )
+                        })?
+                        .path
+                        .display()
+                        .to_string(),
+                }
+            } else {
+                program.clone()
             };
 
             let line = shell_line(&program, &args);
@@ -507,16 +458,17 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
-            // A session grant is the program, not the line — except git, where
-            // "any arguments" is how `git status` silently covered `git
-            // checkout` twice on a review.diff run (IDEAS.md § 12; PLAN 3.3).
-            // A verb that moves the tree offers no grant, so an earlier
-            // approval cannot collapse it: the user sees the exact line again.
+            // A git grant covers read-only lines only (PLAN 3.1, IDEAS.md § 12).
+            // The verb is not enough: `-c core.fsmonitor=…` makes `git status`
+            // run a program, and a planted bare repository brings its config.
             let git_args = match &call {
                 ResolvedCall::ShellExec { args, .. } => args.as_slice(),
                 _ => &[],
             };
-            if git_moves_the_tree(&program, git_args) {
+            let not_grantable = (grants::program_name(&program) == "git")
+                .then(|| git_not_grantable(git_args, &directory.path, workspace))
+                .flatten();
+            if let Some(why) = not_grantable {
                 return Ok(ask(
                     call,
                     AskRequest {
@@ -527,18 +479,16 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                         detail,
                         grant: None,
                         scope_label: scope_label(None),
-                        reason: "this git command changes the working tree or the refs, and \
-                                 allowing git for the session does not cover that"
-                            .to_owned(),
+                        reason: format!(
+                            "allowing git for the session does not cover this line: {why}"
+                        ),
                     },
                 ));
             }
 
-            // The grant is keyed on the program either way — `git` is `git`
-            // whichever operating system runs it, and `wsl.exe` is not a
-            // program anybody was asked about. What the host changes is what
-            // the user is told they are agreeing to.
-            let grant = Grant::shell(&program);
+            // A host changes the wording, never the key: no grant is on
+            // `wsl.exe`.
+            let grant = Grant::shell(&key);
             let reason = match ctx.exec_host {
                 Some(ExecHost::Wsl { distro }) => format!(
                     "a command runs in `{distro}` as that distribution's own user, and is not sandboxed"
@@ -594,37 +544,23 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                     },
                     scope_label: scope_label(Some(&grant)),
                     grant: Some(grant),
-                    // PLAN 5.4: this is the tool with the largest blast radius
-                    // in the MVP, and the prompt should say why rather than
-                    // leaving the user to work it out.
+                    // The largest blast radius of any tool (PLAN 5.4): say why.
                     reason: "a capture includes every window on that display, not just Aegis"
                         .to_owned(),
                 },
             ))
         }
 
-        // The two rows of PLAN 7.3, Phase 13. Both are `auto`, and the reason
-        // is not that a new tool is assumed harmless — a new row defaults to
-        // *ask* (PLAN 7.2, row 7) — but that neither of these reaches past
-        // this process. `skill_run` reads a runbook the user themselves put in
-        // their library or their workspace; `skill_return` writes nothing at
-        // all, it validates. What a runbook then tells the model to *do* is
-        // every bit as gated as it was before: each step is an ordinary call
-        // through this table, so a dialog here would ask the user to approve
-        // reading a file in order to be asked again about everything it says.
-        //
-        // The narrowing that does apply to them is the identity's skill
-        // allow-list, checked in `decide_call` before this table is reached.
+        // Phase 13: both auto. Neither reaches past this process, and every
+        // step a runbook asks for is judged here on its own. The skill
+        // allow-list was checked in `decide_call`.
         ToolCall::SkillRun { name } => Ok(Decision::Auto {
             call: ResolvedCall::SkillRun { name },
             reason: "loading a runbook this identity was granted",
         }),
 
         ToolCall::SkillReturn { report } => {
-            // Artefacts are resolved and contained like any other path the
-            // model names. A return is a claim about files, and a claim about
-            // a file outside the workspace is one this session has no standing
-            // to make — the tool then only has to ask whether they are there.
+            // A return claims files, and only workspace files can be claimed.
             let report = contained(workspace, *report)?;
             Ok(Decision::Auto {
                 call: ResolvedCall::SkillReturn {
@@ -634,23 +570,12 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             })
         }
 
-        // The two rows of PLAN 7.3, Phase 14. They are split the way the
-        // filesystem rows are, and for the same reason rather than by analogy:
-        // one of them reads and the other one changes something that lasts.
-        //
-        // A memory is not a file, but it is closer to `fs_write` than to
-        // `skill_run`, because what it changes is the *next* turn's
-        // instructions and every turn's after that. That is a durable,
-        // invisible-at-the-time effect, and `AGENTS.md` puts those behind the
-        // gate. The dialog carries the sentence itself — a memory is one
-        // sentence by construction, so the user reads the whole thing rather
-        // than a preview of it.
+        // Phase 14. A memory reaches every later turn, so writing one asks,
+        // like `fs_write`.
         ToolCall::MemoryWrite { kind, text, source } => {
             let trimmed = text.trim();
-            // The store refuses this too, with a message written for the
-            // model. Catching it here as well is not a second copy of the
-            // rule: it is what keeps an approval dialog from ever asking a
-            // person to approve remembering nothing.
+            // The store refuses this too; catching it here keeps a dialog from
+            // asking to remember nothing.
             if trimmed.is_empty() {
                 return Err(Decision::deny(
                     ErrorCode::ToolFailed,
@@ -673,9 +598,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 },
                 AskRequest {
                     tool: tool::MEMORY_WRITE.to_owned(),
-                    // Durable and reversible, inside this application, touching
-                    // nothing on the machine. The same badge a workspace write
-                    // gets, for a change of about the same size.
+                    // Durable but reversible, and inside this application.
                     risk: Risk::Medium,
                     title: "Remember this",
                     summary: summarize_memory(kind.as_str(), trimmed),
@@ -691,11 +614,8 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             ))
         }
 
-        // Auto: it reads records this identity already holds, reaches nothing
-        // outside this process, and there is no version of it a user could
-        // usefully be asked about. The scoping that matters is not here at all
-        // — the query cannot name an identity, so `memory_search` can only ever
-        // look at the caller's own memories.
+        // Auto: the query cannot name an identity, so it only reads the
+        // caller's own memories.
         ToolCall::MemorySearch { query } => Ok(Decision::Auto {
             call: ResolvedCall::MemorySearch {
                 query: query.trim().to_owned(),
@@ -703,22 +623,9 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             reason: "reading this identity's own memories",
         }),
 
-        // The two rows of PLAN 7.3, Phase 15, and they are split the way the
-        // memory rows are: one of them starts something, the other one reports.
-        //
-        // `handoff_delegate` **asks**, and it is the row where the default of
-        // PLAN 7.2 row 7 — a new tool is an ask — is most obviously right. It
-        // is the only call in this table that causes *other agents to run*:
-        // more model requests, under other identities, with other allow-lists,
-        // for as long as the timeout allows. Every step any of them then takes
-        // is gated exactly as it would have been in the session the user is
-        // looking at, so this dialog is not standing in for those; what it is
-        // for is the decision `COS.md` gives the human — who works on what.
-        //
-        // A session grant is offered because a CoS that had to be re-approved
-        // for every routing decision is a CoS nobody would use, and because the
-        // grant covers the routing rather than the work: the specialists' own
-        // writes, commands and captures still stop and ask.
+        // Phase 15. Delegating asks: it is the only call that makes other
+        // agents run, and who works on what is the human's decision. The
+        // session grant covers the routing; each specialist's calls still ask.
         ToolCall::HandoffDelegate { plan } => {
             let briefs = &plan.briefs;
             if briefs.is_empty() {
@@ -740,11 +647,8 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             }
 
-            // Checked before the dialog, not after it: a person should never be
-            // asked to approve a delegation that the bus is going to refuse.
-            // The refusal is `E_TOOL_FAILED` rather than a denial about rights,
-            // because nothing here is about rights — the brief is malformed,
-            // and the model can write a better one.
+            // Before the dialog, so nobody approves a delegation the bus would
+            // refuse. `E_TOOL_FAILED`: the brief is malformed, not forbidden.
             for one in briefs.iter().chain(plan.review.iter()) {
                 if let Err(reason) = handoff::check_brief(one) {
                     return Err(Decision::deny(ErrorCode::ToolFailed, reason));
@@ -763,10 +667,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ResolvedCall::HandoffDelegate { plan: plan.clone() },
                 AskRequest {
                     tool: tool::HANDOFF_DELEGATE.to_owned(),
-                    // Not because a brief is dangerous — nothing in it runs
-                    // unreviewed — but because this is the call that spends
-                    // other identities' turns, and the badge is what makes a
-                    // person read the owners rather than the first line.
+                    // It spends other identities' turns; read the owners.
                     risk: Risk::Medium,
                     title: "Hand out work",
                     summary: summarize_handoff(&rows, reviewer.as_deref()),
@@ -783,11 +684,8 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             ))
         }
 
-        // Auto, exactly as `skill_return` is, and for the same reason: it
-        // writes nothing and reaches nothing. It validates a report and hands
-        // it to whoever is waiting. The artefacts are resolved and contained
-        // first, because a return is a claim about files and a claim about a
-        // file outside the workspace is one this run has no standing to make.
+        // Auto, like `skill_return`: it validates a report with contained
+        // artefacts.
         ToolCall::HandoffReturn { report } => {
             let report = contained(workspace, *report)?;
             Ok(Decision::Auto {
@@ -798,31 +696,13 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             })
         }
 
-        // The Phase 18 row, and the only one in this table that covers tools
-        // this build did not write. It **always asks**, and there is no branch
-        // in it that could ever not.
-        //
-        // Every other row can auto-allow because the runtime knows what the
-        // call will do: `fs_list` lists the directory policy resolved, and
-        // nothing else, because that is what the function does. A connector's
-        // tool is a program somebody else wrote, running as the user, with
-        // arguments whose schema this process has never seen. There is no
-        // predicate to write — "is this contained" has no meaning for a call
-        // whose effects are in another process — so what is left is the default
-        // of PLAN 7.2 row 7: a new tool is an ask.
-        //
-        // The server's `readOnlyHint` is read and shown, and it is shown
-        // *attributed*, because it is the thing being gated describing its own
-        // gate. Nothing here branches on it, and the badge does not soften for
-        // it either: a call that leaves this process is `High` by the same
-        // definition `shell_exec` is.
+        // Phase 18: a tool this build did not write always asks (PLAN 7.2
+        // row 7); nothing can be resolved in a call whose effects happen in
+        // another process. `readOnlyHint` is shown, attributed, and never
+        // branched on.
         ToolCall::Connector { name, args } => {
-            // Refused rather than asked about, for the reason a path that will
-            // not resolve is: an approval for a tool nothing answers to could
-            // not mean anything. Reaching here means the name came out of a
-            // transcript written while the connector was up, or the model
-            // invented it — the schemas offered this round only ever name
-            // tools that are connected.
+            // Nothing answers to this name — the connector stopped, or the name
+            // is invented — so there is nothing to approve.
             let Some(info) = ctx.connectors.and_then(|catalog| catalog.find(&name)) else {
                 let (connector, tool) =
                     connectors::split_tool_name(&name).unwrap_or((name.as_str(), name.as_str()));
@@ -836,10 +716,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 ));
             };
 
-            // The arguments as the model wrote them, indented so a person can
-            // read them. Not "resolved": there is nothing here to resolve, and
-            // a dialog that pretended otherwise would be claiming a guarantee
-            // this phase does not have.
+            // The model's arguments, indented for reading; nothing is resolved.
             let arguments =
                 serde_json::to_string_pretty(&args).unwrap_or_else(|_| args.to_string());
             let grant = Grant::Connector { tool: name.clone() };
@@ -873,10 +750,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
     }
 }
 
-/// One line naming a memory, for the approval dialog's header.
-///
-/// The kind and enough of the sentence to recognize it. The dialog shows the
-/// whole thing underneath; this is what the row says when several are queued.
+/// One line naming a memory, for the dialog header; the dialog shows the rest.
 fn summarize_memory(kind: &str, text: &str) -> String {
     const HEAD: usize = 72;
 
@@ -887,12 +761,8 @@ fn summarize_memory(kind: &str, text: &str) -> String {
     format!("{kind}: {head}…")
 }
 
-/// Resolves a return's artefact paths, and refuses one that leaves the folder.
-///
-/// Shared by `skill_return` and `handoff_return`, because it is the same claim
-/// in both: *these files exist and this run produced them*. Whether they are
-/// actually there is the tool's question ([`handoff::check`]); whether they are
-/// this workspace's to claim is this one.
+/// Resolves a return's artefact paths, refusing any outside the workspace.
+/// Whether they exist is the tool's question ([`handoff::check`]).
 fn contained(workspace: &Path, draft: handoff::Draft) -> Result<handoff::Report, Decision> {
     let mut artefacts = Vec::with_capacity(draft.artefacts.len());
 
@@ -923,12 +793,8 @@ fn contained(workspace: &Path, draft: handoff::Draft) -> Result<handoff::Report,
     })
 }
 
-/// One brief as the approval dialog draws it.
-///
-/// The goal, the owner and how much it starts from. Not the constraints and not
-/// the definition of done: those are what the *owner* has to read, and a dialog
-/// that reproduced four whole briefs would be a dialog nobody reads. They are in
-/// the file `filed_in` names, and in the transcript of the run.
+/// One brief as the dialog draws it: goal, owner, how many inputs. The rest is
+/// in the brief file.
 fn row(brief: &handoff::Brief) -> HandoffRow {
     HandoffRow {
         goal: brief.goal.trim().to_owned(),
@@ -939,15 +805,9 @@ fn row(brief: &handoff::Brief) -> HandoffRow {
     }
 }
 
-/// One line naming a delegation, for the dialog's header.
-///
-/// Who, not what: the owners are the decision a person is being asked to make,
-/// and the goals are underneath.
+/// One line naming a delegation's owners, for the dialog header.
 fn summarize_handoff(rows: &[HandoffRow], reviewer: Option<&str>) -> String {
-    // Each owner once, in the order they were first named. Two briefs to the
-    // same identity is an ordinary thing to do — they are two runs, and the
-    // list underneath still has a row each — but a header reading "2 briefs to
-    // Scribe, Scribe" is a header that looks like a bug.
+    // Each owner once, in first-named order.
     let mut owners: Vec<&str> = Vec::with_capacity(rows.len());
     for row in rows {
         if !owners.contains(&row.owner.as_str()) {
@@ -973,13 +833,9 @@ fn ask(call: ResolvedCall, request: AskRequest) -> Decision {
     }
 }
 
-/// Resolves a path argument, turning both failure modes into hard denials.
-///
-/// The two are kept apart because they are different accusations. A path that
-/// will not resolve is a broken argument. A path that resolves outside the
-/// workspace *after* looking contained is a link escape, and PLAN 3.2 refuses
-/// it without a prompt precisely because the approval dialog would have to
-/// show the user a path that is not the one that would be touched.
+/// Resolves a path argument. An unresolvable path and a link escape are both
+/// hard denials (PLAN 3.2): no dialog could honestly show the path a link
+/// would really touch.
 fn resolve(workspace: &Path, raw: &str) -> Result<Resolved, Decision> {
     let resolved = path::resolve(workspace, raw).map_err(|err| {
         Decision::deny(
@@ -1002,12 +858,8 @@ fn resolve(workspace: &Path, raw: &str) -> Result<Resolved, Decision> {
     Ok(resolved)
 }
 
-/// The hard denials specific to writing (PLAN 3.2).
-///
-/// Approving any of these would be approving something that cannot happen: a
-/// write onto a directory or a device does not become possible because a user
-/// clicked Allow, and a missing parent with `create_dirs: false` is a call
-/// that is already decided.
+/// Hard denials specific to writing (PLAN 3.2): targets no approval could make
+/// writable.
 fn writable(
     target: &Resolved,
     existing: Option<&fs::Metadata>,
@@ -1064,109 +916,141 @@ fn nearest_existing(path: &Path) -> Option<&Path> {
     path.ancestors().find(|ancestor| ancestor.exists())
 }
 
-/// Git subcommands that change the working tree or the refs.
-///
-/// PLAN 3.3: the user reads the exact args before anything mutating runs. A
-/// session grant keyed on the basename `git` would otherwise auto-allow
-/// `checkout` after someone approved `status`. This list is not a denylist
-/// that refuses the call — it is the set of verbs that still open a dialog.
-const GIT_MOVES_THE_TREE: &[&str] = &[
-    "add",
-    "am",
-    "apply",
-    "checkout",
-    "cherry-pick",
-    "clean",
-    "clone",
-    "commit",
-    "merge",
-    "mv",
-    "pull",
-    "push",
-    "rebase",
-    "reset",
-    "restore",
-    "revert",
-    "rm",
-    "stash",
-    "switch",
-    "worktree",
+/// The verbs a `git` session grant covers (PLAN 3.1). An allow-list: the old
+/// deny-list covered verbs it had never heard of. `branch` is judged by
+/// [`GIT_BRANCH_LISTING`], since it lists or deletes.
+const GIT_READ_ONLY: &[&str] = &[
+    "blame",
+    "cat-file",
+    "describe",
+    "diff",
+    "log",
+    "ls-files",
+    "ls-tree",
+    "rev-list",
+    "rev-parse",
+    "shortlog",
+    "show",
+    "status",
+    "version",
 ];
 
-/// Git flags that take a value, so the next argument is not the subcommand.
-const GIT_VALUE_FLAGS: &[&str] = &[
-    "--config-env",
-    "--git-dir",
-    "--list-cmds",
-    "--namespace",
-    "--super-prefix",
-    "--work-tree",
-    "-C",
-    "-c",
+/// The options `git branch` may carry and still only list.
+const GIT_BRANCH_LISTING: &[&str] = &[
+    "--show-current",
+    "--list",
+    "-l",
+    "-a",
+    "--all",
+    "-r",
+    "--remotes",
+    "-v",
+    "-vv",
+    "--verbose",
+    "--no-color",
 ];
 
-/// Whether this is a `git` invocation whose subcommand moves the repository.
+/// The options allowed before the verb under a grant. Any other changes where
+/// git looks or which configuration it runs with — and configuration runs
+/// programs (`core.fsmonitor`, `diff.external`, `!` aliases).
+const GIT_SAFE_GLOBALS: &[&str] = &[
+    "--no-pager",
+    "-P",
+    "--no-optional-locks",
+    "--literal-pathspecs",
+    "--version",
+];
+
+/// Options of a read-only verb that are not read-only.
 ///
-/// Unknown verbs stay on the ordinary grant: the list above is the ones we
-/// have watched a session grant cover by accident, not a parser of git.
-fn git_moves_the_tree(program: &str, args: &[String]) -> bool {
-    if Grant::shell(program) != Grant::shell("git") {
-        return false;
-    }
-    git_subcommand(args).is_some_and(|verb| GIT_MOVES_THE_TREE.contains(&verb))
+/// `--output` writes a file wherever it names, `--no-index` and `--contents`
+/// read one from anywhere on disk, and `--ext-diff` runs a program.
+const GIT_UNSAFE_OPTIONS: &[&str] = &["--output", "--no-index", "--contents", "--ext-diff"];
+
+/// Why a `git` line is not one a session grant may cover, or `None` when it is.
+fn git_not_grantable(args: &[String], cwd: &Path, workspace: &Path) -> Option<&'static str> {
+    git_line_not_grantable(args).or_else(|| {
+        bare_repository_on_the_way(cwd, workspace).then_some(
+            "the working directory is laid out like a bare repository, and git would run with \
+             whatever configuration is in it",
+        )
+    })
 }
 
-/// The first non-option argument, skipping `git`'s own flags.
-fn git_subcommand(args: &[String]) -> Option<&str> {
-    let mut skip_value = false;
-    for arg in args {
-        if skip_value {
-            skip_value = false;
-            continue;
+/// The half of [`git_not_grantable`] that only reads the arguments.
+fn git_line_not_grantable(args: &[String]) -> Option<&'static str> {
+    let mut words = args.iter().map(String::as_str);
+    let verb = loop {
+        match words.next() {
+            // `git` alone prints its usage and opens no repository.
+            None => return None,
+            Some(word) if GIT_SAFE_GLOBALS.contains(&word) => {}
+            Some(word) if word.starts_with('-') => {
+                return Some(
+                    "an option before the verb changes where git looks, or which configuration \
+                     it runs with",
+                );
+            }
+            Some(verb) => break verb,
         }
-        if arg == "--" {
-            continue;
+    };
+    let rest: Vec<&str> = words.collect();
+
+    if verb == "branch" {
+        if !rest.iter().all(|word| GIT_BRANCH_LISTING.contains(word)) {
+            return Some("this `git branch` does more than list branches");
         }
-        if GIT_VALUE_FLAGS.contains(&arg.as_str()) {
-            skip_value = true;
-            continue;
-        }
-        if arg.starts_with("--git-dir=")
-            || arg.starts_with("--work-tree=")
-            || arg.starts_with("--namespace=")
-            || arg.starts_with("--super-prefix=")
-            || arg.starts_with("--config-env=")
-            || (arg.starts_with("-c") && arg.len() > 2)
-        {
-            continue;
-        }
-        if arg.starts_with('-') {
-            continue;
-        }
-        return Some(arg.as_str());
+    } else if !GIT_READ_ONLY.contains(&verb) {
+        return Some("only read-only verbs (status, log, diff, show, …) are covered");
     }
-    None
+
+    let unsafe_option = rest.iter().any(|word| {
+        GIT_UNSAFE_OPTIONS.iter().any(|option| {
+            word.strip_prefix(option)
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with('='))
+        })
+    });
+    unsafe_option.then_some(
+        "one of its options writes a file, reads one from anywhere on disk, or runs a program",
+    )
+}
+
+/// Whether git started in `cwd` could find a bare repository laid out as
+/// ordinary workspace files (a `HEAD` beside `objects/`), whose `config` the
+/// model could have written. A `.git` on the way ends git's search, and the
+/// walk stops at the workspace root.
+fn bare_repository_on_the_way(cwd: &Path, workspace: &Path) -> bool {
+    for folder in cwd.ancestors() {
+        if !path::is_contained(workspace, folder) {
+            return false;
+        }
+        if fs::symlink_metadata(folder.join(".git")).is_ok() {
+            return false;
+        }
+        if folder.join("HEAD").is_file()
+            && (folder.join("objects").is_dir() || folder.join("commondir").is_file())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether the program names this application's own binary.
 ///
-/// Compared through [`Grant::shell`], so the comparison folds exactly the same
-/// things the grant key folds — basename, executable suffix and case on
-/// Windows — and `aegis`, `Aegis.exe` and a full path to it are one answer.
+/// Compared through [`grants::program_name`], so basename, executable suffix
+/// and case on Windows fold the same way everywhere, and `aegis`, `Aegis.exe`
+/// and a full path to it are one answer.
 fn is_self(ctx: &PolicyCtx<'_>, program: &str) -> bool {
     ctx.self_exe
         .and_then(Path::file_name)
         .and_then(|name| name.to_str())
-        .is_some_and(|name| Grant::shell(program) == Grant::shell(name))
+        .is_some_and(|name| grants::program_name(program) == grants::program_name(name))
 }
 
 /// Whether the target is inside the workspace's constitution.
 ///
-/// The first segment only, unlike `.git/` beside it: `world/` is a convention
-/// at the root of a workspace, and a repository with a `src/world/` module in
-/// it has not thereby written one. The predicate itself is
-/// [`world::in_world`], so the gate and the module that reads the constitution
-/// agree on what one is.
+/// First segment only ([`world::in_world`]), so `src/world/` does not count.
 fn in_world_dir(workspace: &Path, target: &Resolved) -> bool {
     target
         .relative_to(workspace)
@@ -1182,16 +1066,9 @@ fn in_git_dir(workspace: &Path, target: &Resolved) -> bool {
 
 /// Whether any segment below the workspace root looks like a credential.
 ///
-/// Tested against the path *relative to the workspace* rather than the whole
-/// thing, which is a deliberate narrowing of PLAN 3's wording. The workspace
-/// root is a folder the user chose and already approved; letting one of its
-/// own ancestors — a checkout under `~/.ssh/`, a directory called
-/// `credentials/` — tag every read inside it as sensitive would train the user
-/// to click through the prompt that is supposed to mean something. Everything
-/// below the root is still tested, segment by segment, as written.
-///
-/// Outside the workspace there is no relative path and this returns `false`;
-/// those rows already ask every time, at `high`, with no grant on offer.
+/// Only segments below the workspace root are tested, so a workspace under a
+/// sensitive-looking ancestor does not flag every read. Outside the workspace
+/// this is `false`; those rows already ask at `high`.
 fn is_sensitive(workspace: &Path, target: &Resolved) -> bool {
     target.relative_to(workspace).is_some_and(|relative| {
         segments(&relative).any(|name| {
@@ -1298,15 +1175,9 @@ fn human_bytes(bytes: u64) -> String {
 
 /// A display-only rendering of a command.
 ///
-/// Never executed and never parsed back: `shell_exec` spawns the program with
-/// its argument vector directly, with no shell in between (PLAN 5.1). Quoting
-/// here is for legibility, not for safety, and must never be described as the
-/// latter.
-///
-/// Shared with [`tools::shell`](crate::tools::shell) so the line a user reads
-/// in the approval dialog and the line the transcript reports afterwards are
-/// produced by the same function, and cannot come to disagree about what was
-/// run.
+/// Never executed or parsed (PLAN 5.1): quoting is for legibility, not safety.
+/// Shared with [`tools::shell`](crate::tools::shell) so dialog and transcript
+/// agree.
 pub(crate) fn shell_line(program: &str, args: &[String]) -> String {
     std::iter::once(program)
         .chain(args.iter().map(String::as_str))
@@ -1376,42 +1247,61 @@ mod tests {
     }
 
     #[test]
-    fn git_subcommand_skips_the_flags_that_are_not_the_verb() {
-        assert_eq!(git_subcommand(&args(&["status"])), Some("status"));
-        assert_eq!(
-            git_subcommand(&args(&["--no-pager", "diff", "HEAD"])),
-            Some("diff")
-        );
-        assert_eq!(
-            git_subcommand(&args(&["-C", "/tmp/repo", "checkout", "--", "a"])),
-            Some("checkout")
-        );
-        assert_eq!(
-            git_subcommand(&args(&["--git-dir=.git", "log"])),
-            Some("log")
-        );
-        assert_eq!(git_subcommand(&args(&["--no-pager"])), None);
+    fn read_only_git_lines_are_grantable() {
+        for line in [
+            &[][..],
+            &["status"],
+            &["--no-pager", "log", "--oneline"],
+            &["diff", "HEAD", "--output-indicator-new=+"],
+            &["show", "HEAD:src/main.rs"],
+            &["branch", "--show-current"],
+            &["branch", "-a", "-v"],
+        ] {
+            assert_eq!(git_line_not_grantable(&args(line)), None, "{line:?}");
+        }
     }
 
     #[test]
-    fn only_git_verbs_that_move_the_tree_are_flagged() {
-        assert!(!git_moves_the_tree("git", &args(&["status"])));
-        assert!(!git_moves_the_tree("git", &args(&["log", "--oneline"])));
-        assert!(!git_moves_the_tree("git", &args(&["diff", "HEAD"])));
-        assert!(!git_moves_the_tree("git", &args(&["show", "HEAD"])));
-        assert!(!git_moves_the_tree(
-            "git",
-            &args(&["branch", "--show-current"])
-        ));
-        assert!(git_moves_the_tree("git", &args(&["checkout", "--", "a"])));
-        assert!(git_moves_the_tree(
-            "git.exe",
-            &args(&["--no-pager", "checkout", "main"])
-        ));
-        assert!(git_moves_the_tree(
-            "git",
-            &args(&["push", "origin", "HEAD"])
-        ));
-        assert!(!git_moves_the_tree("cargo", &args(&["test"])));
+    fn a_git_line_that_is_not_read_only_is_not_grantable() {
+        for line in [
+            &["checkout", "--", "a"][..],
+            &["push", "origin", "HEAD"],
+            &["config", "core.fsmonitor", "calc"],
+            &["st"],
+            &["-c", "core.fsmonitor=calc", "status"],
+            &["-ccore.pager=calc", "log"],
+            &["-C", "..", "status"],
+            &["--git-dir=elsewhere", "log"],
+            &["--exec-path=elsewhere", "status"],
+            &["--", "status"],
+            &["diff", "--output=../out.txt"],
+            &["diff", "--output", "../out.txt"],
+            &["diff", "--no-index", "a", "b"],
+            &["blame", "--contents", "/etc/passwd", "x"],
+            &["log", "-p", "--ext-diff"],
+            &["branch", "-D", "main"],
+            &["branch", "new-branch"],
+        ] {
+            assert!(git_line_not_grantable(&args(line)).is_some(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_folder_laid_out_like_a_bare_repository_is_found_on_the_way_up() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        let planted = root.join("planted");
+        fs::create_dir_all(planted.join("objects")).expect("mkdir");
+        fs::create_dir_all(planted.join("refs").join("heads")).expect("mkdir");
+        fs::write(planted.join("HEAD"), "ref: refs/heads/main\n").expect("write");
+
+        assert!(bare_repository_on_the_way(&planted.join("refs"), &root));
+        assert!(!bare_repository_on_the_way(&root, &root));
+
+        fs::create_dir(planted.join("refs").join(".git")).expect("mkdir");
+        assert!(
+            !bare_repository_on_the_way(&planted.join("refs"), &root),
+            "a .git on the way is where git stops looking"
+        );
     }
 }

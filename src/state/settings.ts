@@ -1,27 +1,12 @@
 /**
  * Provider settings state.
  *
- * The runtime owns the truth and this is a cache of the *masked* view of it.
- * There is no unmasked counterpart anywhere in the WebView: the key is in the
- * OS credential store or in the environment, and what this store holds is a
- * source, a hint of four characters, and whether the machine has a credential
- * store at all.
+ * A cache of the *masked* settings; the key never reaches the WebView.
  *
- * Two consequences shape the shape of it.
- *
- * The draft the user is typing is kept separately from the saved settings, so
- * a rejected save leaves the text in the form to be corrected rather than
- * snapping back to what is on disk. `E_INVALID_SETTING` carries the field it
- * is about, which is what lets the message land under the right input instead
- * of in a banner over the whole panel.
- *
- * And the key field is write-only. It starts empty on every load, an empty
- * value means "leave the stored key alone", and it is cleared the moment a
- * save succeeds — a form that redisplayed the key would be a form that had
- * been given it.
- *
- * Errors are held rather than thrown, as in the other stores: every action
- * resolves, and a failure lands where the panel can render it.
+ * - The draft is separate from the saved values, so a rejected save keeps the
+ *   text; `E_INVALID_SETTING` errors land under their field.
+ * - The key field is write-only: empty on load, empty means "keep", cleared
+ *   after a successful save.
  */
 
 import { create } from "zustand";
@@ -48,12 +33,8 @@ import type { IpcError } from "../lib/errors";
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
 /**
- * The environment variable the runtime reads when the credential store holds
- * nothing.
- *
- * Named in the panel so a user on a machine with no keyring knows what to set.
- * It is `ENV_API_KEY` in `src-tauri/src/secrets.rs`; the two are spelled here
- * and there because a constant is not a type and does not cross `ts-rs`.
+ * The key's environment variable, shown when there is no keyring. Must match
+ * `ENV_API_KEY` in `src-tauri/src/secrets.rs` (constants do not cross `ts-rs`).
  */
 export const ENV_API_KEY = "AEGIS_API_KEY";
 
@@ -170,11 +151,8 @@ function draftOf(settings: MaskedSettings): Draft {
 
 export const useSettings = create<SettingsState>((set, get) => {
   /**
-   * Runs a command, sorting its failure into the right place.
-   *
-   * A refusal that names a field belongs under that input; everything else is
-   * a banner. Both are cleared on entry, so a second attempt does not show the
-   * first attempt's complaint.
+   * Runs a command, routing a field refusal under its input and anything else
+   * to the banner; both are cleared first.
    */
   const guard = async (
     command: string,
@@ -193,11 +171,8 @@ export const useSettings = create<SettingsState>((set, get) => {
         set({ error });
       }
 
-      // A save is two steps in the runtime — the document, then the key — and
-      // the second can fail on a machine with no credential store after the
-      // first has already been written. Asking again is how the panel ends up
-      // showing what is really stored rather than what it had before. The
-      // draft is left alone: the user is mid-correction.
+      // The document may be saved even if the key was not: re-read, keeping
+      // the draft.
       if (command !== "settings_get") {
         try {
           set({ settings: await settingsGet() });
@@ -318,14 +293,7 @@ export const useSettings = create<SettingsState>((set, get) => {
   };
 });
 
-/**
- * Subscribes the store to `settings:changed`.
- *
- * One listener for the app, attached by `AppShell` beside the others. The
- * event carries the same masked payload the commands return, so a change made
- * anywhere — including by a future scheduler with no window open — lands here
- * without a refetch.
- */
+/** Subscribes the store to `settings:changed` (attached by `AppShell`). */
 export function attachSettingsEvents(): Promise<UnlistenFn> {
   return subscribe({
     "settings:changed": (settings) => {

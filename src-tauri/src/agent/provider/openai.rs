@@ -1,36 +1,17 @@
 //! The OpenAI-compatible provider (PLAN 4.1).
 //!
-//! One HTTP request per round: `POST {base_url}/chat/completions` with
-//! `stream: true`, and a `text/event-stream` response decoded into the same
-//! [`ModelEvent`]s the fake provider produces. Nothing about the wire format
-//! escapes this file — that is the whole reason [`Provider`] is a trait, and
-//! it is why `agent/turn.rs` did not have to be reopened for this phase.
+//! One streamed `POST {base_url}/chat/completions` per round, decoded into
+//! [`ModelEvent`]s; the wire format stays in this file.
 //!
-//! Four things here are load-bearing and are not obvious from the happy path.
-//!
-//! **Construction never fails.** A provider with no key, an unparseable base
-//! URL, or no HTTP client at all is still a provider; it answers its first
-//! stream with a single [`ModelEvent::Error`]. The alternative — failing in
-//! `session_send` — would reject the user's message before it was recorded,
-//! so the turn would leave no trace of what was asked. As an error event it
-//! lands in the transcript, in `turn:error`, and in the session's state like
-//! any other provider failure.
-//!
-//! **The finish is deferred to the end of the stream.** A chunk carrying
-//! `finish_reason` is often not the last one: several servers send token usage
-//! in a further chunk whose `choices` array is empty, and the turn loop stops
-//! reading at [`ModelEvent::Finish`]. Holding the finish back until `[DONE]`
-//! or the end of the body is what lets that usage be reported rather than
-//! dropped, and it guarantees exactly one finish per response.
-//!
-//! **Cancellation is a closed channel.** The send half is selected on
-//! alongside every read, so a turn that was cancelled — which drops the
-//! receiver — tears the connection down at the next chunk instead of streaming
-//! a reply nobody will read to a server that is still being paid for it.
-//!
-//! **The key is a header and nothing else.** It is marked sensitive so it
-//! cannot appear in a `Debug` of the headers, it is never logged, and it never
-//! goes near the WebView ([`secrets`](crate::secrets)).
+//! * **Construction never fails**: a missing key, bad URL or missing client
+//!   becomes the stream's single [`ModelEvent::Error`], so the user's message is
+//!   still recorded.
+//! * **The finish is deferred** to `[DONE]` or end of body, since usage often
+//!   arrives in a later chunk and the turn loop stops at [`ModelEvent::Finish`].
+//! * **Cancellation** (a dropped receiver) closes the connection at the next
+//!   chunk.
+//! * **The key** is a sensitive header only: never logged, never sent to the
+//!   WebView ([`secrets`](crate::secrets)).
 
 use std::time::{Duration, Instant};
 
@@ -51,60 +32,30 @@ use super::{Provider, STREAM_BUFFER};
 /// Path appended to the base URL for a completion.
 const CHAT_PATH: &str = "/chat/completions";
 
-/// Output tokens [`probe`] asks for.
-///
-/// Enough that no server rejects it as a degenerate request, small enough that
-/// pressing the button repeatedly costs nothing worth thinking about. The
-/// reply is discarded — what is being tested is that there is one.
+/// Output tokens [`probe`] asks for: not degenerate, nearly free.
 const PROBE_MAX_TOKENS: u32 = 16;
 
 /// The `data:` payload that ends an SSE stream.
 const DONE: &str = "[DONE]";
 
-/// What Aegis calls itself to a server.
-///
-/// Servers log it, and a rate limit or a block is easier to explain when the
-/// client says what it is. It carries no machine or user identity.
+/// What Aegis calls itself to a server. No machine or user identity.
 const USER_AGENT: &str = concat!("Aegis/", env!("CARGO_PKG_VERSION"));
 
 /// How long to wait for a connection before giving up.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// How long a stream may go without producing bytes.
-///
-/// Not a limit on the reply — a long answer is many chunks, and each one
-/// restarts this clock. It is the difference between a slow model and a
-/// connection that died without anyone being told, which otherwise leaves a
-/// turn running until the user gives up on it.
+/// How long a stream may go without producing bytes; each chunk resets it.
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long [`probe`] waits before reporting the server as unreachable.
-///
-/// Much shorter than the streaming timeouts: someone is watching this one, and
-/// a diagnosis that takes two minutes to arrive is not a diagnosis.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Most of a server's error body that is quoted back to the user.
-///
-/// Enough for a real message, short enough that an HTML error page or a stack
-/// trace does not become the notification.
 const ERROR_BODY_CHARS: usize = 400;
 
-/// Builds the one HTTP client the process uses.
-///
-/// One client, built at startup and shared by every turn and every probe: it
-/// owns a connection pool, so a second message in a session reuses the
-/// connection and its TLS session rather than paying for a fresh handshake.
-///
-/// `None` when the platform will not give us a TLS stack at all. That is not a
-/// panic — the app still runs, the scripted provider still answers, and the
-/// settings panel says why a request cannot be sent.
-///
-/// There is deliberately no whole-request timeout. A streamed reply is a
-/// response body that stays open for as long as the model is talking, and a
-/// deadline on the whole request would cut off exactly the long answers that
-/// took the most work. [`READ_TIMEOUT`] is the honest version of that limit:
-/// it fires when nothing at all is arriving.
+/// Builds the process's shared HTTP client (one connection pool), or `None`
+/// without a TLS stack. No whole-request timeout, which would cut long
+/// streams; [`READ_TIMEOUT`] covers stalls.
 pub fn client() -> Option<Client> {
     Client::builder()
         .user_agent(USER_AGENT)
@@ -138,23 +89,9 @@ pub struct ProviderProbe {
 
 /// Asks the configured server whether it is there, and reports what happened.
 ///
-/// The probe is a real, tiny completion against the endpoint a turn would use:
-/// `POST {base_url}/chat/completions` with the configured model and sixteen
-/// output tokens. The obvious alternative — `GET {base_url}/models` — is free
-/// but tests the wrong thing, and does so in a way that is worse than useless
-/// on a server whose `/models` is not the OpenAI-shaped one: pointing Aegis at
-/// `https://api.anthropic.com/v1` reaches that vendor's own models endpoint,
-/// which answers `400 anthropic-version: header is required` even though chat
-/// completions on the same base URL work perfectly. A test that fails on a
-/// working configuration is a test that teaches the user to ignore it.
-///
-/// Testing the real endpoint also answers a question `/models` never could:
-/// whether the *model id* is one this server has. That is the second-commonest
-/// thing to get wrong after the address, and from a chat window it looks
-/// exactly like the first.
-///
-/// The cost is a handful of tokens per press of a button someone chose to
-/// press. That is the right trade for the only answer worth having.
+/// A real, tiny completion on the turn's endpoint rather than `GET /models`,
+/// which fails on some working servers (Anthropic's needs a version header)
+/// and cannot check the model id.
 pub async fn probe(
     client: Option<&Client>,
     settings: &ProviderSettings,
@@ -326,16 +263,8 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
-    /// Builds the provider for these settings, this key and this client.
-    ///
-    /// Infallible: each of the three ways this can be unusable — no HTTP
-    /// client, a base URL that will not parse, no key — is recorded and
-    /// reported as the stream's first and only event. See the module note on
-    /// why that is better than failing here.
-    ///
-    /// The client is shared rather than built per turn, so a second message in
-    /// a session reuses the connection and its TLS session instead of paying
-    /// for a new handshake.
+    /// Builds the provider. Infallible: problems surface as the stream's only
+    /// event (see the module note).
     pub fn new(client: Option<Client>, settings: &ProviderSettings, key: Option<ApiKey>) -> Self {
         Self::with_extra_headers(client, settings, key, Vec::new())
     }
@@ -438,9 +367,8 @@ impl Provider for OpenAiProvider {
 
 /// Sends one request and feeds its stream into `tx`.
 ///
-/// Every exit is either an [`ModelEvent::Error`], a [`ModelEvent::Finish`], or
-/// a closed channel. The last of the three is a cancelled turn and is silent
-/// on purpose: nothing has gone wrong, and there is nobody left to tell.
+/// Ends with [`ModelEvent::Error`], [`ModelEvent::Finish`], or silently on a
+/// closed channel (cancelled).
 async fn run(ready: Ready, request: ModelRequest, tx: mpsc::Sender<ModelEvent>) {
     let authorization = match authorization(&ready.key) {
         Ok(header) => header,
@@ -587,11 +515,7 @@ async fn fail(tx: &mpsc::Sender<ModelEvent>, code: ErrorCode, message: String, r
 // Response mapping
 // ---------------------------------------------------------------------------
 
-/// What has been seen so far in one response.
-///
-/// Exists to hold the deferred finish (see the module note): the reason and
-/// the usage can arrive in different chunks, and the turn loop stops reading
-/// at the first [`ModelEvent::Finish`] it is given.
+/// What has been seen so far in one response, holding the deferred finish.
 #[derive(Debug, Default)]
 struct StreamState {
     reason: Option<StopReason>,
@@ -603,10 +527,7 @@ struct StreamState {
 impl StreamState {
     /// Turns one `data:` payload into the events it carries.
     ///
-    /// A payload that is not JSON is dropped with a log line rather than
-    /// failing the turn: it is one frame of a reply that is otherwise
-    /// arriving, and several servers interleave keep-alive junk that the SSE
-    /// grammar allows and the API does not describe.
+    /// Non-JSON payloads (keep-alive junk) are logged and dropped.
     fn absorb(&mut self, payload: &str) -> Vec<ModelEvent> {
         let frame: Value = match serde_json::from_str(payload) {
             Ok(frame) => frame,
@@ -687,12 +608,8 @@ impl StreamState {
 
 /// One streamed tool-call fragment.
 ///
-/// Every field except the position is optional on the wire: the id and the
-/// name arrive once, the arguments arrive in pieces, and
-/// [`ToolCallAssembler`](crate::agent::wire::ToolCallAssembler) is what puts
-/// them back together. Empty strings are treated as absent — a server that
-/// pads every fragment with `"id": ""` must not overwrite the real id with
-/// nothing.
+/// Reassembled by [`ToolCallAssembler`](crate::agent::wire::ToolCallAssembler).
+/// Empty strings count as absent, so `"id": ""` padding cannot erase the id.
 fn tool_call_delta(call: &Value) -> ModelEvent {
     let text = |value: Option<&Value>| {
         value
@@ -721,9 +638,7 @@ fn tool_call_delta(call: &Value) -> ModelEvent {
 
 /// The API's stop reasons, mapped onto ours.
 ///
-/// An unknown reason becomes [`StopReason::Stop`]: the response did end, the
-/// text that arrived is real, and refusing to name a reason we do not
-/// recognize would throw away a reply the user can see on screen.
+/// An unknown reason becomes [`StopReason::Stop`].
 fn stop_reason(reason: &str) -> StopReason {
     match reason {
         "tool_calls" | "function_call" => StopReason::ToolCalls,
@@ -738,13 +653,10 @@ fn stop_reason(reason: &str) -> StopReason {
 
 /// Token usage, from the chunk the server sends at the end of a stream.
 ///
-/// Aegis asks for it — `stream_options.include_usage` in
-/// [`ModelRequest::to_body`](crate::agent::ModelRequest::to_body), which says
-/// why. This function stays as forgiving as it was when nothing asked: a
-/// server that sends no usage at all is not an error, it is a turn recorded as
-/// unmeasured ([`TurnCost::unreported`](crate::store::TurnCost::unreported)),
-/// and a `usage` object missing a field counts it as zero rather than refusing
-/// the whole frame.
+/// Requested via `stream_options.include_usage`
+/// ([`ModelRequest::to_body`](crate::agent::ModelRequest::to_body)). No usage
+/// means unmeasured ([`TurnCost::unreported`](crate::store::TurnCost::unreported));
+/// missing fields count as zero.
 fn usage_of(frame: &Value) -> Option<Usage> {
     let usage = frame.get("usage").filter(|usage| !usage.is_null())?;
     let count = |field: &str| usage.get(field).and_then(Value::as_u64).unwrap_or(0);
@@ -752,11 +664,8 @@ fn usage_of(frame: &Value) -> Option<Usage> {
     let prompt = count("prompt_tokens");
     let completion = count("completion_tokens");
 
-    // A share of `prompt_tokens`, not a sibling of it, so nothing is added
-    // back. Servers that cache automatically report this and nothing about
-    // writes; the ones that do not report it at all leave a zero, which is
-    // also what Anthropic's own compatibility layer leaves — it documents
-    // `prompt_tokens_details` as always empty, and caching as unsupported.
+    // A share of `prompt_tokens`, not added to it. Zero when unreported
+    // (including Anthropic's compatibility layer).
     let cached = usage
         .get("prompt_tokens_details")
         .and_then(|details| details.get("cached_tokens"))
@@ -780,22 +689,12 @@ fn usage_of(frame: &Value) -> Option<Usage> {
 // ---------------------------------------------------------------------------
 
 /// Bytes that may be held while waiting for a line to end.
-///
-/// A server that never sends a newline would otherwise grow this buffer until
-/// the process died. No real frame is anywhere near this size.
 const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 
 /// Reassembles `data:` payloads from a byte stream.
 ///
-/// Chunk boundaries fall wherever the network puts them: in the middle of a
-/// line, between the two bytes of a CRLF, inside a multi-byte character. The
-/// decoder therefore works on bytes and only builds a `String` once a complete
-/// line has arrived — an incomplete UTF-8 sequence contains no newline byte,
-/// so it simply stays buffered until the rest of it turns up.
-///
-/// Only the `data` field is kept. The chat-completions stream sends no `event`
-/// or `id` fields, comments (`: keep-alive`) carry nothing, and a field this
-/// decoder does not know is a field the API does not define.
+/// Works on bytes and decodes only complete lines, so chunks may split lines,
+/// CRLFs or UTF-8 sequences. Only `data` fields are kept.
 #[derive(Debug, Default)]
 pub struct SseDecoder {
     pending: Vec<u8>,
@@ -804,10 +703,8 @@ pub struct SseDecoder {
 }
 
 impl SseDecoder {
-    /// Folds in one chunk and returns every payload it completed.
-    ///
-    /// The error is the buffer cap, and it is a hard stop: a server sending an
-    /// endless line is not one this can recover from by reading more.
+    /// Folds in one chunk and returns every payload it completed. Errors only
+    /// on the buffer cap.
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<String>, String> {
         if self.pending.len().saturating_add(chunk.len()) > MAX_PENDING_BYTES {
             return Err("The server sent a stream frame too large to read.".to_owned());
@@ -825,10 +722,8 @@ impl SseDecoder {
 
     /// Takes one complete line, if the buffer holds one.
     ///
-    /// A lone `\r` at the very end of the buffer is left alone: it may be the
-    /// first half of a CRLF whose second half is in the next chunk, and
-    /// splitting there would produce one spurious empty line — which in this
-    /// grammar means "dispatch the event", and would cut a payload in half.
+    /// A trailing `\r` waits for the next chunk: it may start a CRLF, and a
+    /// spurious empty line would dispatch early.
     fn take_line(&mut self) -> Option<Vec<u8>> {
         let at = self
             .pending
@@ -890,10 +785,7 @@ impl SseDecoder {
 
 /// Joins a normalized base URL and a path into an endpoint.
 ///
-/// String concatenation rather than [`Url::join`], which is defined against
-/// the *document* the base names: joining `/chat/completions` onto
-/// `https://host/v1` yields `https://host/chat/completions` and silently drops
-/// the `/v1` every OpenAI-compatible server needs.
+/// Concatenation, not [`Url::join`], which would drop the `/v1`.
 fn endpoint(base_url: &str, path: &str) -> Result<Url, String> {
     let trimmed = base_url.trim().trim_end_matches('/');
 
@@ -905,8 +797,7 @@ fn endpoint(base_url: &str, path: &str) -> Result<Url, String> {
 
 /// The `Authorization` header, marked so it cannot be printed.
 ///
-/// `set_sensitive` is what keeps the key out of a `Debug` of the header map —
-/// which is the shape a well-meaning diagnostic log takes.
+/// `set_sensitive` keeps it out of a `Debug` of the headers.
 fn authorization(key: &ApiKey) -> Result<HeaderValue, String> {
     let mut header = HeaderValue::from_str(&format!("Bearer {}", key.expose())).map_err(|_| {
         // The message must not quote the key, and the failure is about its
@@ -922,19 +813,15 @@ fn authorization(key: &ApiKey) -> Result<HeaderValue, String> {
 
 /// What went wrong below HTTP, in words a user can act on.
 ///
-/// `reqwest`'s own `Display` is a chain of source errors that names types; the
-/// three cases separated here are the three different things to go and fix.
+/// Three cases, each with a different fix.
 fn transport_reason(err: &reqwest::Error) -> String {
     if err.is_timeout() {
         "The server did not answer in time".to_owned()
     } else if err.is_body() || err.is_decode() {
         "The server's answer could not be read".to_owned()
     } else if err.is_connect() || io_cause(err).is_some() {
-        // `is_connect` alone is not enough: a refused connection reaches us as
-        // a request error wrapping an `io::Error`, and which of the two it is
-        // varies by platform and by how deep in the stack it failed. An I/O
-        // error under a request that never got a response means the same thing
-        // to a user either way — nothing answered.
+        // A refused connection may surface as an I/O error rather than
+        // `is_connect`, depending on platform.
         "Aegis could not reach the server — check the base URL, and whether the server is running"
             .to_owned()
     } else {
@@ -944,9 +831,7 @@ fn transport_reason(err: &reqwest::Error) -> String {
 
 /// The lowest-level I/O failure behind a request error, if there is one.
 ///
-/// `reqwest` wraps its causes several layers deep and does not promise which
-/// layer a given failure surfaces at, so the chain is walked rather than the
-/// top-level predicate trusted.
+/// Walks the whole source chain, since `reqwest` nests causes unpredictably.
 fn io_cause(err: &reqwest::Error) -> Option<&std::io::Error> {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
 
@@ -1063,10 +948,7 @@ mod tests {
         );
     }
 
-    /// A `\r` at the very end of what has arrived is not yet a line ending: it
-    /// may be the first half of a CRLF whose second half is in the next chunk.
-    /// Splitting on it would manufacture one empty line — which in this grammar
-    /// means "dispatch" — and cut a payload in half.
+    /// A CRLF split across chunks does not produce a spurious empty line.
     #[test]
     fn a_trailing_carriage_return_waits_for_what_follows_it() {
         let mut decoder = SseDecoder::default();

@@ -66,18 +66,9 @@ pub fn anthropic_origin(url: &str) -> String {
 /// Whether this configuration speaks the Anthropic Messages API rather than
 /// OpenAI-compatible chat completions.
 ///
-/// Two ways to arrive there. The Claude Code login has no other dialect. The
-/// second is an API key pointed at Anthropic's own host, and it is detected
-/// here rather than declared in Settings because `https://api.anthropic.com/v1`
-/// *does* answer `/chat/completions` — that is the vendor's OpenAI
-/// compatibility layer, which its own documentation says drops prompt caching
-/// and returns no cache token counts. A turn sent there pays full price for a
-/// prefix it just sent, every round. Somebody who pastes that URL wants Claude,
-/// not a shim in front of it, and the native path is strictly better on both
-/// counts, so the address is read as the instruction it is.
-///
-/// The host must match exactly. A gateway that merely proxies Anthropic under
-/// its own name is still asked in the dialect the base URL field documents.
+/// The Claude Code login, or an API key whose host is exactly Anthropic's:
+/// its `/chat/completions` compatibility layer drops prompt caching. Proxies
+/// under other hosts stay OpenAI-compatible.
 pub fn speaks_anthropic(kind: AuthKind, override_url: &str) -> bool {
     match kind {
         AuthKind::ClaudeCli => true,
@@ -106,10 +97,8 @@ const ANTHROPIC_HOST: &str = "api.anthropic.com";
 
 /// The host in a base URL: no scheme, no credentials, no port, no path.
 ///
-/// Deliberately not a URL parse. The only question asked of the answer is
-/// whether it is one known name, and every shape this fails on — an IPv6
-/// literal, a URL too malformed to have a host — is a shape that is not that
-/// name, which is the answer that shape should get.
+/// Not a full URL parse: only compared against known names, which odd shapes
+/// never match.
 fn host_of(url: &str) -> &str {
     let trimmed = url.trim();
     let rest = match trimmed.split_once("://") {
@@ -332,21 +321,14 @@ async fn authorized_get(
 
 /// How long [`output_cap`] waits before giving up and answering `None`.
 ///
-/// Short because somebody is waiting on a Save button. The cap is a nicety —
-/// a lookup that cannot be done in a few seconds is one the provider's own
-/// default can cover — and a save that hung on it would be a worse bug than
-/// the one the cap exists to fix.
+/// Short: a Save button is waiting, and the provider default covers a miss.
 const CAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// The largest reply this model will produce, as the provider's own catalog
 /// reports it.
 ///
-/// `None` for every honest reason there is: an endpoint whose model list does
-/// not carry the field (OpenAI's does not), a server that could not be reached,
-/// a model the list does not mention. The caller's job is to treat all of those
-/// the same way — leave the request's ceiling unset and let the provider apply
-/// its own — rather than to guess a number, because a `max_tokens` above what
-/// the model allows is a 400 on every turn rather than a slightly worse answer.
+/// `None` when unknown (no field, unreachable, model not listed); the caller
+/// then leaves `max_tokens` unset rather than guessing.
 pub async fn output_cap(
     kind: AuthKind,
     override_url: &str,
@@ -380,10 +362,7 @@ pub async fn output_cap(
 
 /// Finds `model` in a models payload and reads its output ceiling.
 ///
-/// Walks the same nested shapes [`parse_ids`] does, because the field sits on
-/// the same objects. `max_tokens` is what Anthropic calls it; `max_output_tokens`
-/// is accepted beside it so that a gateway using the longer name is not
-/// silently ignored.
+/// Same shapes as [`parse_ids`]; accepts `max_tokens` and `max_output_tokens`.
 fn find_cap(value: &Value, model: &str) -> Option<u32> {
     match value {
         Value::Array(items) => items.iter().find_map(|item| find_cap(item, model)),
@@ -458,11 +437,7 @@ fn parse_ids(value: &Value) -> Vec<String> {
 
 /// Gemini's list: `{ "models": [{ "name": "models/gemini-2.5-flash", ... }] }`.
 ///
-/// The `name` field is a resource path, not the id a turn sends, and the
-/// payload mixes chat models with embeddings and image generators. Only
-/// entries that advertise `generateContent` become picker rows, and the
-/// `models/` prefix is stripped so the id matches what `:generateContent`
-/// wants.
+/// Keeps entries supporting `generateContent`, stripping the `models/` prefix.
 fn parse_gemini_ids(value: &Value) -> Vec<String> {
     let mut ids = Vec::new();
     let Some(models) = value.get("models").and_then(Value::as_array) else {

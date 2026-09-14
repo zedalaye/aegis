@@ -1,23 +1,12 @@
 //! The events a turn emits (PLAN 2.2).
 //!
-//! Every payload is a struct here rather than an ad-hoc `json!` at the call
-//! site, for the same reason the command payloads are: `src/ipc/bindings.ts`
-//! is generated from these types, so an event the UI listens for cannot drift
-//! from the event the runtime sends.
+//! Typed payloads, generated into `src/ipc/bindings.ts`.
 //!
-//! Two invariants hold across all of them (PLAN 2.2):
+//! * **No secrets**: tool arguments are redacted like the audit log's.
+//! * **Every payload carries `session_id`**, `tool:finished` included.
 //!
-//! * **No secret crosses the boundary.** Tool arguments are redacted with the
-//!   same function the audit log uses — paths kept, values shortened — so file
-//!   content never reaches the WebView through an event.
-//! * **Every payload carries `session_id`.** A window showing one session can
-//!   then ignore another's traffic without asking what the event means. PLAN's
-//!   table omits it from `tool:finished`; the invariant one paragraph below
-//!   that table is the stronger statement, and it is the one implemented here.
-//!
-//! Emission goes through [`EventSink`] rather than an `AppHandle` so the turn
-//! loop can be driven in a test with no Tauri application at all. The window
-//! implementation is [`WindowSink`](crate::commands::session::WindowSink).
+//! Emission goes through [`EventSink`] so the turn loop runs in tests without
+//! Tauri; the window's sink is `commands::session::WindowSink`.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -83,10 +72,7 @@ pub struct TurnStarted {
 
 /// `turn:delta` — a frame of assistant text.
 ///
-/// Deltas are coalesced into roughly 50 ms frames before they are sent
-/// (PLAN 4.2), so this is a phrase rather than a token: waking the WebView
-/// once per token is what makes a streamed reply feel slower than a batched
-/// one.
+/// Coalesced into ~50 ms frames (PLAN 4.2), not one per token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct TurnDelta {
@@ -129,9 +115,7 @@ pub struct TurnFinished {
 
 /// `turn:error`.
 ///
-/// Always followed by a `turn:finished` carrying [`StopReason::Error`], so a
-/// UI that only tracks the lifecycle does not have to special-case failure to
-/// re-enable its composer.
+/// Always followed by a `turn:finished` carrying [`StopReason::Error`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct TurnError {
@@ -166,10 +150,7 @@ pub struct ToolRequested {
 
 /// `tool:approval_resolved` — an approval stopped being pending.
 ///
-/// Emitted for every way one can end, not only for a click: a turn that was
-/// cancelled while waiting and a request that expired both produce this, with
-/// `resolved_by` saying which. A UI that only removed a card on the user's own
-/// answer would leave a dialog on screen for a call nothing will ever run.
+/// Emitted however it ended — answer, cancel or expiry — per `resolved_by`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ToolApprovalResolved {
@@ -203,23 +184,9 @@ pub struct ToolStarted {
 
 /// `tool:drafting` — the model is still writing a call's arguments.
 ///
-/// The mirror of [`ToolProgress`], one step earlier: that one is a tool's
-/// *output* while it runs, this is its *input* while it is being written. The
-/// gap it fills is the same one, and it opened wider when turns stopped being
-/// capped at 8192 output tokens. A file written by `fs_write` is emitted as
-/// the arguments of a call, so a large one is twenty thousand tokens that
-/// produce no assistant text at all: several minutes in which the runtime is
-/// working perfectly and the window has nothing to show. That is
-/// indistinguishable from a hang, and people kill turns that look like one.
-///
-/// Bytes rather than the text. The arguments are a JSON string being built a
-/// fragment at a time, so any prefix of it is malformed, and a pane that
-/// streamed it would be showing escaped source with the closing brace missing.
-/// A number that climbs answers the only question being asked, which is
-/// whether anything is still happening.
-///
-/// Coalesced into the same 50 ms window as `turn:delta`, and for the same
-/// reason: these fragments arrive far faster than a window can usefully draw.
+/// The input-side mirror of [`ToolProgress`]: a large `fs_write` streams
+/// minutes of arguments with no text, which looks like a hang. Carries a byte
+/// count (partial JSON is unreadable), coalesced like `turn:delta`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ToolDrafting {
@@ -244,15 +211,8 @@ pub struct ToolDrafting {
 
 /// `tool:progress` — output from a tool that is still running.
 ///
-/// `shell_exec` only (PLAN 2.2): a file is read in one call, but a command can
-/// take two minutes, and a pane that only fills in at the end is
-/// indistinguishable from a hang.
-///
-/// Frames are coalesced to roughly 50 ms and the total is capped, so this is
-/// a live view rather than a record — the transcript keeps the one-line
-/// summary and the audit log keeps the byte counts. A `tool:finished` carrying
-/// `truncated` is what says the pane stopped short of everything the command
-/// printed.
+/// `shell_exec` only (PLAN 2.2). A coalesced, capped live view, not a record;
+/// `tool:finished.truncated` says the pane stopped short.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ToolProgress {
@@ -290,21 +250,14 @@ pub struct ToolFinished {
     pub duration_ms: u64,
     /// Whether the result the model saw was shorter than what was available.
     pub truncated: bool,
-    /// A local image the call produced, for the transcript to show.
-    ///
-    /// A path and not the bytes (PLAN 5.4): the WebView loads it through the
-    /// asset protocol, scoped to the capture directory. Carried on the event
-    /// as well as persisted on the record so the thumbnail appears when the
-    /// capture does, rather than when the turn ends and the transcript is
-    /// re-read.
+    /// A capture's path (PLAN 5.4), on the event so the thumbnail shows
+    /// immediately.
     pub image_path: Option<String>,
 }
 
 /// One event, ready to emit.
 ///
-/// The enum exists so [`EventSink`] has a single method: a sink that had one
-/// method per event would have to grow one every phase, and a test sink would
-/// have to implement all of them to observe any of them.
+/// One enum, so [`EventSink`] has a single method.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// `turn:started`.
@@ -334,27 +287,12 @@ pub enum Event {
     SessionUpdated(SessionSummary),
     /// `audit:appended`.
     AuditAppended(Box<AuditEntry>),
-    /// `routine:updated` (PLAN 7.3, Phase 16).
-    ///
-    /// The one event that is not about a turn. A routine's row changes when a
-    /// run of it ends — including at four in the morning with no window open,
-    /// which is why it is an event at all rather than something the panel could
-    /// poll for: a person who opens Settings wants to see what happened, not
-    /// what was true when the panel was last drawn.
+    /// `routine:updated` (Phase 16): a routine's row changed, e.g. a run ended.
     RoutineUpdated(Box<Routine>),
-    /// `connector:updated` (PLAN 7.3, Phase 18).
-    ///
-    /// The second event that is not about a turn, and it is here for the same
-    /// reason the first one is: a connector comes up, or stops coming up,
-    /// while nobody is looking at Settings — at boot, or a minute later when
-    /// an `npx` finally resolved a package. A panel that could only poll would
-    /// show whatever was true when it was drawn.
+    /// `connector:updated` (Phase 18): a connector's state changed.
     ConnectorUpdated(Box<ConnectorView>),
-    /// `workspace:dropped` (PLAN 7.15).
-    ///
-    /// The third event that is not about a turn, and the only one a person
-    /// causes directly. The paths stay in the runtime; this says a drop is
-    /// being held, under which id, and where on the window it landed.
+    /// `workspace:dropped` (PLAN 7.15): a drop is held under an id; paths stay
+    /// in the runtime.
     WorkspaceDropped(crate::intake::WorkspaceDropped),
 }
 
@@ -399,10 +337,7 @@ impl Event {
             Self::ToolFinished(payload) => &payload.session_id,
             Self::SessionUpdated(payload) => &payload.id,
             Self::AuditAppended(payload) => &payload.session_id,
-            // The only payload that is not about one session. The nearest thing
-            // it has is the session its last run opened, which is what a sink
-            // filtering by session would want to route it to; a routine that
-            // has never run has none, and an empty id matches nothing.
+            // Routed to the session its last run opened; empty if none.
             Self::RoutineUpdated(payload) => payload
                 .last
                 .as_ref()
@@ -418,9 +353,7 @@ impl Event {
 
     /// The payload as JSON.
     ///
-    /// Every variant is a plain struct of strings, numbers and bools, so the
-    /// fallback is unreachable — but an event that cannot render must not take
-    /// the turn down with it, so it degrades to `null` and a log line.
+    /// Falls back to `null` and a log line rather than failing the turn.
     pub fn payload(&self) -> Value {
         let rendered = match self {
             Self::TurnStarted(payload) => serde_json::to_value(payload),
@@ -451,8 +384,7 @@ impl Event {
 
 /// Where a turn's events go.
 ///
-/// The turn loop holds one of these and never sees an `AppHandle`, which is
-/// what lets `agent/turn.rs` be driven to completion in a unit test.
+/// The turn loop never sees an `AppHandle`, so it runs in unit tests.
 pub trait EventSink: Send + Sync {
     /// Delivers one event. Never fails: a UI that missed a frame is a
     /// cosmetic problem, and a turn that aborted because the window was
@@ -460,10 +392,7 @@ pub trait EventSink: Send + Sync {
     fn emit(&self, event: Event);
 }
 
-/// An [`EventSink`] that drops everything.
-///
-/// For a turn with nobody watching — a headless test, or a future background
-/// run with no window open.
+/// An [`EventSink`] that drops everything, for turns nobody watches.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NullSink;
 

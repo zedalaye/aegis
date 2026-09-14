@@ -1,24 +1,9 @@
 /**
  * Identity state (PLAN 7.3, Phase 12).
  *
- * The identities a session can be opened as, plus the one thing the panel needs
- * that the runtime does not hold: which identity is being edited, and which
- * field of it was refused.
- *
- * Two decisions worth stating.
- *
- * **The list is refetched after every mutation rather than patched.** The
- * runtime normalizes what it stores — a tool list comes back in registry order,
- * a name comes back trimmed — so a locally patched row would differ from the
- * one on disk in exactly the ways that are hard to notice. It is a handful of
- * records changed by a human a few times a month; there is nothing to optimize.
- *
- * **A refused field is held here, beside the form, not in the shell's banner.**
- * The runtime says which input it was talking about, and a message under that
- * input is worth more than the same message across the top of the window. Only
- * failures that are *not* about a field — a delete refused because sessions
- * still run as the identity — go to {@link AgentsState.error}, which the shell
- * renders like every other store's.
+ * Identities plus the edit form's state. Mutations refetch, since the runtime
+ * normalizes what it stores. Field refusals stay beside the form; other
+ * failures go to {@link AgentsState.error}.
  */
 
 import { create } from "zustand";
@@ -37,12 +22,8 @@ import type { IpcError } from "../lib/errors";
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
 /**
- * The provider binding this build can resolve.
- *
- * Mirrors `DEFAULT_PROVIDER_ID` in `store/agents.rs`. The form does not offer a
- * choice, because there is not one to make yet — a roster of providers to bind
- * identities to is later work (PLAN 7.1, *Provider*) — but the value still has
- * to be sent, because the runtime validates it rather than filling it in.
+ * Mirrors `DEFAULT_PROVIDER_ID` in `store/agents.rs`: not a choice yet
+ * (PLAN 7.1), but still sent and validated.
  */
 export const DEFAULT_PROVIDER_ID = "default";
 
@@ -63,14 +44,8 @@ export function blankDraft(): AgentDraft {
 }
 
 /**
- * A new identity shaped like an existing one (PLAN 7.3, Phase 16).
- *
- * "Clone a role without cloning its rotten memory" (`COS.md`). What is copied
- * is the perimeter — the role, the instructions, the two allow-lists, the
- * budget. What is not copied is everything the copy would have to *earn*: its
- * memories, which belong to an identity and are keyed on its id, and the fact
- * that somebody has watched it run a runbook. A clone starts with a clean
- * record on purpose; that is the whole point of making one.
+ * A copy of an identity's perimeter (role, instructions, allow-lists, budget)
+ * without its memories or run history (`COS.md`).
  */
 export function cloneDraft(agent: Agent): AgentDraft {
   return {
@@ -142,13 +117,7 @@ export type AgentsState = {
   dismissError: () => void;
 };
 
-/**
- * Splits a rejection into the half that belongs under an input and the half
- * that belongs in the shell's banner.
- *
- * The runtime is the one that decides: it sets `field` when the failure is
- * about a value the user typed, and leaves it off otherwise.
- */
+/** Routes a rejection under its input when the runtime set `field`. */
 function landing(cause: unknown, command: string) {
   const error = toIpcError(cause, command);
   return error.field === null

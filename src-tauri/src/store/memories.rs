@@ -1,49 +1,16 @@
 //! The memory document: `memories.json` (PLAN 7.3, Phase 14; `COS.md`
 //! *Memory*).
 //!
-//! The third of `COS.md`'s four layers. The source of truth is the real tools;
-//! the shared workspace is files in the user's own folder (Phase 11); the
-//! session context is the chat. This is **role memory**: the preferences, the
-//! exceptions and the "how we do it here" that belong to one identity and
-//! outlive every conversation it has.
+//! **Role memory**: short records owned by one identity, in a JSON document —
+//! not a hidden filesystem (PLAN 7.1). Anything file-shaped goes in the
+//! workspace.
 //!
-//! It is a *store*, not a second filesystem. PLAN 7.1 (*Workspace*) forbids
-//! inventing a hidden agent-memory tree beside the workspace, and this is not
-//! one: a memory is a short record in a JSON document beside `agents.json`,
-//! with no paths, no directories and nothing for a tool to traverse. Anything
-//! that wants to be a file belongs in the workspace, written with `fs_write`
-//! under the approval gate like a decision or a status.
-//!
-//! Four decisions shape it.
-//!
-//! **A memory is one of three things.** [`MemoryKind`] is the whole vocabulary
-//! — a preference, an exception, or a convention — because those are the three
-//! `COS.md` names, and because a store that accepted anything would become the
-//! transcript it exists to replace. A note that is none of them is not a
-//! memory: it is either a fact about the project, which is a file, or a
-//! procedure, which is a skill (PLAN 7.6, *Not a skill*).
-//!
-//! **A memory is scoped to one identity and never leaks.** Every record
-//! carries an `agent_id`, every accessor takes one, and there is no query that
-//! spans identities. That is what makes "clone a role without cloning its
-//! rotten memory" (`COS.md` *Loop*) something the data model allows, rather
-//! than something a later phase has to retrofit.
-//!
-//! **A memory cites, or it is a hypothesis.** [`Memory::source`] is
-//! `COS.md`'s *cite* operation made structural: an important memory points at
-//! a file, a ticket or a person rather than at "I remember that". It is
-//! optional, because a preference someone stated out loud has no path — but
-//! the field is there, it reaches the prompt, and its absence is as visible as
-//! its presence.
-//!
-//! **The model may write and read; only the human forgets.** The tools
-//! ([`tools::memory`](crate::tools::memory)) are `memory_write` and
-//! `memory_search`, and there is deliberately no `memory_forget` among them:
-//! `COS.md` gives the human "memory correction" as one of the three things
-//! that role exists for, deleting is irreversible, and irreversible actions
-//! stay behind a human gate (`AGENTS.md` *Permissions*). [`MemoryStore::save`]
-//! and [`MemoryStore::forget`] are reached from the Memory panel, which is
-//! where a person corrects a stale hypothesis.
+//! * **Three kinds** ([`MemoryKind`]): preference, exception, convention.
+//! * **Scoped**: every accessor takes an `agent_id`; no query spans identities.
+//! * **Cited when possible** ([`Memory::source`]); uncited reads as a hypothesis.
+//! * **Only the human forgets**: the tools
+//!   ([`tools::memory`](crate::tools::memory)) write and search;
+//!   [`MemoryStore::save`] and [`MemoryStore::forget`] back the Memory panel.
 
 use std::fs;
 use std::io;
@@ -60,39 +27,23 @@ use crate::error::{AppError, AppResult};
 /// Name of the document under the application-data directory.
 const MEMORIES_FILE: &str = "memories.json";
 
-/// Schema version of [`MemoriesFile`].
-///
-/// Its own version, independent of the other documents: they change at very
-/// different rates, and a migration to one has no business quarantining the
-/// others.
+/// Schema version of [`MemoriesFile`], independent of the other documents.
 const SCHEMA_VERSION: u32 = 1;
 
-/// Longest a memory may be.
-///
-/// A sentence, not a paragraph. The cap is the point: role memory holds
-/// exceptions and preferences, and a memory long enough to hold a procedure is
-/// a runbook someone declined to write down (PLAN 7.6).
+/// Longest a memory may be: a sentence; procedure is a skill (PLAN 7.6).
 pub const TEXT_MAX_CHARS: usize = 280;
 
 /// Longest a citation may be.
 pub const SOURCE_MAX_CHARS: usize = 200;
 
-/// Most memories one identity may hold.
-///
-/// A ceiling on the store, not on the prompt — [`PROMPT_MAX`] is that. Past it
-/// the answer is to forget something, which is what the refusal actually says,
-/// rather than to evict the oldest silently: what would be evicted is as
-/// likely to be a human's correction as the model's own guess.
+/// Most memories one identity may hold ([`PROMPT_MAX`] caps the prompt). Past
+/// it writes are refused, never silently evicted.
 pub const MEMORIES_MAX: usize = 200;
 
 /// Most memories carried in a system message.
 pub const PROMPT_MAX: usize = 20;
 
 /// Most bytes of memory carried in a system message.
-///
-/// The second half of the same rule. Twenty memories at the character cap
-/// would be six kilobytes on every single request, which is the workspace
-/// digest's mistake made twice.
 pub const PROMPT_MAX_BYTES: usize = 2 * 1024;
 
 /// Most memories one `memory_search` returns.
@@ -102,12 +53,8 @@ pub const SEARCH_MAX_RESULTS: usize = 12;
 // IPC payloads (PLAN 7.3, Phase 14)
 // ---------------------------------------------------------------------------
 
-/// What a memory *is*, which is also the whole vocabulary.
-///
-/// Three variants and no `other`. The discipline is the one the seven skill
-/// headings impose: naming which of the three a memory is forces whoever
-/// writes it to notice when it is none of them, and a memory that is none of
-/// them belongs in a file or in a runbook.
+/// What a memory *is*. No `other`: anything else belongs in a file or a
+/// runbook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -167,12 +114,8 @@ pub struct Memory {
 }
 
 impl Memory {
-    /// The one line this memory contributes to a prompt or a search result.
-    ///
-    /// The kind leads because it says how much weight the rest carries: an
-    /// exception overrides, a preference colours, a convention is the default.
-    /// The citation trails in brackets, and a memory with none should read
-    /// like one.
+    /// The one line this memory contributes to a prompt or search: kind first,
+    /// citation in brackets.
     pub fn line(&self) -> String {
         match &self.source {
             Some(source) => format!("- ({}) {} [{}]", self.kind.as_str(), self.text, source),
@@ -204,12 +147,7 @@ struct MemoriesFile {
     memories: Vec<StoredMemory>,
 }
 
-/// A memory as persisted.
-///
-/// The same fields as [`Memory`], which is unusual in this tree — the other
-/// stores keep a derived field out of the record. A memory has no derived
-/// field: everything about it is stored, and a second type asserting that
-/// would be ceremony.
+/// A memory as persisted: identical to [`Memory`], which has no derived field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredMemory {
     id: String,
@@ -241,16 +179,9 @@ impl StoredMemory {
 // Store
 // ---------------------------------------------------------------------------
 
-/// The memory store: every identity's memories, in one document.
-///
-/// Same shape as the other stores — one mutex over the whole list, written out
-/// on every mutation — and for the same reason: at this size "what is on disk"
-/// equals "what is in memory" once a call returns, with no flush to forget.
-///
-/// One document for every identity rather than one per identity, because the
-/// scoping that matters is enforced on *access* — every method takes an
-/// `agent_id`, and none of them spans two — and a file per identity would make
-/// deleting one a second thing that can half-happen.
+/// The memory store: every identity's memories in one document, scoped on
+/// access (every method takes one `agent_id`). One mutex, written out on every
+/// mutation.
 #[derive(Debug)]
 pub struct MemoryStore {
     path: PathBuf,
@@ -258,12 +189,8 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    /// Loads the store from `data_dir`.
-    ///
-    /// Never fails, for the reason the other stores do not: a tray app that
-    /// will not boot cannot explain why it did not. A damaged document costs
-    /// the memories in it and nothing else — every identity still opens and
-    /// still talks, with nothing recalled.
+    /// Loads the store from `data_dir`. Never fails: a damaged document starts
+    /// empty.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(MEMORIES_FILE);
 
@@ -304,25 +231,15 @@ impl MemoryStore {
         }
     }
 
-    /// Locks the list, recovering from a poisoned mutex.
-    ///
-    /// Same reasoning as the other stores: the guarded value is a `Vec` only
-    /// ever replaced wholesale, so it cannot be torn, and propagating a panic
-    /// through every later command is strictly worse.
+    /// Locks the list, recovering from poison: it cannot be left torn.
     fn memories(&self) -> MutexGuard<'_, Vec<StoredMemory>> {
         self.memories
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// One identity's memories, most recently touched first.
-    ///
-    /// Recency rather than relevance, and deliberately: relevance needs a
-    /// query, [`MemoryStore::search`] is where a query goes, and a ranking
-    /// invented here would be one no caller could see or correct. What recency
-    /// buys is that the memories in the prompt are the ones most recently
-    /// confirmed — a write that repeats something already held touches it, so
-    /// a fact that keeps coming up keeps its place.
+    /// One identity's memories, most recently touched first. A repeated write
+    /// touches the memory, so confirmed facts stay near the top.
     pub fn list_for(&self, agent_id: &str) -> Vec<Memory> {
         let memories = self.memories();
 
@@ -352,12 +269,8 @@ impl MemoryStore {
 
     /// One identity's memories carrying every term of `query`.
     ///
-    /// Substring matching over the text and the citation, case-insensitively,
-    /// with every whitespace-separated term required. No index, no stemming,
-    /// no ranking: at a two-hundred-record ceiling an index would be slower
-    /// than the scan, and a ranking the caller cannot see is one nobody can
-    /// debug. An empty query is every memory, capped — the honest answer to
-    /// "what do you know", and the same answer the panel gives.
+    /// Case-insensitive substring match over text and citation, every term
+    /// required, no ranking. An empty query returns every memory, capped.
     pub fn search(&self, agent_id: &str, query: &str) -> Vec<Memory> {
         let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
 
@@ -370,18 +283,9 @@ impl MemoryStore {
 
     /// Records a memory, or corrects one.
     ///
-    /// `id` of `None` creates; `Some` corrects the memory with that id, which
-    /// has to belong to `agent_id` — an id from another identity is *not
-    /// found* rather than refused, because "there is no such memory here" is
-    /// the true answer, and the alternative confirms that one exists
-    /// elsewhere.
-    ///
-    /// A create whose text an existing memory already carries touches that one
-    /// rather than storing a second copy. This is `COS.md`'s *consolidate* at
-    /// the door instead of on a clock — the clock is a routine, and routines
-    /// are Phase 16. What it buys now is that an identity reminded of the same
-    /// preference in ten sessions holds one memory rather than ten, with a
-    /// timestamp saying it is still live.
+    /// `None` creates; `Some` corrects that id within `agent_id` (another
+    /// identity's id is *not found*). A create repeating existing text touches
+    /// that memory instead (`COS.md` *consolidate*).
     pub fn save(&self, agent_id: &str, id: Option<&str>, draft: &MemoryDraft) -> AppResult<Memory> {
         let valid = Valid::check(draft)?;
         let mut memories = self.memories();
@@ -406,10 +310,7 @@ impl MemoryStore {
             .find(|memory| memory.agent_id == agent_id && same_text(&memory.text, &valid.text))
         {
             held.kind = valid.kind;
-            // A citation is only ever added by a repeat, never removed by one:
-            // the second telling of a preference rarely repeats where it came
-            // from, and dropping the source would make a memory weaker every
-            // time it was confirmed.
+            // A repeat may add a citation, never remove one.
             held.source = valid.source.or_else(|| held.source.clone());
             held.updated_at = now();
             let touched = held.to_memory();
@@ -457,11 +358,7 @@ impl MemoryStore {
         Ok(created)
     }
 
-    /// Forgets one memory, and reports what went.
-    ///
-    /// Scoped like every other method: an id belonging to another identity is
-    /// not found. It returns the record so a caller can say *what* was
-    /// forgotten rather than only that something was.
+    /// Forgets one of this identity's memories and returns it.
     pub fn forget(&self, agent_id: &str, id: &str) -> AppResult<Memory> {
         let mut memories = self.memories();
 
@@ -476,12 +373,7 @@ impl MemoryStore {
         Ok(forgotten)
     }
 
-    /// Forgets everything one identity held, and reports how much went.
-    ///
-    /// Called when an identity is deleted. Memories of an identity that no
-    /// longer exists are unreachable — every method takes an `agent_id` — and
-    /// leaving them behind would grow the document forever with records
-    /// nothing can name.
+    /// Forgets everything a deleted identity held, returning how many went.
     pub fn forget_for_agent(&self, agent_id: &str) -> AppResult<usize> {
         let mut memories = self.memories();
 
@@ -509,9 +401,6 @@ impl MemoryStore {
     }
 
     /// Serializes the list and replaces the document atomically.
-    ///
-    /// Takes the guard, so the only way to reach it is to already hold the
-    /// lock: a caller cannot mutate the list and forget to persist it.
     fn write(&self, memories: &[StoredMemory]) -> AppResult<()> {
         let file = MemoriesFile {
             version: SCHEMA_VERSION,
@@ -553,32 +442,18 @@ fn matches(memory: &Memory, terms: &[String]) -> bool {
     terms.iter().all(|term| haystack.contains(term))
 }
 
-/// Whether two memories say the same thing, for consolidation.
-///
-/// Case and surrounding whitespace only. Nothing cleverer: a store that decided
-/// two differently worded memories were "the same" would be silently discarding
-/// one of them, and the one it discarded would sometimes be the human's.
+/// Whether two memories say the same thing, ignoring only case and surrounding
+/// whitespace.
 fn same_text(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
 /// The memory block for a system message, or `None` when nothing is held.
 ///
-/// `memories` is one identity's, most recent first
-/// ([`MemoryStore::list_for`]); `total` is how many it holds, so a block that
-/// had to stop can say what it left behind and how to reach it.
-///
-/// This is the *re-inject* half of PLAN 7.3's retrieve-after-compact. Because
-/// the block is rebuilt into every system message, a compaction cannot take it
-/// away: what folds is the conversation, and what stands is what the identity
-/// knows. There is no separate "after compaction, restore memory" step for the
-/// same reason there is no "after compaction, restore the workspace digest" —
-/// neither of them was ever in the part that folds.
-///
-/// Capped twice, by count and by bytes, for the reason the workspace digest is
-/// (PLAN 7.1, *System prompt*): this is paid for on every single request, and a
-/// store that has been running for a year must not silently start costing a
-/// context window per turn.
+/// `memories` is one identity's, most recent first ([`MemoryStore::list_for`]);
+/// `total` lets a capped block say what it left out. Rebuilt into every system
+/// message, so compaction never drops it (PLAN 7.3), and capped by count and
+/// bytes (PLAN 7.1).
 pub fn prompt_block(memories: &[Memory], total: usize) -> Option<String> {
     if memories.is_empty() {
         return None;
@@ -624,11 +499,7 @@ pub fn prompt_block(memories: &[Memory], total: usize) -> Option<String> {
 // Validation
 // ---------------------------------------------------------------------------
 
-/// A draft that has been checked, with every field in the form it is stored in.
-///
-/// A separate type rather than validating in place, for the reason the agent
-/// store's is: at the point of writing there is then no way to confuse a field
-/// that was checked with one that was merely trimmed.
+/// A checked draft, every field in stored form.
 struct Valid {
     kind: MemoryKind,
     text: String,
@@ -636,11 +507,7 @@ struct Valid {
 }
 
 impl Valid {
-    /// Checks a draft.
-    ///
-    /// Every message is written for whoever has to fix it — the person
-    /// correcting a form, or the model reading a refused call — so it says what
-    /// is wrong *and* what a working value looks like.
+    /// Checks a draft; messages say what a working value looks like.
     fn check(draft: &MemoryDraft) -> AppResult<Self> {
         let text = draft.text.trim();
         if text.is_empty() {

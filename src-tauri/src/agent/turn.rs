@@ -6,55 +6,20 @@
 //!       Building -> Streaming -> [ToolPending -> Executing -> Building]* -> Done
 //! ```
 //!
-//! One function owns the whole shape, because the transitions are the design:
-//! a tool result must be persisted before the next request is built, the
-//! assistant message must be on disk before its calls run, and every exit —
-//! finished, cancelled, failed — must leave the session idle and the UI told.
-//! Splitting that across modules is how a state machine grows a state nothing
-//! resets.
+//! One function owns the whole shape: a tool result is persisted before the
+//! next request, the assistant message before its calls run, and every exit
+//! leaves the session idle and the UI told.
 //!
-//! Three properties are worth stating because they are what the code is
-//! arranged around, not incidental to it.
-//!
-//! **Cancellation is checked at every await.** The stream is consumed inside a
-//! `select!` with the turn's [`CancellationToken`], so a cancel lands between
-//! two tokens rather than after the reply completes. Text already streamed is
-//! persisted rather than discarded: the user saw it, and a transcript that
-//! disagrees with what was on screen is worse than a short one.
-//!
-//! **Deltas are coalesced into frames.** The WebView is woken about twenty
-//! times a second instead of once per token (PLAN 4.2). A frame is opened by
-//! the first token and closed by a timer, so a slow trickle still arrives
-//! promptly rather than waiting for a token that never comes.
-//!
-//! **A denial is a result.** Policy refusing a call, a user refusing one, an
-//! approval nobody answered, arguments that never parsed, the round cap — all
-//! of them become an ordinary `tool` message with `ok: false`, and the turn
-//! continues. The model reads it, explains itself and tries something else
-//! (PLAN 4.3). The only things that end a turn early are cancellation and a
-//! provider failure.
-//!
-//! **Waiting for a person is a state, not a stall.** When policy asks, the
-//! turn registers the request, marks the session `awaiting_approval` and parks
-//! on a `oneshot`. The wait is inside the same `select!` as the cancel token
-//! and under a five-minute deadline, so neither a user who walks away nor one
-//! who presses stop leaves a turn holding a call forever.
-//!
-//! **A turn knows where it sits, and nothing else about the team.** From Phase
-//! 15 the same loop drives a session someone typed into and a run a brief
-//! opened ([`Standing`]). That is one flag reaching three places — which tools
-//! the model is offered, what policy refuses, and whether the turn ends the
-//! moment a report is filed — and no fourth. There is deliberately no second
-//! loop for delegated work: a specialist's turn is this turn, under its own
-//! identity, through the same gate and onto the same audit log.
-//!
-//! **And whether anybody is in front of it.** Phase 16 adds the second such
-//! flag, [`Unattended`], and it is a separate one because it answers a
-//! different question: a run a clock started is nobody's specialist
-//! (`Standing::Own`) and still has no one to answer a dialog. It reaches three
-//! places of its own — a line in the system message, an *ask* that policy turns
-//! into a refusal, and the routine's id on every audit line — and carries the
-//! cell the run's report is left in. There is no third loop either.
+//! * **Cancellation is checked at every await**; text already streamed is kept.
+//! * **Deltas are coalesced** into ~50 ms frames opened by the first token.
+//! * **A denial is a result**: refusals, unanswered approvals, unparsed
+//!   arguments and the round cap become `tool` messages, and the turn continues
+//!   (PLAN 4.3). Only cancellation and provider failure end it early.
+//! * **Waiting for a person is a state**: the session reads `awaiting_approval`,
+//!   inside the same `select!` as cancel and under a five-minute deadline.
+//! * [`Standing`] (Phase 15) and [`Unattended`] (Phase 16) are the only ways a
+//!   session, a delegated brief and a routine's run differ. There is no second
+//!   loop.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -92,46 +57,21 @@ use super::registry::{TurnRegistry, MAX_RUN_TURNS};
 use super::transcript;
 use super::wire::{AssembledCall, ModelEvent, StopReason, Usage};
 
-/// Tool rounds allowed in one turn (PLAN 4.2).
-///
-/// The round after this one is not executed: its calls are answered with
-/// `E_TOO_MANY_TOOL_ROUNDS` and the turn finishes cleanly, which is a model
-/// that can explain itself rather than a loop that runs until someone notices.
-///
-/// It is not a permission gate. It fires whatever the approval matrix decided,
-/// so no grant and no "allow everything this session" moves it: what it bounds
-/// is a loop and a bill, and those are the only two things to weigh when
-/// changing it.
+/// Tool rounds allowed in one turn (PLAN 4.2). The round past it is answered
+/// with `E_TOO_MANY_TOOL_ROUNDS`, not run. It bounds a loop and a bill; it is
+/// not a permission gate, and no grant moves it.
 pub const MAX_TOOL_ROUNDS: u32 = 8;
 
-/// Tool rounds allowed in a turn that is following a runbook.
-///
-/// A skill run is the case where the plain cap is wrong, and measurably so: a
-/// `review.diff` over a 500-line diff needs to read the range, then a diff per
-/// file, then the files themselves, which is twenty rounds before it writes
-/// anything (`IDEAS.md` § 11). At eight it does not stall — it stops mid-way,
-/// and the person is asked to say "continue" so the model can resume a
-/// procedure it had already planned.
-///
-/// A higher ceiling is defensible *here* and not in general, because a run is
-/// the one place the work is bounded before it starts: the runbook declares its
-/// steps and its tools, the identity was granted both, and every call still
-/// goes through the same gate one at a time. What is loosened is the
-/// runaway-loop bound, and only while something is on rails.
-///
-/// Twenty-four rather than the twenty a review needed: a ceiling sized to the
-/// one procedure that was measured would be a ceiling that fits nothing else.
+/// Tool rounds allowed while a turn follows a runbook (`IDEAS.md` § 11). A
+/// measured `review.diff` needed about twenty; a runbook bounds its steps and
+/// tools, and every call still passes the gate.
 pub const MAX_TOOL_ROUNDS_IN_SKILL: u32 = 24;
 
 /// How long a `turn:delta` frame stays open.
 pub const DELTA_FRAME: Duration = Duration::from_millis(50);
 
-/// The rounds this turn may spend, given what it is following.
-///
-/// One function rather than two call sites choosing a constant, because the
-/// number in the refusal the model reads and the number the loop stops at have
-/// to be the same one — a message naming a limit the code does not use is worse
-/// than no message.
+/// The round cap for this turn: one function, so the limit the model is told and
+/// the limit enforced are the same number.
 const fn round_cap(skill: Option<&str>) -> u32 {
     match skill {
         Some(_) => MAX_TOOL_ROUNDS_IN_SKILL,
@@ -139,12 +79,8 @@ const fn round_cap(skill: Option<&str>) -> u32 {
     }
 }
 
-/// A tool call the model is part-way through writing.
-///
-/// Exists to answer one question — is anything still happening — during the
-/// stretch where a turn produces no assistant text at all. The arguments
-/// themselves are the assembler's business; this holds only what can honestly
-/// be shown before they parse.
+/// A tool call the model is still writing: enough to show that something is
+/// happening while no text streams.
 #[derive(Debug)]
 struct Drafting {
     /// Which call within this response.
@@ -168,22 +104,13 @@ impl Drafting {
     }
 }
 
-/// Where a turn sits in the Chef-de-Cabinet loop (PLAN 7.3, Phase 15).
-///
-/// Two states, and they are exclusive by construction rather than by care: a
-/// turn either may hand work out or *is* handed-out work, and there is no way
-/// to spell both. That is `COS.md` *Roles* as a type — three roles, one Chief
-/// of Staff, and a specialist that routed work would be a second one.
-///
-/// It decides three things, all in [`Turn::run`]: which tools the model is
-/// offered, what [`policy::decide`] refuses, and whether the turn ends the
-/// moment a report is filed.
+/// Where a turn sits in the Chef-de-Cabinet loop (Phase 15): it may hand work
+/// out, or it is handed-out work — never both (`COS.md` *Roles*). Decides the
+/// tools offered, what [`policy::decide`] refuses, and whether a filed report
+/// ends the turn.
 pub enum Standing<'a> {
-    /// A session someone opened. It may delegate, if the application gave it a
-    /// bus and its identity holds the tool.
-    ///
-    /// `None` is a turn with no bus at all: a test, or a build with nothing
-    /// behind the tool. The model is then not offered `handoff_delegate`.
+    /// A session someone opened, which may delegate. `None` is no bus (a test),
+    /// and `handoff_delegate` is then not offered.
     Own(Option<&'a Arc<dyn bus::Runner>>),
     /// A run a brief opened. It may not delegate, and it answers by filing a
     /// report into this cell.
@@ -214,21 +141,12 @@ impl Standing<'_> {
     }
 }
 
-/// The routine a turn is running for, when a clock started it
-/// (PLAN 7.3, Phase 16).
+/// The routine a turn runs for, when a clock started it (Phase 16).
 ///
-/// Attendance is orthogonal to [`Standing`], which is why it is a field of its
-/// own rather than a third variant: standing says where a turn sits in the
-/// Chef-de-Cabinet graph, and this says whether there is a person in front of
-/// it. A run a routine fired is `Standing::Own` — it is nobody's specialist —
-/// and it is unattended, which is a different fact with different consequences.
-///
-/// Like `Standing` it reaches three places and no fourth: what the system
-/// message says (nobody is watching, so a call that would ask is refused), what
-/// [`policy`] does with an *ask*, and what the audit line records. The cell is
-/// the fourth thing it carries and the only one that travels back out: it is
-/// how the scheduler learns what the run returned, without reading a
-/// transcript.
+/// Orthogonal to [`Standing`]: a routine's run is nobody's specialist, and
+/// nobody is in front of it. It changes the system message, turns asks into
+/// refusals ([`policy`]), tags audit lines, and carries the cell the run's
+/// report lands in for the scheduler.
 #[derive(Debug, Clone, Copy)]
 pub struct Unattended<'a> {
     /// The routine's id. Reaches every audit line the run writes.
@@ -237,33 +155,13 @@ pub struct Unattended<'a> {
     pub reported: &'a skills::Reported,
 }
 
-/// The tools this turn's identity actually holds.
+/// The tools this turn's identity holds here.
 ///
-/// The stored allow-list, adjusted for where the turn sits — and adjusted in
-/// both directions, because each of the two handoff tools is useless in exactly
-/// the place the other one belongs.
-///
-/// A delegated run **gains** `handoff_return` whether or not anyone granted it.
-/// That is not the allow-list being widened: it is the only channel the run has
-/// to answer at all, it reaches nothing outside this process, and a specialist
-/// that could not return would be work that silently never comes back. It
-/// **loses** `handoff_delegate`, which policy refuses anyway — the point of
-/// taking it out of the schemas as well is that the model never spends a round
-/// asking for something it will be told no about.
-///
-/// An ordinary session loses `handoff_return`, for the mirror reason: there is
-/// nothing there for it to close, so offering it is offering a call that can
-/// only fail.
-///
-/// The **built-in identity** gains every connector tool (PLAN 7.3, Phase 18),
-/// and that is not the allow-list being widened either. `Agent::builtin` does
-/// not hold a list somebody wrote; it holds the sentence *every tool this build
-/// has*, evaluated — which is what it has meant since Phase 12, and a connector
-/// the operator installed is a tool this build has. Every identity somebody
-/// named holds exactly what they granted it, so a connector added on Tuesday is
-/// not retroactively in the hands of the Reviewer: granting it is a separate
-/// act, on the identity (AGENTS.md). The gate is unchanged either way — every
-/// connector call is put to a person, whoever makes it.
+/// A delegated run gains `handoff_return` (its only way to answer) and loses
+/// `handoff_delegate`; an ordinary session loses `handoff_return`, which could
+/// only fail. The built-in identity gains every connector tool, since it holds
+/// "every tool this build has"; any other identity holds exactly what it was
+/// granted (AGENTS.md). Connector calls are asked about either way.
 fn held(agent: &Agent, standing: &Standing<'_>, connectors: &mcp::Catalog) -> Vec<String> {
     let (dropped, added) = match standing {
         Standing::Own(_) => (policy::tool::HANDOFF_RETURN, None),
@@ -296,14 +194,8 @@ fn held(agent: &Agent, standing: &Standing<'_>, connectors: &mcp::Catalog) -> Ve
     held
 }
 
-/// What this turn offered the model.
-///
-/// One value rather than two arguments because it is one fact, read twice: the
-/// identity's effective allow-list and the connector catalog it was resolved
-/// against are settled together at the top of the turn
-/// ([`Turn::run`]), and they are read together again every time a call is
-/// judged. Passing them apart is what would let a later change resolve one
-/// freshly and leave the other stale.
+/// What this turn offered the model: the allow-list and the connector catalog
+/// it was resolved against, settled together at the top of [`Turn::run`].
 #[derive(Clone, Copy)]
 struct Offered<'a> {
     /// The tools this identity holds, here.
@@ -319,51 +211,25 @@ pub struct TurnPlan {
     pub session_id: String,
     /// This turn, unique within the process.
     pub turn_id: String,
-    /// The session's workspace root, canonical.
-    ///
-    /// `None` when the project's folder is gone. Every tool call is then a
-    /// hard `E_NO_WORKSPACE` denial (PLAN 3.2), and the system message says so
-    /// rather than letting the model find out one refusal at a time.
+    /// The canonical workspace root. `None` when the folder is gone: every call
+    /// is then `E_NO_WORKSPACE`, and the system message says so.
     pub workspace: Option<PathBuf>,
-    /// Where this project's commands run (PLAN 7.12).
-    ///
-    /// `None` is this process, which is every project that has not been given a
-    /// host. Resolved by the caller and held for the turn, for the reason the
-    /// identity and the provider are: an operator can change it between two
-    /// messages, and a loop that re-read it mid-round could tell the model one
-    /// thing in the system message and run its commands somewhere else.
-    ///
-    /// Beside the workspace rather than folded into it, because they answer
-    /// different questions: the workspace is what the *file* tools may touch,
-    /// and this is where a *command* lands. Only `shell_exec` reads it.
+    /// Where this project's commands run (PLAN 7.12), fixed for the turn so the
+    /// system message and `shell_exec` agree. Only `shell_exec` reads it.
     pub exec_host: Option<ExecHost>,
 }
 
-/// Everything the loop borrows for the length of one turn.
-///
-/// A struct of references rather than eight arguments: the call site builds it
-/// once from [`AppState`](crate::state::AppState), and adding a dependency in
-/// a later phase does not re-thread every signature.
+/// Everything the loop borrows for one turn, built from
+/// [`AppState`](crate::state::AppState).
 pub struct Turn<'a> {
-    /// The identity this turn runs as (PLAN 7.3, Phase 12).
-    ///
-    /// Resolved once per turn by the caller rather than read here, for the same
-    /// reason the provider is: an identity can be edited between two messages
-    /// in the same session, and a turn that re-read it mid-round could show the
-    /// model one set of tools and then judge its calls against another.
-    ///
-    /// It reaches three places, and only three: the system message (who this
-    /// is), the tool schemas (what it may ask for), and the policy context
-    /// (what it may actually do). Nothing else in the loop branches on it.
+    /// The identity this turn runs as (Phase 12), resolved once so the tools
+    /// shown and the tools judged cannot differ. Read by the system message,
+    /// the schemas and policy, and nothing else.
     pub agent: &'a Agent,
     /// Where messages are read from and written to.
     pub sessions: &'a SessionStore,
-    /// Which sessions are running, and how a blocked one is marked.
-    ///
-    /// The turn writes to this rather than only reading it: parking on an
-    /// approval is a fact about the session that `session_open` and the
-    /// sidebar both have to see, and the registry is where that fact already
-    /// lives.
+    /// Which sessions are running; the turn marks its session as waiting on an
+    /// approval here.
     pub turns: &'a TurnRegistry,
     /// Live `allow_session` grants.
     pub grants: &'a GrantStore,
@@ -377,60 +243,26 @@ pub struct Turn<'a> {
     pub sink: &'a dyn EventSink,
     /// This application's own binary, so `shell_exec` can refuse to run it.
     pub self_exe: Option<&'a Path>,
-    /// Where `screen_capture` writes its PNGs.
-    ///
-    /// Aegis' own directory, never the workspace (PLAN 5.4): a capture is an
-    /// artefact of the harness, and one landing in a project folder would end
-    /// up in someone's next commit.
+    /// Where `screen_capture` writes, never the workspace (PLAN 5.4).
     pub captures: &'a Path,
-    /// The user's skill library (PLAN 7.3, Phase 13).
-    ///
-    /// One of the two places a runbook is found; the other is the workspace,
-    /// which the turn already knows. Passed in rather than derived for the
-    /// reason `captures` is: where Aegis keeps its own files is a fact about
-    /// the installation, and a loop that went looking for it could not be run
-    /// in a test without one.
+    /// The skill library (Phase 13); the workspace is the other place runbooks
+    /// live.
     pub skills: &'a Path,
-    /// Where this identity's memories are kept (PLAN 7.3, Phase 14).
-    ///
-    /// Reached twice per turn and for two different things: read once at the
-    /// top, to build the block the system message carries, and held for the
-    /// whole turn because `memory_write` writes through it. The identity it is
-    /// scoped to is [`Turn::agent`] and nothing else — the store spans every
-    /// identity, and every call into it names one.
+    /// The memory store (Phase 14): read at the top of the turn, written by
+    /// `memory_write`, always scoped to [`Turn::agent`].
     pub memories: &'a MemoryStore,
-    /// Where this turn sits in the Chef-de-Cabinet loop (PLAN 7.3, Phase 15).
-    ///
-    /// Resolved by the caller, like the identity and the provider, and for the
-    /// same reason: whether this is a session someone is typing into or a run a
-    /// brief opened is settled before the first request, and a loop that could
-    /// change its mind halfway through would offer the model one set of tools
-    /// and judge its calls against another.
+    /// Where this turn sits (Phase 15), resolved before the first request.
     pub standing: Standing<'a>,
-    /// The routine this turn is running for, when a clock started it
-    /// (PLAN 7.3, Phase 16).
-    ///
-    /// `None` is a session with somebody in front of it, which is every session
-    /// before that phase and every one a person opens. See [`Unattended`] for
-    /// what being `Some` changes, and for why it is not a third [`Standing`].
+    /// The routine this turn runs for (Phase 16). `None` is a session with a
+    /// person in front of it.
     pub unattended: Option<Unattended<'a>>,
-    /// The connectors this installation is running (PLAN 7.3, Phase 18).
-    ///
-    /// Passed in for the reason the skill library is: which programs the
-    /// operator installed is a fact about the installation, and a loop that
-    /// went looking for them could not be driven in a test.
-    /// [`Connectors::new`] is a roster with nothing in it, which is the
-    /// behaviour of every phase before this one.
+    /// The running connectors (Phase 18). [`Connectors::new`] is an empty
+    /// roster.
     pub connectors: &'a Connectors,
 }
 
-/// The [`ProgressSink`] one tool call writes its live output to.
-///
-/// A tool produces text; the turn decides what that text *is* on the wire —
-/// which session and call it belongs to, and where it falls in the turn's
-/// sequence. Keeping the numbering here rather than in the tool is what lets
-/// the UI drop a duplicated or reordered frame with one rule, and what keeps
-/// `tools/` from having to know anything about events.
+/// The [`ProgressSink`] one tool call writes to. The turn, not the tool,
+/// numbers the frames, so the UI can drop duplicates with one rule.
 struct Progress<'a> {
     /// Where the event goes.
     sink: &'a dyn EventSink,
@@ -482,20 +314,13 @@ enum Streamed {
 }
 
 impl Turn<'_> {
-    /// The routine this run belongs to, as an audit line spells it.
-    ///
-    /// Empty for a session somebody opened, which is what every line written
-    /// before Phase 16 carries.
+    /// The routine id for audit lines; empty for a session someone opened.
     fn routine(&self) -> &str {
         self.unattended.map_or("", |run| run.routine)
     }
 
-    /// Runs a turn to completion and reports how it ended.
-    ///
-    /// Never returns an `Err`. Everything that can go wrong is either a tool
-    /// result the model reads or a `turn:error` the user reads, and a turn
-    /// that returned a `Result` would make the caller decide which — a
-    /// decision it has less information to make than this function does.
+    /// Runs a turn to completion. Never an `Err`: a failure is a tool result
+    /// for the model or a `turn:error` for the user.
     pub async fn run(&self, plan: &TurnPlan, cancel: &CancellationToken) -> StopReason {
         self.sink.emit(Event::TurnStarted(TurnStarted {
             session_id: plan.session_id.clone(),
@@ -507,35 +332,19 @@ impl Turn<'_> {
         let mut rounds = 0u32;
         let mut usage: Option<Usage> = None;
 
-        // Whether this turn is a brief being worked on — the same question
-        // `execute` asks to build its `PolicyCtx`, and asked here for the world's
-        // frame below, so what the model is *told* about writing `world/` and
-        // what the gate would actually *do* about it come from one fact.
+        // Whether this turn is a brief: the same fact policy reads, so the world
+        // frame and the gate agree about writing `world/`.
         let delegated = self.standing.open().is_some();
 
-        // Read once per turn rather than per round. A runbook can be edited
-        // between two messages and the next turn picks that up, but a catalog
-        // that changed halfway through a turn would show the model one list
-        // and then judge its choice against another — the same reason the
-        // identity and the provider are resolved once, above this call.
-        //
-        // The catalog is a line per runbook. The bodies stay on disk until
-        // `skill_run` asks for one (PLAN 7.6).
+        // The catalog, once per turn so the list shown and the list judged
+        // match. Bodies load on `skill_run` (PLAN 7.6).
         let catalog = skills::catalog(self.skills, plan.workspace.as_deref());
         let offered = skills::granted(&catalog, self.agent);
         let skill_block = skills::prompt_block(&offered);
 
-        // Once per turn, like the catalog: what this identity holds *here*.
-        // Every use of the allow-list below reads this rather than
-        // `agent.tools` — the schemas the model is shown, the identity policy
-        // judges against, and the fail-closed check a runbook gets — so the
-        // three cannot disagree about whether this run can file a report.
-        //
-        // The connector catalog is read here for the same reason and in the
-        // same breath: a person can reconnect a connector from Settings while a
-        // turn is in flight, and a turn that offered the model `git__status`
-        // and then judged the call against a roster where it had gone would be
-        // refusing a tool it had just described. One snapshot, one turn.
+        // What this identity holds here, with the connector catalog it was
+        // resolved against: one snapshot per turn, read by the schemas, policy
+        // and the runbook check alike.
         let connectors = self.connectors.catalog();
         let held = held(self.agent, &self.standing, &connectors);
         let offered = Offered {
@@ -543,56 +352,34 @@ impl Turn<'_> {
             connectors: &connectors,
         };
 
-        // Which runbook this session is currently following, if any. Seeded
-        // from the session rather than started empty: the round cap can end a
-        // turn in the middle of a procedure, and a run whose name stopped at
-        // that boundary left its own artefact write unattributed and its
-        // `skill_return` with nothing to close (`IDEAS.md` § 10). Carried back
-        // at the end of the turn, and bounded there.
+        // The run this session is following, seeded from the session so a run
+        // the round cap interrupted resumes (`IDEAS.md` § 10).
         let mut skill: Option<String> = self.turns.open_run(&plan.session_id);
 
-        // Once per turn, before the first request, and never mid-turn: a fold
-        // that landed between two rounds would take away context the model had
-        // already been reasoning against, halfway through. This is also the
-        // "flush before compact" of `COS.md` *Memory*, in the only form a
-        // coded compactor can honestly offer one — nothing is flushed because
-        // nothing is lost. The transcript stays on disk in full, what folded
-        // becomes state that names the files and the blockers, and what the
-        // identity has learned is in the block below, which no fold touches.
+        // Fold once per turn, before the first request, never between rounds.
+        // Nothing is lost (`COS.md` *Memory*): the transcript stays whole, and
+        // memories are rebuilt below.
         if let Err(err) = self.sessions.compact(&plan.session_id, false) {
-            // Worth a line and nothing more. A session that could not fold is a
-            // session with an expensive request, not a broken one.
+            // A session that could not fold is expensive, not broken.
             tracing::warn!(%err, session_id = %plan.session_id, "could not compact the session");
         }
 
-        // Read once per turn, like the catalog and for the same reason: a
-        // memory can be written *by this turn*, and a block that changed
-        // between two rounds would show the model one set of standing facts and
-        // then answer from another. The write still lands — the next turn
-        // carries it, and the tool's own result says what was recorded.
+        // Once per turn; a memory this turn writes reaches the next one.
         let remembered = self.memories.list_for(&self.agent.id);
         let memory_block = memories::prompt_block(&remembered, remembered.len());
 
-        // Once per turn, not per round: the host is settled before the first
-        // request (see `TurnPlan::exec_host`), and so is the Linux spelling of
-        // the workspace it names.
+        // Once per turn, like the host itself.
         let host_block = plan
             .exec_host
             .as_ref()
             .map(|host| exec_host::prompt_block(host, plan.workspace.as_deref()));
 
-        // Per-turn, like the delta counter, and shared with every tool call in
-        // the turn — the UI drops anything out of order, and a counter that
-        // restarted per call would make two calls' frames indistinguishable
-        // after a reload. Atomic because the sink that bumps it is handed to a
-        // tool as a `&dyn`, and a tool has no business holding a `&mut` to the
-        // turn's state.
+        // One progress counter for every call in the turn. Atomic: tools get
+        // the sink as `&dyn`.
         let progress_seq = AtomicU32::new(0);
 
         let reason = loop {
-            // Transcript and fold together, under one lock: read apart, a
-            // compaction landing between them would give this round a pointer
-            // into a transcript that does not match it.
+            // Transcript and fold under one lock, so they match.
             let (history, compaction) = match self.sessions.context(&plan.session_id) {
                 Ok(context) => context,
                 Err(err) => {
@@ -610,21 +397,11 @@ impl Turn<'_> {
                     .map(|held| held.through_message_id.as_str()),
             );
 
-            // Read fresh for every round, not once per turn: this *is* the
-            // read path of the workspace convention (PLAN 7.3, Phase 11), and
-            // a round that has just written `DECISIONS.md` should see it in
-            // the next one rather than argue with a stale copy of itself.
-            // `None` for a workspace that does not use the convention, which
-            // leaves the prompt exactly as it was before that phase.
+            // Every round (Phase 11): a round that wrote `DECISIONS.md` sees it
+            // in the next.
             let shared = plan.workspace.as_deref().and_then(workspace::digest);
 
-            // Read on the same clock and for a related reason (PLAN 7.2). The
-            // constitution changes far more slowly than the cabinet does — a
-            // human amends it, and only between turns — but the *sources* it
-            // declares can move while a turn is running, because an operator
-            // drops a new dump into the folder without asking anybody. A round
-            // that learned about that one round late would be a round spent
-            // compiling against a schema nobody has re-read.
+            // Every round too (PLAN 7.2): a declared source can move mid-turn.
             let world = plan
                 .workspace
                 .as_deref()
@@ -644,12 +421,8 @@ impl Turn<'_> {
                     unattended: self.unattended.is_some(),
                 },
                 raw,
-                // Half of the tool ACL, and the half the model can see: an
-                // identity that was not granted `shell_exec` is not offered
-                // one, so it never spends a round asking for it. The other half
-                // is the refusal in `policy::decide_call`, which is what catches
-                // a call replayed out of a transcript written under a wider
-                // grant.
+                // Only tools the identity holds are shown; policy still refuses
+                // a replayed call.
                 tools::schemas_for(&held, &connectors),
             );
 
@@ -681,12 +454,7 @@ impl Turn<'_> {
                     reason,
                     usage: reported,
                 } => {
-                    // Summed, not replaced. A turn is as many requests as it
-                    // ran rounds, and each one was paid for; keeping only the
-                    // last reported a three-round turn as the cost of its
-                    // third request. That was always wrong and is worse now
-                    // that the rounds are cached — the round with the smallest
-                    // `prompt_tokens` is usually the last one.
+                    // Summed over rounds: each request was paid for.
                     if let Some(round) = reported {
                         match &mut usage {
                             Some(spent) => spent.add(round),
@@ -701,14 +469,9 @@ impl Turn<'_> {
                         break reason;
                     }
 
-                    // The round after the cap is answered, not executed. The
-                    // model sees why it stopped and the turn ends cleanly.
-                    //
-                    // Which cap depends on whether a runbook is open, and is
-                    // read per round rather than once: a turn that opens a run
-                    // on its third round is following a procedure from that
-                    // round on, and judging it against the plain ceiling would
-                    // cut it off for what it was doing before.
+                    // The round past the cap is answered, not run. The cap is
+                    // read per round, so a run opened mid-turn gets the larger
+                    // one from then on.
                     let cap = round_cap(skill.as_deref());
                     if rounds >= cap {
                         tracing::warn!(
@@ -730,11 +493,8 @@ impl Turn<'_> {
                         break StopReason::Cancelled;
                     }
 
-                    // A brief that has been answered is a turn with nothing
-                    // left to do. Ending here rather than letting the model
-                    // take another round is what keeps a delegation's cost
-                    // bounded by its report, and it is also what the runner is
-                    // waiting on — the report is already in the cell.
+                    // A returned brief ends the turn: a delegation costs no
+                    // more than its report.
                     if self.standing.open().is_some_and(handoff::Open::closed) {
                         tracing::debug!(turn_id = %plan.turn_id, "the brief was returned");
                         break StopReason::Stop;
@@ -743,11 +503,9 @@ impl Turn<'_> {
             }
         };
 
-        // A run that did not return is carried to the next turn, so the
-        // procedure the cap interrupted resumes under its own name. Two things
-        // close it instead: a cancel, because pressing Stop is the clearest
-        // statement there is that the conversation has moved on, and the
-        // ceiling in `registry`, because a name nobody closed is not a run.
+        // An unreturned run carries to the next turn, unless the turn was
+        // cancelled (Stop means the conversation moved on) or the run is past
+        // the ceiling in `registry`.
         let carried = match reason {
             StopReason::Cancelled => None,
             _ => skill.as_deref(),
@@ -770,10 +528,8 @@ impl Turn<'_> {
             (None, _) => {}
         }
 
-        // A brief that was never returned. The runner turns this into a
-        // failed attempt — and, after the second, into a line on the board
-        // asking the human. Said here too, because "the model just stopped" is
-        // the one failure that is otherwise invisible in a log.
+        // An unreturned brief: the runner counts a failed attempt. Logged, since
+        // "the model just stopped" is otherwise invisible.
         if self.standing.open().is_some_and(|open| !open.closed()) {
             tracing::warn!(
                 session_id = %plan.session_id,
@@ -783,17 +539,9 @@ impl Turn<'_> {
             );
         }
 
-        // What this turn spent, on the session, keyed by the turn id the audit
-        // lines already carry (PLAN 7.3, Phase 17). Recorded for every ending
-        // including a cancellation — the tokens were spent whether or not the
-        // reply arrived — and recorded as *unknown* rather than as zero when
-        // the provider said nothing, because a free turn and an unmeasured one
-        // are different facts.
-        //
-        // A failure here is a line and nothing more: a cost that could not be
-        // written is a gap in a counter, not a reason to fail a turn that has
-        // already happened. The commonest cause is a session deleted while its
-        // last turn was still running.
+        // What the turn spent (Phase 17), keyed by turn id, for every ending —
+        // unknown rather than zero when the provider said nothing. A failure to
+        // record it is logged, not fatal.
         let charge = match usage {
             Some(spent) => {
                 TurnCost::reported(&plan.turn_id, spent.prompt_tokens, spent.completion_tokens)
@@ -832,10 +580,7 @@ impl Turn<'_> {
     // -----------------------------------------------------------------------
 
     /// Consumes one response, coalescing text and assembling tool calls.
-    ///
-    /// The `select!` is `biased` so cancellation is polled before new events:
-    /// a turn that is being cancelled should not first drain whatever the
-    /// provider has already buffered.
+    /// `biased`, so a cancel is polled before buffered events.
     async fn consume(
         &self,
         plan: &TurnPlan,
@@ -847,9 +592,7 @@ impl Turn<'_> {
         let mut frame = String::new();
         let mut assembler = super::wire::ToolCallAssembler::default();
         let mut deadline: Option<Instant> = None;
-        // What the model is part-way through asking for. Reported by size
-        // rather than kept, because the assembler already keeps it and a
-        // half-arrived JSON string is not something to show anybody.
+        // A call being written, reported by size only.
         let mut drafting: Option<Drafting> = None;
 
         let mut reason = None;
@@ -899,15 +642,11 @@ impl Turn<'_> {
                             args_delta,
                             thought_signature,
                         } => {
-                            // Counted before it is handed over: `push` takes
-                            // the fragment, and the size is the only part of
-                            // it this loop still needs.
+                            // Measured before `push` takes the fragment.
                             let grown = args_delta.len() as u64;
                             let draft = drafting.get_or_insert_with(|| Drafting::new(index));
                             if draft.index != index {
-                                // A second call in the same response. The
-                                // first is finished being written, so its last
-                                // size is flushed before the count restarts.
+                                // A second call: flush the first one's size.
                                 self.emit_drafting(plan, draft, seq);
                                 *draft = Drafting::new(index);
                             }
@@ -924,9 +663,7 @@ impl Turn<'_> {
                                 thought_signature,
                             );
 
-                            // Rides the frame the text deltas already open, so
-                            // arguments arriving with no text at all still get
-                            // a window to be reported in.
+                            // Arguments with no text still open a frame.
                             if deadline.is_none() {
                                 deadline = Some(Instant::now() + DELTA_FRAME);
                             }
@@ -956,9 +693,7 @@ impl Turn<'_> {
         }
 
         let Some((reason, usage)) = reason else {
-            // The channel closed without a `Finish`. The reply is truncated
-            // and there is no honest stop reason to report, so it is a
-            // failure rather than a short success.
+            // Closed without `Finish`: a truncated reply, not a short success.
             return Streamed::Failed {
                 text,
                 code: ErrorCode::ProviderParse.as_str().to_owned(),
@@ -984,14 +719,8 @@ impl Turn<'_> {
         }
     }
 
-    /// Emits whatever has accumulated in this frame, and empties it.
-    ///
-    /// Text and the size of a half-written tool call go out together because
-    /// they are the same frame: a turn can be producing one, the other, or
-    /// both, and a large `fs_write` is minutes of the second with none of the
-    /// first. Taking the draft here rather than flushing it separately is what
-    /// stops the two from drifting out of step at the three places this is
-    /// called.
+    /// Emits the frame's text and the drafting call's size together, and
+    /// empties the frame.
     fn flush(
         &self,
         plan: &TurnPlan,
@@ -1014,12 +743,7 @@ impl Turn<'_> {
         }
     }
 
-    /// Reports how far a tool call's arguments have got, if that has moved.
-    ///
-    /// Silent when nothing was added since the last frame. The timer fires on
-    /// a schedule and the model does not, so without this a call that paused
-    /// would emit the same number every fifty milliseconds — noise the UI
-    /// would have to filter and a `seq` that would climb for nothing.
+    /// Reports how far a call's arguments have got, only when that changed.
     fn emit_drafting(&self, plan: &TurnPlan, draft: &mut Drafting, seq: &mut u32) {
         if draft.bytes == draft.reported {
             return;
@@ -1041,18 +765,8 @@ impl Turn<'_> {
     // Tools
     // -----------------------------------------------------------------------
 
-    /// Runs one round of tool calls, in the order the model made them.
-    ///
-    /// Sequential rather than concurrent, and now for a reason stronger than
-    /// filesystem races: the user approves these one at a time. Two dialogs
-    /// competing for the same person's attention is not a queue, and a second
-    /// call that ran while the first was still being read would have been
-    /// approved by nobody.
-    ///
-    /// The filesystem tools themselves are short and local, so they still run
-    /// inline rather than on a blocking thread. What makes this `async` is the
-    /// waiting: [`Turn::ask`] parks here until a person answers, and
-    /// `shell_exec` awaits a child process for as long as two minutes.
+    /// Runs one round of tool calls in order, one at a time, because a person
+    /// approves them one at a time. `async` for [`Turn::ask`] and `shell_exec`.
     async fn execute(
         &self,
         plan: &TurnPlan,
@@ -1069,10 +783,7 @@ impl Turn<'_> {
                 continue;
             }
 
-            // Cloned rather than borrowed for the length of the call: the
-            // context below holds it, and the run is updated from the result
-            // once the call is done. One `String` per tool call is not worth a
-            // lifetime that would have to be threaded through `ToolCtx`.
+            // Cloned: the context borrows it while the run is updated after.
             let running = skill.clone();
 
             let args = match &call.args {
@@ -1128,12 +839,8 @@ impl Turn<'_> {
                 routine: self.routine(),
             };
 
-            // Measured for the one tool whose prompt names a display, and for
-            // no other: asking the window server to describe the screen is a
-            // round trip, and `fs_read` has no use for the answer. Policy
-            // takes it as an argument rather than measuring it itself, which
-            // is what keeps the decision table a pure function and testable
-            // without a screen.
+            // Only a capture needs the display geometry, passed in so policy
+            // stays pure.
             let screen = (call.name == policy::tool::SCREEN_CAPTURE)
                 .then(tools::screenshot::geometry)
                 .flatten();
@@ -1209,19 +916,15 @@ impl Turn<'_> {
             // round is already inside the run a `skill_run` just opened.
             skills::track(skill, &call.name, &outcome.result);
 
-            // What a scheduled run answers with. Read out of the envelope the
-            // tool produced rather than out of the transcript, and only when
-            // somebody is waiting for it: a session a person is watching
-            // reports by being watched (PLAN 7.3, Phase 16).
+            // A scheduled run's answer, read from the envelope for the
+            // scheduler (Phase 16).
             if let Some(unattended) = self.unattended {
                 if let Some(returned) = skills::returned(&call.name, &outcome.result) {
                     unattended.reported.close(returned);
                 }
             }
 
-            // Keyed on what was audited rather than on `ok` alone, so a call
-            // that was refused reads as refused in the transcript instead of
-            // as one that ran and failed.
+            // Keyed on the audit outcome, so a refusal reads as refused.
             let status = match outcome.audit.outcome {
                 Outcome::Denied => ToolCallStatus::Denied,
                 // A command killed by a Stop is not a tool that failed. The
@@ -1234,18 +937,10 @@ impl Turn<'_> {
         }
     }
 
-    /// Parks the turn until a person answers, and reports what they said.
-    ///
-    /// `None` means the turn was cancelled while the dialog was open. That is
-    /// deliberately not a denial: "you said no" and "you stopped the turn" are
-    /// different things to write into a transcript, and only one of them is a
-    /// decision about the call.
-    ///
-    /// Three things are true on every exit from this function, however it
-    /// exits: the request is no longer answerable, the session is no longer
-    /// marked as waiting, and `tool:approval_resolved` has been emitted. A
-    /// dialog left on screen for a call nothing will ever run is the failure
-    /// this shape exists to prevent.
+    /// Parks the turn until a person answers. `None` means the turn was
+    /// cancelled, which is not a denial. On every exit the request is
+    /// withdrawn, the session stops waiting, and `tool:approval_resolved` is
+    /// emitted, so no dialog outlives its call.
     async fn ask(
         &self,
         plan: &TurnPlan,
@@ -1264,8 +959,7 @@ impl Turn<'_> {
         self.sink
             .emit(Event::ToolApprovalRequired(Box::new(ticket.request)));
 
-        // `biased` so a cancel that arrives alongside an answer wins: the user
-        // pressed stop, and a call that ran anyway would be one they stopped.
+        // `biased`: a Stop that lands alongside an answer wins.
         let answer = tokio::select! {
             biased;
             () = cancel.cancelled() => None,
@@ -1291,9 +985,7 @@ impl Turn<'_> {
             },
         };
 
-        // Idempotent: an answered request was already removed by `resolve`.
-        // This covers the other exits, and closes the window in which a click
-        // could land on a request nothing is waiting for.
+        // Idempotent; covers the exits that were not an answer.
         self.approvals.withdraw(&request_id);
         self.turns
             .set_waiting(&plan.session_id, &plan.turn_id, false);
@@ -1326,11 +1018,8 @@ impl Turn<'_> {
         }));
     }
 
-    /// Re-sends the session's row at whatever state the registry now reports.
-    ///
-    /// Read back from the registry rather than passed in, so the badge in the
-    /// sidebar and the `state` a `session_open` returns cannot disagree about
-    /// whether a session is working or waiting for the person looking at it.
+    /// Re-sends the session's row at the registry's state, so the sidebar and
+    /// `session_open` agree.
     fn session_changed(&self, plan: &TurnPlan) {
         let state = self.turns.state_of(&plan.session_id);
         if let Some(summary) = summarize(self.sessions, &plan.session_id, state) {
@@ -1338,11 +1027,9 @@ impl Turn<'_> {
         }
     }
 
-    /// Answers every call of a round without running any of them.
-    ///
-    /// Used for the round cap: the model has to see one `tool` message per
-    /// call it made, or the next request it appears in is structurally
-    /// invalid (see [`transcript`]).
+    /// Answers every call of a round without running it (the round cap). Every
+    /// call needs a `tool` message, or the next request is invalid
+    /// ([`transcript`]).
     fn refuse_all(
         &self,
         plan: &TurnPlan,
@@ -1358,9 +1045,8 @@ impl Turn<'_> {
                 "this turn already ran {cap} rounds of tools, which is the limit; answer with \
                  what you have, or ask the user to continue{}",
                 match skill {
-                    // The run is not lost by saying so: it carries to the next
-                    // turn, and a model told only "the limit" would reasonably
-                    // conclude its procedure had been abandoned.
+                    // Say the run stays open, or the model assumes it was
+                    // abandoned.
                     Some(name) => format!(
                         ". The `{name}` run stays open, so you can carry on with it in the next \
                          turn and close it with `skill_return` there"
@@ -1404,10 +1090,8 @@ impl Turn<'_> {
         }
     }
 
-    /// Records a call that a cancel arrived before.
-    ///
-    /// Still answered, for the same structural reason: an unanswered call
-    /// would make every later request in this session invalid.
+    /// Records a call a cancel arrived before. Still answered, so later
+    /// requests stay valid.
     fn abandon(&self, plan: &TurnPlan, call: &AssembledCall) {
         let message = "the turn was cancelled before this call ran";
         self.answer(
@@ -1494,11 +1178,7 @@ impl Turn<'_> {
     // Persistence
     // -----------------------------------------------------------------------
 
-    /// Persists the assistant message this round produced, if it produced one.
-    ///
-    /// An empty message is skipped: a round that produced no text and made no
-    /// calls has nothing to say, and an empty bubble in the transcript reads
-    /// as a bug.
+    /// Persists this round's assistant message, unless it is empty.
     fn persist_assistant(&self, plan: &TurnPlan, text: String, calls: Vec<ToolCallRecord>) {
         let message = Message::assistant(text, calls);
         if message.is_empty() {
@@ -1536,11 +1216,8 @@ impl Turn<'_> {
     }
 }
 
-/// What the model is told about a call that was not allowed to run.
-///
-/// Written for the model rather than for a log: it says what happened, and
-/// what to do next. A refusal the model reads as a transport failure is a
-/// refusal it retries.
+/// What the model is told about a call that did not run: what happened, and
+/// what to do next, so it does not retry.
 fn refusal(answer: Answer) -> String {
     match answer.resolved_by {
         ResolvedBy::User => "the user refused this call. Do not repeat it. Say what you were \
@@ -1556,10 +1233,7 @@ fn refusal(answer: Answer) -> String {
     }
 }
 
-/// The transcript record for a call the model just made.
-///
-/// Status starts at `Pending`: policy has not seen it yet, and the UI draws
-/// the card before the decision is known.
+/// The transcript record for a new call, `Pending` until policy decides.
 fn record_of(call: &AssembledCall) -> ToolCallRecord {
     ToolCallRecord {
         call_id: call.call_id.clone(),
@@ -1573,10 +1247,8 @@ fn record_of(call: &AssembledCall) -> ToolCallRecord {
     }
 }
 
-/// A [`SessionSummary`] for a session that is no longer running.
-///
-/// Exposed for the command layer, which has to leave the session in a state
-/// the sidebar can draw once the turn's task is gone.
+/// The state a session rests in once its turn has ended, for the command
+/// layer.
 pub fn resting_state(reason: StopReason) -> SessionState {
     match reason {
         StopReason::Error => SessionState::Error,
@@ -1677,16 +1349,12 @@ mod tests {
         sink: Recorder,
         session_id: String,
         captures: PathBuf,
-        /// An empty skill library. These tests are about the loop; the runner
-        /// has its own, in `skills` and in `tests/skills.rs`.
+        /// An empty skill library; the runner is tested elsewhere.
         library: PathBuf,
-        /// An empty memory store, for the same reason: what the loop does with
-        /// one is that it reads it into the prompt and hands it to the tools.
+        /// An empty memory store.
         memories: MemoryStore,
         connectors: Connectors,
-        /// The identity every fixture turn runs as: the built-in one, which
-        /// holds every tool, so these tests are about the loop and not about
-        /// an allow-list.
+        /// The built-in identity, which holds every tool.
         agent: Agent,
     }
 
@@ -1705,9 +1373,7 @@ mod tests {
                 .expect("session")
                 .id;
 
-            // Registered the way `session_send` registers it, because the
-            // session's state — running, or waiting for a person — is read
-            // back out of this registry and asserted on.
+            // Registered as `session_send` does; tests read the state back.
             let turns = TurnRegistry::new();
             turns.begin(&session_id, TURN_ID).expect("a free session");
 
@@ -1758,11 +1424,7 @@ mod tests {
             }
         }
 
-        /// The approval the turn is currently blocked on.
-        ///
-        /// Polled rather than awaited on a channel: the turn is a task in the
-        /// same runtime, and this is the shape a test uses to answer a dialog
-        /// the way a click would.
+        /// The approval the turn is blocked on, polled the way a click finds it.
         async fn pending(&self) -> ApprovalRequest {
             for _ in 0..200 {
                 if let Some(request) = self
@@ -2173,10 +1835,8 @@ mod tests {
         );
     }
 
-    /// An approval nobody answers is refused after [`APPROVAL_TTL`], and the
-    /// turn carries on. Run on a paused clock, so the five minutes cost
-    /// nothing: with every task idle, the runtime advances straight to the
-    /// deadline the turn is waiting on.
+    /// An unanswered approval is refused after [`APPROVAL_TTL`] and the turn
+    /// carries on. A paused clock skips the wait.
     #[tokio::test(start_paused = true)]
     async fn an_unanswered_approval_expires_and_the_turn_carries_on() {
         let fx = Fixture::new();
@@ -2254,13 +1914,8 @@ mod tests {
         assert!(awaiting, "the sidebar was told the session is blocked");
     }
 
-    /// PLAN 3.2: a path that will not resolve is refused outright, with no
-    /// approval offered — approving it could not mean anything, because the
-    /// dialog would have nothing true to show the user.
-    ///
-    /// A path *outside* the workspace is deliberately not the example here.
-    /// That is an ask, not a denial, on every platform, and using it would
-    /// leave this test waiting five minutes for an answer nobody gives.
+    /// PLAN 3.2: an unresolvable path is refused with no approval, and the turn
+    /// continues. (A path outside the workspace would ask, not refuse.)
     #[tokio::test]
     async fn a_hard_denial_is_a_result_and_the_turn_continues() {
         let fx = Fixture::new();
@@ -2455,10 +2110,8 @@ mod tests {
         );
     }
 
-    /// A runbook in the fixture's library, granted to the fixture's identity.
-    ///
-    /// Two steps rather than one, and the split is policy's: writing a runbook
-    /// is not granting it, so a test that wants a run has to do both.
+    /// Writes a runbook into the library and grants it: writing alone grants
+    /// nothing.
     fn grant_runbook(fx: &mut Fixture, name: &str) {
         let dir = fx.library.join(name);
         std::fs::create_dir_all(&dir).expect("skill dir");
@@ -2466,14 +2119,7 @@ mod tests {
         fx.agent.skills = vec![name.to_owned()];
     }
 
-    /// The cap a turn is judged against depends on whether it is following a
-    /// runbook (`IDEAS.md` § 11).
-    ///
-    /// At eight rounds a real procedure does not stall, it stops half-way: the
-    /// measured `review.diff` needed about twenty before it wrote anything. A
-    /// run is the one place a higher ceiling is defensible, because the work
-    /// was bounded before it started — the runbook declares its steps and its
-    /// tools, and every call still goes through the gate one at a time.
+    /// A turn following a runbook gets the larger round cap (`IDEAS.md` § 11).
     #[tokio::test]
     async fn a_turn_following_a_runbook_gets_the_larger_round_cap() {
         let mut fx = Fixture::new();
@@ -2566,8 +2212,7 @@ mod tests {
             ),
         ]);
 
-        // Cancelled on the write's approval dialog, which is where a person
-        // watching a run they no longer want actually presses Stop.
+        // Cancelled on the write's dialog, where a person would press Stop.
         let cancel = CancellationToken::new();
         let stopping = async {
             fx.pending().await;
@@ -2625,9 +2270,8 @@ mod tests {
         assert_eq!(answered, vec!["call_a", "call_b"]);
     }
 
-    /// A file written by `fs_write` is generated as the call's arguments, so a
-    /// large one produces no `turn:delta` at all. Without this the window has
-    /// nothing to show for minutes and a working turn reads as a hung one.
+    /// A large `fs_write` streams no text; drafting events show the call is
+    /// still being written.
     #[tokio::test]
     async fn a_call_being_written_reports_how_far_it_has_got() {
         let fx = Fixture::new();
@@ -2687,9 +2331,7 @@ mod tests {
         assert_eq!(last.index, 0);
     }
 
-    /// The frame timer fires on a schedule and the model does not. A call that
-    /// paused would otherwise re-report the same number every 50 ms, which is
-    /// noise the UI would have to filter and a `seq` climbing for nothing.
+    /// An unchanged drafting size is not re-reported on every frame.
     #[test]
     fn an_unchanged_count_stays_quiet() {
         let fx = Fixture::new();

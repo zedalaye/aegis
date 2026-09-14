@@ -1,50 +1,18 @@
-//! The audit log.
+//! The audit log: one JSON line per tool call in `audit.jsonl`, whatever the
+//! outcome (PLAN 2.1 entry shape, PLAN 3.1 decisions).
 //!
-//! One JSON line per tool call, appended to `audit.jsonl` under the
-//! application-data directory, whatever the outcome — allowed, refused,
-//! failed, cancelled. This is the record that makes the approval gate
-//! meaningful after the fact: an approval the user has already clicked through
-//! is only worth something if there is a way to go back and read what was
-//! actually done.
+//! * **Append-only JSONL**: a crash truncates at most the last line, and
+//!   unparseable lines are skipped on read.
+//! * **Arguments, not content**: paths are kept, file content is replaced by its
+//!   size, and the digest covers the full arguments.
+//! * **Logging never fails the call**: a write failure is logged loudly.
+//! * **Bounded reads** from the end of the file. The runtime also reads it:
+//!   [`AuditLog::witnessed`] is the evidence a routine's skill already ran.
 //!
-//! Four properties shape the format:
-//!
-//! * **One line per call, append-only.** JSONL rather than a JSON document, so
-//!   a line can be written without reading what came before, a crash truncates
-//!   at most the last line, and `tail -f` works. A line that will not parse is
-//!   skipped on read rather than poisoning the file.
-//! * **Arguments are recorded, content is not.** The digest is over the
-//!   arguments as the model sent them; the human-readable copy keeps the paths
-//!   — which are the point — and replaces file content with its size. A log
-//!   that quoted the bytes of every `fs_write` would become the one place on
-//!   the machine where every secret the agent ever wrote is collected in plain
-//!   text.
-//! * **A failure to log never fails the call.** The line is written after the
-//!   tool has already run, so refusing at that point would be theatre; an
-//!   unwritable log is loud in the tracing output, and the entry still reaches
-//!   the UI.
-//! * **Reading is bounded.** [`AuditLog::tail`] reads from the end of the
-//!   file, so a log that has grown for months still answers instantly. It is
-//!   also read *by the runtime* from Phase 16: a routine may only name a skill
-//!   its identity has already carried to a `skill_return`, and this is where
-//!   that evidence lives (`AuditLog::witnessed`).
-//!
-//! The entry shape is PLAN 2.1, "Settings and audit"; the decision vocabulary
-//! is PLAN 3.1's. It has grown four times since, every time by adding a field
-//! with a `serde` default rather than by changing one — `agent_id` in Phase 12,
-//! `skill` in Phase 13, `handoff` in Phase 15 and `routine` in Phase 16 — which
-//! is the property PLAN 7.1 asks the log to keep: a schema that can grow
-//! `agent_id`, `skill`, `tokens`, `handoff_id`.
-//!
-//! Four of those five ids are here. **`tokens` is not, and will not be.** Phase
-//! 17 is the phase that would have added it, and adding it would have been a
-//! lie: tokens are spent by a model round, not by a tool call, several calls
-//! come out of one round, and — the fact that settles it — a turn that called
-//! no tool at all still spends them. A counter built from this file would
-//! silently omit every reply that only talked. So cost is recorded on the
-//! session, per turn ([`TurnCost`](crate::store::TurnCost)), and joined to this
-//! file on the `turn_id` every line has carried since Phase 4. The extensible
-//! schema did its job; the field it was extended with belonged somewhere else.
+//! Fields added later (`agent_id`, `skill`, `handoff`, `routine`) are
+//! `#[serde(default)]` so old lines still parse. Tokens are deliberately absent:
+//! they are spent per model round, even without tool calls, so cost lives on the
+//! session ([`TurnCost`](crate::store::TurnCost)) and joins here on `turn_id`.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
@@ -61,11 +29,8 @@ use crate::error::ErrorCode;
 /// Name of the log under the application-data directory.
 const AUDIT_FILE: &str = "audit.jsonl";
 
-/// How much of the tail of the file [`AuditLog::tail`] will read.
-///
-/// A tool call's line is a few hundred bytes, so this is tens of thousands of
-/// calls — far more than any `limit` the UI asks for, and a fixed ceiling on
-/// what a log left running for a year costs to read.
+/// How much of the end of the file [`AuditLog::tail`] reads: tens of thousands
+/// of lines.
 const TAIL_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
 
 /// The largest `limit` [`AuditLog::tail`] will honour.
@@ -74,28 +39,11 @@ const TAIL_MAX: usize = 1000;
 /// Longest string value kept verbatim in `args_redacted`.
 const REDACT_MAX_CHARS: usize = 96;
 
-/// Argument keys whose value is the point of the record and is never
-/// shortened.
-///
-/// These are what a person scanning the log is looking for: *which file*,
-/// *which folder*, *which program*. They are short by nature, and a truncated
-/// path is worse than useless — it reads like a different path.
-///
-/// `artefacts` joined them in Phase 17, and for exactly that reason: a report
-/// names what the work produced, a trace reads those names back off the line to
-/// say what a run left on disk, and a path cut at ninety-six characters names
-/// nothing. It is a list of paths under a different key, not a new kind of
-/// value.
-///
-/// `from` joined in PLAN 7.15 for the same reason: a brief dropped onto the
-/// project records where it was copied from, and that is a path.
+/// Argument keys never shortened: paths and programs, where a truncated value
+/// reads like a different one.
 const KEPT_WHOLE: &[&str] = &["path", "cwd", "program", "display", "artefacts", "from"];
 
-/// Argument keys replaced by their size rather than recorded.
-///
-/// `fs_write.content` is the whole reason this list exists: it is the one
-/// argument that routinely carries the contents of a file, and the audit log
-/// must not become a copy of everything the agent has ever written.
+/// Argument keys replaced by their size, so the log never copies file content.
 const SIZED_NOT_QUOTED: &[&str] = &["content"];
 
 /// How a tool call came to run, or not (PLAN 2.1, `AuditEntry.decision`).
@@ -111,15 +59,8 @@ pub enum AuditDecision {
     AllowSession,
     /// The user, or policy, refused it.
     Deny,
-    /// A person did it themselves, in the window, with no model involved
-    /// (PLAN 7.15).
-    ///
-    /// Not an approval: nothing asked, and no gate stood between the act and
-    /// the file. It exists for the one such act that writes into a workspace —
-    /// a file dropped onto the project and copied in as a brief — so that intake
-    /// no session wrote is still on the record. Such a line carries no session,
-    /// identity or turn, and a board fold, which is scoped by session, leaves
-    /// it out.
+    /// A person acted in the window with no model involved — a dropped brief
+    /// (PLAN 7.15). No session, identity or turn; boards leave it out.
     Operator,
 }
 
@@ -138,18 +79,8 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// A file a tool call left on disk, identified without the log holding a copy.
-///
-/// `screen_capture` is the only tool that produces one today, and PLAN 5.4
-/// names exactly what its line may carry: the path, the dimensions and a
-/// digest, never the image. That is enough to say afterwards *which* capture a
-/// call produced, and to check that the file still on disk is the one this line
-/// is about.
-///
-/// The dimensions are pixels because the only artefact so far is an image; a
-/// later tool that writes something else will widen this shape rather than
-/// borrow it, and the field being optional is what lets it (PLAN 7.1: the audit
-/// schema has to be able to grow).
+/// A file a tool call left on disk, identified by path, digest and size —
+/// never a copy (PLAN 5.4). Only `screen_capture` produces one today.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct AuditArtifact {
@@ -163,11 +94,8 @@ pub struct AuditArtifact {
     pub height: u32,
 }
 
-/// One line of the log.
-///
-/// Serialized and deserialized with the same struct on purpose: the file *is*
-/// the wire format for `audit_tail`, so a field the writer adds is a field the
-/// reader sees, and there is no second shape to keep in step.
+/// One line of the log, and the `audit_tail` wire format. Later fields default
+/// so older lines still parse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct AuditEntry {
@@ -176,17 +104,7 @@ pub struct AuditEntry {
     pub ts: String,
     /// Which session made the call.
     pub session_id: String,
-    /// Which identity it was made as (PLAN 7.3, Phase 12).
-    ///
-    /// The first half of "who ran, what did it cost, why did it fail" (PLAN
-    /// 7.2, row 10). A tool call is gated on the identity's allow-list, so a
-    /// record of the call that does not name the identity cannot be read back
-    /// against the grant that let it through.
-    ///
-    /// `#[serde(default)]` for the lines written before identities existed: the
-    /// file is its own wire format, and a reader that refused those lines would
-    /// lose the history the log is kept for. Those lines carry an empty string,
-    /// which is not an identity and is drawn as none.
+    /// Which identity it was made as (Phase 12); empty on older lines.
     #[serde(default)]
     pub agent_id: String,
     /// Which turn within it.
@@ -195,58 +113,23 @@ pub struct AuditEntry {
     pub call_id: String,
     /// Tool name.
     pub tool: String,
-    /// The skill run this call was part of (PLAN 7.3, Phase 13).
-    ///
-    /// "A run without `skill` on the line cannot be budgeted or replayed"
-    /// (PLAN 7.6). Every call made between a `skill_run` and its
-    /// `skill_return` carries the name — not only the two the skill tools make
-    /// — so the question a replay asks is answerable: *what did this runbook
-    /// actually do, and what was it refused*.
-    ///
-    /// Empty for a call made outside a run, and for every line written before
-    /// this phase. `#[serde(default)]` for the same reason `agent_id` carries
-    /// one: the file is its own wire format, and a reader that refused the
-    /// older lines would lose the history the log is kept for.
+    /// The skill run this call belongs to (Phase 13; PLAN 7.6): every call
+    /// between `skill_run` and `skill_return`. Empty otherwise.
     #[serde(default)]
     pub skill: String,
-    /// The delegation this call was part of (PLAN 7.3, Phase 15).
-    ///
-    /// The other half of "one run id over CoS + specialists" (PLAN 7.2, row
-    /// 10): the CoS's `handoff_delegate` line carries it, and so does every
-    /// call every specialist makes while working on one of its briefs — in
-    /// their own sessions, under their own identities. Given `agent_id` beside
-    /// it, a replay can say who ran, under whose brief, and what it cost.
-    ///
-    /// Empty outside a delegation, and on every line written before this
-    /// phase. `#[serde(default)]` for the reason `agent_id` and `skill` carry
-    /// one: the file is its own wire format, and a reader that refused the
-    /// older lines would lose the history the log is kept for.
+    /// The delegation this call belongs to (Phase 15): the CoS's
+    /// `handoff_delegate` and every call specialists make on its briefs.
     #[serde(default)]
     pub handoff: String,
-    /// The routine whose run this call was part of (PLAN 7.3, Phase 16).
-    ///
-    /// The third id over a run, beside `agent_id` and `skill`, and the one that
-    /// answers a question only this phase can raise: *what did the machine do
-    /// while nobody was here*. Every call a scheduled run makes carries it, so
-    /// a week of a watch routine is one grep — and so is the budget it spent,
-    /// which is the "cannot be budgeted or replayed" of `COS.md` applied to the
-    /// only runs nobody watched.
-    ///
-    /// Empty outside a routine's run, and on every line written before this
-    /// phase. `#[serde(default)]` for the reason the three before it carry one:
-    /// the file is its own wire format, and a reader that refused the older
-    /// lines would lose the history the log is kept for.
+    /// The routine whose run this call belongs to (Phase 16).
     #[serde(default)]
     pub routine: String,
     /// Auto-allowed, approved, or refused.
     pub decision: AuditDecision,
     /// Why policy decided that, in the words the user was shown.
     pub policy_reason: String,
-    /// SHA-256 of the canonical arguments JSON, hex.
-    ///
-    /// The digest is over the arguments in full, including anything the
-    /// redacted copy shortened, so two calls can be compared for identity even
-    /// though neither line quotes what they carried.
+    /// SHA-256 of the full canonical arguments JSON, hex — including what the
+    /// redacted copy shortened.
     pub args_digest: String,
     /// The arguments as JSON, paths kept and values shortened.
     pub args_redacted: String,
@@ -264,19 +147,11 @@ pub struct AuditEntry {
     /// The stable code when this failed, `null` otherwise.
     pub error_code: Option<String>,
     /// The file this call wrote, when it wrote one.
-    ///
-    /// `#[serde(default)]` because the file is its own wire format: a log
-    /// written by an earlier build has no such key, and a reader that refused
-    /// those lines would lose the history the log exists to keep.
     #[serde(default)]
     pub artifact: Option<AuditArtifact>,
 }
 
 /// Everything needed to append one line, before the timestamp is taken.
-///
-/// A struct rather than a dozen positional arguments: the fields are almost
-/// all strings and numbers, and a call site that transposed two of them would
-/// still compile.
 #[derive(Debug)]
 pub struct AuditRecord<'a> {
     /// Which session made the call.
@@ -343,11 +218,8 @@ impl AuditRecord<'_> {
     }
 }
 
-/// The append-only log.
-///
-/// The mutex serializes writers within the process. It is not a lock on the
-/// file: another process appending to the same log would interleave, which is
-/// exactly what JSONL tolerates and a JSON document would not.
+/// The append-only log. The mutex serializes writers in this process only;
+/// JSONL tolerates other processes interleaving whole lines.
 #[derive(Debug)]
 pub struct AuditLog {
     path: PathBuf,
@@ -355,10 +227,7 @@ pub struct AuditLog {
 }
 
 impl AuditLog {
-    /// A log writing to `audit.jsonl` under `data_dir`.
-    ///
-    /// Nothing is opened or created here: a run in which no tool call happens
-    /// should not leave an empty file behind, so the first append creates it.
+    /// A log writing to `audit.jsonl` under `data_dir`, created on first append.
     pub fn new(data_dir: &Path) -> Self {
         Self {
             path: data_dir.join(AUDIT_FILE),
@@ -371,24 +240,16 @@ impl AuditLog {
         &self.path
     }
 
-    /// Locks the writer.
-    ///
-    /// Poisoning is recovered rather than propagated: what the guard protects
-    /// is the ordering of appends to a file, not an invariant in memory, so a
-    /// panic elsewhere leaves nothing here torn. Refusing to log afterwards
-    /// would turn one panic into a permanently unaudited runtime.
+    /// Locks the writer, recovering from poison: one panic must not stop all
+    /// auditing.
     fn writer(&self) -> MutexGuard<'_, ()> {
         self.writer
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Appends one line and returns the entry that was written.
-    ///
-    /// The entry comes back whether or not the write succeeded, because the
-    /// caller has an `audit:appended` event to emit and a UI to update either
-    /// way. A write failure is logged at `error` — it is a real problem, and
-    /// the log is the one place that cannot report its own absence.
+    /// Appends one line and returns the entry, even if the write failed (logged
+    /// at `error`), so the UI event still fires.
     pub fn append(&self, record: &AuditRecord<'_>) -> AuditEntry {
         let entry = record.seal();
 
@@ -406,9 +267,7 @@ impl AuditLog {
 
     /// Serializes one entry and appends it, newline-terminated.
     fn write_line(&self, entry: &AuditEntry) -> io::Result<()> {
-        // Serialized before the lock is taken: it cannot fail for this shape,
-        // but holding the writer across work that does not need it is how a
-        // log becomes a bottleneck.
+        // Serialized before taking the lock.
         let mut line = serde_json::to_vec(entry).map_err(io::Error::other)?;
         line.push(b'\n');
 
@@ -422,25 +281,14 @@ impl AuditLog {
             .append(true)
             .open(&self.path)?;
 
-        // One `write_all` of a whole line: append mode makes a single write
-        // atomic against other appenders, so a concurrent writer — another
-        // Aegis process on the same profile — cannot land halfway through a
-        // line.
+        // One write of the whole line, so other appenders cannot split it.
         file.write_all(&line)?;
         file.flush()
     }
 
-    /// The most recent entries, newest first.
-    ///
-    /// `session_id` filters to one session; `limit` is clamped to
-    /// [`TAIL_MAX`]. Only the last [`TAIL_WINDOW_BYTES`] of the file are read,
-    /// and the first line in that window is dropped unless the window starts
-    /// at the beginning of the file — it is almost certainly a fragment, and a
-    /// fragment is not an entry.
-    ///
-    /// A line that does not parse is skipped rather than failing the call: the
-    /// last line of a log whose process was killed mid-write is exactly that
-    /// case, and it must not hide the thousands of good lines above it.
+    /// The most recent entries, newest first, optionally for one session, with
+    /// `limit` clamped to [`TAIL_MAX`]. Reads the last [`TAIL_WINDOW_BYTES`],
+    /// dropping a leading fragment; unparseable lines are skipped.
     pub fn tail(&self, limit: usize, session_id: Option<&str>) -> io::Result<Vec<AuditEntry>> {
         let limit = limit.min(TAIL_MAX);
         if limit == 0 {
@@ -449,8 +297,7 @@ impl AuditLog {
 
         let (bytes, partial_first) = match self.read_tail() {
             Ok(read) => read,
-            // No log yet means no tool has run yet, which is an empty list
-            // rather than an error the UI has to explain.
+            // No log yet: no tool has run.
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(err) => return Err(err),
         };
@@ -477,32 +324,15 @@ impl AuditLog {
             }
         }
 
-        // Newest first, and only as many as were asked for. Truncating after
-        // the filter is what makes `limit` mean "entries you will see" rather
-        // than "lines I happened to look at".
+        // Truncated after filtering, so `limit` counts entries returned.
         out.reverse();
         out.truncate(limit);
         Ok(out)
     }
 
-    /// Whether this identity has already carried this skill to a
-    /// `skill_return` (PLAN 7.13, *Phase 16's door*).
-    ///
-    /// The one place the runtime *reads* its own log to decide something, and
-    /// it is deliberate: "run it under watch, then put it on a clock" is a rule
-    /// about something that has already happened, and the log is where what has
-    /// happened is written down. It is also the payoff for PLAN 7.6's *audit
-    /// names the skill* — without the name on the line there would be no way to
-    /// ask this question at all.
-    ///
-    /// A **return** rather than a run, because that is the half that means the
-    /// runbook reached its end: a `skill_run` says somebody opened the file.
-    /// Any status counts — a `blocked` is a runbook doing its job.
-    ///
-    /// Bounded by [`TAIL_WINDOW_BYTES`] like every other read of this file, so
-    /// a run from long enough ago has scrolled out of the window and the answer
-    /// is `false`. That is the safe direction, and the fix is to run it once
-    /// more and watch it, which is the thing the rule is asking for anyway.
+    /// Whether this identity has carried this skill to a successful
+    /// `skill_return`, any status (PLAN 7.13, *Phase 16's door*). Limited to
+    /// the tail window: an old run reads as `false`, the safe direction.
     pub fn witnessed(&self, agent_id: &str, skill: &str) -> bool {
         let Ok((bytes, partial_first)) = self.read_tail() else {
             return false;
@@ -524,10 +354,8 @@ impl AuditLog {
             })
     }
 
-    /// Reads at most the last [`TAIL_WINDOW_BYTES`] of the log.
-    ///
-    /// The flag says whether the window started mid-file, and therefore
-    /// whether its first line is a fragment.
+    /// Reads at most the last [`TAIL_WINDOW_BYTES`]; the flag is true when the
+    /// first line is a fragment.
     fn read_tail(&self) -> io::Result<(Vec<u8>, bool)> {
         let mut file = fs::File::open(&self.path)?;
         let len = file.metadata()?.len();
@@ -543,12 +371,8 @@ impl AuditLog {
     }
 }
 
-/// SHA-256 of the arguments, hex, over their canonical JSON form.
-///
-/// `serde_json::Value` keeps object keys in a `BTreeMap`, so serializing one
-/// is already key-sorted and whitespace-free: two calls with the same
-/// arguments written in a different key order digest identically, which is
-/// what makes the digest usable for spotting a repeated call.
+/// SHA-256 of the arguments, hex. `serde_json::Value` objects serialize
+/// key-sorted, so key order does not change the digest.
 fn digest(args: &serde_json::Value) -> String {
     use std::fmt::Write as _;
 
@@ -561,22 +385,14 @@ fn digest(args: &serde_json::Value) -> String {
         })
 }
 
-/// The arguments as a compact JSON string, with paths kept and values
-/// shortened.
-///
-/// Structure is preserved — the keys, the nesting and the types are all still
-/// there — so the line reads as the call that was made. What changes is that a
-/// value which could be arbitrarily long, or could be a secret, is replaced by
-/// a description of itself.
+/// The arguments as compact JSON with the same structure: paths kept, long
+/// strings shortened, content replaced by its size.
 pub(crate) fn redact(args: &serde_json::Value) -> String {
     let redacted = redact_value(None, args);
     serde_json::to_string(&redacted).unwrap_or_else(|_| "\"<unrenderable>\"".to_owned())
 }
 
-/// Redacts one value, given the key it was found under.
-///
-/// An array inherits its key, so `shell_exec`'s `args: [...]` is shortened
-/// element by element under the same rule as any other value.
+/// Redacts one value under its key; array elements inherit the array's key.
 fn redact_value(key: Option<&str>, value: &serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
 
@@ -593,8 +409,6 @@ fn redact_value(key: Option<&str>, value: &serde_json::Value) -> serde_json::Val
                 .collect::<Vec<_>>(),
         ),
         Value::String(text) => Value::String(redact_string(key, text)),
-        // Numbers, booleans and null are already as short as they will ever
-        // be, and none of them can hide a file's contents.
         other => other.clone(),
     }
 }

@@ -1,65 +1,21 @@
 //! The constitution of a workspace: `world/` (PLAN 7.2; `COS.md` *Work*).
 //!
-//! The missed half of Phase 11. [`workspace`](crate::workspace) laid down the
-//! **cabinet** — briefs, status, artefacts, decisions and the project's own
-//! runbooks, all under `.aegis/` — and those files change every turn, which is
-//! the point of them. This module is the other layer in the same folder, with
-//! the opposite mutation rule: what the thing *is*.
+//! What the project *is*, at the root beside the `.aegis/` cabinet, because it
+//! belongs to the project rather than to Aegis.
 //!
-//! It stays at the **root**, unprefixed, and that is the one difference in the
-//! layout that carries an argument. The cabinet is the harness's working
-//! surface over a project, so it goes in the tool's own directory; `world/` is
-//! the project, the way `src/` and `docs/` are, and putting it inside `.aegis/`
-//! would say it belongs to Aegis. It does not — it outlives any harness that
-//! reads it. Essence, the schema it was perceived to have, how it behaves
-//! including the sins a dump showed, how a new instance is known to be right,
-//! the decisions that moved the essence, and the sources all of that was
-//! perceived from.
+//! * **Opt-in.** Nothing creates it; a world exists once `world/essence.md` does.
+//! * **Specialists never write it.** A delegated run's write is refused
+//!   ([`matrix`](crate::policy::matrix)); otherwise it is asked at high risk with
+//!   a `world/`-only grant. The frame matches the run ([`FRAME_DELEGATED`] vs
+//!   [`FRAME_CABINET`]), so the model does not refuse what the gate would ask.
+//! * **Sources are hashed, not `world/`.** Drift in [`SOURCES_FILE`]'s declared
+//!   artefacts is measured when a brief launches ([`blocking`]) and when the
+//!   panel opens ([`status`]).
+//! * **An in-step source is not re-read.** A read is refused; a moved source
+//!   reads normally so it can be re-perceived.
 //!
-//! Four facts about it, and each one is a rule somewhere below.
-//!
-//! **It is opt-in, and nothing here creates it.** There is no scaffolder for
-//! `world/`, deliberately: a workspace with no essence to protect — a watch
-//! folder, a wish list — gains nothing from five empty templates, and PLAN 7.2
-//! calls those theatre. A world exists when somebody wrote `world/essence.md`,
-//! in their editor or through `fs_write` under the gate, and this module reads
-//! whatever is there.
-//!
-//! **Specialists read it and do not write it.** That is a *refusal*, not an ask
-//! with a session grant ([`matrix`](crate::policy::matrix)): a delegated run
-//! that writes the constitution is the same shape as a reviewer calling
-//! `fs_write`. Amending the essence is a cabinet act — the human, or the Chief
-//! of Staff in front of them — so outside a delegated run the write is put to a
-//! person, at high risk, with a narrow grant of its own that reaches `world/`
-//! and nothing else.
-//!
-//! The frame says whichever of those is true of the run ([`FRAME_DELEGATED`] and
-//! [`FRAME_CABINET`]), and that split is not cosmetic. A single paragraph
-//! telling every session "you do not write `world/`" is wrong for half of them
-//! in the expensive direction: the model declines what the operator is sitting
-//! there waiting to approve, never reaches the dialog that would have said yes,
-//! and leaves an audit log with no `fs_write` in it at all — a prompt refusing,
-//! which looks nothing like a gate refusing and is much harder to find.
-//!
-//! **What is hashed is the sources, not the constitution.** Hashing `world/` to
-//! detect a specialist's write would be the lockfile of a harness that had no
-//! policy; this harness *is* the policy. What is hashed is what nobody writes
-//! in a session: the declared source artefacts of [`SOURCES_FILE`] — a dump, an
-//! export, logs. The operator drops a new one, and re-perceiving *that delta*
-//! is the only legitimate re-perception there is. Drift is measured where it
-//! changes a decision: at the launch of a brief ([`blocking`]) and when a person
-//! opens the panel ([`status`]).
-//!
-//! **Reading a source that has already been perceived is refused.** Not asked:
-//! what it said is in `world/`, and reading it again is precisely the
-//! round-trip the whole shape exists to prevent. A source that has *moved* is
-//! not in that state — it has not been perceived yet — so it reads like any
-//! other file in the workspace, and the bounded re-perception can happen.
-//!
-//! What reaches the model is [`block`]: a frame of a few lines and the world's
-//! *status*. Never `essence.md` itself. The system message stays a policy
-//! summary plus what is true right now (PLAN 7.1); the constitution stays on
-//! disk, where `fs_read` can reach it in the one turn that needs it.
+//! The model gets [`block`] — a short frame plus status — never `essence.md`
+//! itself (PLAN 7.1).
 
 use std::fmt::Write as _;
 use std::fs;
@@ -78,25 +34,14 @@ pub const WORLD_DIR: &str = "world";
 /// Where the source artefacts a world was perceived from are declared.
 pub const SOURCES_FILE: &str = "world/sources.yml";
 
-/// How much of a declared source is read at a time while hashing it.
-///
-/// A dump is the one file in a workspace that is routinely larger than memory,
-/// and the reason to hash it is to avoid reading it — so the hash itself must
-/// not be the read that costs.
+/// Chunk size for hashing a declared source, which may be larger than memory.
 const HASH_CHUNK: usize = 64 * 1024;
 
-/// Most sources one `sources.yml` may declare.
-///
-/// A cap on a list that reaches the system message, for the reason every other
-/// block here has one. A world with more declared dumps than this has a
-/// directory it should be declaring instead.
+/// Most sources one `sources.yml` may declare; the list reaches the system
+/// message.
 const SOURCES_MAX: usize = 32;
 
 /// One file of the constitution, and what it is for.
-///
-/// The table is the one place the convention is written down, the way
-/// `CONVENTION` is for the cabinet: the reader, the panel and the frame all
-/// walk it.
 struct Leaf {
     /// The file's name inside `world/`.
     file: &'static str,
@@ -104,11 +49,7 @@ struct Leaf {
     what: &'static str,
 }
 
-/// The constitution, in reading order.
-///
-/// Essence first because everything else is a claim about it, the essence's own
-/// decisions last because they are its history. Nothing here is required: a
-/// world that has only an essence is a world.
+/// The constitution, in reading order. Every file is optional.
 const CONSTITUTION: [Leaf; 5] = [
     Leaf {
         file: "essence.md",
@@ -132,13 +73,8 @@ const CONSTITUTION: [Leaf; 5] = [
     },
 ];
 
-/// What every session on a world is told, whoever is running it.
-///
-/// A harness injection rather than a skill, and PLAN 7.2 is explicit about why:
-/// a skill can be skipped, and forgetting this is the defect the whole shape
-/// exists to prevent. It is a few lines, it carries no procedure — how to
-/// perceive a delta or verify against the oracle is a runbook — and it names no
-/// file's contents.
+/// What every session on a world is told — injected rather than a skill, which
+/// could be skipped (PLAN 7.2). No procedure.
 const FRAME: &str = "\
 This workspace has a world. `world/` is what this project *is*, and for this \
 session it is the constitution: read it before you plan anything, starting with \
@@ -151,12 +87,8 @@ You do not reopen the declared sources below to understand the project. They \
 have been perceived and what they said is in `world/`; a read of one that has \
 not changed is refused rather than asked about.";
 
-/// The half of the frame that is about *writing*, for a delegated run.
-///
-/// `COS.md` *Work*: specialists read the world and do not write it. The gate
-/// refuses it outright ([`matrix`](crate::policy::matrix)), and this is the
-/// same fact said in advance, so a specialist plans for the stop rather than
-/// discovering it four steps in.
+/// The writing half of the frame for a delegated run, where the gate refuses
+/// `world/` writes ([`matrix`](crate::policy::matrix)).
 const FRAME_DELEGATED: &str = "\
 You do not write `world/`. Amending the essence is a human decision, and this \
 is a brief: a write there is refused outright, not put to anybody. If the work \
@@ -165,18 +97,8 @@ answer — stop, say in one sentence which line of the essence would have to \
 move and why, and return `needs_you`. That is an écart, and it is worth more \
 than a plausible instance built on a world nobody agreed to change.";
 
-/// The same half, for a session a person is sitting in.
-///
-/// The distinction this exists to make, and the one an earlier version of the
-/// frame got wrong by telling *every* session it may not write: amending the
-/// world is a human decision, and a person asking for help with it in their own
-/// session **is** that decision being made. Saying "you do not write `world/`"
-/// there is a prompt refusing what the gate would have asked about, which reads
-/// to the operator as a bug in the harness — and it quietly disables
-/// [`world.draft`](crate::skills::DRAFT_SKILL), whose whole job is those writes.
-///
-/// So what it says is what is true: not yours to decide, theirs — and every
-/// write is put to them.
+/// The same half for an attended session, where writes are asked, not refused —
+/// otherwise the prompt would block [`world.draft`](crate::skills::DRAFT_SKILL).
 const FRAME_CABINET: &str = "\
 `world/` is not yours to change on your own initiative. Amending the essence is \
 the operator's decision, so do not rewrite it to make a task fit: if what you \
@@ -211,8 +133,7 @@ pub enum SourceState {
 }
 
 impl SourceState {
-    /// Whether this state is one the Chief of Staff has to act on before it
-    /// routes anything (`COS.md` *Loop*: source drift comes first).
+    /// Whether this needs acting on before routing (`COS.md` *Loop*).
     pub const fn is_drift(self) -> bool {
         matches!(self, Self::Drifted | Self::Missing | Self::Unrecorded)
     }
@@ -250,28 +171,17 @@ pub struct WorldSource {
     pub state: SourceState,
 }
 
-/// The world's state in one workspace.
-///
-/// Measured on every call and never stored, for the reason
-/// [`WorkspaceLayout`](crate::workspace::WorkspaceLayout) is: the folder
-/// belongs to the user, who may have written `world/essence.md` in their editor
-/// a minute ago.
+/// The world's state in one workspace, measured on every call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct WorldStatus {
     /// Whether there is a world in this workspace at all.
-    ///
-    /// False for every workspace that never opted in, which is most of them,
-    /// and the panel then says only what a world is and how one is started.
     pub present: bool,
     /// Every file of the constitution, present or not, in reading order.
     pub files: Vec<WorldFile>,
     /// What `world/sources.yml` declares, and what is true of each one.
     pub sources: Vec<WorldSource>,
     /// Whether any declared source has moved since it was perceived.
-    ///
-    /// Derived here rather than in the UI so that "drifted" means the same
-    /// thing to the panel, to the brief that will not launch, and to a test.
     pub drifted: bool,
     /// Why `sources.yml` could not be read as written, when it could not.
     pub problem: Option<String>,
@@ -306,17 +216,8 @@ pub struct World {
     problem: Option<String>,
 }
 
-/// The world in `root`, or `None` when this workspace has none.
-///
-/// A world is `world/` holding at least one file of [`CONSTITUTION`]. A
-/// directory holding only a `sources.yml`, or only a README somebody left
-/// there, is not one: a declared dump with no essence is the theatre PLAN 7.2
-/// refuses, and treating it as a world would start refusing reads of that dump
-/// on the strength of an empty folder.
-///
-/// Never fails. Every part of it is optional, and a part that cannot be read is
-/// a part that is not there — which is the answer the panel, the frame and the
-/// gate can all act on.
+/// The world in `root`: `world/` holding at least one [`CONSTITUTION`] file (a
+/// lone `sources.yml` is not a world). Never fails; unreadable parts are absent.
 pub fn read(root: &Path) -> Option<World> {
     let dir = inside(root, WORLD_DIR)?;
     if !dir.is_dir() {
@@ -341,12 +242,8 @@ pub fn read(root: &Path) -> Option<World> {
 }
 
 impl World {
-    /// What is true of every declared source, read in full.
-    ///
-    /// This is the authoritative measurement and the expensive one: it hashes
-    /// what it has to. Called where drift changes a decision — a brief about to
-    /// launch, a panel somebody opened — and never on the way into a model
-    /// request.
+    /// What is true of every declared source, hashing as needed. Expensive:
+    /// never called on the way into a model request.
     pub fn measure(&self) -> Vec<(&Source, SourceState)> {
         self.sources
             .iter()
@@ -382,15 +279,10 @@ fn state_of(source: &Source) -> SourceState {
         return SourceState::Missing;
     };
     if !meta.is_file() {
-        // A declared source that is a directory is a declaration this build
-        // cannot answer: it hashes files. Reported as drift rather than
-        // silently as "in step", because the honest answer is that nothing here
-        // knows whether it moved.
+        // Only files can be hashed; a directory cannot be shown in step.
         return SourceState::Drifted;
     }
-    // The cheap half first. A log that was appended to, an export that was
-    // regenerated: the length already says it moved, and there is no reason to
-    // read a gigabyte to confirm it.
+    // A length change settles it without hashing.
     if source.bytes.is_some_and(|len| len != meta.len()) {
         return SourceState::Drifted;
     }
@@ -436,18 +328,11 @@ fn hash(path: &Path) -> io::Result<String> {
 // `world/sources.yml`
 // ---------------------------------------------------------------------------
 
-/// What [`SOURCES_FILE`] declares, and what is wrong with it.
+/// What [`SOURCES_FILE`] declares, and the first thing wrong with it. Parsed by
+/// hand, like [`skills::doc`](crate::skills::doc), for line-numbered errors.
 ///
-/// Parsed by hand rather than with a YAML crate, for the reason the `SKILL.md`
-/// front matter is ([`skills::doc`](crate::skills::doc)): the shape is a list of
-/// three scalars, a dependency that could deserialize an arbitrary document
-/// would be a dependency that accepts documents this has no meaning for, and the
-/// error a person needs is "line 7 declares no path", not a parser's.
-///
-/// Two spellings, because both are honest states of a world. A source may be
-/// declared with a digest — it has been perceived — or as a bare path, which
-/// says it is one of this world's sources and nothing has been perceived from it
-/// yet.
+/// An entry is a path with a recorded digest (perceived) or a bare path (not
+/// yet perceived).
 ///
 /// ```yaml
 /// sources:
@@ -476,11 +361,7 @@ fn sources(root: &Path) -> (Vec<Source>, Option<String>) {
     let mut problem: Option<String> = None;
 
     for (at, line) in text.lines().enumerate() {
-        // Everything from a `#` is a comment, wherever it is — which does mean
-        // a path with a `#` in it cannot be declared. Said here rather than
-        // worked around: a source artefact is a dump somebody dropped in a
-        // folder, the operator names that folder, and a comment beside an entry
-        // is worth more than the file name nobody has.
+        // `#` always starts a comment, so a path cannot contain one.
         let trimmed = line.split('#').next().unwrap_or("").trim();
         if trimmed.is_empty() || trimmed == "sources:" {
             continue;
@@ -490,9 +371,7 @@ fn sources(root: &Path) -> (Vec<Source>, Option<String>) {
             let rest = rest.trim();
             let declared = match rest.strip_prefix("path:") {
                 Some(value) => value.trim(),
-                // The bare form. Anything else with a colon in it is a key this
-                // build does not know, at the position where a path belongs,
-                // and guessing at it would declare a source nobody wrote down.
+                // The bare form; any other `key:` here is refused, not guessed.
                 None if !rest.contains(':') => rest,
                 None => {
                     note(
@@ -535,9 +414,7 @@ fn sources(root: &Path) -> (Vec<Source>, Option<String>) {
                 Ok(len) => current.bytes = Some(len),
                 Err(_) => note(&mut problem, at, "`bytes` is not a number"),
             },
-            // Not an error. A world may carry a note, a date or a provenance
-            // line beside a source, and refusing the file over a key this build
-            // has no use for would make the format brittle for no gain.
+            // Unknown keys (notes, dates) are ignored.
             other => tracing::debug!(key = other, "an unread key in the declared sources"),
         }
     }
@@ -553,23 +430,16 @@ fn sources(root: &Path) -> (Vec<Source>, Option<String>) {
     (found, problem)
 }
 
-/// Records the *first* thing wrong with `sources.yml`, and only the first.
-///
-/// A person fixing a file they wrote wants the line to start at; a list of
-/// twelve complaints about a file whose second line was mistyped is a list of
-/// eleven consequences.
+/// Records only the *first* thing wrong with `sources.yml`; later ones are
+/// usually consequences.
 fn note(problem: &mut Option<String>, at: usize, what: &str) {
     if problem.is_none() {
         *problem = Some(format!("`{SOURCES_FILE}` line {}: {what}", at + 1));
     }
 }
 
-/// One declared path as a [`Source`], or why it is not one.
-///
-/// Resolved through [`path`] rather than joined, and refused when it lands
-/// outside the workspace. `sources.yml` is a file in the user's folder that a
-/// model can be asked to write, and a declaration of `../../.ssh/id_rsa` that
-/// this module then hashed would be an exfiltration path with a YAML front end.
+/// One declared path as a [`Source`], resolved through [`path`] and refused
+/// outside the workspace — a model can write `sources.yml`.
 fn declare(root: &Path, declared: &str) -> Result<Source, String> {
     let declared = declared.trim().trim_matches('"');
     if declared.is_empty() {
@@ -595,36 +465,15 @@ fn declare(root: &Path, declared: &str) -> Result<Source, String> {
 // What reaches the model
 // ---------------------------------------------------------------------------
 
-/// The frame and the world's status, for the system message.
-///
-/// `None` for a workspace with no world, which is every workspace that did not
-/// opt in: nothing is appended to nag somebody into a constitution they do not
-/// need.
-///
-/// What it carries is the frame, the names of the constitution's files, the
-/// declared sources by path, and any drift that could be seen *without reading a
-/// source*. It never carries a file's contents — PLAN 7.1 keeps the system
-/// message a policy summary plus what is true now, and the essence is exactly
-/// the document that would grow it into a runbook.
-///
-/// The drift it reports is the drift a [`glance`] can see: a source that is not
-/// there, one nothing was ever perceived from, one whose recorded length no
-/// longer matches, and — for a source small enough that reading it is not itself
-/// the waste — a digest that no longer matches. Hashing a multi-megabyte dump on
-/// the way into every model request would be the round-trip this whole module
-/// exists to avoid, so the block reports the drift it has seen and never claims
-/// there is none. The measurement that is allowed to claim that is
-/// [`World::drifted`], and it runs where it changes a decision.
+/// The frame and the world's status for the system message, or `None` without
+/// a world: file names, declared sources, and only the drift a cheap [`glance`]
+/// sees. Never file contents (PLAN 7.1), and never a claim that nothing drifted
+/// ([`World::drifted`] is the full measurement).
 pub fn block(root: &Path, delegated: bool) -> Option<String> {
     let world = read(root)?;
     let mut out = String::from(FRAME);
 
-    // The one part of the frame that differs by run, and it has to: the gate
-    // refuses a brief's write and *asks* about a session's, so a single
-    // paragraph is wrong for one of them. Told wrongly in the strict direction
-    // it is worse than useless — the model declines what the operator is
-    // sitting there waiting to approve, and never reaches the dialog that would
-    // have said yes.
+    // The gate refuses a brief's write but asks about a session's.
     out.push_str("\n\n");
     out.push_str(if delegated {
         FRAME_DELEGATED
@@ -644,9 +493,7 @@ pub fn block(root: &Path, delegated: bool) -> Option<String> {
         .iter()
         .filter(|leaf| !world.held.contains(&leaf.file))
     {
-        // Named as absent rather than left out. A world with no oracle cannot be
-        // verified against one, and a model told only what is there would go
-        // looking for the file rather than saying that it is not written yet.
+        // Named as absent, so the model does not go looking for it.
         let _ = write!(
             out,
             "\nThere is no `{WORLD_DIR}/{}` yet ({}).",
@@ -693,26 +540,13 @@ pub fn block(root: &Path, delegated: bool) -> Option<String> {
     Some(out)
 }
 
-/// Above this, a source is too big to hash on the way into a model request.
-///
-/// The same number as the matrix's `READ_ASK_BYTES`, and the same judgement
-/// behind it: below a megabyte, reading a file is the order of cost the cabinet
-/// digest already pays twice per request; above it, a read is a thing you decide
-/// to do. A dump that size is exactly the one whose recorded `bytes` is the
-/// cheap check.
+/// Above this, a source is not hashed on the way into a model request (same as
+/// the matrix's `READ_ASK_BYTES`).
 const GLANCE_MAX_BYTES: u64 = 1024 * 1024;
 
-/// What can be told about a source cheaply.
-///
-/// `None` means the answer would cost more than a model request should pay, so
-/// [`block`] says nothing about it rather than guessing. That is the asymmetry
-/// the block is written around: it reports drift it has seen and never claims
-/// there is none.
-///
-/// Three of the four answers are free — a file that is not there, one nothing
-/// was ever perceived from, one whose length is no longer what was recorded. The
-/// fourth needs the bytes, and it is taken only for a source small enough that
-/// reading it is not the round-trip this module exists to avoid.
+/// What can be told about a source cheaply: missing, unrecorded or length
+/// changed for free, a hash only under [`GLANCE_MAX_BYTES`]. `None` means
+/// unknown.
 fn glance(source: &Source) -> Option<SourceState> {
     let Ok(meta) = fs::metadata(&source.resolved) else {
         return Some(SourceState::Missing);
@@ -733,11 +567,8 @@ fn glance(source: &Source) -> Option<SourceState> {
 // What the gate asks
 // ---------------------------------------------------------------------------
 
-/// Whether a workspace-relative path is inside the constitution.
-///
-/// The *first* segment only, unlike the `.git/` predicate beside it: `world/` is
-/// a convention at the root of a workspace, and a code repository with a
-/// `src/world/` module in it has not thereby written a constitution.
+/// Whether a workspace-relative path is inside the constitution: first segment
+/// only, so `src/world/` is not.
 pub fn in_world(relative: &Path) -> bool {
     relative
         .components()
@@ -748,19 +579,8 @@ pub fn in_world(relative: &Path) -> bool {
         .is_some_and(|first| first.eq_ignore_ascii_case(WORLD_DIR))
 }
 
-/// The declared source `target` is, when it is one that has already been
-/// perceived.
-///
-/// `Some(path)` is the refusal case of PLAN 7.2: while a world is in force, a
-/// read of a declared source artefact is *denied*, not asked about. What it said
-/// is in `world/`, and reading it again is the round-trip the world exists to
-/// have paid once.
-///
-/// `None` covers every other state, and one of them matters: a source that has
-/// **moved** reads like any other file in the workspace. It has not been
-/// perceived yet, and perceiving that delta is the one legitimate re-perception
-/// there is — a refusal here would leave a world that could never be brought
-/// back into step.
+/// The declared source `target` is, if it is still in step — a read the gate
+/// refuses (PLAN 7.2). A moved source returns `None` so it can be re-perceived.
 pub fn perceived_source(root: &Path, target: &Path) -> Option<String> {
     let world = read(root)?;
     let source = world.declaring(target)?;
@@ -768,18 +588,9 @@ pub fn perceived_source(root: &Path, target: &Path) -> Option<String> {
     (state_of(source) == SourceState::InStep).then(|| source.path.clone())
 }
 
-/// Why this brief must not launch yet, when a declared source has moved.
-///
-/// PLAN 7.2: at the launch of a brief the harness compares the declared hashes;
-/// drift means the brief does not go out, and what goes out instead is a bounded
-/// perceive-delta. Both at once is how a world quietly ends up with an instance
-/// compiled from a schema nobody re-read.
-///
-/// The one brief that *does* go out is the delta itself, and it names itself: a
-/// brief whose `inputs` name one of the drifted paths is the perceive-delta, so
-/// it passes. Nothing here reads a skill name — a brief carries none, inputs are
-/// paths (`COS.md` *Handoff*), and the path is what makes this one bounded to
-/// the delta rather than a reopening of the whole dump.
+/// Why this brief must not launch while a declared source has drifted
+/// (PLAN 7.2). A brief whose `inputs` name a drifted path is the perceive-delta
+/// and passes.
 pub fn blocking(root: &Path, inputs: &[String]) -> Option<String> {
     let world = read(root)?;
     let moved = world.drifted();
@@ -794,10 +605,7 @@ pub fn blocking(root: &Path, inputs: &[String]) -> Option<String> {
         return None;
     }
 
-    // Each one carries *how* it moved, because the three answers ask for
-    // different things: a source that changed is a perceive-delta, one that was
-    // never recorded is a first perception, and one that is gone is a question
-    // for the human.
+    // How each moved matters: changed, never recorded, or gone.
     let paths: Vec<String> = moved
         .iter()
         .map(|(source, state)| format!("{} — {}", source.path, state.as_str()))
@@ -811,12 +619,8 @@ pub fn blocking(root: &Path, inputs: &[String]) -> Option<String> {
     ))
 }
 
-/// Whether a brief's input names a declared source.
-///
-/// A suffix match on `/`-separated segments rather than a path resolution,
-/// because an input is whatever the model wrote: `sources/dump.sql`,
-/// `./sources/dump.sql` and an absolute path to the same file are all the same
-/// claim, and none of them has to exist for the claim to be readable.
+/// Whether a brief's input names a declared source: a segment-wise suffix
+/// match, so relative and absolute spellings both count.
 fn names(input: &str, declared: &str) -> bool {
     let input = input.replace('\\', "/");
     let input = input.trim().trim_start_matches("./");
@@ -831,11 +635,8 @@ fn names(input: &str, declared: &str) -> bool {
 // What the panel draws
 // ---------------------------------------------------------------------------
 
-/// The world's state in `root`, measured now.
-///
-/// The expensive read: every declared source is hashed if it has to be. That is
-/// the right cost for a panel somebody opened, and the wrong one for a model
-/// request — see [`block`].
+/// The world's state in `root`, fully measured — for the panel, not model
+/// requests.
 pub fn status(root: &Path) -> WorldStatus {
     let world = read(root);
     let held: &[&str] = world.as_ref().map_or(&[], |world| &world.held);
@@ -872,11 +673,7 @@ pub fn status(root: &Path) -> WorldStatus {
     }
 }
 
-/// [`path::resolve`], for a read where a refusal is not worth an error.
-///
-/// Same shape and same reasoning as the cabinet's: this runs on the way into
-/// model requests and panel renders, and the honest answer for a path that will
-/// not resolve inside the workspace is that there is nothing there.
+/// [`path::resolve`] for reads: a path outside the workspace is simply absent.
 fn inside(root: &Path, rel: &str) -> Option<PathBuf> {
     match path::resolve(root, rel) {
         Ok(resolved) if resolved.inside => Some(resolved.path),

@@ -1,18 +1,9 @@
 /**
  * Dropping a file onto a project in the list (PLAN 7.15).
  *
- * The literal form of "drop a file onto the project": the row names which one,
- * so it works for any project in the list, not only the open one. It lands in
- * that project's `.aegis/briefs/` — the only place a drop ever lands — and a
- * project without the cabinet refuses in the runtime's own words. Nothing lays
- * the convention down because something was dropped.
- *
- * The explorer keeps its own targets and its own rules (`ExplorerPanel`). The
- * two listeners hit-test disjoint parts of the page, so one drop is never
- * claimed twice.
- *
- * As everywhere else, the window names a drop by its id and never sends a path:
- * the runtime holds what the OS handed it.
+ * Works for any project row, landing in its `.aegis/briefs/` (refused without
+ * one). The explorer's listener covers a disjoint area. Drops are named by id,
+ * never by path.
  */
 
 import { create } from "zustand";

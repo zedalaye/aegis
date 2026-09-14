@@ -1,23 +1,11 @@
 //! The protocol between the runtime and a model (PLAN 4.1).
 //!
-//! Two things live here, and the split is the point. [`ModelRequest`] and its
-//! `WireMessage` family are the OpenAI-compatible request body — the only
-//! place in Aegis that knows what that JSON looks like. [`ModelEvent`] is the
-//! *normalized* stream coming back: whatever shape a provider's SSE frames
-//! arrive in, they are turned into these four variants before they leave
-//! `provider/`, so nothing downstream ever sees provider JSON.
-//!
-//! That normalization is what makes the fake provider and the real one
-//! interchangeable. `agent/turn.rs` consumes [`ModelEvent`] and has no way to
-//! tell which produced it.
-//!
-//! The third piece is [`ToolCallAssembler`]. Streamed tool calls arrive as
-//! fragments — a name in one frame, a slice of the arguments string in the
-//! next — and they must be accumulated per index and parsed exactly once, at
-//! the end. Doing it here rather than in each provider means Phase 8 inherits
-//! the assembly, including its failure behaviour: a call whose arguments never
-//! became valid JSON is not executed, it is answered, so the model can correct
-//! itself instead of the turn dying (PLAN 4.1).
+//! * [`ModelRequest`] / `WireMessage`: the OpenAI-compatible request body.
+//! * [`ModelEvent`]: the normalized stream every provider produces, so the turn
+//!   loop cannot tell providers apart.
+//! * [`ToolCallAssembler`]: accumulates streamed call fragments per index and
+//!   parses once at the end; unparseable arguments are answered with an error,
+//!   not executed (PLAN 4.1).
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -32,9 +20,8 @@ const FUNCTION: &str = "function";
 
 /// One request to a model.
 ///
-/// Built by [`transcript`](super::transcript) from a session's messages; sent
-/// by a [`Provider`](super::provider::Provider). Streaming is not a field
-/// because it is not a choice: Aegis always streams.
+/// Built by [`transcript`](super::transcript), sent by a
+/// [`Provider`](super::provider::Provider). Always streamed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelRequest {
     /// The model id, from settings (Phase 8) or the fake provider's own name.
@@ -48,23 +35,10 @@ pub struct ModelRequest {
 impl ModelRequest {
     /// The HTTP request body of PLAN 4.1.
     ///
-    /// `tools` and `tool_choice` are omitted entirely when no tool is on
-    /// offer: some OpenAI-compatible servers reject an empty `tools` array
-    /// rather than treating it as "no tools", and an absent key is what every
-    /// implementation agrees on.
-    ///
-    /// `stream_options.include_usage` **is** sent, and that is a correction of
-    /// a Phase 8 guess rather than a new feature (PLAN 7.3, Phase 17). That
-    /// phase left it out on the reasoning that some compatible servers reject
-    /// the extension and that most volunteer usage on the final chunk anyway.
-    /// The second half is false: a streaming endpoint generally sends a usage
-    /// chunk *only* when asked, so every turn came back unmeasured, and the
-    /// token counters this phase is judged on had nothing to count. The first
-    /// half is a risk worth taking now — the field is near-universal, servers
-    /// that do not know it almost always ignore unknown keys, and one that
-    /// refuses fails loudly on the next message and by name under
-    /// `settings_probe_provider`, which is a far better failure than a counter
-    /// that silently reads zero forever.
+    /// `tools` and `tool_choice` are omitted when empty (some servers reject an
+    /// empty array). `stream_options.include_usage` is sent (Phase 17): most
+    /// servers only report usage when asked, and a refusing server fails
+    /// visibly in the probe.
     pub fn to_body(&self) -> Value {
         let mut body = json!({
             "model": self.model,
@@ -86,9 +60,8 @@ impl ModelRequest {
 
 /// One message in the request body.
 ///
-/// The variants serialize to exactly the four shapes PLAN 4.1 shows. An
-/// assistant message that made tool calls carries `content: null`, which is
-/// what the API expects — not an empty string.
+/// The four shapes of PLAN 4.1; an assistant message with tool calls has
+/// `content: null`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum WireMessage {
@@ -191,12 +164,8 @@ pub enum StopReason {
 pub struct Usage {
     /// Tokens in the request, whether or not they were paid for at full price.
     ///
-    /// The *whole* prompt, always — which is the one definition that means the
-    /// same thing across providers and across a cache hit. Anthropic reports
-    /// its own `input_tokens` net of both cache figures below, so the provider
-    /// puts them back before filling this in; the Responses API counts them in
-    /// already and does not. Getting that wrong would make a well-cached turn
-    /// look like a cheap one instead of a cheaply-*served* one.
+    /// Always the whole prompt: Anthropic's net `input_tokens` get the cache
+    /// figures added back.
     #[ts(type = "number")]
     pub prompt_tokens: u64,
     /// Of `prompt_tokens`, how many were served out of the prompt cache — the
@@ -206,8 +175,7 @@ pub struct Usage {
     /// Of `prompt_tokens`, how many were written to the cache for a later turn
     /// to read, at a premium over the plain price.
     ///
-    /// Anthropic only: providers whose caching is automatic charge nothing to
-    /// write and so report nothing, which is a zero here rather than a gap.
+    /// Anthropic only; zero elsewhere.
     #[ts(type = "number")]
     pub cache_creation_tokens: u64,
     /// Tokens in the reply.
@@ -221,9 +189,7 @@ pub struct Usage {
 impl Usage {
     /// Adds another round's usage into this one.
     ///
-    /// A turn is a sequence of requests, and what it spent is their sum. Every
-    /// field adds, the cache figures included: they are each a share of the
-    /// `prompt_tokens` in the same round, so their shares sum too.
+    /// Every field sums, cache shares included.
     pub const fn add(&mut self, other: Self) {
         self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
         self.cache_read_tokens = self
@@ -261,9 +227,7 @@ pub enum ModelEvent {
         args_delta: String,
         /// Gemini thought signature for this call, when the part carried one.
         ///
-        /// Opaque. Must be echoed on the `functionCall` part of the next
-        /// request or Gemini 3 rejects the round. Other providers leave this
-        /// `None`.
+        /// Opaque; must be echoed on the next request or Gemini 3 rejects it.
         thought_signature: Option<String>,
     },
     /// The response ended.
@@ -308,11 +272,8 @@ pub struct AssembledCall {
 
 /// Accumulates streamed [`ModelEvent::ToolCallDelta`] fragments.
 ///
-/// Fragments are keyed by `index`, which is the only field a provider is
-/// guaranteed to repeat: the id and the name arrive once, on whichever
-/// fragment the provider felt like putting them on. Parsing is deferred to
-/// [`ToolCallAssembler::finish`], because a partial arguments string is not
-/// valid JSON and trying it early would fail on every call.
+/// Keyed by `index`, the only field repeated on every fragment; parsed only in
+/// [`ToolCallAssembler::finish`].
 #[derive(Debug, Default)]
 pub struct ToolCallAssembler {
     calls: Vec<Partial>,
@@ -331,15 +292,13 @@ struct Partial {
 impl ToolCallAssembler {
     /// Folds one fragment in.
     ///
-    /// `id` and `name` are taken the first time they appear and not
-    /// overwritten afterwards: a provider that repeats them repeats the same
-    /// value, and a provider that sends a second, different one is confused —
-    /// the first is what the earlier fragments belong to.
+    /// `id` and `name` are kept from their first appearance.
     pub fn push(&mut self, index: u32, id: Option<String>, name: Option<String>, args_delta: &str) {
         self.push_signed(index, id, name, args_delta, None);
     }
 
-    /// [`push`] plus a Gemini thought signature, taken the first time it appears.
+    /// [`Self::push`] plus a Gemini thought signature, kept from its first
+    /// appearance.
     pub fn push_signed(
         &mut self,
         index: u32,
@@ -385,15 +344,8 @@ impl ToolCallAssembler {
 
     /// Parses everything accumulated, in the order the model produced it.
     ///
-    /// Three things are repaired rather than refused, because each is a
-    /// provider quirk rather than a model mistake:
-    ///
-    /// * a missing id becomes `call_<index>` — ids only have to be unique
-    ///   within the response, and the index already is;
-    /// * empty arguments become `{}`, which is what a zero-argument call
-    ///   means and what several servers send for one;
-    /// * a call with no name at all cannot be repaired, and becomes an `Err`
-    ///   the model is told about.
+    /// A missing id becomes `call_<index>` and empty arguments become `{}`; a
+    /// missing name becomes an `Err` the model is told about.
     pub fn finish(mut self) -> Vec<AssembledCall> {
         self.calls.sort_by_key(|call| call.index);
 

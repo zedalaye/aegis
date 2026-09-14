@@ -1,29 +1,10 @@
 /**
  * Explorer state (PLAN 7.15).
  *
- * The files belong to the operator's folder, so this store holds no copy of
- * them that outlives a look. It holds the folders somebody has expanded, the
- * one file being previewed, and what the last drop did — all of it refetched
- * rather than patched, for the reason the shared-file panel refetches: a file
- * edited in somebody's editor a moment ago is the one they expect to see.
- *
- * Four decisions shape it.
- *
- * **It reads only while the panel is open.** Like the board: open fetches,
- * closed forgets. A tree kept in memory for a panel nobody is looking at is a
- * directory walk paid for after every turn.
- *
- * **One folder at a time.** A folder is listed when it is expanded, and never
- * before. The runtime caps each listing and says what it left out.
- *
- * **Nothing here writes a file.** There is no save, no rename, no delete. The
- * one action that changes the workspace is `importDrop`, and what it copies is
- * whatever the OS dropped on the window — the runtime holds those paths, and
- * this store only ever names a drop by its id.
- *
- * **A preview failure is the pane's, not the window's.** A file that was
- * deleted since the tree was drawn is an ordinary thing to click on; it says so
- * where the file would have been, not in a banner over everything.
+ * Expanded folders, the previewed file and the last drop's result, refetched
+ * rather than patched, and only while the panel is open. Folders list on
+ * expand. Nothing writes files except `importDrop`, which names a drop by id.
+ * Preview errors stay in the pane.
  */
 
 import { create } from "zustand";
@@ -311,11 +292,8 @@ export const useExplorer = create<ExplorerState>((set, get) => {
 });
 
 /**
- * Re-reads the tree when a turn may have changed the folder.
- *
- * `turn:finished` only, once per turn, and a no-op while the panel is shut. A
- * write lands in the middle of a turn, but a tree that redrew after every tool
- * call would be one that jumped under the cursor of somebody reading it.
+ * Re-reads the open tree on `turn:finished` only, so it does not jump after
+ * every tool call.
  */
 export function attachExplorerEvents(): Promise<UnlistenFn> {
   return subscribe({

@@ -1,26 +1,9 @@
 //! The approval gate, through the crate's public surface.
 //!
-//! The unit tests inside `approval.rs` cover the registry's own branches and
-//! those in `agent/turn.rs` cover the loop's. This file covers what only an
-//! outside caller can see: that the Phase 6 exit conditions of `PLAN.md` § 6
-//! hold when the pieces are assembled the way the application assembles them —
-//! allow-once, allow-session and deny each doing what they say, a denial
-//! landing in the transcript as `E_DENIED` without ending the turn, and grants
-//! that can be listed and taken back.
-//!
-//! It uses the improvising [`FakeProvider`] rather than a script, because the
-//! provider's own triggers are part of the walkthrough: typing `/write` or
-//! `/run` is how a person reaches this gate before there is a model, and a
-//! test that scripted the call instead would not notice if that stopped
-//! working.
-//!
-//! Phase 7 adds the `shell_exec` half at the bottom, because a command is the
-//! first tool whose *running* the user can watch — the gate has to hold, and
-//! then the output has to arrive while it is still being produced.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is, against real files in
-//! a temporary directory.
+//! Phase 6's exit conditions (PLAN 6) as the app assembles them: allow-once,
+//! allow-session and deny; `E_DENIED` without ending the turn; grants listed and
+//! revoked. Uses the improvising [`FakeProvider`] so its `/write` and `/run`
+//! triggers stay tested. The `shell_exec` streaming half (Phase 7) is last.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -216,10 +199,7 @@ impl App {
     /// Runs one turn, answering each approval it raises with `answers` in
     /// order. An approval past the end of `answers` is left alone.
     ///
-    /// The two halves run concurrently on purpose: this is the shape the
-    /// application has, where the turn is a spawned task and the answers
-    /// arrive from a window. A test that resolved before running would not be
-    /// testing a gate at all.
+    /// Turn and answers run concurrently, as in the app.
     async fn turn(&self, sink: &Recorder, answers: &[ApprovalDecision]) -> StopReason {
         let turn_id = "turn-1";
         let cancel = self.turns.begin(&self.session_id, turn_id).expect("free");

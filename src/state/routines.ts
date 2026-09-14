@@ -1,23 +1,8 @@
 /**
  * Routine state (PLAN 7.3, Phase 16).
  *
- * What is on a clock, what it last did, and what is wrong with it. Three
- * things this store deliberately does *not* do.
- *
- * **It keeps no copy of what a routine can do.** Whether a skill is still
- * granted, a folder still there, a budget still unspent: all of that arrives on
- * the row as `problem`, measured by the runtime on every list. A UI that cached
- * "this one is fine" would be the thing that draws a clock as running after it
- * has quietly stopped.
- *
- * **It does not schedule anything.** The clock is a task in the Rust runtime
- * and runs whether or not there is a window — that is the whole point of the
- * phase. This store watches; `routine:updated` is how it hears about a run
- * nobody was in front of.
- *
- * **There is no field here for a prompt.** A routine names a runbook. If it
- * could carry a message, it would be a chat on a timer, which is the one thing
- * `COS.md` says not to automate.
+ * Rows with a runtime-measured `problem`, updated by `routine:updated`. The
+ * scheduler runs in Rust; there is no prompt field, a routine names a runbook.
  */
 
 import { create } from "zustand";
@@ -215,14 +200,7 @@ export const useRoutines = create<RoutinesState>((set, get) => ({
   dismissError: () => set({ error: null, fieldError: null }),
 }));
 
-/**
- * Keeps the list in step with what the clock is doing.
- *
- * The only store that hears from the runtime while nobody is looking at it: a
- * routine's row changes when a run ends, which is usually at an hour when the
- * window is shut. Patched rather than refetched, so a night of runs costs one
- * message each.
- */
+/** Patches rows from `routine:updated`, one message per run. */
 export function attachRoutineEvents(): Promise<UnlistenFn> {
   return subscribe({
     "routine:updated": (routine) => {

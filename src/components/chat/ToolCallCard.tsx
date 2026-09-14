@@ -1,44 +1,15 @@
 /**
  * One tool call in the transcript.
  *
- * The transcript is the record of what the agent did, so a call appears here
- * whatever became of it — auto-allowed, approved, refused, failed, or abandoned
- * by a cancel. A reply that quietly touched the filesystem and left no trace
- * would be the worst possible default.
+ * Every call is shown, whatever became of it.
  *
- * Three rules about what is shown.
- *
- * **The arguments are the ones the model sent**, not the ones policy resolved,
- * because that is what a user is checking when they go back and read a call
- * they allowed. They are rendered as plain text inside a `<pre>`: model output
- * is untrusted input, and the WebView holds the whole UI.
- *
- * **The summary is one line.** A tool's real output can be 256 KB; the model
- * gets the envelope, the transcript gets a sentence. Arguments are collapsed
- * behind a disclosure for the same reason — the card has to stay skimmable in
- * a conversation that made twenty calls.
- *
- * The text arrives already cleaned: the runtime strips ANSI escape sequences,
- * so this pane never has to be a terminal emulator, and what it shows is what
- * the model was given.
- *
- * **A running command's output is shown as it arrives.** That is the one
- * exception to the rule above, and it is the point of `shell_exec`: a command
- * that takes two minutes and shows nothing until it is done is
- * indistinguishable from a hang. The pane is bounded, it follows the output
- * the way the transcript follows a reply, and it says when it is not showing
- * everything. It is a live view, not a record — nothing is on disk but the
- * summary, so it is gone when the session is re-opened.
- *
- * A capture is the one result that is a picture, and it is shown as one. The
- * bytes never come through the IPC channel (PLAN 5.4): the record carries the
- * PNG's path, `convertFileSrc` turns it into an `asset:` URL, and the runtime
- * has scoped that protocol to the capture directory and nothing else — a path
- * outside it comes back 403 rather than being read. Unlike the output pane
- * this *is* a record: the path is persisted with the call, so re-opening the
- * session shows the capture again. It is also the one place the transcript
- * shows a person something the model was not shown; the model got a path, a
- * size and a digest.
+ * - Arguments are the model's own, as plain text in a `<pre>` (untrusted),
+ *   collapsed by default.
+ * - The summary is one line; ANSI is already stripped by the runtime.
+ * - A running command's output streams into a bounded live pane that is not
+ *   persisted.
+ * - A capture is shown from its persisted path via the capture-scoped `asset:`
+ *   protocol (PLAN 5.4); the model only got path, size and digest.
  */
 
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -73,12 +44,8 @@ function formatArgs(argsJson: string): string {
 }
 
 /**
- * What a command has printed, following the output as it arrives.
- *
- * Scrolling sticks to the bottom only while the reader is already there, for
- * the same reason the transcript does: someone who has scrolled up to read a
- * compiler error is reading it, and a pane that yanks itself back down every
- * 50 ms cannot be read at all.
+ * What a command has printed, following the bottom only while the reader is
+ * there.
  */
 function OutputPane({ output }: { readonly output: ToolOutput }) {
   const paneRef = useRef<HTMLPreElement | null>(null);
@@ -124,17 +91,8 @@ function OutputPane({ output }: { readonly output: ToolOutput }) {
 }
 
 /**
- * The capture a call produced, at a size that fits in a transcript.
- *
- * Clicking it grows it in place rather than opening it anywhere. A link would
- * be a navigation, and this window is the application — nothing in the UI
- * should be one click away from leaving it. Growing it costs nothing extra:
- * the `<img>` already holds the full-resolution file, and only the box around
- * it changes.
- *
- * A capture that has since been deleted from disk simply fails to load, and
- * says so. The summary line above it still records what was taken and where,
- * which is the part that was never in the picture.
+ * The capture a call produced; clicking grows it in place (never navigates). A
+ * deleted file shows a load failure.
  */
 function CaptureThumbnail({ path }: { readonly path: string }) {
   const [broken, setBroken] = useState(false);

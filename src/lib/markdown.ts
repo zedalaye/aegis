@@ -1,32 +1,15 @@
 /**
  * A small markdown reader for the file preview (PLAN 7.15).
  *
- * It parses into a typed tree and nothing else. There is no HTML string
- * anywhere in this module or in the component that draws its output: every
- * node becomes a React element, and every piece of text reaches the DOM as a
- * text node. That is the sanitizer, and it is a closed set by construction —
- * a construct this parser does not know is text, not a construct that slips
- * through.
+ * Parses into a typed tree rendered as React elements and text nodes — no HTML
+ * strings, so unknown constructs are just text.
  *
- * Three decisions follow from that, and none of them is an oversight.
+ * - Raw HTML is shown as text.
+ * - Images are not loaded; a relative one can be opened through the runtime.
+ * - Links do not navigate; a workspace link opens that file in the preview.
  *
- * - **Raw HTML is text.** `<script>` in a file is shown as the characters
- *   `<script>`. A preview is for reading what the file says.
- * - **Images are not loaded.** `![](https://…)` would be the file choosing
- *   who the window talks to, and `![](file://…)` would be the file choosing
- *   what it reads. An image is drawn as its alt text; a relative one can be
- *   opened in the preview, which fetches it through the runtime like any
- *   other file in the workspace.
- * - **Links do not navigate.** An `<a href>` in this WebView can take the whole
- *   app somewhere else, or hit a `tauri:` scheme. A link to another file in the
- *   workspace opens that file in the preview; anything else is shown as text.
- *
- * Deliberately a subset: headings, paragraphs, emphasis, inline code, fenced
- * and indented code, block quotes, lists, rules and pipe tables. It is not
- * CommonMark and does not try to be — the files it reads are briefs, status
- * boards, decisions and runbooks, and those are the shapes they use. This is
- * not the chat bubble's renderer either (IDEAS § 14): that text is a model's,
- * and a different question.
+ * A subset of Markdown for briefs, boards, decisions and runbooks — not
+ * CommonMark, and not the chat renderer (IDEAS § 14).
  */
 
 /** A run of text inside a block. */
@@ -669,9 +652,8 @@ export function isExternal(href: string): boolean {
 /**
  * `rel` resolved against the folder `base`, both workspace-relative with `/`.
  *
- * `null` when it climbs above the workspace root. That is not the containment
- * check — the runtime refuses such a path whatever this says — it is only so a
- * link that obviously leaves the project is not drawn as one that opens.
+ * `null` above the workspace root — cosmetic; the runtime enforces
+ * containment.
  */
 export function resolveRelative(base: string, rel: string): string | null {
   const clean = (rel.split(/[?#]/)[0] ?? "").replace(/\\/g, "/");
@@ -699,10 +681,7 @@ export function resolveRelative(base: string, rel: string): string | null {
 /**
  * Whether an inline code span reads as a path in the workspace.
  *
- * Briefs name their inputs as paths in backticks (`COS.md`: inputs are paths,
- * never paste), and being able to open one from the brief is most of what
- * seeing a brief is for. The test is deliberately conservative: no spaces, not
- * absolute, and either a folder separator or a file extension.
+ * Conservative: no spaces, not absolute, and a separator or an extension.
  */
 export function looksLikePath(text: string): boolean {
   if (

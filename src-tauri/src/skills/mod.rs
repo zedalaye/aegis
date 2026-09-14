@@ -1,54 +1,20 @@
-//! The skill runner (PLAN 7.3, Phase 13; PLAN 7.6; `COS.md` *Skills*).
+//! The skill runner (Phase 13; PLAN 7.6; `COS.md` *Skills*).
 //!
-//! A skill is a versioned `SKILL.md` runbook — not a memory, not a tool. A
-//! tool is a verb on the machine. A memory is a preference or an exception. A
-//! skill *sequences* tools toward a done criterion, under the identity's
-//! allow-list, and it is the layer that makes a Chef de Cabinet cheap instead
-//! of chatty: without it every specialist re-derives "how we triage mail" from
-//! a novel in the context window, tokens burn, the process drifts, and
-//! compaction wipes it.
+//! A skill is a versioned `SKILL.md` runbook that sequences tools toward a done
+//! criterion.
 //!
-//! ## Catalog in, body on demand
-//!
-//! This is the shape the whole phase turns on, and the reason for every seam
-//! below. Every turn's system message carries the **catalog**: one line per
-//! skill the identity may run — name, version, scope, when to use it, the
-//! tools it will call ([`prompt_block`]). The **body** is not there. It is
-//! read, parsed and handed over only when the model calls `skill_run`, into
-//! that turn, and the next turn does not carry it unless it runs the skill
-//! again. Stuffing every `SKILL.md` into every system prompt is precisely the
-//! anti-pattern the catalog exists to prevent (PLAN 7.6), so [`Skill`] does
-//! not hold a body at all: [`catalog`] keeps the line, [`load`] re-reads the
-//! one file that was actually invoked. The rule is a property of the types,
-//! not a habit of the caller.
-//!
-//! ## Three scopes, two directories, one allow-list
-//!
-//! `COS.md` names three scopes. Two of them are places on disk — the user's
-//! **library**, beside the other application data, and the **workspace**'s own
-//! `.aegis/skills/`, which is where "how *this* project is deployed" belongs
-//! and which travels with the folder in git. The third, per-agent, is not a
-//! directory: it is [`Agent::skills`](crate::store::Agent::skills), the
-//! identity's allow-list, and it selects from what the other two found
-//! ([`granted`]). A workspace skill shadows a library skill of the same name,
-//! because the more specific runbook is the one that knows about the project.
-//!
-//! ## No extra rights
-//!
-//! A skill never widens the tool allow-list (PLAN 7.3, Phase 13). Two things
-//! enforce that and neither is inside the runbook:
-//!
-//! * the identity's *skill* allow-list is checked by
-//!   [`policy::decide_call`](crate::policy::decide_call), before anything is
-//!   read, with no approval offered — a prompt to exceed an allow-list is not
-//!   a question to ask; and
-//! * a run whose declared `tools` are not all held by the identity **fails
-//!   closed** at `skill_run`, rather than halfway through the steps.
-//!
-//! Everything a skill's steps then do is an ordinary tool call through the
-//! ordinary gate: the same matrix, the same dialog, the same audit line — now
-//! with the skill's name on it, which is what makes a run budgetable and
-//! replayable later (PLAN 7.6, *Audit names the skill*).
+//! * **Catalog in, body on demand.** The system message carries one line per
+//!   granted skill ([`prompt_block`]); the body is read only by `skill_run`,
+//!   into that turn. [`Skill`] has no body field, so this holds by type.
+//! * **Scopes.** The user's library and the workspace's `.aegis/skills/` are
+//!   directories (a workspace skill shadows a library one of the same name);
+//!   the per-agent scope is [`Agent::skills`](crate::store::Agent::skills),
+//!   applied by [`granted`].
+//! * **No extra rights.** The skill allow-list is checked in
+//!   [`policy::decide_call`](crate::policy::decide_call) with no approval
+//!   offered, and a run whose declared `tools` the identity does not hold fails
+//!   closed at `skill_run`. Every step is an ordinary gated call whose audit
+//!   line names the skill.
 
 pub mod doc;
 
@@ -65,51 +31,30 @@ use crate::workspace;
 
 pub use doc::SkillDoc;
 
-/// The directory skills live in — in the library and in a workspace alike.
-///
-/// One name for both, so "where do skills go" has one answer whichever scope
-/// someone is writing for. It is the *leaf*: the user's library is this
-/// directory beside the other application data, and a workspace's is this
-/// directory inside
-/// [`workspace::CABINET_DIR`](crate::workspace::CABINET_DIR), with the rest of
-/// the convention it belongs to.
+/// The skills directory's name, in the library and under
+/// [`workspace::CABINET_DIR`](crate::workspace::CABINET_DIR) alike.
 pub const LIBRARY_DIR: &str = "skills";
 
-/// The runbook inside a skill's directory.
-///
-/// The directory is the skill's *name* and the file is always called this, as
-/// `COS.md` and PLAN 7.3 both write it. A directory rather than a bare
-/// `<name>.md` because a runbook grows attachments — a template, an example,
-/// a checklist — and they belong beside it rather than in a second tree.
+/// The runbook inside a skill's directory, which is named after the skill and
+/// may hold attachments.
 pub const SKILL_FILE: &str = "SKILL.md";
 
-/// A runbook somebody proposed and nobody has applied yet (PLAN 7.13).
-///
-/// Beside where the `SKILL.md` would go, in the same directory, so applying one
-/// is a copy between two names a person can see side by side. The catalog never
-/// reads this name: [`read_dir`] looks for [`SKILL_FILE`] and nothing else, which
-/// is what makes a proposal unrunnable as a property of discovery rather than a
-/// check somebody has to remember.
+/// A proposed runbook not yet applied (PLAN 7.13), beside where its `SKILL.md`
+/// would go. [`read_dir`] never reads it, so a proposal cannot run.
 pub const PROPOSAL_FILE: &str = "PROPOSAL.md";
 
 /// Longest skill name.
 pub const NAME_MAX_CHARS: usize = 64;
 
-/// Most skills one catalog holds.
-///
-/// A ceiling on what the system message can cost, since the catalog is in
-/// every request. Past it the library is not a library, it is a wiki, and the
-/// answer is per-agent allow-lists rather than a longer prompt.
+/// Most skills one catalog holds, since the catalog is in every request.
 pub const CATALOG_MAX: usize = 64;
 
 // ---------------------------------------------------------------------------
 // IPC payloads
 // ---------------------------------------------------------------------------
 
-/// Which of `COS.md`'s scopes a skill was found in.
-///
-/// The per-agent scope is not here because it is not a place: it is the
-/// identity's allow-list, applied to what these two found.
+/// Which directory a skill was found in. The per-agent scope is an allow-list,
+/// not a place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -130,12 +75,8 @@ impl SkillScope {
     }
 }
 
-/// One catalog entry.
-///
-/// Everything except the runbook. A `Skill` is what the panel draws, what the
-/// system message is built from, and what the allow-list is matched against;
-/// the body is [`load`]ed only by a run, which is the whole point of the type
-/// not having a field for it.
+/// One catalog entry: everything except the body, which only a run
+/// [`load`]s.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct Skill {
@@ -152,18 +93,11 @@ pub struct Skill {
     pub tools: Vec<String>,
     /// The `SKILL.md` itself, so a person can go and open it.
     pub path: String,
-    /// Whether a workspace skill of this name is hiding a library one.
-    ///
-    /// Reported rather than silently resolved: two runbooks with one name is
-    /// exactly the state where somebody is running the one they did not mean
-    /// to, and the panel can say so.
+    /// Whether this workspace skill hides a library one of the same name, so
+    /// the panel can say so.
     pub shadows: bool,
-    /// Why this one cannot run, when it cannot.
-    ///
-    /// A file that will not parse stays in the catalog carrying its refusal,
-    /// rather than disappearing: the author is the only person who can fix it,
-    /// and a skill that vanished would tell them nothing. It is never offered
-    /// to the model — [`granted`] drops it.
+    /// Why this one cannot run. Kept in the catalog for its author, never
+    /// offered to the model ([`granted`]).
     pub problem: Option<String>,
 }
 
@@ -174,14 +108,9 @@ impl Skill {
     }
 }
 
-/// Whether `name` is a skill name.
-///
-/// The one definition, shared by discovery and by the identity allow-list
-/// ([`store::agents`](crate::store::agents)), so a name that can be granted is
-/// a name a directory can have and there is no third spelling in between.
-/// Lower case because the name reaches a case-insensitive filesystem on two of
-/// the three platforms, and a library that behaved differently on Linux would
-/// be a library that breaks when it is shared.
+/// Whether `name` is a skill name — shared by discovery and the identity
+/// allow-list ([`store::agents`](crate::store::agents)). Lower case, so a
+/// library behaves the same on case-insensitive filesystems.
 pub fn is_name(name: &str) -> bool {
     !name.is_empty()
         && name.chars().count() <= NAME_MAX_CHARS
@@ -194,26 +123,13 @@ pub fn is_name(name: &str) -> bool {
 // Discovery
 // ---------------------------------------------------------------------------
 
-/// Every skill the library and this workspace hold, by name.
-///
-/// Never fails. A library directory that is not there, or not readable, is a
-/// catalog without it — this is called on the way into a turn, and a turn that
-/// would not start because a folder is missing is a session that can no longer
-/// be talked to.
-///
-/// Workspace skills are discovered second and shadow library ones of the same
-/// name. The one they hide is dropped rather than listed twice: the model
-/// resolves a name to one runbook, and a catalog offering two of them would be
-/// offering a choice nothing downstream can express.
+/// Every skill the library and this workspace hold, by name. Never fails: an
+/// unreadable directory contributes nothing. A workspace skill replaces a
+/// library one of the same name.
 pub fn catalog(library: &Path, workspace: Option<&Path>) -> Vec<Skill> {
     let mut found = read_dir(library, SkillScope::Library);
 
     if let Some(root) = workspace {
-        // Under the cabinet, not at the workspace root: a project's runbooks
-        // are one directory of the same convention as its briefs and its board
-        // ([`workspace`](crate::workspace)), and they moved with it. The leaf
-        // name is still [`LIBRARY_DIR`], which is what keeps "where do skills
-        // go" one answer in both scopes.
         for mut skill in read_dir(&workspace_dir(root), SkillScope::Workspace) {
             if let Some(at) = found.iter().position(|other| other.name == skill.name) {
                 tracing::debug!(
@@ -259,10 +175,8 @@ fn read_dir(root: &Path, scope: SkillScope) -> Vec<Skill> {
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
 
-        // A folder that is not named like a skill is somebody else's folder,
-        // not a broken skill: `skills/` is an ordinary directory in an
-        // ordinary workspace and may well have a `.git` or a `README.md` in
-        // it. Only a directory holding a `SKILL.md` claims to be one.
+        // Only a skill-named directory holding a `SKILL.md` is a skill; anything
+        // else in `skills/` is somebody else's.
         if !is_name(&name) {
             continue;
         }
@@ -305,11 +219,8 @@ fn entry_for(name: &str, scope: SkillScope, path: &Path) -> Skill {
     skill
 }
 
-/// Reads and parses one `SKILL.md`.
-///
-/// The `io` failure is folded into the same message as a parse failure,
-/// because both answer the one question the caller has — can this run, and if
-/// not, what does the author have to change.
+/// Reads and parses one `SKILL.md`; read and parse failures share one message
+/// shape for the author.
 fn read(path: &Path) -> Result<SkillDoc, String> {
     let bytes = fs::read(path).map_err(|err| match err.kind() {
         io::ErrorKind::NotFound => format!("there is no `{SKILL_FILE}` in this folder"),
@@ -323,13 +234,8 @@ fn read(path: &Path) -> Result<SkillDoc, String> {
     doc::parse(&text)
 }
 
-/// The runbook of one catalog entry, read now.
-///
-/// Separate from [`catalog`] and re-reading the file on purpose: this is the
-/// *body on demand* half of PLAN 7.6, and a catalog that had already loaded
-/// every body would make the rule a habit of the caller rather than a fact
-/// about the code. It also means a runbook edited between two turns is the one
-/// that runs.
+/// The runbook of one catalog entry, read from disk now (PLAN 7.6, body on
+/// demand), so an edit between turns is what runs.
 pub fn load(skill: &Skill) -> Result<SkillDoc, String> {
     read(Path::new(&skill.path))
 }
@@ -350,23 +256,15 @@ pub fn find<'a>(catalog: &'a [Skill], name: &str) -> Option<&'a Skill> {
 pub enum ProposalState {
     /// There is no `SKILL.md` beside it yet, so it can be applied.
     Pending,
-    /// The `SKILL.md` beside it is this proposal, byte for byte.
-    ///
-    /// Left listed rather than hidden: `fs_write` cannot delete, so an applied
-    /// proposal stays on disk until a person removes it, and a panel that
-    /// pretended it had gone would be describing a folder that is not theirs.
+    /// The `SKILL.md` beside it is this proposal, byte for byte. Still listed:
+    /// the file stays until a person removes it.
     Applied,
-    /// A different `SKILL.md` is already there, and applying never replaces
-    /// one. That runbook was not proposed through this path, so this path does
-    /// not touch it (PLAN 7.13, *Never*).
+    /// A different `SKILL.md` is there, and applying never replaces one
+    /// (PLAN 7.13).
     Occupied,
 }
 
-/// One `PROPOSAL.md` in a workspace, as Settings lists it.
-///
-/// The fields a person decides on — what it is for, what it would call, whether
-/// it parses — and never the body. A proposal's body reaches nobody's system
-/// prompt, and nothing in the window needs it: the path is on the row.
+/// One `PROPOSAL.md` in a workspace, as Settings lists it — never its body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct SkillProposal {
@@ -389,14 +287,8 @@ pub struct SkillProposal {
     pub problem: Option<String>,
 }
 
-/// Every proposal in this workspace, by name.
-///
-/// The workspace only. A `PROPOSAL.md` in the library is not a proposal this
-/// slice knows about: the library is the outside-the-workspace row, asked every
-/// time, and session-authored runbooks belong in the project (PLAN 7.13,
-/// *Workspace only*).
-///
-/// Never fails, for [`catalog`]'s reason.
+/// Every proposal in this workspace, by name. Workspace only (PLAN 7.13); never
+/// fails.
 pub fn proposals(root: &Path) -> Vec<SkillProposal> {
     let dir = workspace_dir(root);
     let Ok(entries) = fs::read_dir(&dir) else {
@@ -450,14 +342,11 @@ fn proposal_for(name: &str, path: &Path) -> SkillProposal {
 
 /// Whether a write is the apply of a proposal, and whether that apply may go.
 ///
-/// `relative` is the write's target relative to the workspace root; `content` is
-/// what would be written. An apply is recognised by what it *is* — a write of
-/// `.aegis/skills/<name>/SKILL.md` whose content is the `PROPOSAL.md` beside it,
-/// byte for byte — rather than by a flag the model sets, so there is no way to
-/// ask for the apply row without actually copying the proposal.
+/// An apply is a write of `.aegis/skills/<name>/SKILL.md` (`relative` to the
+/// root) whose `content` is the `PROPOSAL.md` beside it, byte for byte — never a
+/// flag the model sets.
 ///
-/// * `None`: not an apply. Any other write of a `SKILL.md` is the handwritten
-///   path of PLAN 7.6, which this slice does not replace and does not touch.
+/// * `None`: not an apply (any other `SKILL.md` write is PLAN 7.6's path).
 /// * `Some(Ok(name))`: an apply that may be put to a person.
 /// * `Some(Err(reason))`: an apply that is refused — the proposal will not
 ///   parse, or there is already a runbook there to replace.
@@ -475,9 +364,8 @@ pub fn apply_of(root: &Path, relative: &Path, content: &str) -> Option<Result<St
     ) else {
         return None;
     };
-    // Case-folded on the fixed segments, for the filesystems that fold them:
-    // `.Aegis/Skills/x/skill.md` is the same file there, and an apply that could
-    // be dodged by spelling would be a rule about spelling.
+    // Case-folded fixed segments: `.Aegis/Skills/x/skill.md` is the same file
+    // on folding filesystems.
     if !cabinet.eq_ignore_ascii_case(workspace::CABINET_DIR)
         || !skills.eq_ignore_ascii_case(LIBRARY_DIR)
         || !file.eq_ignore_ascii_case(SKILL_FILE)
@@ -510,10 +398,8 @@ pub fn apply_of(root: &Path, relative: &Path, content: &str) -> Option<Result<St
     Some(Ok(name.to_owned()))
 }
 
-/// Whether this workspace holds a proposal of this name.
-///
-/// For the refusal a `skill_run` of one gets, which has a different fix from a
-/// name that is simply nowhere: this one is a person's apply away.
+/// Whether this workspace holds a proposal of this name, so `skill_run` can say
+/// it needs applying.
 pub fn is_proposed(root: &Path, name: &str) -> bool {
     is_name(name) && workspace_dir(root).join(name).join(PROPOSAL_FILE).is_file()
 }
@@ -522,13 +408,7 @@ pub fn is_proposed(root: &Path, name: &str) -> bool {
 // The allow-list, and the catalog the model sees
 // ---------------------------------------------------------------------------
 
-/// The skills `agent` may run, in catalog order.
-///
-/// Two filters, and both matter. An identity is shown only what it was granted
-/// — the per-agent scope of `COS.md` — and a runbook that will not parse is
-/// never offered, because offering it would be offering a run that cannot
-/// start. The refusal for the second stays in the catalog for the panel, where
-/// the person who can fix it will see it.
+/// The skills `agent` may run, in catalog order: granted and parseable.
 pub fn granted<'a>(catalog: &'a [Skill], agent: &Agent) -> Vec<&'a Skill> {
     catalog
         .iter()
@@ -536,16 +416,8 @@ pub fn granted<'a>(catalog: &'a [Skill], agent: &Agent) -> Vec<&'a Skill> {
         .collect()
 }
 
-/// The catalog block for the system message, or `None` when there is none.
-///
-/// `None` rather than a line saying "you have no skills": an identity that was
-/// granted none is every identity from before this phase, and a prompt that
-/// grew a paragraph about a feature it does not use would be the system
-/// message drifting the way PLAN 7.1 says it must not.
-///
-/// What each line carries is what a decision to load one is made on — the
-/// name, when it applies, and what it will touch. Not the steps: they are the
-/// body, and the body arrives when it is invoked.
+/// The catalog block for the system message, or `None` with no skills (no
+/// paragraph about an unused feature). Each line: name, when to use it, tools.
 pub fn prompt_block(skills: &[&Skill]) -> Option<String> {
     if skills.is_empty() {
         return None;
@@ -583,13 +455,8 @@ pub fn prompt_block(skills: &[&Skill]) -> Option<String> {
 // The run, as the turn sees it
 // ---------------------------------------------------------------------------
 
-/// What a skill tool needs from the runtime around it.
-///
-/// Held by [`ToolCtx`](crate::tools::ToolCtx) rather than resolved inside the
-/// tool, for the reason the capture directory is: where the library lives and
-/// which identity is running are facts about the installation and the session,
-/// not about what the model asked for, and a tool that went looking for them
-/// itself could not be tested without an application.
+/// What a skill tool needs from the runtime, passed in through
+/// [`ToolCtx`](crate::tools::ToolCtx) so the tools test without an app.
 #[derive(Debug, Clone, Copy)]
 pub struct SkillCtx<'a> {
     /// The user's library directory.
@@ -598,19 +465,13 @@ pub struct SkillCtx<'a> {
     pub workspace: Option<&'a Path>,
     /// The tools the identity holds, for the fail-closed check.
     pub tools: &'a [String],
-    /// The skill this turn is currently running, if any.
-    ///
-    /// Set by [`track`] when `skill_run` succeeds and cleared when
-    /// `skill_return` does. Every audit line written while it is set carries
-    /// the name, which is what makes a run budgetable and replayable
-    /// (PLAN 7.6, *Audit names the skill*).
+    /// The skill currently running, set and cleared by [`track`]; audit lines
+    /// carry it (PLAN 7.6).
     pub active: Option<&'a str>,
 }
 
 impl SkillCtx<'_> {
-    /// Whether the identity holds every tool a runbook says it will call.
-    ///
-    /// Returns the first one it does not, which is what the refusal names.
+    /// The first tool a runbook declares that the identity does not hold.
     pub fn missing<'d>(&self, declared: &'d [String]) -> Option<&'d str> {
         declared
             .iter()
@@ -619,11 +480,8 @@ impl SkillCtx<'_> {
     }
 }
 
-/// The name a skill tool reports it opened, in [`ToolResult::meta`].
-///
-/// The turn reads the run out of the envelope rather than out of the
-/// arguments: what opened is what the tool decided, and a loop that re-derived
-/// it from the call would be a second copy of that decision.
+/// The name a skill tool reports it opened, in [`ToolResult::meta`]. Read from
+/// the result, not the arguments: the tool decides.
 pub const META_SKILL: &str = "skill";
 
 /// The status a `skill_return` recorded, in [`ToolResult::meta`].
@@ -632,12 +490,7 @@ pub const META_STATUS: &str = "status";
 /// The summary a `skill_return` recorded, in [`ToolResult::meta`].
 pub const META_SUMMARY: &str = "summary";
 
-/// What a run reported, for whoever started the turn (PLAN 7.3, Phase 16).
-///
-/// The three fields of a `skill_return` anybody outside the turn has any use
-/// for: which runbook, how it ended, and what it said. A scheduled run's row is
-/// built from this, and nothing else in the process reads it — a session
-/// somebody is watching reports by being watched.
+/// What a run's `skill_return` reported, for a scheduled run's row (Phase 16).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Returned {
     /// The runbook that returned.
@@ -648,16 +501,9 @@ pub struct Returned {
     pub summary: String,
 }
 
-/// Where a turn leaves what its last run returned.
-///
-/// A cell, and the same one Phase 15 wrote for a delegated run
-/// ([`handoff::Open`](crate::handoff::Open)): the caller creates it, lends it to
-/// the turn, and reads it once the turn is over. Nothing here survives the
-/// turn, which is the scope a run has anyway.
-///
-/// The mutex is not contention — a turn runs its tool calls one at a time — it
-/// is there because the cell is reached through a shared reference from inside
-/// the loop.
+/// Where a turn leaves what its last run returned; the caller lends it to the
+/// turn and reads it afterwards, like [`handoff::Open`](crate::handoff::Open).
+/// The mutex only gives interior mutability through a shared reference.
 #[derive(Debug, Default)]
 pub struct Reported {
     returned: std::sync::Mutex<Option<Returned>>,
@@ -687,12 +533,8 @@ impl Reported {
     }
 }
 
-/// Reads a tool result as the return it recorded, if it is one.
-///
-/// Out of the envelope rather than out of the arguments, for the reason
-/// [`track`] is: what was recorded is what the tool decided, and a caller that
-/// re-derived it from the call would be a second copy of that decision — one
-/// that would happily report a return the tool had refused.
+/// Reads a successful `skill_return` result as what it recorded — from the
+/// result, so a refused return reports nothing.
 pub fn returned(tool: &str, result: &ToolResult) -> Option<Returned> {
     if tool != crate::policy::tool::SKILL_RETURN || !result.ok {
         return None;
@@ -714,27 +556,14 @@ pub fn returned(tool: &str, result: &ToolResult) -> Option<Returned> {
     })
 }
 
-/// Follows a session's skill run across the tool calls of one round.
+/// Follows a skill run across tool calls: `skill_run` opens it, `skill_return`
+/// closes it.
 ///
-/// The scope used to be the turn, on the argument that a local variable cannot
-/// be left set by a crash, a cancel or a window closing, and that a span which
-/// outlived its turn could name calls made after the conversation had moved on.
-/// The first half is still true and is why this function still takes a
-/// `&mut Option<String>`; the second half was measured and found to cost more
-/// than it saved. A real run spans turns because the round cap ends them —
-/// `IDEAS.md` § 10 has the trace, where half a run's audit lines carried no
-/// skill at all, the artefact write among them, and the closing
-/// `skill_return` was refused for want of anything open to close.
-///
-/// So the local is now seeded from the session at the top of a turn and carried
-/// back at the end of it
-/// ([`TurnRegistry::carry_run`](crate::agent::registry::TurnRegistry::carry_run)),
-/// and the "moved on" risk is bounded there instead: a cancel closes the run,
-/// and so does spending
-/// [`MAX_RUN_TURNS`](crate::agent::registry::MAX_RUN_TURNS) without returning.
-/// The body's scope has not changed and is not this: it is still loaded into
-/// one turn and gone from the next, which is what makes a run cheap. What
-/// carries is the name.
+/// The name (not the body) carries across turns, since the round cap splits
+/// real runs (`IDEAS.md` § 10):
+/// [`TurnRegistry::carry_run`](crate::agent::registry::TurnRegistry::carry_run)
+/// seeds and stores it, and a cancel or
+/// [`MAX_RUN_TURNS`](crate::agent::registry::MAX_RUN_TURNS) closes it.
 pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
     if !result.ok {
         return;
@@ -755,119 +584,19 @@ pub fn track(active: &mut Option<String>, tool: &str, result: &ToolResult) {
 // The library on disk
 // ---------------------------------------------------------------------------
 
-/// Creates the library and offers each seeded runbook to it once.
+/// Creates the library and offers each seeded runbook once per name, recorded
+/// in [`SEEDED_FILE`], so a deleted runbook never comes back and a new build's
+/// runbook still reaches old installs. Best effort.
 ///
-/// "Once" is per *name*, recorded in [`SEEDED_FILE`], rather than "once ever,
-/// keyed on the directory". Both rules keep the promise that matters — a
-/// runbook somebody deleted does not come back on the next start, because an
-/// application arguing with its user about the contents of their own folder is
-/// the thing to avoid. The manifest is what lets a later phase add a runbook
-/// the mode needs without every existing install being the one install that
-/// never sees it.
+/// A library older than the manifest counts a [`SEEDED_BEFORE`] name as offered
+/// only if its directory exists: wrongly assuming "offered" would lose a
+/// runbook silently, while wrongly assuming "not offered" only restores an
+/// example once.
 ///
-/// A library that predates the manifest is reconciled against its own disk. What
-/// it was offered cannot be read back, only inferred, and the two ways of
-/// getting the inference wrong do not cost the same: calling a name offered when
-/// it never was loses that runbook **for good and in silence**, while calling it
-/// unoffered costs one example reappearing once, in the open, on the single
-/// start that writes the manifest. So a name in [`SEEDED_BEFORE`] counts as
-/// offered when its directory is actually there, and after that start the
-/// manifest governs and a deletion is permanent.
-///
-/// Best effort throughout. A library that could not be created costs the
-/// examples and nothing else: [`catalog`] reads a missing directory as an empty
-/// one.
-///
-/// Twenty-five runbooks now, in nine groups. Two are the halves of the mode as it
-/// was: the standing rule that nothing irreversible goes out unreviewed, and
-/// the loop a Chief of Staff runs. One founds the cabinet that loop needs
-/// (PLAN 7.14): it proposes a roster and creates nobody. Four are the world's (PLAN 7.2) — draft one,
-/// perceive a delta, verify against the oracle, check the constitution. Three
-/// are the client-delivery pack (PLAN 7.3, Phase 19, pack 1) — review a range,
-/// draft a deploy, triage an alert. Three are client intake (pack 2) — turn a
-/// message into a ticket, recap a thread, draft a reply nobody has sent. Three
-/// are the watch (pack 3) — sweep what arrived into entries, digest what is new
-/// since the last digest, and say what one entry would mean here. Three are
-/// budget and portfolio (pack 4) — say what is held, say how long it lasts, and
-/// say what crossed a line somebody set. Three are social (pack 5) — find the
-/// few posts worth answering, draft one answer, draft one post. Three are
-/// revenue and the wish list (pack 6) — keep somebody's goals, write one
-/// proposal well enough to be wrong, and show what is funded.
-///
-/// Those last six groups are what a **domain pack** is, and the reason they
-/// are here rather than anywhere else in this tree. Phase 19's rule is *domain
-/// packs as skills, not runtime*: a domain reaches the harness as three files in
-/// a directory, and `agent/turn.rs`, the policy matrix and the tool registry do
-/// not know that a client exists. The rest of a pack is not in this file: the
-/// connectors it may want are installed by the operator (Phase 18), and the
-/// specialist that runs it is an identity somebody made and granted these names
-/// to.
-///
-/// Each pack has one property visible from here, and in each case it is the
-/// property that decides how the pack is granted.
-///
-/// * **Delivery** declares `shell_exec` and every runbook stops one step short
-///   of the act that cannot be taken back — a merge, a deploy, a sent reply —
-///   because that step is the human's (PLAN 7.4), and a procedure that ended
-///   with it would be a procedure that had taken it.
-/// * **Intake** declares no command at all, so its specialist is an identity
-///   that cannot run one, which is what you want of the identity whose inputs
-///   were written by people outside the house.
-/// * **Watch** declares no command either, for a different reason: it is the
-///   pack meant to run *unattended*, and an unattended run is never asked
-///   anything — what it may do beyond reading is what somebody signed onto the
-///   routine, and everything else is refused (PLAN 7.6). It also has no
-///   irreversible act to stop short of, so its discipline is the other one:
-///   *nothing happened* has to be a cheap and complete answer, or a watch on a
-///   clock manufactures news the way a triage with no *no ask* manufactures
-///   work.
-/// * **Budget** declares no command for a third reason, and this one is about
-///   the tool rather than the input or the hour: § 7.3 says *not a broker*, and
-///   a program on PATH is a calculator right up until it is `ccxt`. It is also
-///   the first pack whose material is arithmetic, where a wrong answer is
-///   formatted exactly like a right one — so a figure is copied from a line
-///   somebody else wrote or shown as a sum a reader can redo, and a total that
-///   does not reconcile is `needs_you` rather than a rounded line. Its stop is
-///   delivery's again, one item further down PLAN 7.4's list: the order.
-/// * **Social** is the only one whose artefact is addressed to nobody in
-///   particular, and the difference is permanence rather than accuracy. A
-///   mistaken mail is fixed by a second mail to the same person; a post is read
-///   by people who have none of the context, kept by some of them, and reached
-///   by no correction. Its adversary is new too: intake's was a forger, which is
-///   at least outside the run, and this one is inside it — the sharp answer
-///   performs best, and a model asked for *a good reply* cannot tell good from
-///   rewarded. So its steps name the shapes to refuse rather than asking for
-///   judgement.
-/// * **Revenue and the wish list** is the last of the six, and the only one
-///   whose material has not happened. Every other pack's discipline is a
-///   variant of *name the file the claim came from*; a want has no export
-///   behind it and a proposal is an argument about a future. So the rule
-///   inverts — nothing may acquire the grammar of a fact: an ordering nobody
-///   stated is *unordered*, a price nobody looked up is *not priced*, and a
-///   thesis carries what would show it false or it is not written. It is also
-///   the only pack under two prefixes, which is load-bearing rather than
-///   untidy: `revenue.thesis` may not read the wish list and
-///   `revenue.pipeline` may not give a proposal a number, because a thesis
-///   explained by the holiday it would fund is motivated reasoning with a file
-///   behind it.
-///
-/// One rule now appears in three packs, which is worth reading as a property of
-/// domain packs rather than of those three domains: `mail.triage` needs *no
-/// ask*, `watch.digest` needs *nothing new*, `social.scan` needs *none worth
-/// answering*. A procedure pointed at a pile and asked what to do about it will
-/// always find something, so the empty answer has to be ordinary, cheap and
-/// complete — not a fallback nobody reaches.
-///
-/// [`DRAFT_SKILL`] is the one that writes `world/`, and it is not the
-/// `world.amend` PLAN 7.2 refuses: that sentence is about *specialists*, and
-/// this is refused inside a brief exactly like any other write to the
-/// constitution, because the gate reads the run and not the runbook. What it
-/// serves is the other half of the same paragraph — amending the world is a
-/// cabinet act — where a person is in the session and would otherwise write six
-/// files by hand.
-///
-/// None of them is granted to anything by being here. An identity that may run
-/// one is an identity somebody granted it to (PLAN 7.6, *Authoring*).
+/// The seeds are the mode's own runbooks (review, `cos.loop`, cabinet founding,
+/// the four world skills) and the Phase 19 domain packs — see
+/// `docs/guide/packs.md` for what each pack declares and why. Seeding grants
+/// nothing (PLAN 7.6, *Authoring*).
 pub fn seed(library: &Path) {
     let manifest = library.join(SEEDED_FILE);
     let mut offered: Vec<String> = match fs::read_to_string(&manifest) {
@@ -877,9 +606,7 @@ pub fn seed(library: &Path) {
             .filter(|line| !line.is_empty())
             .map(str::to_owned)
             .collect(),
-        // A library from before the manifest existed: it was offered whichever
-        // of [`SEEDED_BEFORE`] is on its disk, because which of them it saw
-        // depends on the build that made it and no file records the answer.
+        // A library from before the manifest: infer from its disk.
         Err(_) if library.is_dir() => SEEDED_BEFORE
             .iter()
             .filter(|name| library.join(name).is_dir())
@@ -910,33 +637,20 @@ pub fn seed(library: &Path) {
     if written == 0 {
         return;
     }
-    // Written after the runbooks, not before: a crash between the two leaves a
-    // name unrecorded, which costs one redundant write on the next start. The
-    // other order would lose the runbook for good.
+    // After the runbooks: a crash in between costs a redundant write, not a
+    // lost runbook.
     if let Err(err) = fs::write(&manifest, format!("{}\n", offered.join("\n"))) {
         tracing::warn!(%err, path = %manifest.display(), "could not record what was seeded");
     }
     tracing::info!(dir = %library.display(), written, "example runbooks seeded");
 }
 
-/// Where the library records which runbooks it has already been offered.
-///
-/// A dotfile inside the library rather than a key in a store: the library is a
-/// directory of directories and this is a fact about that directory. [`read_dir`]
-/// skips it for free — it is not a folder holding a `SKILL.md`.
+/// The library's record of runbooks already offered, one name per line.
 const SEEDED_FILE: &str = ".seeded";
 
-/// What a library created before [`SEEDED_FILE`] existed **may** have been
-/// offered — not what it was.
-///
-/// Two names across two builds, and that is the whole problem. The first wrote
-/// [`REVIEW_SKILL`] alone; [`COS_SKILL`] joined it later, behind a `if
-/// library.exists() { return; }` that skipped every library already on disk. So
-/// a library made by the first build never saw `cos.loop` and never could:
-/// reading this list as a record of what was written is what left one install
-/// without half of the mode, with the manifest recording it as offered. Which of
-/// the two a given library actually got is answerable only by looking, which is
-/// what [`seed`] does.
+/// What a library older than [`SEEDED_FILE`] **may** have been offered. Early
+/// builds skipped existing libraries, so some never got [`COS_SKILL`]; [`seed`]
+/// checks the disk.
 const SEEDED_BEFORE: [&str; 2] = [REVIEW_SKILL, COS_SKILL];
 
 /// Every runbook this build seeds, and the body each starts as.
@@ -971,14 +685,8 @@ const SEEDED: [(&str, &str); 25] = [
 /// The standing rule of the whole mode, as a runbook.
 pub const REVIEW_SKILL: &str = "never-send-without-review";
 
-/// `never-send-without-review`, the first skill a fresh library holds.
-///
-/// Chosen because it is the standing rule of the whole mode rather than a
-/// domain: irreversible actions stay behind a human gate (`COS.md` *Loop*),
-/// and the skill that checks a draft against its own definition of done is the
-/// most valuable one there is (PLAN 7.6, *Verifier is a skill*). It also
-/// demonstrates the format on something that needs no connector — the input is
-/// a file, which is all a skill ever needs to start.
+/// `never-send-without-review`: the mode's standing rule, and an example that
+/// needs no connector (PLAN 7.6, *Verifier is a skill*).
 const REVIEW_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write
@@ -1044,28 +752,8 @@ than no review, because it reads like one.
 /// The Chief of Staff's own loop (PLAN 7.3, Phase 15).
 pub const COS_SKILL: &str = "cos.loop";
 
-/// `cos.loop`, the Chief-of-Staff loop as a runbook.
-///
-/// `COS.md` *Loop* is six steps: read the sources of truth and `/status`,
-/// update the attention list, route new work, retry what is blocked, ping the
-/// human only when it is irreversible, ambiguous or on a deadline, write the
-/// new status and stop. Every one of them is a tool call this build already
-/// has, which is exactly why it is a **skill** and not prompt text.
-///
-/// That is the whole argument for where this lives. PLAN 7.1 is explicit that
-/// the system prompt stays a policy summary plus what is true right now, and
-/// that procedure landing in it is procedure Phase 13 will have to fight. A
-/// Chief of Staff whose loop was baked into the runtime would be the loop every
-/// identity ran, on every turn, whether or not it was routing anything — and it
-/// could not be edited by the person whose office it is. As a runbook it costs
-/// one catalog line until someone runs it, it is a file in a folder they own,
-/// and granting it to an identity is a separate, deliberate act (PLAN 7.6,
-/// *Authoring*).
-///
-/// It is seeded rather than left to be written because the loop is not this
-/// operator's invention — it is the mode's, it is written down in `COS.md`, and
-/// a harness that shipped the handoff bus without it would be shipping the
-/// verbs and none of the grammar.
+/// `cos.loop`: `COS.md` *Loop* as a runbook rather than prompt text
+/// (PLAN 7.1), so it costs one catalog line and its owner can edit it.
 const COS_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write, handoff_delegate
@@ -1159,24 +847,10 @@ you remember — a board nobody agreed on is worse than no board.
 /// Founding a cabinet (PLAN 7.14).
 pub const FOUND_SKILL: &str = "cabinet.found";
 
-/// `cabinet.found`, the founder's runbook.
-///
-/// It writes one file, `.aegis/roster/PROPOSAL.md`, and creates nobody. The
-/// identities it names come into existence when a person applies the proposal
-/// in Settings ([`roster`](crate::roster)), which is the grant; there is no tool
-/// a session could call instead, and this runbook declares none it could.
-///
-/// Seeded beside `cos.loop` because assembling a cabinet is the combinatorial
-/// product of identities, tools, skills and clocks, and a founder that did not
-/// know the packs' declared tools would propose grants that fail closed on
-/// their first run. So its steps carry that table, and the roster example it
-/// writes from is parsed by the roster's own tests.
-///
-/// Granted to nothing by being here, and never to the built-in Assistant, which
-/// is a constant that holds no skills (PLAN 7.14, *When*). The usual founder is
-/// a Duplicate of it with this one name ticked. The example inside is indented
-/// on purpose: a `## ` at the start of a line would be an eighth section to
-/// [`doc::parse`].
+/// `cabinet.found`: writes `.aegis/roster/PROPOSAL.md` and creates nobody; a
+/// person applies it in Settings ([`roster`](crate::roster)). Its steps carry
+/// the packs' declared tools so proposed grants do not fail closed; its example
+/// is indented so a `## ` is not read as a section by [`doc::parse`].
 pub const FOUND_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -1320,21 +994,9 @@ nobody set up is a team for a project that has not agreed to have one.
 /// Help with founding or amending a world (PLAN 7.2).
 pub const DRAFT_SKILL: &str = "world.draft";
 
-/// `world.draft`, the one runbook in this set that writes `world/`.
-///
-/// PLAN 7.2 says there is no specialist skill `world.amend`, and there is not:
-/// this is refused outright inside a brief, like every other write to the
-/// constitution, because the gate reads the *run* and not the runbook. What it
-/// is for is the other side of that sentence — *amending the world is a cabinet
-/// act* — where a person is in the session asking for help writing six files
-/// they would otherwise write alone.
-///
-/// The distinction it has to hold, and the reason most of its steps are about
-/// stopping: drafting is a procedure, and deciding is not. An agent is good at
-/// reading a repository and proposing what its schema *is*; it is not the thing
-/// that decides what a project is *for*, or what would make a new instance
-/// right. So the runbook writes the descriptive files from evidence and refuses
-/// to invent the essence or the oracle, which are the two the human owns.
+/// `world.draft`: the only seeded runbook that writes `world/`, for an attended
+/// session (refused inside a brief, PLAN 7.2). It drafts the descriptive files
+/// from evidence and never invents the essence or the oracle.
 const DRAFT_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -1419,13 +1081,8 @@ plausible prose, which is the most expensive possible thing to have to unlearn.
 /// The delta half of the world's library (PLAN 7.2, *Library skills*).
 pub const PERCEIVE_SKILL: &str = "world.perceive-delta";
 
-/// `world.perceive-delta`, the only legitimate re-perception there is.
-///
-/// A world is perceived once. What may then change is a declared source — the
-/// operator drops a new dump, a log grew — and that delta is the one thing
-/// worth reading a source artefact for. The runbook is deliberately narrow: it
-/// takes the paths whose hash moved, and it returns a *proposal*. It does not
-/// write `world/`, because nothing a specialist runs does.
+/// `world.perceive-delta`: reads only the declared sources that moved and
+/// returns a proposal; never writes `world/`.
 const PERCEIVE_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write
@@ -1499,12 +1156,8 @@ Return `status: blocked` with the path in `open_questions`.
 /// The verifier half of the world's library (PLAN 7.2, *Library skills*).
 pub const VERIFY_SKILL: &str = "world.verify";
 
-/// `world.verify`, the oracle as a program rather than a taste review.
-///
-/// `COS.md` *Work*: verification is a program, not a reviewer's opinion about a
-/// diff, and evidence is paths. The instance is disposable; what is not is
-/// whether it satisfies the oracle. This is the runbook a fan-in reviewer runs,
-/// and the reason the Chief of Staff does not re-read the work itself.
+/// `world.verify`: checks an instance against the oracle, with paths as
+/// evidence (`COS.md` *Work*).
 const VERIFY_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write, shell_exec
@@ -1576,13 +1229,8 @@ from the thing it is meant to judge says nothing.
 /// (PLAN 7.2, *Library skills*).
 pub const CHECK_SKILL: &str = "world.check";
 
-/// `world.check`, the frame as a procedure.
-///
-/// The frame is injected into every session whose workspace has a world, so a
-/// session working on one already knows the rule. What it does not have is a
-/// step that reads the constitution deliberately and says where it stands. That
-/// is this: cheap, read-only, and the honest first move in a session about to
-/// touch a world it has not read.
+/// `world.check`: a cheap, read-only pass over the constitution before touching
+/// a world.
 const CHECK_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read
@@ -1654,20 +1302,8 @@ the work under the cabinet's own rules.
 /// scopes*).
 pub const REVIEW_DIFF_SKILL: &str = "review.diff";
 
-/// `review.diff`, the first runbook of the delivery pack.
-///
-/// The pack's cheapest runbook, and the one that needs nothing installed: `git`
-/// is on the machine of anybody who has a client repository, so the source of
-/// a diff is `shell_exec` today and a forge's connector later — the procedure
-/// does not move when it does (PLAN 7.6).
-///
-/// What makes it a runbook rather than a prompt is step 4. "Review this diff"
-/// gets a model's four best observations about the hunks it was shown; a fixed
-/// order that asks about intent, correctness, irreversibility and leakage gets
-/// the same four questions on a Friday as on a Tuesday, and a verdict that can
-/// be compared with last week's. The step that reads the *files* rather than
-/// the hunks is there for the failure this catches most often: a hunk is
-/// correct and what it now sits beside is not.
+/// `review.diff`: reads a range via `git` and asks the same four questions in a
+/// fixed order, reading surrounding files, not just hunks.
 const REVIEW_DIFF_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write, shell_exec
@@ -1768,21 +1404,8 @@ the shared files are missing — the button is in the project panel.
 /// deploy stays gated*).
 pub const DEPLOY_SKILL: &str = "deploy.draft";
 
-/// `deploy.draft`, the runbook that stops one step before the deploy.
-///
-/// The pack's whole argument in one file. A deploy is irreversible in the sense
-/// the matrix means — somebody else's users are on the other end — so the
-/// procedure that can be written down is everything up to it, and the act
-/// itself stays a human one (PLAN 7.4). That is not a limitation this runbook
-/// works around later: there is no version of it that ends with the deploy,
-/// which is why the last step says so rather than leaving it to the gate.
-///
-/// It also fixes where the facts come from. The project's own account — a
-/// workspace runbook, the compose file, the CI workflow — beats what a model
-/// knows about how applications like this are usually shipped, and a missing
-/// account is a `blocked` rather than an invitation to infer a pipeline. A
-/// Coolify or a host connector, when there is one, replaces that source and
-/// leaves the procedure alone (PLAN 7.6).
+/// `deploy.draft`: everything up to the deploy, which stays human (PLAN 7.4).
+/// Facts come from the project's own files; without them it is `blocked`.
 const DEPLOY_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write, shell_exec
@@ -1867,21 +1490,9 @@ write the plan with its directory created and say the shared files are missing.
 /// Turn a monitoring signal into a note and a reply nobody has sent.
 pub const ALERT_SKILL: &str = "alert.draft";
 
-/// `alert.draft`, triage for something that is on fire.
-///
-/// Two files out, and the second one is why this is in the pack: an incident is
-/// the moment a client is owed a sentence, and that sentence is the one most
-/// likely to be written out of an inference somebody stopped marking as one. So
-/// the note keeps observed and inferred apart and cites the command behind
-/// every observed line, and the reply may not carry a cause the note marked as
-/// a guess.
-///
-/// The steps that say *stop* are load-bearing here in a way they are not in
-/// [`REVIEW_DIFF_SEED`]. Restarting the service is the one move in an incident
-/// that is both plausible and destroys the evidence for what caused it; it is
-/// also exactly what a model holding `shell_exec` and a sense of helpfulness
-/// reaches for. Triage produces the note that informs that decision. The
-/// decision stays a person's.
+/// `alert.draft`: an incident note separating observed (with commands) from
+/// inferred, plus an unsent client reply carrying no guessed cause. Never
+/// restarts anything.
 const ALERT_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write, shell_exec
@@ -1981,36 +1592,10 @@ with their directory created and say the shared files are missing.
 /// read + draft, never send*).
 pub const MAIL_SKILL: &str = "mail.triage";
 
-/// `mail.triage`, the runbook the rest of the intake pack works from.
-///
-/// The pack's source is a file, exactly as the delivery pack's was: an exported
-/// message, a forwarded thread in `.aegis/briefs/`, a note passed on by the
-/// human. There is no mail tool in this build and this runbook does not want
-/// one — a connector later replaces where the message comes from and leaves the
-/// procedure alone (PLAN 7.6), which is the same seam that let `review.diff`
-/// read a diff through `shell_exec` on the first day.
-///
-/// What makes it a runbook rather than "read this email" is step 2. Mail is
-/// indirect: an ask arrives as *would you have a moment at some point*, and a
-/// model asked to summarize it returns a commitment with a deadline nobody
-/// typed. Requiring the ask to be a **quoted sentence carrying its message's
-/// date** makes *no ask* an available answer, which it has to be, because most
-/// mail is no ask and a triage that finds work in every message is a triage
-/// that manufactures it.
-///
-/// The `needs_you` in *What to return* is the one rule here that is not about
-/// economy. A message asking for money to move, or for access, is the message
-/// worth forging, it reads like the ordinary ones, and a ticket is not what
-/// decides. Intake is the one pack whose inputs are written by strangers.
-///
-/// Step 1 came out of an exported message rather than out of writing this. An
-/// `.eml` is mostly not text: a 180 KB attachment makes a 250 KB file, which is
-/// under [`READ_MAX_BYTES`](crate::tools::READ_MAX_BYTES) and therefore arrives
-/// *whole*, spending the turn on base64 — and one a little larger goes over the
-/// cap, so the read comes back cut off inside the attachment and the message's
-/// own last lines are never seen. Neither failure is visible from the runbook's
-/// prose, which is why the step names the encoding header instead of saying
-/// "read it".
+/// `mail.triage`: one message file into a ticket. The ask must be a quoted,
+/// dated sentence so *no ask* is possible; money or access requests are
+/// `needs_you`. Step 1 handles `.eml` attachments, which can fill or overflow
+/// [`READ_MAX_BYTES`](crate::tools::READ_MAX_BYTES).
 const MAIL_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -2125,22 +1710,8 @@ the button is in the project panel.
 /// Work out where a conversation actually stands.
 pub const THREAD_SKILL: &str = "thread.recap";
 
-/// `thread.recap`, the runbook that keeps a reply honest.
-///
-/// The one an intake pack is incomplete without, and the reason is arithmetic
-/// rather than judgement: a mail client quotes the whole thread into every
-/// message, so a nine-message thread carries one commitment forty times, and a
-/// model reading it end to end finds a project where there was a sentence. Step
-/// 2 is that; step 1 is the other half — the last message is not the state, and
-/// reading backwards finds the version of a promise somebody restated rather
-/// than the one they made.
-///
-/// The three lists are what [`REPLY_SEED`] draws its commitments from, and the
-/// line between the first two is the whole value of the file: something is
-/// *agreed* when one side proposed it and the other answered, and *outstanding*
-/// otherwise. Silence reads as consent to anybody summarizing in good faith,
-/// which is exactly how a client gets told that a thing they never agreed to
-/// was settled weeks ago.
+/// `thread.recap`: where a thread stands, de-duplicating quoted text. Its
+/// agreed/outstanding split (silence is not agreement) feeds [`REPLY_SEED`].
 const THREAD_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -2238,24 +1809,9 @@ answer would be.
 /// Draft the answer somebody else sends (`COS.md` *Loop*; PLAN 7.4).
 pub const REPLY_SKILL: &str = "reply.draft";
 
-/// `reply.draft`, the intake pack's stop.
-///
-/// [`DEPLOY_SKILL`] is to a deploy what this is to a sent message, down to the
-/// name: the procedure that can be written down is everything up to the
-/// irreversible act, and the act stays a person's (PLAN 7.4). There is no mail
-/// tool in this build, and the last step says so anyway — a connector arriving
-/// later moves where a message comes from, not who sends one.
-///
-/// Its own rule is the sources block. A reply is the one artefact in this
-/// application that ends up in somebody else's hands as a promise, so every
-/// date, price and scope in it names the file it came from, and a commitment
-/// with no file behind it does not get softer wording — it goes in
-/// `open_questions`. "I'll look into it" is a commitment; the reader is right
-/// to treat it as one.
-///
-/// It also refuses to pick its own input, which no other runbook here does. A
-/// draft written to the newest ticket in the directory is how the wrong client
-/// gets answered, and the failure is invisible because the reply is fluent.
+/// `reply.draft`: a reply a person sends (PLAN 7.4). Every date, price and
+/// scope cites its file; an unsourced commitment goes to `open_questions`. It
+/// never picks its own input.
 const REPLY_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write
@@ -2351,25 +1907,9 @@ and return `status: needs_you`.
 /// Turn what arrived into entries (PLAN 7.3, Phase 19, pack 3).
 pub const WATCH_SWEEP_SKILL: &str = "watch.sweep";
 
-/// `watch.sweep`, the collecting half of the watch pack.
-///
-/// There is no tool in this build that fetches anything, and this runbook does
-/// not want one. Material reaches the watch the way a client's message reaches
-/// intake: as files somebody put in the workspace. A connector later replaces
-/// where the material comes from and leaves the procedure alone (PLAN 7.6) —
-/// and installing one starts a program, which is the operator's act (Phase 18).
-///
-/// What makes it a runbook rather than "read these pages" is step 3. A watch
-/// reads material written by people with something to sell, where the sentence
-/// and the evidence for it are not the same object and only one of them is
-/// usually present. Keeping *what it says* apart from *what it shows* is the
-/// whole of an entry's value, because the digest above it can only be as honest
-/// as the entries under it, and by then the launch post is gone.
-///
-/// Its bookkeeping is deliberately a set of file names rather than a ledger
-/// file. What has been swept is answered by `fs_list` of the artefacts
-/// directory, so nothing has to be kept in step with anything, and deleting an
-/// entry is how you ask for that item to be read again.
+/// `watch.sweep`: files in the workspace into entries that keep *what it says*
+/// apart from *what it shows*. What was swept is the set of entry files; delete
+/// one to re-read it.
 const WATCH_SWEEP_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -2476,26 +2016,10 @@ than no entry.
 /// Report what is new since the last report (PLAN 7.3, Phase 19, pack 3).
 pub const WATCH_DIGEST_SKILL: &str = "watch.digest";
 
-/// `watch.digest`, the one runbook in this tree written to be put on a clock.
-///
-/// Every other seeded runbook answers something that happened: a client wrote,
-/// a change is up for review, an alert fired. A watch runs whether or not
-/// anything happened, which makes it the first pack whose cost is *recurring* —
-/// and that changes what the failure is. Nothing here can be sent, so nothing
-/// here needs a stop one step short of an irreversible act. What it needs
-/// instead is for **nothing** to be a cheap and complete answer, because a
-/// digest that always has five items is a digest manufacturing them, exactly as
-/// a triage that finds an ask in every message manufactures work.
-///
-/// So an empty period writes no file and returns `done` rather than `blocked`:
-/// a `blocked` for a quiet week would leave a routine two silences from pausing
-/// itself over a watch working exactly as intended (PLAN 7.6, *Budgets*).
-///
-/// The delta is bookkept the way [`WATCH_SWEEP_SEED`]'s is, and for the same
-/// reason: the digest ends with the entry names it covered, and the next run
-/// reads that list first. It is what keeps a run proportional to what arrived
-/// rather than to how long the watch has existed — the property a folder of two
-/// hundred entries takes eight months to notice is missing.
+/// `watch.digest`: written for a clock. A quiet period writes nothing and
+/// returns `done`, not `blocked`, so the routine does not pause itself
+/// (PLAN 7.6). Each digest lists the entries it covered, so the next run reads
+/// only what is new.
 const WATCH_DIGEST_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -2604,27 +2128,9 @@ Return `status: needs_you`.
 /// What one entry would mean here (PLAN 7.3, Phase 19, pack 3).
 pub const WATCH_IMPACT_SKILL: &str = "watch.impact";
 
-/// `watch.impact`, where the watch meets this project and stops.
-///
-/// A watch is only worth running because something in it occasionally changes
-/// what you do, and that is also the step where it goes wrong: *this exists* is
-/// one sentence away from *we should switch*, and the sentence in between is the
-/// one nobody writes. So the note carries the **condition** rather than the
-/// conclusion — what would have to be true for this to be worth doing, in things
-/// somebody could go and find out — and it costs doing nothing as well as doing
-/// it, because a note that prices only the change is an argument for the change
-/// wearing a table.
-///
-/// Its own stop is an écart (`COS.md` *Work*). This is the runbook most likely
-/// of any in the library to conclude that the constitution would have to move,
-/// which is the most useful thing it can conclude and the one thing it may not
-/// act on. A specialist does not write `world/` — and a scheduled run is not
-/// even offered that approval, since [`Grant::WorldAmend`] is refused at the
-/// routine's door.
-///
-/// Like [`REPLY_SEED`] it refuses to pick its own input, for the same reason and
-/// with the same failure: a note written about whatever looked most interesting
-/// is a note about the wrong thing, and it will read well.
+/// `watch.impact`: what one given entry would mean here, as conditions to check,
+/// with the cost of doing nothing too. A needed `world/` change is reported as
+/// an écart, never made ([`Grant::WorldAmend`] is refused to routines).
 ///
 /// [`Grant::WorldAmend`]: crate::policy::Grant::WorldAmend
 const WATCH_IMPACT_SEED: &str = r#"---
@@ -2733,28 +2239,9 @@ make — leave that line out and return `status: needs_you`.
 /// What is held and what is owed (PLAN 7.3, Phase 19, pack 4).
 pub const BUDGET_POSITION_SKILL: &str = "budget.position";
 
-/// `budget.position`, the status file § 7.3 asks this pack for.
-///
-/// The first runbook in the library whose material is **arithmetic** rather
-/// than prose, which is a different failure and a worse one. A model asked to
-/// total a column returns a plausible number, formatted beautifully, and
-/// nothing about the artefact looks wrong — a wrong review argues with you, a
-/// wrong total does not.
-///
-/// So the rule is that a figure is either **copied** from a line somebody else
-/// wrote or **shown** as an arithmetic a reader can redo, and there is no third
-/// kind. That is also the answer to the obvious objection: this pack declares
-/// no `shell_exec`, so nothing here runs a calculator. It does not need one. A
-/// model that shows its addends and reconciles them against the statement's own
-/// stated total is caught when it adds wrong; one that reports only the total
-/// never is. Where the arithmetic should be done by a program, that program is
-/// a connector the operator installs (Phase 18), and it replaces where the
-/// number is computed rather than the procedure (PLAN 7.6).
-///
-/// The other half is staleness, which is the failure specific to money: a
-/// figure with no date is not a figure, and a position is only as current as
-/// its oldest input. So the file leads with the stalest as-of date among its
-/// sources rather than with today's.
+/// `budget.position`: what is held and owed. Every figure is copied from a
+/// source line or shown as redoable arithmetic reconciled to stated totals, and
+/// the file leads with its stalest as-of date.
 const BUDGET_POSITION_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -2860,20 +2347,8 @@ position missing an account is useful; a position with an invented one is not.
 /// How long the money lasts (PLAN 7.3, Phase 19, pack 4).
 pub const BUDGET_RUNWAY_SKILL: &str = "budget.runway";
 
-/// `budget.runway`, the question the status file exists to answer.
-///
-/// Two failures, and both are arithmetic wearing prose. The first is the
-/// annualised commitment counted as a monthly one, or missed because it only
-/// appears once in a year of exports — a subscription billed in March is
-/// invisible in April and is a twelfth of itself every month. The second is the
-/// point estimate: "eleven months" from inputs that support "nine to fourteen"
-/// is a number somebody will plan against, and the honest artefact is the range
-/// plus what would narrow it.
-///
-/// It also refuses to pick its own input, as [`REPLY_SEED`] and
-/// [`WATCH_IMPACT_SEED`] do. A runway computed from whatever position file was
-/// most recently written is a runway for the wrong month, and it will read
-/// perfectly.
+/// `budget.runway`: a range, not a point, with annual commitments spread
+/// monthly. Never picks its own input.
 const BUDGET_RUNWAY_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write
@@ -2973,19 +2448,8 @@ written is too long rather than too short.
 /// A line was crossed (PLAN 7.3, Phase 19, pack 4).
 pub const BUDGET_ALERT_SKILL: &str = "budget.alert";
 
-/// `budget.alert`, the surveillance half, and the pack's stop.
-///
-/// Delivery stops before the deploy and intake before the send; this stops
-/// before the **order**, which is on the same list (PLAN 7.4) and is the one
-/// this pack is most often one sentence away from. § 7.3 is blunt about it —
-/// *read-only connectors, a status file, alerts. Not a broker* — and the reason
-/// the sentence has to be in the runbook rather than only in the plan is that a
-/// number crossing a line reads as an instruction. An alert that ends in
-/// *consider reducing the position* is an alert that has traded, slowly.
-///
-/// Its own rule is that a threshold is somebody else's. A line the run picked
-/// while writing the note is a line drawn around what happened, which is how a
-/// watch on a portfolio ends up reporting every move as significant.
+/// `budget.alert`: reports a threshold somebody else set being crossed, and
+/// stops before any order or recommendation to trade (PLAN 7.3, 7.4).
 const BUDGET_ALERT_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -3087,24 +2551,9 @@ to go and look, and that is a sentence worth writing. The other way round is
 /// Which of it, if any, is worth answering (PLAN 7.3, Phase 19, pack 5).
 pub const SOCIAL_SCAN_SKILL: &str = "social.scan";
 
-/// `social.scan`, and the third time this library has had to make *nothing* an
-/// available answer.
-///
-/// `mail.triage` needed *no ask*, `watch.digest` needed *nothing new*, and this
-/// needs *none worth answering* — which is worth saying out loud, because three
-/// packs arriving at the same rule is not a coincidence about those domains. The
-/// characteristic failure of a domain pack is manufacturing work: a procedure
-/// pointed at a pile and asked what to do about it will always find something,
-/// and the cheapest way to stop that is to make the empty answer explicit,
-/// ordinary and complete rather than a fallback nobody reaches.
-///
-/// What is new here is the adversary. Intake's was a forger, and a forger is at
-/// least outside the run. This one is inside it: the material was written to be
-/// engaging, and the post that most invites an answer is the one somebody is
-/// wrong on. *Being wrong* is never in the criterion, and the criterion has to
-/// be a file rather than a judgement made while reading — the same shape as
-/// [`BUDGET_ALERT_SEED`]'s threshold, for the same reason, and against a pull
-/// that is much stronger here.
+/// `social.scan`: the few posts worth answering against a criteria file, with
+/// *none worth answering* as an ordinary result. "Someone is wrong" is never a
+/// criterion.
 const SOCIAL_SCAN_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -3208,24 +2657,9 @@ this house would have been.
 /// Draft the answer to one post (PLAN 7.3, Phase 19, pack 5).
 pub const SOCIAL_REPLY_SKILL: &str = "social.reply";
 
-/// `social.reply`, written against the gradient rather than against a mistake.
-///
-/// Every other drafting runbook here can be got right by being careful. This one
-/// has something pulling at it: of the answers that could be written to a post,
-/// the sharp one performs best, and a model asked for *a good reply* has no way
-/// to tell the difference between good and rewarded. So the steps name the
-/// shapes to refuse rather than asking for judgement — no correction that is not
-/// load-bearing, no reply whose first clause is about the other person being
-/// wrong, no answer to the argument instead of the question.
-///
-/// The other half is that a reply is **public and permanent**, which the mail
-/// pack's is not. `reply.draft` goes to a named person in a thread that carries
-/// its own context, and a mistake in it is fixed by a second mail to the same
-/// person. This goes to everybody, it will be read by people who have none of
-/// the context, it can be quoted with the question cropped off, and no
-/// correction reaches the people who read the first one. That is why publish
-/// sits on PLAN 7.4's list beside sending and deploying, and why the last step
-/// hands the draft to [`REVIEW_SKILL`].
+/// `social.reply`: one public, permanent answer. The steps name the shapes to
+/// refuse (gratuitous corrections, openings about the other person being wrong)
+/// and end by handing off to [`REVIEW_SKILL`].
 const SOCIAL_REPLY_SEED: &str = r#"---
 version: 1
 tools: fs_read, fs_write
@@ -3328,21 +2762,8 @@ cannot be defended. Return `status: needs_you` with what you would have needed.
 /// Say the thing that happened (PLAN 7.3, Phase 19, pack 5).
 pub const SOCIAL_POST_SKILL: &str = "social.post";
 
-/// `social.post`, the only artefact in this tree addressed to nobody in
-/// particular.
-///
-/// Everything else the library writes has a reader: a client, a colleague, the
-/// person who set a threshold, whoever opens the digest on Friday. A post has an
-/// audience instead, most of whom will arrive without the context, some of whom
-/// will keep a copy, and none of whom will see the correction. So the two rules
-/// are about permanence rather than about accuracy: every claim names something
-/// that has *already happened* and is on disk, and every sentence is read once
-/// on its own, out of context, before the draft is written out.
-///
-/// The forward-looking sentence is the one this exists to stop. "Coming next
-/// week" costs nothing to write and is a published deadline; it is also the
-/// sentence a model reaches for, because a post about something finished feels
-/// like it needs one.
+/// `social.post`: every claim names something already done and on disk, each
+/// sentence must survive being quoted alone, and nothing promises the future.
 const SOCIAL_POST_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -3444,29 +2865,9 @@ sources block, and say so in the summary.
 /// pack 6).
 pub const WISH_LIST_SKILL: &str = "wish.list";
 
-/// `wish.list`, and the first artefact in this library with nothing behind it.
-///
-/// Every other runbook's discipline is a variant of one sentence: name the file
-/// the claim came from. A diff, a message, a release note, a statement, a post —
-/// all of them happened, and the rule is that the artefact may not go beyond
-/// them. A want has not happened and may never. There is no export of somebody
-/// wanting a car.
-///
-/// So the rule inverts. What the file must never do is let a want acquire the
-/// grammar of a fact: the ordering is the one the person stated, recorded as
-/// theirs, and where they stated none the list says *unordered* rather than
-/// picking; a price nobody looked up is *not priced* rather than an estimate,
-/// because an estimate is the number [`REVENUE_PIPELINE_SEED`] then divides by.
-///
-/// It is also the runbook that has no opinions. PLAN 7.3 is that the CoS keeps
-/// the list visible and the human decides the spend, and AGENTS.md's line for
-/// this workload is *not a shopping agent*. Nothing here judges whether a want
-/// is sensible, drops one that looks unwise, or adds one nobody asked for.
-///
-/// And it is a **file**, which PLAN 7.4 says in as many words — funding goals
-/// expressed as files. Not a memory on an identity: a memory is invisible,
-/// capped, unreadable by anybody else and gone when the identity is deleted,
-/// which is four things a person's own goals should never be.
+/// `wish.list`: somebody's goals as a file, never a memory (PLAN 7.4). Nothing
+/// acquires the grammar of a fact: unstated order is *unordered*, an unchecked
+/// price is *not priced*. No judgement of the wants.
 const WISH_LIST_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -3566,23 +2967,9 @@ a partial list written whole is a list with entries silently deleted.
 /// One idea, written well enough to be wrong (PLAN 7.3, Phase 19, pack 6).
 pub const REVENUE_THESIS_SKILL: &str = "revenue.thesis";
 
-/// `revenue.thesis`, which is a proposal and never an order.
-///
-/// PLAN 7.3 asks for *proposals* — a trade thesis, a monetization draft — and
-/// PLAN 7.4 keeps trading and X monetization as funding goals expressed as
-/// files, not as a reason to put a broker in `src-tauri`. What that leaves is an
-/// argument, and an argument's only defence against being fluent is being
-/// falsifiable. So every thesis carries what would show it false and what being
-/// wrong costs, and it carries no size, no allocation and no expected return —
-/// those three are the order wearing a thesis.
-///
-/// Its sharpest rule is that it may not read the position. A thesis is about the
-/// world; the balance is about this house; and reading the second while writing
-/// the first is exactly how a thesis gets sized by what is available to lose.
-/// That is the same wall [`REVENUE_PIPELINE_SEED`] holds from the other side,
-/// and it is why the wish list is not in this runbook's inputs either: *this
-/// could pay for the car* is motivated reasoning with a file behind it, which is
-/// worse than motivated reasoning without one.
+/// `revenue.thesis`: a falsifiable proposal with what would disprove it and what
+/// being wrong costs — no size, allocation or expected return. It may not read
+/// the position or the wish list (see [`REVENUE_PIPELINE_SEED`]).
 const REVENUE_THESIS_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -3685,21 +3072,9 @@ keep any of them.
 /// What is funded, what is not (PLAN 7.3, Phase 19, pack 6).
 pub const REVENUE_PIPELINE_SKILL: &str = "revenue.pipeline";
 
-/// `revenue.pipeline`, the one file allowed to hold both halves of this pack,
-/// and the wall between them.
-///
-/// PLAN 7.3 gives the CoS this job in one clause — keep the wish list and the
-/// funding pipeline visible, not click "buy" — and *visible* is not *joined*. A
-/// wish list beside a folder of revenue proposals is one step from "here is how
-/// to pay for the car", and the most expensive artefact this pack could produce
-/// is a thesis whose real cause is a holiday.
-///
-/// So the pipeline reports the gap and never claims anything closes it: a
-/// proposal has no expected value here and the file has no column for one.
-/// [`REVENUE_THESIS_SEED`] holds the same wall from the other side by refusing
-/// to read the wish list at all. Together they are the reason this pack is two
-/// prefixes rather than one — the naming keeps apart what the arithmetic would
-/// happily join.
+/// `revenue.pipeline`: shows wants and proposals side by side and the gap between
+/// them, never claiming a proposal closes it (PLAN 7.3). The two prefixes keep
+/// this apart from [`REVENUE_THESIS_SEED`].
 const REVENUE_PIPELINE_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -3793,12 +3168,8 @@ a number that would be acted on, and it is the one kind of wrong this file must
 not be.
 "#;
 
-/// `inbox.triage`, seeded into a workspace by the shared-files convention.
-///
-/// The stub PLAN 7.3 asks Phase 13 for: file in, status and artefact out. It
-/// is deliberately not a chatbot that "knows about inboxes" — the source is a
-/// markdown file in `.aegis/briefs/`, which is a valid input today, and a mail
-/// connector later replaces the source rather than the procedure (PLAN 7.6).
+/// `inbox.triage`, the workspace example runbook (Phase 13): a brief file in,
+/// status and artefact out.
 pub const TRIAGE_SEED: &str = r#"---
 version: 1
 tools: fs_list, fs_read, fs_write
@@ -4080,17 +3451,8 @@ mod tests {
         doc::parse(text).unwrap_or_else(|err| panic!("`{name}`: {err}"))
     }
 
-    /// A domain pack (PLAN 7.3, Phase 19) calls nothing that has to be
-    /// installed first.
-    ///
-    /// A pack is skills, connectors and an identity, and only the first of
-    /// those ships. A seeded runbook that declared `coolify__deploy` or
-    /// `imap__fetch` would be an example that fails closed at `skill_run` on
-    /// every machine where that connector is not installed — which is every
-    /// machine, on the day it is seeded. The source of a diff, a deploy fact or
-    /// a client's message is `shell_exec` and files on disk today; a connector
-    /// replaces the source later, and that is an edit to the runbook the
-    /// operator owns.
+    /// A seeded pack runbook declares no connector tool, or it would fail
+    /// closed on a fresh install.
     #[test]
     fn a_domain_pack_calls_only_tools_this_build_has() {
         for name in PACKS {
@@ -4106,15 +3468,8 @@ mod tests {
         }
     }
 
-    /// A pack's catalog line is the whole of what a model sees before choosing
-    /// it.
-    ///
-    /// That line is the first paragraph of *When to use it*, capped at
-    /// [`doc::SUMMARY_MAX_CHARS`] and ellipsised past it — so an opening
-    /// paragraph that runs long does not cost more prompt, it costs the end of
-    /// the sentence saying when to run the thing, which is the one sentence a
-    /// catalog is for. Six domain runbooks are already more than a person keeps
-    /// in their head, and whichever pack lands next, its first paragraph fits.
+    /// Each pack runbook's *When to use it* opening fits
+    /// [`doc::SUMMARY_MAX_CHARS`], so its catalog line is not cut off.
     #[test]
     fn a_domain_pack_says_when_to_run_it_without_the_line_being_cut_off() {
         for name in PACKS {
@@ -4128,12 +3483,7 @@ mod tests {
         }
     }
 
-    /// A pack is assembled by a grant, not by being shipped.
-    ///
-    /// The three runbooks are in everybody's library from the first start and
-    /// reach no model until an identity holds them — which is the whole of what
-    /// "domain packs as skills, not runtime" costs an install that does no
-    /// client work: three folders it can delete.
+    /// Seeded packs reach no model until an identity is granted them.
     #[test]
     fn the_delivery_pack_reaches_a_specialist_and_nobody_else() {
         let dir = TempDir::new().expect("temp dir");
@@ -4153,15 +3503,8 @@ mod tests {
         );
     }
 
-    /// Intake (PLAN 7.3, Phase 19, pack 2) holds no tool that runs a command.
-    ///
-    /// The property that decides how the pack is granted, which is why it is a
-    /// test rather than a sentence in the README. Its three runbooks read files
-    /// and write files, so the specialist that holds them needs `fs_*` and
-    /// nothing else — and an identity with no `shell_exec` is what you want
-    /// pointed at text somebody outside the house wrote. A runbook here that
-    /// grew a `git` call would quietly turn that identity into one that has a
-    /// shell, on a grant nobody revisited.
+    /// Intake (pack 2) declares no command: its identity reads text strangers
+    /// wrote and must not need a shell.
     #[test]
     fn the_intake_pack_holds_no_tool_that_runs_a_command() {
         for name in [MAIL_SKILL, THREAD_SKILL, REPLY_SKILL] {
@@ -4176,22 +3519,9 @@ mod tests {
         }
     }
 
-    /// The watch (PLAN 7.3, Phase 19, pack 3) can actually be put on a clock.
-    ///
-    /// The property that decides how *this* pack is granted, and the one the
-    /// other two never had to have: § 7.3 gives watch as **scheduled** research,
-    /// so a runbook here that cannot pass the routine door is a runbook that
-    /// does not do the thing the pack is for. The door is the real one —
-    /// [`schedule::check`](crate::schedule::check) — because every part of it is
-    /// a claim about these files: the tools are declared under *Inputs required
-    /// and tools it will call*, the identity holds them, and every standing
-    /// approval a run needs is one a person may sign.
-    ///
-    /// Which is why the pack declares no command, for a different reason than
-    /// intake's. A `curl` signed once and fired at four in the morning is an
-    /// outbound channel with nobody on it. Fetching stays the operator's act
-    /// — material arrives in the workspace, or a connector they installed puts
-    /// it there — and the runbooks read files and write one file back.
+    /// The watch pack (pack 3) passes the real routine door
+    /// ([`schedule::check`](crate::schedule::check)) and declares no command: an
+    /// unattended run must not have an outbound channel.
     #[test]
     fn the_watch_pack_can_be_put_on_a_clock() {
         use crate::policy::Grant;
@@ -4203,8 +3533,7 @@ mod tests {
 
         let mut watcher = agent_with(&[WATCH_SWEEP_SKILL, WATCH_DIGEST_SKILL, WATCH_IMPACT_SKILL]);
         watcher.name = "Watcher".to_owned();
-        // Everything the three declare, and nothing else. `shell_exec` and
-        // `screen_capture` are not on this identity, which is the point.
+        // Exactly what the three declare: no shell, no screen.
         watcher.tools = vec![
             tool::FS_LIST.to_owned(),
             tool::FS_READ.to_owned(),
@@ -4225,9 +3554,7 @@ mod tests {
 
         for name in [WATCH_SWEEP_SKILL, WATCH_DIGEST_SKILL, WATCH_IMPACT_SKILL] {
             let skill = find(&catalog, name).expect("seeded");
-            // One standing approval: write inside the workspace. Everything
-            // else a run of these wants is a read, and reads inside the
-            // workspace are not asked about in the first place.
+            // The only standing approval needed: workspace writes.
             crate::schedule::check(
                 &draft(name, vec![Grant::FsWrite]),
                 &watcher,
@@ -4237,10 +3564,7 @@ mod tests {
             .unwrap_or_else(|err| panic!("`{name}` cannot be scheduled: {err}"));
         }
 
-        // And the one conclusion `watch.impact` is likeliest to reach is the
-        // one no clock may act on: amending the constitution is a human
-        // decision (`COS.md` *Work*), so the door refuses the grant rather than
-        // the runbook discovering it at four in the morning.
+        // No clock may amend the constitution: the door refuses that grant.
         let impact = find(&catalog, WATCH_IMPACT_SKILL).expect("seeded");
         assert!(
             crate::schedule::check(
@@ -4254,25 +3578,8 @@ mod tests {
         );
     }
 
-    /// Budget (PLAN 7.3, Phase 19, pack 4) could not reach a broker if it tried.
-    ///
-    /// § 7.3 gives this pack in five words — *read-only connectors, a status
-    /// file, alerts. Not a broker* — and the last three are the ones that need
-    /// enforcing, because they are the ones a convenient edit undoes. So the
-    /// assertion is stronger than intake's: not "no `shell_exec`" but **these
-    /// three tools and no others**. Reading files, listing them, writing one
-    /// back is the whole perimeter of surveillance, and everything outside it is
-    /// something this pack has no use for and a portfolio identity should not
-    /// hold — a shell (a program on PATH is a calculator right up until it is a
-    /// broker's client), a screen, another identity's attention, a connector
-    /// call nobody watched.
-    ///
-    /// Which leaves the arithmetic to be done by the model, and that is the
-    /// point rather than an oversight: the runbooks answer it by showing the
-    /// addends and reconciling against the source's own stated total, so an
-    /// error is *visible*. Where the sum should be computed by a program, that
-    /// program is a connector the operator installs, replacing where the number
-    /// comes from and not the procedure (PLAN 7.6).
+    /// Budget (pack 4) declares only `fs_read`, `fs_list` and `fs_write`: no
+    /// shell that could become a broker client (PLAN 7.3, *not a broker*).
     #[test]
     fn the_budget_pack_could_not_reach_a_broker_if_it_tried() {
         let allowed = [tool::FS_LIST, tool::FS_READ, tool::FS_WRITE];
@@ -4291,23 +3598,8 @@ mod tests {
         }
     }
 
-    /// A draft somebody else sends names the runbook that checks it first.
-    ///
-    /// Not a rule invented for this pack — an invariant the library already had
-    /// and nobody had written down. Of the twenty-one seeded runbooks, exactly
-    /// the ones whose output is a message a person will send end by handing it
-    /// to [`REVIEW_SKILL`], and that runbook was seeded first precisely to be
-    /// the other end of this (PLAN 7.6, *Verifier is a skill*). A runbook naming
-    /// another is the split the format is for; four of them naming this one is
-    /// the standing rule of the whole mode having somewhere to attach.
-    ///
-    /// It matters most where it was added last. Social is the pack whose drafts
-    /// go to nobody in particular and stay there — a mistaken mail is fixed by a
-    /// second mail to the same person, and no correction reaches the people who
-    /// read a post. Publish sits on PLAN 7.4's line with send, pay, merge and
-    /// deploy for that reason, and a draft that reached the end of its runbook
-    /// without naming the review is a draft one step from being published by
-    /// momentum.
+    /// Every runbook whose output a person sends or publishes ends by naming
+    /// [`REVIEW_SKILL`] (PLAN 7.6, *Verifier is a skill*).
     #[test]
     fn a_draft_somebody_else_sends_names_the_runbook_that_checks_it() {
         for name in [
@@ -4323,14 +3615,8 @@ mod tests {
         }
     }
 
-    /// Social (PLAN 7.3, Phase 19, pack 5) has no tool that could publish.
-    ///
-    /// The same set assertion the budget pack gets, and for the sharper half of
-    /// the same reason: § 7.4 puts *publish* on one line with send, pay, merge,
-    /// deploy and trade. Aegis has no tool that posts, so the perimeter is not
-    /// enforcing an absence today — it is what makes the absence survive the
-    /// edit where a runbook grows a `shell_exec` to "just check the API", on an
-    /// identity somebody granted once and has not looked at since.
+    /// Social (pack 5) declares only file tools, so no later edit quietly adds a
+    /// way to publish (PLAN 7.4).
     #[test]
     fn the_social_pack_holds_nothing_that_could_publish() {
         let allowed = [tool::FS_LIST, tool::FS_READ, tool::FS_WRITE];
@@ -4345,24 +3631,9 @@ mod tests {
         }
     }
 
-    /// A goal is a file, and not something an identity remembers.
-    ///
-    /// PLAN 7.4 says it in as many words — trading, X monetization and the wish
-    /// list are *funding goals expressed as files* — and the tempting shortcut
-    /// is the one this forbids: `memory_write` is right there, a want is exactly
-    /// the shape of a thing to remember, and a runbook that recorded goals as
-    /// memories would look tidier than one that keeps a markdown file.
-    ///
-    /// It would also be wrong in four ways at once, and all four are properties
-    /// of memories rather than opinions about them: a memory belongs to one
-    /// identity and no other can read it, there is no view spanning two, an
-    /// identity holds at most two hundred, and deleting the identity forgets
-    /// what it knew. Somebody's own goals must not be invisible, capped,
-    /// unreadable by the next specialist, or destroyed by an edit in Settings.
-    /// A file in their folder is none of those things.
-    ///
-    /// The rest of the perimeter is the budget pack's, for the reason PLAN 7.3
-    /// gives this one: execution of money movement is always human.
+    /// Revenue and wish list (pack 6) keep goals in files, never `memory_write`
+    /// (PLAN 7.4: memories are per-identity, capped and deleted with it), with
+    /// the budget pack's file-only perimeter.
     #[test]
     fn a_goal_is_a_file_and_not_something_an_identity_remembers() {
         let allowed = [tool::FS_LIST, tool::FS_READ, tool::FS_WRITE];
@@ -4381,20 +3652,8 @@ mod tests {
         }
     }
 
-    /// What a full library costs every turn, now that all six packs have landed.
-    ///
-    /// [`the_catalog_block_carries_no_step_of_any_runbook`] bounds what *one
-    /// more* runbook costs. This bounds the whole of it, which is the question
-    /// Phase 19 made worth asking: eighteen of the twenty-five seeded runbooks
-    /// arrived as domain packs, one pack at a time, each diff boring enough that
-    /// nobody was counting — and the catalog is in the system message of every
-    /// request an identity granted them makes (PLAN 7.6, *catalog in, body on
-    /// demand*). Six more packs added the same way, with nothing watching the
-    /// total, is how a library becomes a context window.
-    ///
-    /// The bound is the per-line one multiplied out, so it stays true of the
-    /// seventh pack without being edited, and it fails if a line ever stops
-    /// being bounded — which is the thing that would actually go wrong.
+    /// The whole seeded catalog stays within the per-line bound times its size;
+    /// [`the_catalog_block_carries_no_step_of_any_runbook`] bounds one line.
     ///
     /// [`the_catalog_block_carries_no_step_of_any_runbook`]: self#tests
     #[test]
@@ -4516,11 +3775,7 @@ mod tests {
             !block.contains("Rewrite the file whole"),
             "a step reached the system message:\n{block}"
         );
-        // The catalog is in *every* request, so what one more skill costs is
-        // the number that matters — a library that grew the system message
-        // without anyone noticing is exactly the drift PLAN 7.1 asks it not to
-        // have. It is bounded by the summary cap plus the fixed parts of a
-        // line, and nothing in a line is unbounded.
+        // Every request carries the catalog, so one line must stay bounded.
         let one = block.len();
         let two = prompt_block(&[&found[0], &found[0]])
             .expect("a block")
@@ -4588,17 +3843,9 @@ mod tests {
         );
     }
 
-    /// The manifest is what lets a later phase add a runbook the mode needs
-    /// without every existing install being the one install that never sees it.
-    ///
-    /// Written against the install that *was* that one install. The earliest
-    /// build seeded [`REVIEW_SKILL`] alone and created the library by writing
-    /// it; [`COS_SKILL`] was added to the pair one phase later, behind a guard
-    /// that skipped any library already on disk, so a library made by the first
-    /// build never saw it. Reading [`SEEDED_BEFORE`] as a record of what was
-    /// written then recorded `cos.loop` as offered in the new manifest, which is
-    /// how an install ends up permanently missing half of the mode without a
-    /// line anywhere saying so. The migration therefore looks at the disk.
+    /// A pre-manifest library from the earliest build (no `cos.loop`) still
+    /// receives [`COS_SKILL`]: the migration checks the disk, not
+    /// [`SEEDED_BEFORE`].
     #[test]
     fn a_library_from_before_the_manifest_gains_what_it_was_never_actually_offered() {
         let dir = TempDir::new().expect("temp dir");
@@ -4627,13 +3874,8 @@ mod tests {
         );
     }
 
-    /// The one thing the disk check costs, paid once and in the open.
-    ///
-    /// A runbook deleted from a library that never got a manifest comes back on
-    /// the start that writes one, because nothing on disk distinguishes "deleted
-    /// it" from "never had it". That is the cheap side of the asymmetry: the
-    /// user deletes it a second time and the manifest makes it stick, where the
-    /// other guess loses a runbook silently and forever.
+    /// The accepted cost of the disk check: a runbook deleted before the
+    /// manifest existed comes back once, then a second deletion sticks.
     #[test]
     fn a_deletion_from_before_the_manifest_comes_back_once_and_then_never_again() {
         let dir = TempDir::new().expect("temp dir");

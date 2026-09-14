@@ -1,22 +1,9 @@
 /**
  * Connector state (PLAN 7.3, Phase 18).
  *
- * What external MCP servers are configured, which of them are running, and
- * what each one offers. Three things this store deliberately does *not* do.
- *
- * **It keeps no copy of what is running.** The state, the tool list, the last
- * lines of a server's stderr and the environment variables it is missing all
- * arrive on the row, measured by the runtime. A UI that cached "this one is
- * connected" would be the thing that draws a connector as up after its process
- * has quietly gone.
- *
- * **It does not start anything by itself.** Connectors are started by the Rust
- * runtime at boot, whether or not there is a window; `connector:updated` is how
- * this store hears that one came up, changed what it offers, or died.
- *
- * **It grants nothing.** Installing a connector makes its tools exist. Who may
- * call them is edited on the identity, in the panel above — a separate act, on
- * a different object, exactly as it is for `shell_exec`.
+ * Rows measured by the runtime (state, tools, stderr, missing env), updated by
+ * `connector:updated`. This store starts nothing and grants nothing; tool
+ * grants are edited on identities.
  */
 
 import { create } from "zustand";
@@ -212,25 +199,14 @@ export const useConnectors = create<ConnectorsState>((set, get) => ({
 }));
 
 /**
- * Every connector tool that is callable right now, in connector order.
- *
- * What the identity form offers as things to grant. Only the tools of
- * connectors that are actually up: an allow-list you type is an allow-list you
- * typo, and a checkbox for a tool nothing answers to is a grant nobody can
- * read. A name granted earlier and no longer offered stays on the identity —
- * the runtime keeps it and refuses it — and the form says so.
+ * Callable connector tools, in connector order — what the identity form offers
+ * to grant.
  */
 export function liveTools(connectors: readonly ConnectorView[]): ToolInfo[] {
   return connectors.flatMap((view) => view.tools);
 }
 
-/**
- * Keeps the list in step with what the connectors are doing.
- *
- * Like the routine store, this one hears from the runtime while nobody is
- * looking at it: connectors are started at boot, and a server can die at any
- * hour. Patched rather than refetched, one message per changed row.
- */
+/** Patches rows from `connector:updated`, one message per changed row. */
 export function attachConnectorEvents(): Promise<UnlistenFn> {
   return subscribe({
     "connector:updated": (view) => {

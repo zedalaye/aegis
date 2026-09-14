@@ -1,27 +1,11 @@
 //! The status board and the replay, through the crate's public surface.
 //!
-//! The unit tests inside `board/` cover the two halves separately — what a
-//! `STATUS.md` parses to, and what a set of audit lines folds to. This file
-//! covers the Phase 17 exit condition of `PLAN.md` § 7.3, which is a claim
-//! about the *whole* runtime:
+//! Phase 17's exit condition (PLAN 7.3): who ran, what it cost and why it
+//! failed, from real routine runs rather than hand-built audit lines.
 //!
-//! > you can answer "who ran, what did it cost, why did it fail" without
-//! > opening a chat.
-//!
-//! So nothing here builds an audit line by hand. A routine is fired the way the
-//! scheduler fires it, against real files in a temporary directory, and the
-//! questions are then put to the log and the session document it left behind —
-//! which is the only way to show that the ids those phases put on the line are
-//! enough to answer them.
-//!
-//! Three claims, in the order they matter:
-//!
-//! 1. **A run that worked says who ran it, what it spent, and what it left on
-//!    disk.** All three from the record, none from a transcript.
-//! 2. **A run that did not says why**, in the words the record already used —
-//!    and lands in the column that says who has to move next.
-//! 3. **The board is both halves.** What the file says and what the runtime
-//!    knows, in the same three columns, each line saying which it came from.
+//! 1. A successful run reports identity, cost and artefacts from the record.
+//! 2. A failed run says why and lands in the right column.
+//! 3. The board merges file and runtime lines, each labelled.
 
 use std::path::PathBuf;
 use std::sync::Mutex;

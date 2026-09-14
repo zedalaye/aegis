@@ -1,15 +1,12 @@
 //! Claude Code and Codex via `motosan-ai`, Grok via the OpenAI-compatible path,
 //! Gemini via the Generative Language API.
 //!
-//! Also an API key aimed at Anthropic's own host, which is not a CLI login at
-//! all and arrives here anyway: `/v1/messages` is where prompt caching lives,
-//! and the `/chat/completions` layer on the same host does not have it. The
-//! credential is the only thing that differs — see [`credentials`]. Gemini is
-//! the same shape: a pasted AI Studio key, a different dialect.
+//! Anthropic API keys come here too, for `/v1/messages` prompt caching; only
+//! the credential differs ([`credentials`]). Gemini likewise takes a pasted key.
 //!
-//! Construction still never fails: a missing CLI login becomes the stream's
-//! first [`ModelEvent::Error`]. Refresh happens at the start of the stream so
-//! a settings panel that merely *opens* does not hit the token endpoint.
+//! Construction never fails (errors are the stream's first
+//! [`ModelEvent::Error`]), and tokens refresh when the stream starts, not when
+//! Settings opens.
 
 use std::collections::HashMap;
 
@@ -79,14 +76,10 @@ impl Provider for SubscriptionProvider {
     }
 }
 
-/// The credential this kind uses.
-///
-/// [`AuthKind::ApiKey`] only reaches this module when the endpoint is
-/// Anthropic's own, so the pasted key *is* the Anthropic credential; motosan
-/// reads the `sk-ant-oat01-` prefix to tell a CLI token from a key and sends
-/// each in the header that one wants. [`AuthKind::Gemini`] is the same store
-/// and a different header (`x-goog-api-key`). Every other kind is a login on
-/// disk.
+/// The credential this kind uses: the pasted key for [`AuthKind::ApiKey`]
+/// (Anthropic's host only; motosan picks the header from the `sk-ant-oat01-`
+/// prefix) and [`AuthKind::Gemini`] (`x-goog-api-key`), a login on disk
+/// otherwise.
 async fn credentials(
     kind: AuthKind,
     key: Option<ApiKey>,
@@ -937,14 +930,9 @@ async fn probe_motosan(
 
 /// One round's usage, in the shape [`Usage`] promises.
 ///
-/// The whole function is one disagreement between two APIs. Anthropic reports
-/// `input_tokens` *net* of the cached tokens — a turn that read 40k from the
-/// cache and sent 200 new ones says `input_tokens: 200` — so the two cache
-/// figures are added back to make `prompt_tokens` mean "the prompt". The
-/// Responses API counts them in already (`input_tokens_details.cached_tokens`
-/// is a share of `input_tokens`, not a sibling of it), so adding there would
-/// count the cache twice and report a turn as more expensive the better it
-/// went.
+/// Anthropic's `input_tokens` excludes cached tokens, so both cache figures are
+/// added back; the Responses API already includes them
+/// (`input_tokens_details.cached_tokens`), so nothing is added there.
 fn to_usage(provider: motosan_ai::Provider, found: &motosan_ai::Usage) -> Usage {
     let read = u64::from(found.cache_read_input_tokens.unwrap_or(0));
     let created = u64::from(found.cache_creation_input_tokens.unwrap_or(0));
@@ -1020,18 +1008,9 @@ fn to_chat_request(
         builder = builder.tools_cached(tools);
     }
 
-    // The ceiling the provider's own catalog reported for this model, which is
-    // the whole reason it is carried this far. Left unset when the catalog
-    // would not say, because motosan's fallback is safe on every model and a
-    // guessed number above the model's real limit is a 400 on every turn.
-    //
-    // It is not only a limit on how long a reply may be: a file written by
-    // `fs_write` is emitted as the arguments of a tool call, so this is also
-    // the largest file a turn can write. motosan's own default of 8192 caps
-    // that at roughly 25 KB of source once JSON escaping is counted, and
-    // overflowing it truncates the arguments mid-JSON — which the assembler
-    // then refuses to parse, so the call is answered rather than run and the
-    // file is silently never written.
+    // The catalog's output ceiling, unset when unknown (a guess too high is a
+    // 400 every turn). It also bounds `fs_write`, whose content is emitted as
+    // arguments: motosan's 8192 default caps a file near 25 KB.
     if let Some(max_tokens) = max_tokens {
         builder = builder.max_tokens(max_tokens);
     }
@@ -1041,19 +1020,10 @@ fn to_chat_request(
 
 /// Marks where the conversation may be read back out of the cache.
 ///
-/// Caching is a prefix match, so one breakpoint on the newest message makes
-/// every earlier byte re-readable: the request a turn sends is the whole
-/// transcript again, and without this each round of a tool loop pays full
-/// price for the round before it. Three breakpoints in all — tools, system,
-/// here — against a limit of four.
-///
-/// The last message is skipped when it is a tool result, because motosan
-/// serializes `Role::Tool` without ever consulting the flag (`cache` is read
-/// on the user and assistant arms only). Marking one would be a breakpoint
-/// that silently is not there, so the mark goes on the assistant turn that
-/// asked for the call instead. The cost is one round of lag: this round's tool
-/// output is written to the cache by the next round, which is the round that
-/// reads it back.
+/// One breakpoint on the newest message caches the whole prefix (three of the
+/// four allowed: tools, system, here). motosan ignores the flag on
+/// `Role::Tool`, so a trailing tool result puts the mark on the assistant turn
+/// before it, one round of lag.
 fn mark_cache_breakpoint(messages: &mut [motosan_ai::Message]) {
     if let Some(message) = messages
         .iter_mut()

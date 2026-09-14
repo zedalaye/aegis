@@ -1,28 +1,9 @@
 /**
  * The audit log, as the drawer sees it.
  *
- * The log on disk is the record; this store is a window onto its tail. It
- * holds no truth of its own and there is no command anywhere in the WebView
- * that writes, edits or clears a line — a UI able to do that would be a UI
- * able to forge the record of what the agent did.
- *
- * Three decisions shape it.
- *
- * **It only reads while the drawer is open.** A tail on every session switch
- * would be a file read nobody asked for, and the log can be months long. Open
- * fetches; closed forgets. That also makes the reconciliation trivial: there is
- * no stale cache to repair, because there is no cache when nothing is looking.
- *
- * **Events extend, the command establishes.** `audit:appended` prepends the
- * line the runtime has just written, so a call approved with the drawer open
- * appears as it happens rather than on the next refresh. Everything else —
- * opening, switching scope, switching session — refetches, because the event
- * stream only covers the time the window was listening.
- *
- * **Scope is a filter on what to ask for, not on what was kept.** "This
- * session" and "everything" are two different `audit_tail` calls; the store
- * never holds one and renders the other, so what is on screen is always a list
- * the runtime produced.
+ * A read-only window onto the log's tail; nothing in the WebView can write it.
+ * Fetched only while the drawer is open; `audit:appended` prepends, anything
+ * else (open, scope, session) refetches. Scope is a separate `audit_tail` call.
  */
 
 import { create } from "zustand";
@@ -40,14 +21,7 @@ export type LoadStatus = "idle" | "loading" | "ready" | "error";
 /** Which calls the drawer is showing. */
 export type AuditScope = "session" | "all";
 
-/**
- * How many entries to ask for, and to keep.
- *
- * Rust clamps `audit_tail` at 1000; this is well under it. The drawer is for
- * "what has this agent been doing", which is answered by the last couple of
- * hundred calls — and a list bounded here is a list that cannot grow without
- * limit as a long-running session appends to it.
- */
+/** How many entries to fetch and keep (the runtime clamps at 1000). */
 const TAIL_LIMIT = 200;
 
 export type AuditState = {
@@ -85,11 +59,8 @@ export type AuditState = {
 
 export const useAudit = create<AuditState>((set, get) => {
   /**
-   * Reads the tail for whatever scope and session are current.
-   *
-   * The scope and session are captured before the call and checked after it:
-   * a user who switches scope while a read is in flight must not be shown the
-   * answer to the question they have just stopped asking.
+   * Reads the tail for the current scope and session, discarding the answer
+   * if either changed meanwhile.
    */
   const read = async (): Promise<void> => {
     const { scope, sessionId } = get();
@@ -129,11 +100,7 @@ export const useAudit = create<AuditState>((set, get) => {
     openDrawer: async () => {
       set({ open: true });
 
-      // The path is a fact about the installation, not about the log's
-      // contents, so it is fetched once and kept. It is returned even before
-      // the first line is written — the drawer's empty state says where the
-      // file *will* be, which is what someone checking "is anything being
-      // recorded" needs.
+      // The path is fetched once; it exists even before the first line.
       if (get().logPath === null) {
         try {
           set({ logPath: await auditLogPath() });
@@ -215,13 +182,8 @@ export const useAudit = create<AuditState>((set, get) => {
 });
 
 /**
- * Subscribes the store to `audit:appended`.
- *
- * One listener for the app, attached by `AppShell` beside the others. The
- * handler drops everything while the drawer is closed — opening it refetches,
- * so a line missed here is a line that will be read from the file a moment
- * later, and the alternative is keeping a list in memory for a panel nobody is
- * looking at.
+ * Subscribes the store to `audit:appended` (attached by `AppShell`); ignored
+ * while the drawer is closed.
  */
 export function attachAuditEvents(): Promise<UnlistenFn> {
   return subscribe({

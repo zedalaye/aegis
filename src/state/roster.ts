@@ -1,25 +1,9 @@
 /**
  * Roster proposal state (PLAN 7.14).
  *
- * The open project's `.aegis/roster/PROPOSAL.md`, judged by the runtime against
- * the identities on file, and the one act this window can take on it: apply.
- *
- * Three decisions worth stating.
- *
- * **Measured, never remembered.** The proposal is a file a session or an editor
- * may rewrite at any moment, and which of its names already exist changes
- * whenever an identity is made. The panel re-reads it when it opens and after
- * every change to the identity list.
- *
- * **Apply sends back the digest it was shown.** The runtime refuses a file that
- * changed after the preview was built, because confirming is signing the
- * allow-lists on screen. This store never builds a draft of its own: what is
- * created is what the runtime read, not what the window holds.
- *
- * **Confirming is a second press.** The first opens a sentence saying exactly
- * what will be created; the second creates it. A grant of `fs_write` to three
- * identities is not a thing to do on one click that might have been meant for
- * Re-read.
+ * The runtime's judgement of `.aegis/roster/PROPOSAL.md`, re-read on open and
+ * after identity changes. Apply sends back the preview's digest and needs a
+ * confirming second press.
  */
 
 import { create } from "zustand";

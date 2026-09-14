@@ -1,38 +1,15 @@
 //! Firing a routine: the tick, and the run it opens (PLAN 7.3, Phase 16).
 //!
-//! The adapter between [`schedule`](super)'s policy — what is due, what a run
-//! is told, what it may do with nobody watching — and the machinery that
-//! answers it. The machinery is the one that was already here. A scheduled run
-//! is an ordinary session, bound to the routine's identity, driven by the
-//! ordinary [`Turn`] loop, judged by the ordinary matrix, written to the
-//! ordinary audit log. There is no second agent loop and no privileged path,
-//! which is the same sentence Phase 15 wrote about delegated runs and is true
-//! here for the same reason.
+//! Adapts [`schedule`](super)'s rules to the existing machinery: a scheduled
+//! run is an ordinary session, [`Turn`] loop, matrix and audit log.
 //!
-//! ## Three things worth reading the code for
-//!
-//! **The clock does not act; it presses send.** [`tick`] measures, and
-//! everything it measures is a fact somebody can check: is this routine due, is
-//! its skill still granted, is its folder still there, has it any budget left.
-//! When all four say yes it opens a session and hands it one message. Nothing
-//! about the run afterwards knows it came from a clock except the two things
-//! that must — policy, which refuses to ask a question nobody can answer, and
-//! the audit log, which records which routine a call belongs to.
-//!
-//! **A run is bounded from the outside.** [`RUN_TIMEOUT`] cancels the turn
-//! through the same token a person's Stop uses, so a routine that hangs is a
-//! failed run rather than an occupied slot forever. Two of those in a row and
-//! the routine pauses itself, saying so on its row — the escalate-after-two of
-//! `COS.md` *Loop*, applied to a clock.
-//!
-//! **A scheduled run does not start other agents.** It is
-//! [`Standing::Own`] with no bus, so `handoff_delegate` is not even offered.
-//! That is a boundary rather than an oversight: what a person signed when they
-//! saved the routine is one identity running one runbook, and a fan-out under a
-//! clock would be several unattended sessions nobody signed for, each holding
-//! none of this routine's standing approvals and therefore each returning
-//! `blocked`. A Chief of Staff routes when a person is there to read the board
-//! (Phase 15); Phase 17's board is where that becomes worth revisiting.
+//! * **The clock presses send**: [`tick`] checks due, granted, folder and
+//!   budget, then opens a session with one message. Only policy (unattended)
+//!   and the audit line (`routine`) know it came from a clock.
+//! * **Bounded**: [`RUN_TIMEOUT`] cancels through the Stop token; two silent
+//!   runs pause the routine.
+//! * **No fan-out**: [`Standing::Own`] with no bus, so `handoff_delegate` is not
+//!   offered — nobody signed for other agents' sessions.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -61,26 +38,14 @@ use crate::store::{
 
 use super::{Watch, MAX_IN_FLIGHT, TICK};
 
-/// How long one scheduled run may take before it is stopped.
-///
-/// Longer than a delegated attempt (`handoff::bus::ATTEMPT_TIMEOUT`, five
-/// minutes) because a routine is doing the work rather than waiting for someone
-/// else to, and shorter than "until somebody notices" because nobody is going
-/// to. It is enforced through the turn's own cancellation token, so a stopped
-/// run stops the way a person's **Stop** stops one: mid-call, with the
-/// transcript and the audit line of whatever it was doing intact.
+/// How long one scheduled run may take, enforced through the turn's
+/// cancellation token like **Stop**.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Everything a scheduled run borrows from the runtime around it.
 ///
-/// The same shape and the same reasoning as [`Turn`] and
-/// [`handoff::runner::Host`](crate::handoff::runner::Host): the fields are
-/// references to stores that live for the process, and a function taking
-/// fourteen of them positionally is a call site nobody can read. It is a second
-/// struct rather than a reuse of the handoff one because the two borrow
-/// different things — a scheduled run needs the routine ledger and the project
-/// list, a delegated one needs neither — and letting them drift apart is
-/// cheaper than a shared type that grows the union of both.
+/// Like [`handoff::runner::Host`](crate::handoff::runner::Host), but with the
+/// routine and project stores.
 pub struct Host<'a> {
     /// Where a routine's project is resolved to a folder.
     pub projects: &'a crate::store::Store,
@@ -109,25 +74,15 @@ pub struct Host<'a> {
     pub skills: &'a Path,
     /// Where the identity's memories live.
     pub memories: &'a MemoryStore,
-    /// The connectors this installation is running (PLAN 7.3, Phase 18).
-    ///
-    /// A run nobody is watching may call one, and only under the same rule as
-    /// everything else it does: the routine's standing approvals are ordinary
-    /// session grants, and a connector's tool is covered only if somebody
-    /// signed for that tool by name when they saved the routine.
+    /// The running connectors (Phase 18); a run may call a tool only if the
+    /// routine signed for it by name.
     pub connectors: &'a Connectors,
     /// Which provider answers for an identity (PLAN 7.1, *Provider*).
     pub provider: &'a (dyn Fn(&Agent) -> Box<dyn Provider> + Send + Sync),
 }
 
-/// Which routines are running right now.
-///
-/// In memory and nowhere else, because it is a fact about *this process*: a
-/// routine is not "running" after a crash, and a persisted flag saying it was
-/// would be the thing that stops a clock forever. Held in
-/// [`AppState`](crate::AppState) so the tick and the **Run now** button claim
-/// from the same set — pressing the button while the clock is firing the same
-/// routine is refused rather than run twice.
+/// Which routines are running now, in memory only. Shared by the tick and
+/// **Run now**, so a routine never runs twice at once.
 #[derive(Debug, Default)]
 pub struct Scheduler {
     running: Mutex<HashSet<String>>,
@@ -140,9 +95,6 @@ impl Scheduler {
     }
 
     /// Takes a slot for `routine_id`, or says why there is none.
-    ///
-    /// Both limits are here rather than at the two call sites, so the button
-    /// and the clock cannot disagree about them.
     pub fn claim(&self, routine_id: &str) -> AppResult<()> {
         let mut running = self.running();
 
@@ -194,21 +146,13 @@ struct Ready {
     agent: Agent,
     workspace: PathBuf,
     /// Where the project's commands run (PLAN 7.12). `None` is this process.
-    ///
-    /// Taken from the project record beside the workspace, on the same tick:
-    /// an unattended run is an ordinary session under the same rules, and one
-    /// that spawned on Windows because nobody was watching would be running a
-    /// different toolchain from every run somebody did watch.
     exec_host: Option<ExecHost>,
     skill: crate::skills::Skill,
 }
 
 /// Resolves everything a run needs, or says why it cannot happen.
 ///
-/// The same four questions [`inspect`](super::inspect) asks on the panel, asked
-/// again here at the moment of firing, because everything they look at can
-/// change between a tick and the run it decided on — and because **Run now**
-/// reaches this function without going past a panel at all.
+/// Re-asks [`inspect`](super::inspect)'s questions at firing time.
 fn ready(host: &Host<'_>, routine: &Routine) -> Result<Ready, String> {
     let agent = host
         .agents
@@ -249,12 +193,8 @@ fn ready(host: &Host<'_>, routine: &Routine) -> Result<Ready, String> {
 
 /// Runs one routine, start to finish, and records what became of it.
 ///
-/// Never returns an error: everything that can go wrong is a
-/// [`RunOutcome::Failed`] on the routine's row with the reason in it, because
-/// there is nobody to return an error *to* — that is the whole shape of the
-/// phase. The one thing it will not do is fire a routine whose door is shut;
-/// that is refused before a session is opened, and refused in words the panel
-/// shows.
+/// Never errors: failures are a [`RunOutcome::Failed`] on the routine's row. A
+/// shut door is refused before any session opens.
 pub async fn fire(host: &Host<'_>, routine_id: &str) {
     let routine = match host.routines.get(routine_id) {
         Ok(routine) => routine,
@@ -307,10 +247,7 @@ pub async fn fire(host: &Host<'_>, routine_id: &str) {
     // your behalf should be watchable while it happens, the same as a brief's.
     host.sink.emit(Event::SessionUpdated(session.clone()));
 
-    // What a person signed, made real for exactly this run. They are ordinary
-    // session grants — the same values the approval dialog creates — so every
-    // check downstream is the check that was already there, and they go when
-    // the run does.
+    // The signed approvals become ordinary session grants for this run only.
     for grant in &routine.grants {
         host.grants.insert(&session.id, grant.clone());
     }
@@ -455,15 +392,8 @@ fn outcome_of(status: &str) -> RunOutcome {
 
 /// Starts the scheduler on the async runtime.
 ///
-/// One task for the process, woken every [`TICK`], holding nothing between
-/// wakes: the routines are read from the store each time, so a routine edited,
-/// paused or deleted in Settings takes effect on the next tick with no
-/// invalidation to get wrong.
-///
-/// It runs whether or not there is a window. That is the point of the phase and
-/// of the tray (PLAN 7.2, row *Process*): closing the window hides a surface, it
-/// does not stop the machine. Events still go out; a sink with no window drops
-/// them and says so at debug level.
+/// One task woken every [`TICK`], re-reading routines each time, window or not
+/// (PLAN 7.2, *Process*).
 pub fn spawn<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         tracing::info!(seconds = TICK.as_secs(), "scheduler started");
@@ -480,9 +410,7 @@ pub fn spawn<R: Runtime>(app: AppHandle<R>) {
 
 /// One pass over the routines.
 ///
-/// Synchronous on purpose: it measures and spawns, and everything it measures
-/// is a lock or a `stat`. The runs themselves are tasks, so a routine that
-/// takes ten minutes does not hold up the tick that would have started another.
+/// Synchronous: it only measures and spawns run tasks.
 fn tick<R: Runtime>(app: &AppHandle<R>) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
@@ -494,17 +422,8 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
             continue;
         }
 
-        // The watermark moves when a change is *acted on*, and at no other
-        // time. Advancing it whichever way the answer went is what would lose a
-        // change that arrived while the routine was inside its cooldown: the
-        // file would be marked as seen by a tick that did not fire, and nothing
-        // newer would ever appear. A pending change stays pending.
-        //
-        // The one exception is a routine that has never looked — normally
-        // impossible, because saving one records where "now" is
-        // (`AppState::arm_watch`), and reachable only when that look failed.
-        // Learning then costs one skipped change rather than a routine that
-        // fires on every old file in the folder.
+        // The watermark moves only when a change is acted on (or learned, see
+        // `schedule::learning`), so changes during a cooldown stay pending.
         let watch = watch_for(&state, &routine);
         if let Some(newest) = watch.as_ref().and_then(super::learning) {
             state.routines().mark_seen(&routine.id, newest);
@@ -525,10 +444,7 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
         if state.scheduler().claim(&routine.id).is_err() {
             continue;
         }
-        // Before the run rather than after it: a run takes minutes, and a
-        // second tick inside that window would otherwise see the same change
-        // and be told the routine is already running — which is true, and would
-        // have left the watermark behind for a third tick to trip over.
+        // Before the run, so a tick during it does not see the same change.
         if let Some(newest) = watch.as_ref().and_then(|watch| watch.newest.as_deref()) {
             state.routines().mark_seen(&routine.id, newest);
         }
@@ -543,10 +459,7 @@ fn watch_for(state: &AppState, routine: &Routine) -> Option<Watch> {
         return None;
     };
 
-    // Resolved through the same containment check every tool call goes through
-    // (PLAN 3.2): a workspace-relative directory that resolves outside — a
-    // symlink, a `..` somebody hand-edited into the document — is not watched
-    // and is not an error the scheduler can do anything about.
+    // Same containment as tool calls (PLAN 3.2); outside means not watched.
     let workspace = state.workspace_for_project(&routine.project_id)?;
     let resolved = crate::policy::path::resolve(&workspace, dir).ok()?;
     if !resolved.inside {
@@ -562,9 +475,7 @@ fn watch_for(state: &AppState, routine: &Routine) -> Option<Watch> {
 
 /// Spawns one run, and gives its slot back however it ends.
 ///
-/// The slot is claimed by the caller and released here, in one place, so there
-/// is no path out of a run that leaves a routine marked as running for the rest
-/// of the process's life.
+/// The caller claims the slot; it is released here on every path.
 fn start<R: Runtime>(app: AppHandle<R>, routine_id: String) {
     tauri::async_runtime::spawn(async move {
         // Two statements, and the second one always runs: a slot that leaked
@@ -580,9 +491,8 @@ fn start<R: Runtime>(app: AppHandle<R>, routine_id: String) {
 
 /// Assembles the host from a running application and fires one routine.
 ///
-/// The state is looked up from the handle rather than captured, for the reason
-/// the turn task does it: a `State<'_, AppState>` borrows an invocation that
-/// this outlives.
+/// State is looked up from the handle, since a `State` borrow cannot outlive
+/// the invocation.
 async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
@@ -613,14 +523,8 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
 
 /// Fires a routine now, on somebody's say-so.
 ///
-/// Deliberately the same path the clock takes, unattended and all: what **Run
-/// now** shows you is exactly what happens at three in the morning, including
-/// which calls are refused for want of a standing approval. A paused routine
-/// still runs — pressing the button is a decision, and it does not restart the
-/// clock.
-///
-/// The checks that can be answered immediately are answered immediately, so the
-/// button can say why it did nothing; everything after that is events.
+/// The clock's own unattended path. Works on a paused routine without
+/// resuming it; immediate refusals return, the rest is events.
 pub fn run_now<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,

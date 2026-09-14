@@ -1,17 +1,9 @@
 /**
  * One row of the session list.
  *
- * The title is editable in place: renaming is a rare action, and a dialog for
- * it would be more chrome than the action deserves. Double-click, or the
- * rename button, turns the label into an input; Enter commits, Escape
- * abandons, and blur commits — losing an edit because the user clicked
- * elsewhere is the more annoying of the two failure modes.
- *
- * A row may also say why it exists when nobody typed it: a `brief` badge for a
- * session a delegation opened (Phase 15), a `routine` badge for one a clock
- * did (Phase 16). Work the machine did on your behalf is listed beside the work
- * you asked for, never hidden — reading what happened overnight should be a
- * click.
+ * Renamed in place (double-click or button): Enter and blur commit, Escape
+ * abandons. Sessions opened by a delegation or a routine carry a `brief` or
+ * `routine` badge (Phases 15–16) and are listed, never hidden.
  */
 
 import { useEffect, useRef, useState } from "react";

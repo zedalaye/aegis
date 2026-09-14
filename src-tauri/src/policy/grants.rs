@@ -1,29 +1,9 @@
-//! Per-session "always allow" grants (PLAN 3.1).
+//! Per-session "allow for this session" grants (PLAN 3.1).
 //!
-//! A grant is what the user creates by answering an approval with
-//! `allow_session`. Three properties make it something a user can reason
-//! about, and all three are enforced here rather than in the UI:
-//!
-//! * **Narrow.** The key is `(tool, scope)`, never the tool alone. Approving
-//!   `git` does not approve `rm`, and a `git` grant does not cover `checkout`;
-//!   approving writes in the workspace does not
-//!   approve writes to `.git/` or anywhere outside it. Every grant carries a
-//!   [`Grant::scope_label`] that says, in words, exactly what it covers — the
-//!   same sentence the approval dialog showed before it was created.
-//! * **Session-lifetime only.** Grants live in memory, keyed by session id,
-//!   and are dropped when the session closes or the process exits. Nothing in
-//!   this module touches the disk. There is no "always allow forever" in the
-//!   MVP, and adding one would need a deliberate change here, not a new call
-//!   site.
-//! * **Revocable.** [`GrantStore::list`] is what Settings renders, and
-//!   [`GrantStore::revoke`] is the button beside each row.
-//!
-//! A grant can only ever *skip a prompt policy would otherwise raise*. The
-//! matrix decides first and names the grant that would cover the call; a row
-//! that offers no grant — anything outside the workspace, any `.git/` write —
-//! simply has no name to match, so no entry in this store can apply to it.
-//! That is why the "never outside the workspace" rule needs no check of its
-//! own: it is a property of the table, not a condition evaluated here.
+//! A grant is **narrow** (a scope, never a whole tool), **session-lifetime**
+//! (in memory, dropped on close; nothing here touches disk) and **revocable**.
+//! It can only collapse an ask whose row names it: a row offering no grant —
+//! outside the workspace, a `.git/` write — has nothing to match.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard};
@@ -31,40 +11,18 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// One `allow_session` grant.
-///
-/// The variants are the scopes, not the tools: `fs_read` appears only as
-/// [`Grant::FsReadLarge`] because the only `fs_read` row that offers a grant
-/// is the large-file one, and a grant that covered every read would be a
-/// different, much broader thing than what the user was asked about.
+/// One `allow_session` grant. The variants are scopes, not tools.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
 pub enum Grant {
-    /// Read any contained file over the size threshold without asking again.
-    ///
-    /// Reads under the threshold are auto-allowed anyway, and a sensitive name
-    /// is asked about every time, so this grant covers exactly the row it was
-    /// offered on: "this file is big".
+    /// Contained reads over the size threshold.
     FsReadLarge,
     /// Write anywhere in the workspace subtree, except `.git/` and `world/`.
     FsWrite,
-    /// Amend the workspace's constitution for the rest of the session
-    /// (PLAN 7.2).
-    ///
-    /// Its own variant rather than a wider [`Grant::FsWrite`], and the split is
-    /// the point of it existing. Somebody who allowed writes so a session could
-    /// file artefacts has not thereby agreed to let it rewrite what the project
-    /// *is*; somebody helping author an essence has not thereby opened every
-    /// other file in the repository. Neither grant matches the other's row.
-    ///
-    /// It exists at all because founding a world is six files and amending one
-    /// is rarely fewer — and six identical dialogs in a row is how a person
-    /// learns to click through the one that mattered. What it never covers is a
-    /// delegated run, which is refused before any grant is consulted, or an
-    /// unattended one, which is offered nothing to sign: `COS.md` is that
-    /// amending the world is a *human* decision, and a routine has no human in
-    /// it.
+    /// Writes under `world/` (PLAN 7.2). Its own scope: a workspace-write grant
+    /// never reaches the constitution, and this one reaches nothing else. Never
+    /// offered to delegated or unattended runs.
     WorldAmend,
     /// Run one program in the workspace.
     Shell {
@@ -73,36 +31,13 @@ pub enum Grant {
     },
     /// Capture the primary display.
     ScreenCapture,
-    /// Record memories as this identity, for the rest of the session.
-    ///
-    /// Not scoped further, because there is nothing narrower to scope it to: a
-    /// memory has no path and no program, only a sentence, and a grant keyed on
-    /// the sentence would be a grant that never matched twice.
+    /// Record memories as this identity.
     MemoryWrite,
-    /// Hand briefs to other identities for the rest of the session.
-    ///
-    /// Not scoped to an owner or a goal, for the reason [`Grant::MemoryWrite`]
-    /// is not scoped to a sentence: what a user approves here is *this session
-    /// may route work*, and a grant keyed on the goal would be one that never
-    /// matched twice. It stays narrow anyway, because it covers only the
-    /// routing — every tool call the specialists then make is judged by this
-    /// same table, under their own identities and with none of this session's
-    /// grants (they run in sessions of their own).
+    /// Hand briefs to other identities. Covers the routing only: each
+    /// specialist's calls are judged in its own session, without this grant.
     HandoffDelegate,
-    /// Call one tool of one connector for the rest of the session
-    /// (PLAN 7.3, Phase 18).
-    ///
-    /// Keyed on the whole tool name — `git__status`, not `git` — and that is
-    /// the decision of the phase rather than a detail of it. A connector's tool
-    /// list is the server's to change, and it may change while a session is
-    /// open (`notifications/tools/list_changed`). A grant that covered the
-    /// *connector* would then quietly cover a tool that did not exist when
-    /// somebody read the dialog. This one covers what was on the screen.
-    ///
-    /// Not scoped further than that, for the reason [`Grant::MemoryWrite`] is
-    /// not scoped to a sentence: the arguments belong to a schema this process
-    /// has never seen, and a grant keyed on them would be one that never
-    /// matched twice.
+    /// One connector tool by full name (PLAN 7.3, Phase 18), never the whole
+    /// connector: a server may add tools while a session is open.
     Connector {
         /// The full tool name the dialog named.
         tool: String,
@@ -110,26 +45,16 @@ pub enum Grant {
 }
 
 impl Grant {
-    /// Builds a shell grant from the program as the model spelled it.
-    ///
-    /// The key is the basename, so `/usr/bin/git`, `git` and (on Windows)
-    /// `C:\Program Files\Git\cmd\git.exe` all name the same grant — the user
-    /// approved *running git*, and which copy of git PATH finds is not a
-    /// distinction they were shown. Windows also drops the executable suffix
-    /// and folds case, because `git.exe`, `git.cmd` and `GIT` are one program
-    /// there. Phase 7 resolves the program through PATH before it runs; it
-    /// normalizes through this same function, so the grant a user created on
-    /// the prompt is the grant the resolved call matches.
+    /// A shell grant. A bare name is keyed on [`program_name`]; a name with a
+    /// separator on its whole path, which the matrix passes resolved — so
+    /// `scripts\git.cmd` is not `git`.
     pub fn shell(program: &str) -> Self {
         Self::Shell {
             program: shell_key(program),
         }
     }
 
-    /// The tool this grant can ever apply to.
-    ///
-    /// Borrowed rather than `&'static str` since Phase 18: a connector's tools
-    /// are named by the server that offers them.
+    /// The tool this grant can apply to.
     pub fn tool(&self) -> &str {
         match self {
             Self::FsReadLarge => "fs_read",
@@ -145,12 +70,8 @@ impl Grant {
         }
     }
 
-    /// What granting this would allow, in words.
-    ///
-    /// This is the `scope_label` on the approval request. It is written as a
-    /// promise about the rest of the session, because that is what the user is
-    /// actually agreeing to, and it is the same string Settings shows beside
-    /// the Revoke button afterwards.
+    /// What the grant covers, in words: the request's `scope_label`, and the
+    /// text beside Revoke.
     pub fn scope_label(&self) -> String {
         match self {
             Self::FsReadLarge => {
@@ -169,7 +90,8 @@ impl Grant {
             }
             Self::Shell { program } if program == "git" => {
                 "run read-only `git` in this workspace (status, log, diff, show, …) for the rest \
-                 of this session — checkout, merge, push and reset are still asked about"
+                 of this session — any other verb, an option before the verb, and a line that \
+                 writes a file or runs a program are still asked about"
                     .to_owned()
             }
             Self::Shell { program } => format!(
@@ -185,7 +107,8 @@ impl Grant {
                     .to_owned()
             }
             Self::HandoffDelegate => {
-                "hand briefs to other identities, for the rest of this session — what each of                  them then does is still approved call by call"
+                "hand briefs to other identities, for the rest of this session — what each of \
+                 them then does is still approved call by call"
                     .to_owned()
             }
             Self::Connector { tool } => {
@@ -201,11 +124,31 @@ impl Grant {
     }
 }
 
-/// Normalizes a program name into a grant key.
-///
-/// Kept beside [`Grant::shell`] so the matrix, the approval path and Phase 7's
-/// PATH resolution cannot drift into three slightly different answers.
+/// Normalizes a program into a grant key. See [`Grant::shell`].
 fn shell_key(program: &str) -> String {
+    let trimmed = program.trim();
+    if !names_a_path(trimmed) {
+        return program_name(trimmed);
+    }
+    if cfg!(windows) {
+        trimmed.to_lowercase()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Whether `program` names a file by path rather than a program on PATH — the
+/// rule `shell_exec` resolves by.
+pub fn names_a_path(program: &str) -> bool {
+    std::path::Path::new(program.trim())
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+}
+
+/// Which program a name runs: the basename, on Windows without its suffix and
+/// lower-cased. Answers "is this git / is this Aegis"; never the grant key of a
+/// program named by path.
+pub fn program_name(program: &str) -> String {
     let trimmed = program.trim();
     let basename = std::path::Path::new(trimmed)
         .file_name()
@@ -221,12 +164,9 @@ fn shell_key(program: &str) -> String {
     }
 }
 
-/// The live grants of every open session.
-///
-/// Held in [`AppState`](crate::AppState) for the life of the process. Each
-/// session's set is independent: two sessions on the same workspace do not
-/// share approvals, because the user approved a thing they were doing, not a
-/// property of the folder.
+/// The live grants of every open session, held in
+/// [`AppState`](crate::AppState). Sessions never share grants, even on one
+/// workspace.
 #[derive(Debug, Default)]
 pub struct GrantStore {
     sessions: Mutex<HashMap<String, HashSet<Grant>>>,
@@ -238,13 +178,8 @@ impl GrantStore {
         Self::default()
     }
 
-    /// Locks the map.
-    ///
-    /// A poisoned mutex means some other command panicked while holding it.
-    /// What is behind it is a plain map that is only ever inserted into or
-    /// removed from wholesale, so it cannot be torn; recovering is strictly
-    /// better than turning one panic into a permanently broken policy layer
-    /// that denies every later call.
+    /// Locks the map, recovering from poison: the map cannot be left torn, and
+    /// one panic must not break every later decision.
     fn sessions(&self) -> MutexGuard<'_, HashMap<String, HashSet<Grant>>> {
         self.sessions
             .lock()
@@ -287,10 +222,7 @@ impl GrantStore {
         removed
     }
 
-    /// Every grant a session holds, in a stable order.
-    ///
-    /// Sorted because the set's own order is not reproducible, and this list
-    /// is rendered: rows that reshuffle between refreshes are unusable.
+    /// Every grant a session holds, sorted so the rendered list is stable.
     pub fn list(&self, session: &str) -> Vec<Grant> {
         let mut grants: Vec<Grant> = self
             .sessions()
@@ -326,15 +258,28 @@ mod tests {
     }
 
     #[test]
-    fn shell_grants_are_keyed_on_the_program_alone() {
+    fn a_bare_name_is_keyed_on_the_program() {
         let store = GrantStore::new();
         store.insert("s1", Grant::shell("git"));
 
-        assert!(store.holds("s1", &Grant::shell("/usr/bin/git")));
+        assert!(store.holds("s1", &Grant::shell(" git ")));
         assert!(
             !store.holds("s1", &Grant::shell("rm")),
             "approving one program must not approve another"
         );
+    }
+
+    #[test]
+    fn a_program_named_by_a_path_is_keyed_on_the_path() {
+        let store = GrantStore::new();
+        store.insert("s1", Grant::shell("git"));
+
+        assert!(
+            !store.holds("s1", &Grant::shell("/ws/scripts/git")),
+            "a file called git is not git"
+        );
+        assert_ne!(Grant::shell("/ws/a/tool"), Grant::shell("/ws/b/tool"));
+        assert_eq!(program_name("/ws/scripts/git"), "git");
     }
 
     #[cfg(windows)]
@@ -342,9 +287,14 @@ mod tests {
     fn windows_shell_keys_ignore_case_and_the_executable_suffix() {
         assert_eq!(Grant::shell("GIT.EXE"), Grant::shell("git"));
         assert_eq!(
+            Grant::shell(r"C:\WS\Tool.cmd"),
+            Grant::shell(r"c:\ws\tool.cmd")
+        );
+        assert_ne!(
             Grant::shell(r"C:\Program Files\Git\cmd\git.cmd"),
             Grant::shell("git")
         );
+        assert_eq!(program_name(r"C:\Program Files\Git\cmd\git.cmd"), "git");
     }
 
     #[test]

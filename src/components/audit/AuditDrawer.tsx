@@ -2,22 +2,9 @@
  * The audit drawer: what the agent has actually done, from the file that
  * recorded it.
  *
- * A panel beside the work area rather than over it. The transcript is the
- * story the model tells about a session; this is the record kept independently
- * of it, and the two are worth reading side by side — a call that appears in
- * one and not the other is exactly the thing a user opens this to find.
- *
- * It reads the log rather than the transcript on purpose. The lines are on
- * disk as JSONL whether or not Aegis is running, they cover sessions that have
- * since been deleted, and they are written for every call including the
- * refused ones. That independence is the whole value: a record that came from
- * the same in-memory state as the chat could not contradict it.
- *
- * Scope has two settings and no third. "This session" is the common question —
- * what did the conversation in front of me do — and "Everything" is the other
- * one, what has this machine's agent done at all. There is no filter by tool
- * or by outcome: the list is short, bounded and searchable by eye, and the
- * file is there for anything more.
+ * Beside the work area so it can be read against the transcript. It reads the
+ * JSONL log, independent of the chat state and including deleted sessions.
+ * Scope is "This session" or "Everything"; no other filters.
  */
 
 import { useEffect } from "react";
@@ -34,13 +21,7 @@ const SCOPES: readonly (readonly [AuditScope, string])[] = [
   ["all", "Everything"],
 ];
 
-/**
- * What the drawer says when it has nothing to list.
- *
- * Two different nothings, and the fix differs: no session is selected, or this
- * agent has genuinely not run a tool. An empty list that did not say which
- * would read as a log that is not recording.
- */
+/** The empty state: no session selected, or no tool calls yet. */
 function Empty() {
   const scope = useAudit((s) => s.scope);
   const sessionId = useAudit((s) => s.sessionId);

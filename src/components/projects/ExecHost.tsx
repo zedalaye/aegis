@@ -1,30 +1,10 @@
 /**
  * Where this project's commands run, in the rail (PLAN 7.12).
  *
- * One control: a list of this computer and every WSL distribution installed on
- * it. Picking one means `shell_exec` runs the program inside that distribution
- * — on that distribution's PATH, as that distribution's own user — instead of
- * spawning it on Windows. Nothing else changes: `fs_read`, `fs_write` and
- * `fs_list` still work on the folder through Windows, and the approval gate is
- * the same gate.
- *
- * It sits on the project's side of the rail, above the shared files, because it
- * is the most consequential fact about the folder here — it decides which
- * machine's toolchain the work is done with — and because a person setting up a
- * project wants it before they start rather than after the first `pnpm` fails.
- *
- * When the folder itself lives in a distribution, that row says so. It is a
- * label, not a decision: PLAN 7.12 forbids flipping the host from a `\wsl$\`
- * path, because picking a folder is not consent — and because the inference
- * would only catch one of the two spellings, `C:\work` being just as reachable
- * from the distribution at `/mnt/c/work`. Marking the row makes the likely
- * answer findable and still leaves the choosing to the person.
- *
- * The panel draws nothing at all on a machine with no distributions, unless the
- * project already names one. A picker with a single row is not a choice, and on
- * macOS, on Linux, and on a Windows box without WSL there genuinely is only one
- * place a command can go — while a project carrying a host that this machine
- * cannot offer is exactly the case somebody has to be able to see and undo.
+ * Picking a WSL distribution makes `shell_exec` run there; file tools and the
+ * gate are unchanged. The folder's own distribution is labelled, never
+ * auto-selected (PLAN 7.12). Hidden when there are no distributions, unless the
+ * project already names one.
  */
 
 import { useEffect } from "react";

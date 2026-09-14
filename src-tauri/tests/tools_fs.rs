@@ -1,13 +1,7 @@
 //! The filesystem tools, driven the way the turn loop will drive them.
 //!
-//! Nothing here calls a tool directly. Every test goes
-//! `policy::decide` → `tools::run`, because that pipeline *is* what Phase 4
-//! delivers: a tool that could be reached without a decision would be a tool
-//! outside the gate, and a test that skipped the decision would not notice.
-//!
-//! The exit criterion of the phase is at the bottom: one test drives
-//! `fs_list`, `fs_read` and `fs_write` through policy and then finds the
-//! expected lines on disk in the audit log.
+//! Every test goes `policy::decide` → `tools::run`. Phase 4's exit criterion is
+//! last: all three tools through policy, with the expected audit lines.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -89,11 +83,14 @@ impl Fixture {
     /// Runs one call end to end: policy decides, and whatever it decided is
     /// carried out and audited.
     ///
-    /// An ask is treated as the user having answered `allow_once`, which is
-    /// what Phase 6 will do with the same decision; a hard denial is refused
-    /// without running anything. This is the whole of the turn loop's tool
-    /// step, minus the events.
+    /// An ask counts as `allow_once`; a hard denial runs nothing.
     fn call(&self, tool_name: &str, args: Value) -> ToolOutcome {
+        self.call_after(tool_name, args, || {})
+    }
+
+    /// [`Fixture::call`], with `between` run after policy decided and before
+    /// the tool runs — where a person would be reading the dialog.
+    fn call_after(&self, tool_name: &str, args: Value, between: impl FnOnce()) -> ToolOutcome {
         let ctx = PolicyCtx::new("session-1", Some(&self.workspace), &self.grants);
         let cancel = tokio_util::sync::CancellationToken::new();
         let tools_ctx = ToolCtx {
@@ -123,7 +120,10 @@ impl Fixture {
             routine: "",
         };
 
-        match decide(&ctx, tool_name, args.clone()) {
+        let decision = decide(&ctx, tool_name, args.clone());
+        between();
+
+        match decision {
             Decision::Auto { call, reason } => {
                 self.runtime
                     .block_on(tools::run(&tools_ctx, AuditDecision::Auto, reason, &call))
@@ -154,6 +154,69 @@ impl Fixture {
 /// fails a test rather than reaching a model.
 fn envelope(outcome: &ToolOutcome) -> Value {
     serde_json::from_str(&outcome.result.to_json()).expect("the envelope is valid JSON")
+}
+
+/// Links `link` to the directory `target`, or reports that this machine will
+/// not. On Windows a junction is the fallback, which needs no privilege and is
+/// what the runtime treats as a link anyway.
+fn link_dir(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(target, link).is_ok()
+        || std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|out| out.status.success());
+
+    if !made {
+        eprintln!("skipping: this machine does not allow creating a directory link");
+    }
+    made
+}
+
+// ---------------------------------------------------------------------------
+// Between the decision and the call
+// ---------------------------------------------------------------------------
+
+/// The decision is taken when the call arrives, and the dialog may be open for
+/// minutes. A folder that becomes a link in the meantime must not carry the
+/// write out of the workspace.
+#[test]
+fn a_folder_swapped_for_a_link_after_the_decision_stops_the_write() {
+    let fixture = Fixture::new();
+    let mut linked = false;
+
+    let outcome = fixture.call_after(
+        tool::FS_WRITE,
+        json!({ "path": "later/notes.md", "content": "hello", "create_dirs": true }),
+        || linked = link_dir(&fixture.outside, &fixture.workspace.join("later")),
+    );
+    if !linked {
+        return;
+    }
+
+    assert!(!outcome.result.ok, "{}", outcome.result.to_json());
+    assert!(
+        !fixture.outside.join("notes.md").exists(),
+        "nothing is written through the link"
+    );
+}
+
+#[test]
+fn a_path_that_did_not_move_is_still_written() {
+    let fixture = Fixture::new();
+
+    let outcome = fixture.call_after(
+        tool::FS_WRITE,
+        json!({ "path": "later/notes.md", "content": "hello", "create_dirs": true }),
+        || fs::create_dir(fixture.workspace.join("later")).expect("mkdir"),
+    );
+
+    assert!(outcome.result.ok, "{}", outcome.result.to_json());
+    assert!(fixture.workspace.join("later").join("notes.md").is_file());
 }
 
 // ---------------------------------------------------------------------------
@@ -607,10 +670,7 @@ fn a_session_grant_shows_up_in_the_log_as_the_reason_a_write_ran() {
 
 /// Policy resolves a path once; the tool operates on what policy resolved.
 ///
-/// The check is indirect on purpose — there is no way to hand a tool a
-/// different path than the one that was judged, which is the property being
-/// asserted. What is observable is that the file that changed is the resolved
-/// one.
+/// Observed indirectly: the file that changed is the resolved one.
 #[test]
 fn a_tool_touches_the_path_policy_resolved_and_no_other() {
     let fixture = Fixture::new();

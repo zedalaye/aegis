@@ -1,15 +1,9 @@
 /**
  * One file of the open project, shown and not edited (PLAN 7.15).
  *
- * Preview in, save out. Markdown is drawn as elements by `Markdown`, other text
- * sits in a `<pre>`, an image is fetched as bytes and shown from a blob URL
- * this window made, and anything else is its name, size and type. There is no
- * cursor and no Save: changing a file is the operator's editor, or `fs_write`
- * through the approval dialog, and "Show in folder" is how the first is reached.
- *
- * `world/` is previewed exactly like everything else. That it is preview-only
- * is not a special case here — everything is — and it is said on the file,
- * because the constitution is the one place somebody might expect a pencil.
+ * Markdown via `Markdown`, other text in a `<pre>`, images from a blob URL,
+ * anything else as name, size and type. No editing; a note on `world/` files
+ * says so explicitly.
  */
 
 import { useEffect, useState } from "react";
@@ -36,13 +30,7 @@ function folderOf(path: string): string {
   return at === -1 ? "" : path.slice(0, at);
 }
 
-/**
- * An image, from bytes the runtime handed over.
- *
- * The blob URL is revoked when the image changes or the pane goes away: one
- * left behind keeps the whole picture alive in memory for as long as the window
- * is open.
- */
+/** An image from runtime bytes; its blob URL is revoked on change or unmount. */
 function ImagePreview({
   projectId,
   preview,

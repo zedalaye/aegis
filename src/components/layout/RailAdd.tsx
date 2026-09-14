@@ -1,15 +1,8 @@
 /**
  * The "+" on a rail heading (PLAN 7.10 chrome, same place Orca puts one).
  *
- * A sibling of the disclosure, never nested in it — a button inside a button
- * is invalid HTML and would make "add" also fold the section.
- *
- * Two shapes. **One action** is a click: add a project, or add a session when
- * there is only one identity to open as. **A list** is a menu: the identities
- * a new session can be bound to. Creating a session has always been one click
- * in the common case; a menu that opened to a single name would make that
- * case worse to serve the rare one. The menu is therefore only drawn when
- * there is something to choose.
+ * A sibling of the disclosure button, never nested in it. A single action is a
+ * click; a menu appears only when there are several identities to choose from.
  */
 
 import { useEffect, useId, useRef, useState } from "react";

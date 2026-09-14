@@ -1,24 +1,10 @@
 //! Session and turn commands (PLAN 2.1, "Sessions and turns").
 //!
-//! Seven of the eight commands are thin: look something up, hand it back. The
-//! eighth, [`session_send`], is the one with a shape worth reading.
+//! [`session_send`] returns once the turn is registered; the rest is events
+//! (PLAN 2.1), so turns stream, cancel and survive a reopened window.
 //!
-//! It returns as soon as the turn is *registered*, not when it is finished.
-//! Everything after that arrives as events (PLAN 2.1). Two reasons, and the
-//! second is the important one: a turn can run for minutes, and an `invoke`
-//! that outlived the window it was called from would be a promise nothing can
-//! resolve; and a turn that is only observable through its return value cannot
-//! be cancelled, cannot stream, and cannot be watched by a window that was
-//! reopened halfway through.
-//!
-//! So the ordering inside `session_send` is deliberate. The turn is registered
-//! before the message is stored, because registration is what refuses a second
-//! concurrent turn — storing first would let two sends race and interleave two
-//! users' messages in one transcript. The user's message is stored before the
-//! task is spawned, so the transcript the turn reads already contains what it
-//! is answering. And if anything between those two steps fails, the
-//! registration is undone, or the session would be left running a turn that
-//! does not exist.
+//! Its order matters: register (refusing a concurrent turn), then store the
+//! message, then spawn — undoing the registration if a step in between fails.
 
 use std::sync::Arc;
 
@@ -37,10 +23,8 @@ use super::window::MAIN_WINDOW;
 
 /// Creates a session in a project, as an identity.
 ///
-/// An omitted `agent_id` is the built-in identity — the assistant every session
-/// before Phase 12 ran as. The binding is fixed at creation and there is no
-/// command that changes it; see
-/// [`SessionStore::create`](crate::store::SessionStore::create) for why.
+/// An omitted `agent_id` is the built-in identity; the binding is permanent
+/// ([`SessionStore::create`](crate::store::SessionStore::create)).
 #[tauri::command(rename_all = "snake_case")]
 pub fn session_create(
     state: State<'_, AppState>,
@@ -85,12 +69,8 @@ pub fn session_rename(
 
 /// Deletes a session and its transcript.
 ///
-/// Everything the process knew about the session goes first: the running turn
-/// is cancelled, its open approvals are withdrawn and its grants are dropped.
-/// Deleting the transcript out from under a live turn would leave it writing
-/// messages into a session that no longer exists — which the turn loop
-/// survives, but only by logging a warning per message — and leaving a dialog
-/// answerable would leave a button that approves a call nothing will run.
+/// Cancels the turn and drops approvals and grants before deleting the
+/// transcript.
 #[tauri::command(rename_all = "snake_case")]
 pub fn session_delete(state: State<'_, AppState>, session_id: String) -> AppResult<()> {
     state.close_session(&session_id);
@@ -158,21 +138,8 @@ pub fn session_send(
 
 /// Folds this session's older turns into state (PLAN 7.3, Phase 14).
 ///
-/// The button behind the automatic fold that every turn already does when a
-/// transcript has grown expensive. Forced, so it does not wait for that
-/// threshold — but it keeps the same number of recent turns raw, because how
-/// much is readable is not a function of why the fold was asked for.
-///
-/// Returns the session as it now reads, whether or not anything moved: a
-/// session with too few turns to fold is an answer, not a failure, and the
-/// panel draws it by finding no fold in the detail it got back.
-///
-/// Refused with `E_TURN_BUSY` while a turn is running, for the reason a second
-/// `session_send` is: a turn folds once, before its first request, so that all
-/// of its rounds reason against the same history.
-///
-/// Nothing is deleted. The transcript stays on disk in full and the pane still
-/// scrolls through all of it; what changes is only what reaches the model.
+/// A forced fold, keeping the usual raw tail; returns the session either way.
+/// `E_TURN_BUSY` while a turn runs. Nothing is deleted.
 #[tauri::command(rename_all = "snake_case")]
 pub fn session_compact(state: State<'_, AppState>, session_id: String) -> AppResult<SessionDetail> {
     state.compact_session(&session_id)
@@ -180,9 +147,7 @@ pub fn session_compact(state: State<'_, AppState>, session_id: String) -> AppRes
 
 /// Cancels a running turn.
 ///
-/// Idempotent from the user's side — pressing stop twice is not an error worth
-/// reporting — but a handle from a turn that has already finished does fail,
-/// so the UI refetches rather than leaving a stop button that does nothing.
+/// A handle from a finished turn fails, so the UI refetches.
 #[tauri::command(rename_all = "snake_case")]
 pub fn session_cancel(
     state: State<'_, AppState>,
@@ -216,14 +181,8 @@ async fn run_turn<R: Runtime>(
     let agent = state.agent_of(&plan.session_id);
     let provider = state.provider_for(&agent);
 
-    // What this turn's `handoff_delegate` would run against, if it makes one
-    // (PLAN 7.3, Phase 15). Built here rather than in `AppState` because it is
-    // per turn: it remembers the session it opened for each brief, so a retry
-    // continues that run instead of starting a third one.
-    //
-    // A session whose project is gone gets none: a delegation with no workspace
-    // is a team with no shared files, which is the thing the whole mode rests
-    // on (`COS.md` *Memory*).
+    // Per-turn delegation state (Phase 15); none without a workspace, since a
+    // team needs shared files (`COS.md` *Memory*).
     let bus: Option<Arc<dyn bus::Runner>> =
         state
             .sessions()
@@ -271,10 +230,8 @@ async fn run_turn<R: Runtime>(
 
 /// An [`EventSink`] that emits to the main window.
 ///
-/// `emit_to` rather than `emit`: streaming events go to the one window that
-/// asked for them, never as a global broadcast (PLAN 2.2). A failure is logged
-/// and swallowed — the window closing mid-turn is ordinary, and a turn that
-/// aborted because nobody was watching would lose work for no reason.
+/// `emit_to` the main window, never a broadcast (PLAN 2.2). Failures are
+/// logged: a closed window must not abort the turn.
 pub struct WindowSink<R: Runtime> {
     app: AppHandle<R>,
 }

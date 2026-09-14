@@ -1,38 +1,18 @@
 //! The workspace explorer (PLAN 7.15): a read-only tree of the open project,
 //! and a preview of one file in it.
 //!
-//! The agent is *in* the system — `fs_list`, `fs_read`, the digest. The
-//! operator was not: shared memory is files, and a window that could not show
-//! them made the transcript the place a person looked, which is the thing the
-//! convention exists to stop being. Revealing the folder (PLAN 7.10) is not
-//! seeing it — on macOS Finder hides `.aegis/` until ⌘⇧. is pressed.
+//! Read-only: there is no save path, since a WebView write would bypass the
+//! gate (PLAN 7.6). Drops go through [`intake`](crate::intake).
 //!
-//! This module is the read half of that, and it is deliberately only a read.
-//! There is no save path here and there will not be one: a WebView that could
-//! write `DECISIONS.md` or a `SKILL.md` would be a second write around the
-//! approval gate (PLAN 7.6, *Authoring*). The one write the slice allows is a
-//! brief arriving from a drop, and that is [`intake`](crate::intake), not this.
+//! * **Contained**: every path goes through [`reveal::target`].
+//! * **One directory at a time**, capped at [`LISTING_MAX_ENTRIES`], with the
+//!   remainder counted.
+//! * **Ignored is hidden, not unreachable**: `.git`, `node_modules` and
+//!   ignore-file matches are hidden by default; `.aegis/` is shown; previews
+//!   never check ignore rules.
 //!
-//! Three rules shape it.
-//!
-//! * **Contained, like reveal.** Every path the window sends goes through
-//!   [`reveal::target`], the containment `workspace_reveal` already uses, so a
-//!   listing or a preview cannot be aimed outside the project — through `..`,
-//!   through an absolute path, or through a link. This is not a generic
-//!   `fs_list` the window can point anywhere.
-//! * **One directory at a time.** A monorepo is the first thing somebody opens,
-//!   and a tree built eagerly is a walk of `node_modules`. A folder is listed
-//!   when it is expanded, capped at [`LISTING_MAX_ENTRIES`], and what was left
-//!   out is counted rather than silently dropped.
-//! * **Ignored is hidden by default, never unreachable.** `.git`,
-//!   `node_modules`, and whatever the repository's own ignore files name are
-//!   left out unless asked for. `.aegis/` is shown: its dot is one root entry,
-//!   not invisibility. And a brief may point at a gitignored dump, so a preview
-//!   never asks whether a file is ignored.
-//!
-//! Bytes never become markup here. Text comes back as a string for the window
-//! to render as elements; an image comes back as bytes the window turns into a
-//! blob URL it created itself. Nothing is ever handed over as a `file://` URL.
+//! Text returns as a string and images as bytes for a blob URL — never a
+//! `file://` URL.
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -49,24 +29,13 @@ use crate::reveal;
 use crate::workspace::{ARTEFACTS_DIR, BRIEFS_DIR, CABINET_DIR};
 use crate::world::WORLD_DIR;
 
-/// Most entries one listing returns.
-///
-/// A person scrolls a folder of a thousand files; they do not read one. What is
-/// past the cap is counted on the listing, so the tree can say so.
+/// Most entries one listing returns; the rest are counted.
 pub const LISTING_MAX_ENTRIES: usize = 1000;
 
-/// Most bytes of a file a text preview carries.
-///
-/// A preview is for reading, and half a megabyte of text is more than anyone
-/// reads in a pane. A longer file says it was cut, and the reveal button beside
-/// it is how the rest is reached.
+/// Most bytes of a file a text preview carries; longer files say they were cut.
 pub const TEXT_MAX_BYTES: u64 = 512 * 1024;
 
-/// Largest image the window is handed as bytes.
-///
-/// The bytes cross the IPC channel once, as a binary response rather than
-/// base64, and become a blob URL. A photograph straight off a camera fits; a
-/// scan of a book does not need to.
+/// Largest image the window is handed as bytes (a binary IPC response).
 pub const IMAGE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 /// How much of a file is looked at to decide whether it is text.
@@ -74,19 +43,13 @@ const SNIFF_BYTES: usize = 8 * 1024;
 
 /// Names hidden wherever they appear, whatever the ignore files say.
 ///
-/// `.git` because it is the repository's store, not the project's files; and
-/// `node_modules` because a folder that is not a git work tree has no ignore
-/// file to name it, and it is still the one directory that makes a tree
-/// useless. Both are shown, marked, when ignored entries are asked for.
+/// Shown, marked, when ignored entries are requested.
 const ALWAYS_IGNORED: [&str; 2] = [".git", "node_modules"];
 
 /// Which part of the workspace a path is in, as far as a drop is concerned.
 ///
-/// Measured here rather than in the window so the convention's names are
-/// spelled in one language. The window uses it for two things: marking the
-/// cabinet as the working surface, and refusing a drop before it asks —
-/// [`intake`](crate::intake) takes no destination at all, so a refusal there
-/// is the window being honest about a target, not the enforcement.
+/// Lets the window mark the cabinet and pre-refuse drop targets; enforcement is
+/// [`intake`](crate::intake)'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -235,9 +198,8 @@ pub struct FilePreview {
 
 /// One folder of the workspace, or the root when `dir` is empty.
 ///
-/// `show_ignored` includes what is hidden by default, marked. It is a view
-/// toggle and not a permission: nothing hidden here is secret from the
-/// operator, who can open the same folder in their own file manager.
+/// `show_ignored` includes hidden entries, marked — a view toggle, not a
+/// permission.
 pub fn list(root: &Path, dir: Option<&str>, show_ignored: bool) -> AppResult<TreeListing> {
     let rel_dir = normalize(dir.unwrap_or(""));
     let target = reveal::target(root, Some(&rel_dir))?;
@@ -300,11 +262,7 @@ pub fn list(root: &Path, dir: Option<&str>, show_ignored: bool) -> AppResult<Tre
 
 /// The names directly inside `dir` that the ignore files leave visible.
 ///
-/// The `ignore` crate rather than a hand-rolled matcher: gitignore semantics —
-/// negation, anchoring, a rule in a parent directory, `core.excludesFile` — are
-/// exactly where a second implementation would disagree with `git status`.
-/// Rules apply the way git applies them, inside a work tree only, and a
-/// `.gitignore` in a folder that is not one names nothing.
+/// Uses the `ignore` crate to match git exactly, inside a work tree only.
 fn visible_names(dir: &Path) -> HashSet<OsString> {
     let mut builder = ignore::WalkBuilder::new(dir);
     builder
@@ -335,9 +293,8 @@ fn visible_names(dir: &Path) -> HashSet<OsString> {
 
 /// Whether some folder on the way down to `rel_dir` is itself ignored.
 ///
-/// A folder the ignore files name hides everything under it, but asking the
-/// walker about its *children* directly finds nothing that names them. So the
-/// question is asked of each folder on the way down instead.
+/// Checked per ancestor, since an ignored folder's children match no rule
+/// themselves.
 fn inside_ignored(root: &Path, rel_dir: &str) -> bool {
     let mut at = root.to_path_buf();
     for segment in rel_dir.split('/').filter(|s| !s.is_empty() && *s != ".") {
@@ -517,12 +474,8 @@ fn sniff(head: &[u8]) -> Option<&'static str> {
 
 /// The bytes as text, or `None` when they are not text.
 ///
-/// A NUL in the first few kilobytes is the one signal worth trusting: text
-/// files do not carry them, and UTF-16 — which does — is rare enough in a
-/// workspace to be shown as a binary rather than as spaced-out garbage. A file
-/// that is not UTF-8 but has no NUL is usually a legacy code page, a CSV out of
-/// a spreadsheet, and it is shown with the odd replacement character rather
-/// than refused — unless replacements are so common it was never text at all.
+/// A NUL in the first kilobytes means binary. Non-UTF-8 text is shown lossily
+/// unless replacement characters dominate.
 fn as_text(head: &[u8]) -> Option<String> {
     if head[..head.len().min(SNIFF_BYTES)].contains(&0) {
         return None;
@@ -569,9 +522,8 @@ fn is_markdown(rel: &str) -> bool {
 
 /// A path from the window, in the one spelling rows are keyed by.
 ///
-/// Separators become `/`, a leading `./` and a trailing `/` go. Nothing here
-/// decides containment — that is [`reveal::target`] — so a `..` is left for it
-/// to refuse.
+/// `/` separators, no leading `./` or trailing `/`. Containment is
+/// [`reveal::target`]'s.
 fn normalize(raw: &str) -> String {
     let mut rel = raw.trim().replace('\\', "/");
     while let Some(rest) = rel.strip_prefix("./") {

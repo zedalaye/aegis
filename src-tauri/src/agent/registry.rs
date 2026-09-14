@@ -1,23 +1,11 @@
 //! Which sessions are doing something, and how to stop them.
 //!
-//! Two questions, one map, because they have the same answer. "Is this session
-//! running?" is what the sidebar draws and what `session_send` refuses on; "how
-//! do I cancel it?" is what `session_cancel` needs. Keeping them apart would
-//! mean two structures that must agree about the same fact, and the moment
-//! they disagree the UI shows a spinner nothing can stop.
+//! One map answers both "is it running?" and "how do I cancel it?". Nothing is
+//! persisted: after a crash every session is idle
+//! ([`store::sessions`](crate::store::sessions)).
 //!
-//! Nothing here is persisted, and that is the point. A [`SessionState`] is a
-//! fact about this process: a session that was running when the machine lost
-//! power is idle when it comes back, because there is no turn left to finish.
-//! The session document stores the transcript; this holds what is happening to
-//! it right now (see [`store::sessions`](crate::store::sessions)).
-//!
-//! Two records are kept per session rather than one. The `running` half is the
-//! turn in flight; the `resting` half is what the session looks like when
-//! there is none — `Idle`, or `Error` after a turn that failed, so the sidebar
-//! can still show something went wrong after the task is gone. A send clears
-//! the resting state, which is what makes an error badge disappear when the
-//! user tries again.
+//! Per session: `running` (the turn in flight) and `resting` (`Idle`, or
+//! `Error` after a failed turn, cleared by the next send).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -46,31 +34,15 @@ struct Live {
 
 /// Most turns one skill run may span before it is dropped.
 ///
-/// The bound on the risk that made a run turn-scoped in the first place: a span
-/// that outlives its turn can end up naming calls made after the conversation
-/// moved on. A run that has survived this many turns without a `skill_return`
-/// is no longer a procedure being followed — it is a name nobody closed — so it
-/// is dropped, loudly, rather than carried further.
-///
-/// Four rather than two because a real run is genuinely several turns: the
-/// trace this was written from (`IDEAS.md` § 10) took five, and the round cap
-/// that made it five has since been raised for exactly this case
-/// ([`MAX_TOOL_ROUNDS_IN_SKILL`](super::turn::MAX_TOOL_ROUNDS_IN_SKILL)).
+/// Past this, a run without `skill_return` is dropped loudly rather than
+/// tagging later calls. Real runs span several turns (`IDEAS.md` § 10; see
+/// [`MAX_TOOL_ROUNDS_IN_SKILL`](super::turn::MAX_TOOL_ROUNDS_IN_SKILL)).
 pub const MAX_RUN_TURNS: u32 = 4;
 
 /// A runbook a session is part-way through (PLAN 7.6).
 ///
-/// Session state rather than a turn's local, and that is a correction rather
-/// than a preference. The round cap can end a turn in the middle of a
-/// procedure; the person then says "continue"; and every audit line after that
-/// boundary used to carry no skill at all — including, in the trace this was
-/// written from, the `fs_write` of the artefact the run existed to produce, and
-/// the `skill_return` that was refused because nothing was open to return.
-/// PLAN 7.6 asks one thing of a run — that it can be budgeted and replayed —
-/// and a name that stops at the first turn boundary cannot deliver it.
-///
-/// Nothing here is persisted, like everything else in this module: a run whose
-/// process is gone has nothing left to return.
+/// Session state, not turn-local: the round cap can split a run across turns,
+/// and its audit lines must keep the skill name (PLAN 7.6). Not persisted.
 #[derive(Debug, Clone)]
 struct OpenRun {
     /// The runbook being followed.
@@ -86,10 +58,7 @@ struct ActiveTurn {
     cancel: CancellationToken,
     /// Whether the turn is parked on an approval rather than working.
     ///
-    /// The distinction is the user's, not the runtime's: a session that is
-    /// waiting for *them* has to look different from one that is waiting for a
-    /// model, or the sidebar shows a spinner beside the thing that is blocked
-    /// on a click they have not made.
+    /// So the sidebar can show "waiting for you" rather than a spinner.
     waiting: bool,
 }
 
@@ -99,11 +68,7 @@ impl TurnRegistry {
         Self::default()
     }
 
-    /// Locks the map, recovering from a poisoned mutex.
-    ///
-    /// The guarded value is a plain map replaced entry by entry, so it cannot
-    /// be torn; propagating a panic through every later command would be
-    /// strictly worse than carrying on with it.
+    /// Locks the map, recovering from poison: it cannot be left torn.
     fn sessions(&self) -> MutexGuard<'_, HashMap<String, Live>> {
         self.sessions
             .lock()
@@ -112,11 +77,8 @@ impl TurnRegistry {
 
     /// Registers a turn, and hands back the token that cancels it.
     ///
-    /// Fails with `E_TURN_BUSY` when the session already has one. That refusal
-    /// is the whole reason this is a registry rather than a counter: two turns
-    /// in one session would interleave their messages in the transcript, and
-    /// the second would build its request from a conversation the first was
-    /// halfway through writing.
+    /// Fails with `E_TURN_BUSY` when the session already has one, so two turns
+    /// never interleave a transcript.
     pub fn begin(&self, session_id: &str, turn_id: &str) -> AppResult<CancellationToken> {
         let mut sessions = self.sessions();
         let live = sessions.entry(session_id.to_owned()).or_default();
@@ -142,10 +104,8 @@ impl TurnRegistry {
 
     /// Retires a turn and records what the session rests at.
     ///
-    /// `turn_id` is checked rather than trusted: a task finishing after its
-    /// session started a *newer* turn must not clear the new one. That is
-    /// reachable — a cancelled turn's task can outlive the cancel by however
-    /// long its last await takes.
+    /// Checks `turn_id`, so a cancelled task finishing late cannot clear a
+    /// newer turn.
     pub fn finish(&self, session_id: &str, turn_id: &str, resting: SessionState) {
         let mut sessions = self.sessions();
         let Some(live) = sessions.get_mut(session_id) else {
@@ -170,10 +130,7 @@ impl TurnRegistry {
 
     /// Cancels a session's turn.
     ///
-    /// Fails when the turn named is not the one running, rather than
-    /// succeeding silently: the caller is holding a handle from a turn that
-    /// has already ended, and saying so is what makes the UI refetch instead
-    /// of leaving a stop button that does nothing.
+    /// Fails when the named turn is not the one running, so the UI refetches.
     pub fn cancel(&self, session_id: &str, turn_id: &str) -> AppResult<()> {
         let sessions = self.sessions();
 
@@ -238,9 +195,7 @@ impl TurnRegistry {
 
     /// Marks a turn as blocked on an approval, or working again.
     ///
-    /// Checked against `turn_id` for the same reason [`TurnRegistry::finish`]
-    /// is: a turn that was superseded must not repaint the session its
-    /// successor now owns.
+    /// Checked against `turn_id`, like [`TurnRegistry::finish`].
     pub fn set_waiting(&self, session_id: &str, turn_id: &str, waiting: bool) {
         let mut sessions = self.sessions();
         let Some(active) = sessions

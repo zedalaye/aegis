@@ -1,15 +1,8 @@
 /**
  * Which identity a session runs as (PLAN 7.3, Phase 12).
  *
- * Beside the model badge in the chat header, and for the same reason it is
- * there: what is answering and *as whom* are the two things a user needs while
- * a reply streams. They are different facts — the model comes from settings and
- * can change between two messages, the identity is fixed for the life of the
- * session — so they are two badges, not one.
- *
- * The built-in identity draws nothing. Every session had it before there was
- * anything to choose, so a badge reading "Assistant" on every conversation
- * would be a word that never varies and therefore never informs.
+ * Separate from the model badge: the identity is fixed per session, the model
+ * is not. The built-in identity draws nothing.
  */
 
 import { DEFAULT_AGENT_ID, useAgents } from "../../state/agents";

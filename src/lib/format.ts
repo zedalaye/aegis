@@ -11,24 +11,15 @@ import type { Cost } from "../ipc/bindings";
 const SEPARATOR = /[\\/]+/;
 
 /**
- * The last segment of a path — the folder's own name.
- *
- * Used to propose a project name from the folder the user picked. Trailing
- * separators are ignored, and a filesystem or drive root (`/`, `C:\`) has no
- * last segment, so it names itself.
+ * The last segment of a path, ignoring trailing separators; a root names
+ * itself.
  */
 export function folderName(path: string): string {
   const segments = path.split(SEPARATOR).filter((segment) => segment.length > 0);
   return segments.at(-1) ?? path;
 }
 
-/**
- * Shortens a long path for a fixed-width badge, keeping both ends.
- *
- * The two informative parts of a path are the root it lives under and the
- * folder it ends at; the middle is what can go. Falls back to the original
- * when eliding would not actually save anything.
- */
+/** Shortens a long path by eliding its middle, keeping both ends. */
 export function shortenPath(path: string, maxLength = 48): string {
   if (path.length <= maxLength) {
     return path;
@@ -48,12 +39,7 @@ export function shortenPath(path: string, maxLength = 48): string {
 }
 
 /**
- * An RFC3339 timestamp as a short, local, human-readable string.
- *
- * Timestamps cross the wire in UTC; a user reads them in their own timezone,
- * which is what `toLocaleString` does. An unparseable value is shown verbatim
- * rather than as "Invalid Date" — a wrong-looking timestamp is at least a
- * clue, and this is never load-bearing.
+ * An RFC3339 timestamp in local time; unparseable values are shown verbatim.
  */
 export function formatTimestamp(value: string): string {
   const parsed = new Date(value);
@@ -74,15 +60,7 @@ export function formatOptionalTimestamp(value: string | null): string {
 /** Unit steps for {@link formatBytes}, largest last. */
 const BYTE_UNITS = ["B", "KB", "MB", "GB"] as const;
 
-/**
- * A byte count as a short human-readable string.
- *
- * Powers of 1024, one decimal above the first step, and no decimal on bytes
- * themselves — "1.4 KB" is what a person wants from an audit row, "1434 B" is
- * not. The counts this renders are the audit log's `bytes_in` / `bytes_out`,
- * which are what a call actually carried, so the exact number is never the
- * point; the order of magnitude is.
- */
+/** A byte count in powers of 1024, one decimal above bytes ("1.4 KB"). */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) {
     return "—";
@@ -99,15 +77,7 @@ export function formatBytes(bytes: number): string {
   return `${rendered} ${BYTE_UNITS[unit] ?? "B"}`;
 }
 
-/**
- * A millisecond duration as a short human-readable string.
- *
- * Three scales, because a tool call spans all three: a filesystem read is
- * single-digit milliseconds, a model-driven shell command is seconds, and a
- * build is minutes. Sub-second values keep their milliseconds — the difference
- * between 3 ms and 300 ms is the difference between a cached read and a cold
- * one, and rounding both to "0.0 s" would hide it.
- */
+/** A duration in ms, s or min; sub-second values keep their milliseconds. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) {
     return "—";
@@ -126,13 +96,8 @@ export function formatDuration(ms: number): string {
 }
 
 /**
- * An RFC3339 timestamp as a local clock time, without the date.
- *
- * For dense lists where every row carries one and the date is nearly always
- * today. Seconds are kept: two tool calls in the same turn are frequently
- * within the same minute, and a column where consecutive rows read identically
- * says nothing about their order. The full timestamp belongs in a `title` or a
- * `dateTime` attribute beside it.
+ * An RFC3339 timestamp as local clock time with seconds, for dense lists;
+ * put the full timestamp in a `title` or `dateTime`.
  */
 export function formatTimeOfDay(value: string): string {
   const parsed = new Date(value);
@@ -142,14 +107,7 @@ export function formatTimeOfDay(value: string): string {
   return parsed.toLocaleTimeString(undefined, { timeStyle: "medium" });
 }
 
-/**
- * A token count, short enough for a row.
- *
- * Thousands are what a turn costs and millions are what a month of them does,
- * so those are the two steps. Exact below a thousand, because the difference
- * between 40 and 900 tokens is the difference between a one-line reply and a
- * paragraph, and rounding both to "0.0k" would hide it.
- */
+/** A token count: exact below 1k, then `k` and `M`. */
 export function formatTokens(tokens: number): string {
   if (!Number.isFinite(tokens) || tokens < 0) {
     return "—";
@@ -164,13 +122,8 @@ export function formatTokens(tokens: number): string {
 }
 
 /**
- * What a {@link Cost} says, in one phrase.
- *
- * "At least" when some turn's provider never reported its usage: the number is
- * a floor, not a total, and a counter that read as exact when it is not would
- * be worse than one that said nothing. A cost with no turns at all renders as
- * a dash — a run that never reached a model did not cost nothing, it cost
- * nothing *measurable*, and those are different sentences.
+ * A {@link Cost} in one phrase: "at least" when some usage went unreported, a
+ * dash when nothing was measured.
  */
 export function formatCost(cost: Cost): string {
   if (cost.turns === 0) {
@@ -185,18 +138,9 @@ export function formatCost(cost: Cost): string {
 }
 
 /**
- * How much of a {@link Cost}'s prompt was served out of the provider's cache,
- * as a whole percentage.
- *
- * The one number that says whether a session is re-sending its transcript at
- * full price. A turn's prompt is mostly the turns before it, so on a warm
- * cache this sits high; a zero where a high number is expected means something
- * ahead of the breakpoints is changing between requests.
- *
- * `null` when there is no prompt to have cached at all — no turns, or turns
- * whose providers reported nothing. Zero is *not* null: a provider that cached
- * nothing has answered the question, and a provider that was never asked has
- * not.
+ * The whole-percent share of a {@link Cost}'s prompt served from cache — low
+ * on a warm session means the prompt prefix keeps changing. `null` when no
+ * prompt usage was reported (distinct from zero).
  */
 export function cacheShare(cost: Cost): number | null {
   if (cost.prompt_tokens === 0) {

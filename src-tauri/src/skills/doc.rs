@@ -1,41 +1,18 @@
 //! One `SKILL.md`, parsed and judged.
 //!
-//! A skill is a *frozen how* (PLAN 7.6): a runbook someone wrote down once, so
-//! that neither the Chef de Cabinet nor a specialist has to re-derive it in a
-//! context window every time. This module is the half of the runner that
-//! decides whether a file is one.
+//! * **Front matter**: `version` and `tools`, so the catalog is machine-readable
+//!   and a run can fail closed before starting (PLAN 7.6).
+//! * **The seven `COS.md` *Skills* headings**, required in order and nothing
+//!   else; a refusal names the missing heading.
 //!
-//! Two things are checked, and for different reasons.
-//!
-//! **The front matter, because a catalog has to be machine-readable.** A
-//! catalog line carries a version and the tools the runbook will call, and
-//! neither can be scraped out of prose without guessing. `tools` in particular
-//! is not decoration: it is what lets a run be refused *before* it starts when
-//! the identity does not hold one of them, rather than after four rounds of
-//! discovering it one refusal at a time (PLAN 7.6, *No extra rights*).
-//!
-//! **The seven headings of `COS.md` *Skills*, because the runner enforces them
-//! and the model does not get to skip one.** They are required, in order, and
-//! nothing else is allowed beside them. That is stricter than markdown needs
-//! to be, deliberately: the headings are the contract between whoever writes a
-//! runbook and whoever runs it, and a file that quietly omitted *what to do if
-//! the source is missing* would be a runbook whose failure mode is inventing
-//! an answer. A refusal names the heading, so an author is told which line to
-//! add rather than that their file is "invalid".
-//!
-//! A parse failure is never fatal to anything. It makes one catalog entry
-//! carry a [`problem`](super::Skill::problem) instead of being runnable, which
-//! is what puts the message in front of the person who can fix it.
+//! A failure makes the entry carry a [`problem`](super::Skill::problem).
 
 use crate::tools;
 
 /// The headings every skill declares, in the order it declares them
 /// (`COS.md` *Skills*).
 ///
-/// The parenthetical glosses `COS.md` writes after three of them — "(strict
-/// format — a handoff result)", "(maps onto the policy matrix …)", "(return
-/// `blocked`, do not invent)" — explain the heading rather than being part of
-/// it, so a file that copied them verbatim is accepted (see [`normalize`]).
+/// `COS.md`'s parenthetical glosses are accepted too (see [`normalize`]).
 pub const HEADINGS: [&str; 7] = [
     "When to use it",
     "Inputs required and tools it will call",
@@ -54,18 +31,12 @@ const KEYS: [&str; 2] = ["version", "tools"];
 
 /// Longest `SKILL.md` the runner will load.
 ///
-/// A cap on the *runbook*, not on what it can reach: a skill points at files
-/// and reads them with `fs_read` like anything else. The number is a judgement
-/// about what a runbook is — sixteen kilobytes is several pages of steps, and
-/// a procedure longer than that is a document that wants splitting into skills
-/// which name each other, not one turn's worth of instructions.
+/// A cap on the runbook itself; longer procedures should be split into skills.
 pub const BODY_MAX_BYTES: usize = 16 * 1024;
 
 /// Longest catalog line a skill contributes.
 ///
-/// The catalog is in the system message of every turn (PLAN 7.6, *catalog in,
-/// body on demand*), so this is the standing per-skill cost of having a
-/// library at all.
+/// The per-skill cost in every system message (PLAN 7.6).
 pub const SUMMARY_MAX_CHARS: usize = 160;
 
 /// Longest declared version string.
@@ -73,9 +44,7 @@ const VERSION_MAX_CHARS: usize = 16;
 
 /// A `SKILL.md` that passed.
 ///
-/// Deliberately not the raw text plus accessors: everything downstream reads
-/// these four fields, and a type that still held the unparsed file would let a
-/// caller go around the checks by re-reading it.
+/// Parsed fields only, so nothing downstream can bypass the checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDoc {
     /// What the author versioned it as. Free-form; compared by people.
@@ -93,9 +62,7 @@ pub struct SkillDoc {
 
 /// Parses and judges one `SKILL.md`.
 ///
-/// The error is written for the person who wrote the file rather than for a
-/// model: it says what is wrong *and* what a working line looks like, because
-/// a validator that only says "invalid" leaves the author guessing.
+/// Errors say what is wrong and what a working line looks like.
 pub fn parse(text: &str) -> Result<SkillDoc, String> {
     if text.len() > BODY_MAX_BYTES {
         return Err(format!(
@@ -121,9 +88,7 @@ pub fn parse(text: &str) -> Result<SkillDoc, String> {
 
 /// Splits the leading `---` block from the runbook.
 ///
-/// The fence has to be the very first thing in the file. A front matter that
-/// could start anywhere would make "this file has none" indistinguishable from
-/// "this file has one further down that I did not notice".
+/// The fence must open the file.
 fn split(text: &str) -> Result<(&str, &str), String> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
 
@@ -212,22 +177,15 @@ fn front_matter(front: &str) -> Result<(String, Vec<String>), String> {
         ));
     }
 
-    // Kept in registry order and validated against it, for the reason an
-    // identity's allow-list is (`store::agents`): the strings the policy table
-    // keys on and the audit log records are one vocabulary, so a runbook
-    // cannot declare a tool that does not exist and one name cannot mean two
-    // things.
+    // Validated against the registry, in registry order (like `store::agents`).
     let mut tools = Vec::new();
     for name in tools::names() {
         if declared.iter().any(|wanted| wanted == name) {
             tools.push((*name).to_owned());
         }
     }
-    // A runbook may also declare a connector's tool (PLAN 7.3, Phase 18),
-    // checked for shape rather than for existence — for the reason an
-    // identity's allow-list is: a runbook is a file that travels with a
-    // repository, and one that would not parse on a machine where the
-    // connector is not installed would be a runbook nobody could read.
+    // Connector tools (Phase 18) are checked for shape only: the connector may
+    // not be installed here.
     for wanted in declared {
         if tools.iter().any(|known| known == &wanted) {
             continue;
@@ -298,10 +256,8 @@ fn sections(body: &str) -> Result<Vec<String>, String> {
 
 /// A heading as it is compared.
 ///
-/// Case, surrounding whitespace, a trailing colon and a parenthetical gloss
-/// are authorial rather than semantic: `COS.md` itself writes three of the
-/// seven with a gloss, and a file that copied them verbatim must not be
-/// refused for it.
+/// Ignores case, surrounding whitespace, a trailing colon and a parenthetical
+/// gloss.
 fn normalize(heading: &str) -> String {
     let heading = heading.trim();
     let heading = match heading.find('(') {
@@ -320,10 +276,8 @@ fn normalize(heading: &str) -> String {
 
 /// The catalog line: the first paragraph of *When to use it*, capped.
 ///
-/// Taken from the heading rather than from a second front-matter key, so a
-/// skill says when it applies in one place and the catalog cannot drift from
-/// the runbook. Bullets are folded into the line — a catalog entry is one
-/// line, and a list rendered into a system message would be a list of lists.
+/// Taken from the heading, not a separate key; bullets are folded into one
+/// line.
 fn summarize(section: &str) -> String {
     let paragraph: Vec<&str> = section
         .lines()

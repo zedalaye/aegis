@@ -2,32 +2,16 @@
  * The `allow_session` grants the open session holds, with a way to take each
  * one back (PLAN 3.1, "revocable").
  *
- * A grant is the only thing in Aegis that makes a future tool call run without
- * asking, so it has to be visible while it is in force — not buried behind a
- * settings page the user has no reason to open. It lives beside the transcript
- * of the session that created it, and it disappears when there are none, which
- * is the normal state.
- *
- * Each row is labelled with the runtime's own `scope_label`: the same sentence
- * the approval dialog showed before the grant was created. A list that
- * described a grant differently from the prompt that created it would be a list
- * the user cannot check their memory against.
- *
- * Settings will show this too from Phase 8. It is here now because the grant
- * belongs to the session, and Phase 6 is where a user can first create one.
+ * Shown beside the session's transcript while any grant is in force, using the
+ * same wording as the approval dialog.
  */
 
 import type { Grant } from "../../ipc/bindings";
 import { useApprovals } from "../../state/approvals";
 
 /**
- * What a grant covers, in words.
- *
- * Mirrors `Grant::scope_label` in `policy/grants.rs`. Duplicated rather than
- * sent over the wire because a grant is a tagged union, not a string — the
- * runtime's own copy is what the *dialog* shows, and this is the list. If the
- * two ever disagree the runtime is right; that is why the wording here is kept
- * deliberately identical.
+ * What a grant covers, in words. Must match `Grant::scope_label` in
+ * `policy/grants.rs` word for word.
  */
 function scopeLabel(grant: Grant): string {
   switch (grant.kind) {
@@ -39,7 +23,7 @@ function scopeLabel(grant: Grant): string {
       return "Amend world/, this workspace’s constitution";
     case "shell":
       if (grant.program === "git") {
-        return "Run read-only `git` in this workspace (status, log, diff, show, …) — checkout, merge, push and reset are still asked about";
+        return "Run read-only `git` in this workspace (status, log, diff, show, …) — any other verb, an option before the verb, and a line that writes a file or runs a program are still asked about";
       }
       return `Run \`${grant.program}\` in this workspace, with any arguments`;
     case "screen_capture":

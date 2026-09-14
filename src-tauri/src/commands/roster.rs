@@ -1,17 +1,11 @@
 //! Roster commands (PLAN 7.14).
 //!
-//! Two commands, and the second is the only place in this application an
-//! identity is created from a file. Neither is a tool: the registry has no
-//! `agent_create`, `agent_update` or `roster_apply`, so a session can write a
-//! roster proposal — an ordinary `fs_write`, under the gate — and cannot apply
-//! one. Applying is a person pressing a button in Settings, and that press is
-//! the grant.
+//! Commands, never tools: a session may write a proposal but only a person's
+//! press in Settings applies it, and that press is the grant.
 //!
-//! * [`roster_proposal`] reads the open project's `.aegis/roster/PROPOSAL.md`
-//!   and judges it against the identities on file: what would be created, what
-//!   is skipped because the name exists, and what would be refused.
-//! * [`roster_apply`] creates the new identities with the allow-lists that
-//!   preview showed — every one, or none — and puts each on the audit log.
+//! * [`roster_proposal`] judges `.aegis/roster/PROPOSAL.md` against the
+//!   identities on file (created, skipped, refused).
+//! * [`roster_apply`] creates what the preview showed, all or none, audited.
 
 use tauri::{AppHandle, State};
 

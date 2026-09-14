@@ -1,28 +1,12 @@
 //! The filesystem tools: `fs_list`, `fs_read`, `fs_write`.
 //!
-//! Every function here takes a path that
-//! [`policy`](crate::policy) already resolved and judged. There is no path
-//! handling in this module and there must never be: a tool that re-derived a
-//! path could arrive somewhere policy never looked at, which is the one bug
-//! the whole layering of Phase 3 exists to make impossible. A relative
-//! argument, a `..`, a symlink — all of that was answered before anything here
-//! was called.
+//! Paths arrive already resolved and judged by [`policy`](crate::policy); this
+//! module must never re-derive one.
 //!
-//! What is left for a tool is the part policy has no opinion about: how much
-//! to return, how to say it, and what to do when the disk disagrees.
-//!
-//! * **Caps are the tool's own** (PLAN 4.3). `fs_read` returns at most 256 KB
-//!   and `fs_list` at most 1000 entries. The caller's `limit` and
-//!   `max_entries` can ask for less and never for more, and the envelope says
-//!   plainly when something was cut, so a model reading half a file knows it
-//!   read half a file.
-//! * **Text means UTF-8.** A file that is not valid UTF-8 is reported as such
-//!   rather than converted lossily: a model shown `data\u{fffd}\u{fffd}` will
-//!   reason about it as if it were the file, and acting on a corrupted reading
-//!   of a binary is worse than being told it is a binary.
-//! * **Failures are envelopes, not exceptions.** A missing file, a permission
-//!   error, a directory where a file was expected — each becomes an `ok:
-//!   false` result the model can read and respond to, and the turn continues.
+//! * **Caps** (PLAN 4.3): `fs_read` ≤ 256 KB, `fs_list` ≤ 1000 entries; callers
+//!   may ask for less, and truncation is stated.
+//! * **Text means UTF-8**: invalid UTF-8 is reported, never lossily converted.
+//! * **Failures are envelopes** (`ok: false`); the turn continues.
 
 use std::fs;
 use std::io::{self, Read as _, Seek as _, SeekFrom};
@@ -36,9 +20,7 @@ use crate::policy::tool;
 
 /// One entry of a listing, before it is rendered.
 ///
-/// Sorted on `(!is_dir, name)`: directories first, then files, each
-/// alphabetically. A stable order is what makes a listing comparable between
-/// two calls — the filesystem's own order is not one.
+/// Sorted directories first, then by name, so listings are stable.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Entry {
     /// `false` sorts before `true`, so this reads backwards on purpose:
@@ -55,10 +37,7 @@ struct Entry {
 impl Entry {
     /// One line of the listing.
     ///
-    /// The format is minimal on purpose: a directory gets a trailing `/`, a
-    /// link a trailing `@`, and a regular file a tab and its size in bytes.
-    /// Nothing is aligned or padded — the model reads this, and padding is
-    /// tokens spent on whitespace.
+    /// `dir/`, `link@`, or `file<TAB>size`; no padding.
     fn render(&self) -> String {
         let mark = if self.not_dir { "" } else { "/" };
         let link = if self.link { "@" } else { "" };
@@ -97,11 +76,7 @@ pub fn list_schema() -> Value {
 
 /// Lists a directory.
 ///
-/// `bytes` on the envelope is the rendered length of the listing; how many
-/// entries the directory actually holds is in `meta.total_entries`, which is
-/// what `truncated` is measured against. Counting past the cap costs one
-/// `readdir` pass and is what lets the model be told "you are seeing 1000 of
-/// 40000" instead of just "there is more".
+/// `bytes` is the rendered length; `meta.total_entries` counts past the cap.
 pub(crate) fn list(path: &Path, max_entries: Option<u32>) -> Produced {
     let cap = max_entries
         .unwrap_or(LIST_MAX_ENTRIES)
@@ -305,19 +280,9 @@ pub(crate) fn read(path: &Path, offset: Option<u64>, limit: Option<u64>) -> Prod
 
 /// Interprets a byte window as text, or reports that it is not text.
 ///
-/// A window cut out of a UTF-8 file can split a multi-byte character at either
-/// end, and neither is evidence the file is binary:
-///
-/// * a `seek` to a non-zero offset can land inside a character, so leading
-///   continuation bytes are dropped — but only when the caller actually asked
-///   for an offset, otherwise a file that genuinely starts with a stray
-///   continuation byte would be quietly accepted as text;
-/// * the cap can cut the last character in half, which `from_utf8` reports as
-///   an *incomplete* sequence (`error_len() == None`) at the very end. That is
-///   trimmed too.
-///
-/// Anything else — an invalid sequence in the middle of the window — means the
-/// file is not text, and the answer is `None`.
+/// Tolerates a character split at either edge: leading continuation bytes (only
+/// with a non-zero offset) and a trailing incomplete sequence are trimmed. Any
+/// other invalid sequence means `None`.
 fn text_window(bytes: &[u8], trim_leading: bool) -> Option<String> {
     let start = if trim_leading {
         // A UTF-8 continuation byte is `10xxxxxx`; at most three can precede
@@ -376,13 +341,8 @@ pub fn write_schema() -> Value {
 
 /// Writes a file, replacing whatever was there.
 ///
-/// The write is a plain one, not a write-to-temp-and-rename. An atomic replace
-/// is the right shape for Aegis' *own* store, where a torn document would cost
-/// the user their project list; it is the wrong shape inside someone's
-/// workspace, where it would change the file's identity on disk and break
-/// hard links, editor file watches and anything else holding the inode. What
-/// protects the user here is not atomicity but the approval they gave, and
-/// their own version control.
+/// A plain write, not temp-and-rename, which would break hard links and editor
+/// watches in the user's workspace.
 pub(crate) fn write(path: &Path, content: &str, create_dirs: bool) -> Produced {
     let existed = path.exists();
 
@@ -423,11 +383,7 @@ pub(crate) fn write(path: &Path, content: &str, create_dirs: bool) -> Produced {
 
 /// Turns an `io::Error` into an envelope the model can act on.
 ///
-/// The message names the path and what was being attempted, because that is
-/// what tells a model whether to retry, to create the parent first, or to give
-/// up. The `io::Error` itself goes to the log: its text varies by platform and
-/// locale, and on Windows it carries an OS error number that means nothing to
-/// a model.
+/// Names the path and action; the platform-specific `io::Error` goes to the log.
 fn failed_io(tool_name: &str, path: &Path, err: &io::Error, action: &str) -> Produced {
     tracing::debug!(%err, path = %path.display(), tool = tool_name, "a tool call failed");
 

@@ -1,39 +1,14 @@
 /**
  * The application header.
  *
- * Not OS window chrome — the window keeps its native decorations. This is the
- * in-app bar that names the app, shows which workspace is in scope, and offers
- * Hide (when a tray exists) and Quit.
+ * The in-app header (native decorations are kept): workspace in scope, Hide
+ * (with a tray) and Quit via runtime commands, since the WebView has no
+ * `core:window` permission.
  *
- * Hide and quit are runtime commands rather than WebView calls: the window has
- * no `core:window` permission, so this bar reaches the window through exactly
- * the same path the tray does.
- *
- * Settings is here rather than in the sidebar because it is not about a
- * project: where the model comes from is a fact about the application, and it
- * has to be reachable on a fresh install where there is no project yet. The
- * audit log is here for the same reason and one more: the record covers every
- * session including deleted ones, so it does not belong under any of them.
- *
- * The board (Phase 17) is the one action here that *is* about a project, and it
- * is here anyway: it is a mode the work area takes over, like Settings, and a
- * button that lived in the rail beside the project rows would read as "open
- * this project" rather than "show me its board".
- *
- * Files (PLAN 7.15) is the other one about a project, and here for the board's
- * reason: seeing the folder is a mode the work area takes over, not a row in
- * the rail.
- *
- * Settings, the board and Files are three modes of one work area, so opening
- * one closes the others. That is decided here rather than in the shell's render
- * chain: a chain that merely preferred one would leave another's button drawn
- * as pressed with nothing behind it, which is a button that lies.
- *
- * The actions on the right are icon buttons (PLAN 7.10). Each keeps its name
- * as `aria-label` and as a tooltip — never an icon alone. Settings, Audit and
- * Board stay *modes* (`aria-pressed`); Hide and Quit stay actions. The Open
- * control sits on the path, not among them: that click is about the folder,
- * not about a pane of this window.
+ * Settings, Board and Files are mutually exclusive work-area modes, enforced
+ * here so no button shows pressed with nothing behind it; the audit drawer is
+ * app-wide. Icon buttons keep `aria-label` and a tooltip (PLAN 7.10); modes use
+ * `aria-pressed`.
  */
 
 import { useEffect, useState } from "react";

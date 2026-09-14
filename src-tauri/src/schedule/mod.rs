@@ -1,58 +1,18 @@
 //! Routines: a clock on a skill (PLAN 7.3, Phase 16).
 //!
-//! This module is the *policy* of the scheduler — which routine may exist, when
-//! one is due, and what its run is told. [`runner`] is the machinery that then
-//! opens a session and drives it, and the split is the one Phase 15 drew
-//! between `handoff::bus` and `handoff::runner`, for the same reason: the rules
-//! here are arithmetic and refusals, and every one of them is exercisable
-//! without an application, a clock or a model.
+//! The scheduler's rules — which routine may exist, when one is due, what its
+//! run is told — kept pure so they test without an app, clock or model.
+//! [`runner`] opens and drives the session.
 //!
-//! ## The door
-//!
-//! A routine names a **live skill, already granted, already run under watch at
-//! least once** (PLAN 7.13, *Phase 16's door*). Those three are checked in
-//! [`check`], and the third is the one worth explaining, because it is the only
-//! check in the runtime whose evidence is the audit log: a routine may only
-//! name a runbook this identity has already carried to a `skill_return`. The
-//! audit line for that return exists precisely because PLAN 7.6 asks for it —
-//! "a run without `skill` on the line cannot be budgeted or replayed" — and
-//! this is what it buys. It is not a formality. "Promote a procedure to a
-//! skill, run it under watch, *then* put it on a clock" is the whole discipline
-//! of § 7.6, and without a check the middle step is the one everybody skips.
-//!
-//! There is no fourth door offering to waive the other three. A skill that will
-//! not parse, one the identity was never granted, one nobody has run: each is a
-//! refusal with the fix in it, at the moment somebody saves the routine, rather
-//! than a silent failure at four in the morning.
-//!
-//! ## Nobody is watching
-//!
-//! That is the fact the whole phase turns on, and it is deliberately *not*
-//! conditional on whether the window happens to be open: a run that behaved
-//! differently depending on where the window was would be one nobody could
-//! reproduce. So a routine's run is always unattended, `Run now` included —
-//! what you see when you press it is exactly what the clock does at three in
-//! the morning.
-//!
-//! Unattended means an approval dialog cannot be answered, so [`policy`] turns
-//! every *ask* into a refusal ([`PolicyCtx::unattended`]) instead of parking a
-//! turn on a prompt nobody will ever see. What a run may do beyond reading is
-//! therefore exactly the list of grants a person signed on the routine — the
-//! same [`Grant`](crate::policy::Grant) values the approval dialog creates,
-//! seeded into the run's session and dropped when it ends. [`check`] refuses to
-//! store one the runbook does not declare it will call, or one the identity
-//! does not hold, so the signature is bounded twice over by things somebody
-//! already decided.
-//!
-//! ## What a routine cannot be
-//!
-//! It cannot be a chat: there is no prompt field anywhere in this phase, and
-//! the run's opening message is written here ([`opening`]) from the routine and
-//! the runbook. It cannot be a proposal: only `SKILL.md` reaches the catalog
-//! (PLAN 7.13). It cannot grant itself anything: the signature is checked
-//! against the identity's allow-list, which only Settings can widen. And it
-//! cannot run forever: a routine that ends twice running with no report pauses
-//! itself and says why.
+//! * **The door** ([`check`]): a live skill, granted to the identity, and
+//!   already carried to a `skill_return` by it according to the audit log
+//!   (PLAN 7.13).
+//! * **Always unattended**, `Run now` included: every *ask* is refused
+//!   ([`PolicyCtx::unattended`](crate::policy::PolicyCtx::unattended)), so a
+//!   run does only what its signed [`Grant`](crate::policy::Grant)s allow,
+//!   which [`check`] bounds by the runbook's tools and the allow-list.
+//! * **Not a chat**: the opening message is written here ([`opening`]); two
+//!   silent runs in a row pause the routine.
 
 pub mod runner;
 
@@ -66,33 +26,19 @@ use crate::skills::Skill;
 use crate::store::routines::{Routine, RoutineDraft, Schedule, EVERY_MIN_MINUTES};
 use crate::store::Agent;
 
-/// How often the scheduler looks at its routines.
-///
-/// Half a minute: short enough that "daily at 07:00" fires at 07:00 rather than
-/// at some time after it, long enough that the process is asleep essentially
-/// always. Nothing in the phase depends on it being exact — every schedule is
-/// expressed as "is it time yet", never as "wake me at", so a tick that is late
-/// costs lateness and never a missed run.
+/// How often the scheduler looks at its routines. Schedules ask "is it time
+/// yet", so a late tick is late, never missed.
 pub const TICK: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Most scheduled runs that may be in flight at once, across every routine.
-///
-/// A ceiling on the whole scheduler rather than on any one routine, because
-/// what a person notices is the machine, not the routine: ten runbooks that all
-/// fire at nine o'clock are ten sessions, ten model requests and ten
-/// `shell_exec` children. The rest are not dropped — they are simply not due
-/// yet on this tick, and the next one takes them.
+/// Most scheduled runs in flight at once, across all routines; the rest wait
+/// for a later tick.
 pub const MAX_IN_FLIGHT: usize = 2;
 
 /// How deep under a watched directory a change is looked for.
 const WATCH_DEPTH: usize = 3;
 
-/// How many entries a watched directory walk will visit before it stops.
-///
-/// A trigger is a cheap question asked often; a routine pointed at a folder of
-/// fifty thousand files must not turn every tick into a filesystem sweep. The
-/// walk stops and answers with the newest it saw, which is the honest answer to
-/// "has anything changed" for a folder somebody is using as an inbox.
+/// How many entries a watched-directory walk visits before answering with the
+/// newest seen.
 const WATCH_ENTRIES: usize = 2_000;
 
 /// What a watched directory looked like, this tick and last.
@@ -111,13 +57,9 @@ pub struct Watch {
 
 /// Whether this routine may be saved (PLAN 7.13, *Phase 16's door*).
 ///
-/// `skill` is the catalog entry for the name the draft carries, `None` when the
-/// catalog has no such name; `witnessed` is whether the audit log holds a
-/// `skill_return` this identity made for it. Both are measured by the caller,
-/// which is what keeps this function a pure statement of the rules.
-///
-/// Every refusal names the fix, because all four of them are fixable and three
-/// of them are fixable in a place the person is not currently looking.
+/// `skill` is the catalog entry for the draft's name; `witnessed` is whether
+/// the audit log holds this identity's `skill_return` for it. Every refusal
+/// names the fix.
 pub fn check(
     draft: &RoutineDraft,
     agent: &Agent,
@@ -161,10 +103,7 @@ pub fn check(
         });
     }
 
-    // Fail closed at the door as well as at the run (PLAN 7.6, *No extra
-    // rights*). The runner would refuse this anyway, before the first step —
-    // saying so now is the difference between a routine that never works and a
-    // form that explains why.
+    // Fail closed at the door too, so the form explains it (PLAN 7.6).
     if let Some(missing) = skill
         .tools
         .iter()
@@ -204,11 +143,8 @@ pub fn check(
     }
 
     for grant in &draft.grants {
-        // The one standing approval nothing can carry (PLAN 7.2; `COS.md`
-        // *Work*). Amending the world is a human decision, and a routine is
-        // the one run with no human in it — so it is refused here, at the
-        // door, as well as by the matrix at the call. The form does not offer
-        // it; this is what answers a hand-edited `routines.json`.
+        // No routine may amend the world (PLAN 7.2); catches a hand-edited
+        // `routines.json`.
         if matches!(grant, Grant::WorldAmend) {
             return Err(AppError::Routine {
                 field: "grants",
@@ -245,16 +181,8 @@ pub fn check(
     Ok(())
 }
 
-/// Why this routine cannot fire as it stands, or `None` when it can.
-///
-/// The derived half of the door: [`check`] runs when somebody saves, and this
-/// runs on every list and every tick, because everything it looks at can change
-/// afterwards without the routine being touched. A skill can be un-granted in
-/// Settings, a workspace folder can be unplugged, an identity can be deleted.
-/// The routine is left alone in all three cases — it is a record of what
-/// somebody wanted — and it says what is wrong instead of firing.
-///
-/// A paused routine has no problem: pausing is a decision, not a fault.
+/// Why this routine cannot fire now, or `None`: the door re-checked on every
+/// list and tick. A paused routine has no problem.
 pub fn inspect(
     routine: &Routine,
     agent: Option<&Agent>,
@@ -314,10 +242,7 @@ pub fn inspect(
         ));
     }
 
-    // The other half of "budget per agent and per routine" (`COS.md`). It is
-    // last because it is the one a person is least likely to have caused with
-    // this routine: three well-behaved clocks on one identity can spend it
-    // between them, and the row should say so rather than reading as broken.
+    // Last: the per-agent budget may be spent by other routines.
     if agent_runs_today >= agent.runs_per_day {
         return Some(format!(
             "`{}` has used its {} scheduled runs for today, across every routine that fires as \
@@ -335,21 +260,9 @@ pub fn inspect(
 
 /// Whether this routine is due.
 ///
-/// Pure, and given everything it needs: `now` and — for a
-/// [`Schedule::OnChange`] — what the watched directory looks like. A function
-/// that read the clock itself would be one no test could put at 06:59 and then
-/// at 07:01.
-///
-/// Two rules are shared by all three schedules and are worth stating once.
-///
-/// **A missed window fires once, never a backlog.** A machine that was asleep
-/// for a week owes one run, not two hundred. That falls out of asking "is it
-/// time yet" against the *last run* rather than counting slots.
-///
-/// **Nothing before `armed_at` counts.** A routine saved at three in the
-/// afternoon and set to run daily at seven is not immediately eight hours late;
-/// it starts counting when it was armed. Editing the schedule re-arms it, and
-/// so does un-pausing.
+/// Pure: given `now` and, for [`Schedule::OnChange`], the watched directory's
+/// newest stamp. A missed window fires once, never a backlog, and nothing
+/// before `armed_at` counts.
 pub fn due(routine: &Routine, now: DateTime<Utc>, watch: Option<&Watch>) -> bool {
     if routine.paused {
         return false;
@@ -391,10 +304,7 @@ pub fn due(routine: &Routine, now: DateTime<Utc>, watch: Option<&Watch>) -> bool
             if watch.seen.is_empty() || newest <= watch.seen.as_str() {
                 return false;
             }
-            // The same floor an interval has. A folder somebody is actively
-            // writing into would otherwise fire this on every tick, and a
-            // trigger that runs every thirty seconds is the runaway
-            // `EVERY_MIN_MINUTES` exists to prevent.
+            // Same floor as an interval, or a busy folder fires every tick.
             last.is_none_or(|last| {
                 now >= last + chrono::TimeDelta::minutes(i64::from(EVERY_MIN_MINUTES))
             })
@@ -404,20 +314,10 @@ pub fn due(routine: &Routine, now: DateTime<Utc>, watch: Option<&Watch>) -> bool
 
 /// The newest change a routine has to *record* rather than act on.
 ///
-/// `Some` only for a routine that has never looked at its folder: there is no
-/// "before" to compare against, and a routine pointed at a directory of old
-/// files is watching for the next one, not announcing the last hundred.
-///
-/// Normally nothing takes this path — saving a routine records where "now" is
-/// ([`AppState::arm_watch`](crate::AppState::arm_watch)), so the first tick
-/// already has a watermark and a file dropped in a second after saving fires.
-/// It is the fallback for when that look failed: an unplugged folder, a
-/// permission error.
-///
-/// It is deliberately the *only* case in which the watermark moves without a
-/// run. Advancing it on every tick would swallow any change that arrived while
-/// the routine was inside its cooldown — marked as seen by a tick that did not
-/// fire, with nothing newer ever to come.
+/// `Some` only for a routine that has never recorded a watermark (usually
+/// [`AppState::arm_watch`](crate::AppState::arm_watch) did at save). The only
+/// case where the watermark moves without a run, so changes during a cooldown
+/// are not swallowed.
 pub fn learning(watch: &Watch) -> Option<&str> {
     if watch.seen.is_empty() {
         watch.newest.as_deref()
@@ -428,10 +328,8 @@ pub fn learning(watch: &Watch) -> Option<&str> {
 
 /// The most recent local occurrence of `hour:minute` at or before `now`.
 ///
-/// `None` only for the local times that do not exist — the hour a
-/// daylight-saving jump skips. A routine set to 02:30 in a zone that goes from
-/// 02:00 to 03:00 that night simply does not fire that day, which is the same
-/// thing every alarm clock does and a better answer than firing twice.
+/// `None` for a local time a daylight-saving jump skips: that day it does not
+/// fire.
 fn last_slot(now: DateTime<Utc>, hour: u32, minute: u32) -> Option<DateTime<Utc>> {
     let local = now.with_timezone(&Local);
 
@@ -453,11 +351,8 @@ fn last_slot(now: DateTime<Utc>, hour: u32, minute: u32) -> Option<DateTime<Utc>
 
 /// The newest modification time under `dir`, as a fixed-width UTC stamp.
 ///
-/// Bounded in both directions ([`WATCH_DEPTH`], [`WATCH_ENTRIES`]) because this
-/// runs on every tick. Unreadable entries are skipped rather than reported: a
-/// permission error in one subdirectory is not a reason to stop watching the
-/// folder, and the trigger's only claim is "something in here is newer than it
-/// was".
+/// Bounded by [`WATCH_DEPTH`] and [`WATCH_ENTRIES`]; unreadable entries are
+/// skipped.
 pub fn newest_change(dir: &Path) -> Option<String> {
     let mut newest: Option<DateTime<Utc>> = None;
     let mut budget = WATCH_ENTRIES;
@@ -473,13 +368,8 @@ pub fn newest_change(dir: &Path) -> Option<String> {
     };
 
     while let Some((at, depth)) = stack.pop() {
-        // The directory's own stamp, and not only its files'. An entry that
-        // appears, disappears or is renamed touches the directory and may touch
-        // no file at all: a file *moved* into the folder keeps the modification
-        // time it had somewhere else — which on Windows is what copying one
-        // does too — and a deletion has no file left to ask. Watching only the
-        // files makes both of those invisible, which is not what "when this
-        // folder changes" means to the person who wrote it.
+        // Directory stamps too: a moved-in or copied file keeps its old mtime,
+        // and a deletion leaves no file to ask.
         consider(std::fs::metadata(&at).and_then(|meta| meta.modified()));
 
         let Ok(entries) = std::fs::read_dir(&at) else {
@@ -509,12 +399,8 @@ pub fn newest_change(dir: &Path) -> Option<String> {
     newest.map(|at| at.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
-/// Reads one of the store's timestamps.
-///
-/// `None` for anything that will not parse, which is a hand-edited document
-/// rather than a state this process produces. Every caller treats that as "no
-/// stamp" rather than as an error, because a routine is not worth refusing to
-/// schedule over a mangled date.
+/// Reads one of the store's timestamps; `None` (treated as no stamp) if it
+/// will not parse.
 fn parse(stamp: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(stamp)
         .ok()
@@ -525,14 +411,9 @@ fn parse(stamp: &str) -> Option<DateTime<Utc>> {
 // What the run is told
 // ---------------------------------------------------------------------------
 
-/// The message a scheduled run opens with.
-///
-/// Written here rather than stored on the routine, and that is the phase's
-/// central refusal: there is no prompt field, so there is nothing for a
-/// still-fuzzy workflow to hide in (PLAN 7.6). What the model gets is the
-/// runbook's name and the three facts it cannot read off the routine — that
-/// nobody is watching, what that means for a call it wants approved, and that
-/// the only thing anybody will ever read is what it writes down.
+/// The message a scheduled run opens with, built here since routines have no
+/// prompt (PLAN 7.6): the runbook, that nobody is watching, and that asks are
+/// refused.
 pub fn opening(routine: &Routine, skill: &Skill) -> String {
     let mut out = format!(
         "This is a scheduled run. The routine `{}` fired it — {} — and it runs as this identity \
@@ -571,20 +452,11 @@ pub fn opening(routine: &Routine, skill: &Skill) -> String {
     out
 }
 
-/// How a scheduled run's opening message begins.
-///
-/// A constant because two other places match on it: the scripted provider, so
-/// the whole phase can be walked through without a model, and the tests. A
-/// marker in a message rather than a flag on the request, because that is all a
-/// model ever gets — an unattended run has no channel of its own, and inventing
-/// one would be a second way for a turn to be told something.
+/// How a scheduled run's opening message begins; the scripted provider and
+/// tests match on it.
 pub const OPENING_MARKER: &str = "This is a scheduled run.";
 
-/// A routine's name, cut to a session title.
-///
-/// The routine's rather than the skill's: the sidebar row is answering "why is
-/// this session here", and the runbook's name is already on every audit line
-/// the run writes.
+/// A routine's name (not the skill's), cut to a session title.
 pub fn title(routine: &Routine) -> String {
     let name = routine.name.trim();
     if name.chars().count() <= TITLE_MAX_CHARS {
@@ -643,13 +515,8 @@ mod tests {
         });
     }
 
-    /// The one standing approval nothing can be signed for (PLAN 7.2).
-    ///
-    /// Refused at the door as well as at the call: the form does not offer it,
-    /// the matrix offers no grant to an unattended run, and this is what
-    /// answers a hand-edited `routines.json`. All three, because a clock that
-    /// could rewrite what the project *is* at four in the morning is the one
-    /// failure the world exists to make impossible.
+    /// `WorldAmend` can never be signed on a routine (PLAN 7.2), even in a
+    /// hand-edited file.
     #[test]
     fn a_routine_cannot_be_signed_for_amending_the_world() {
         let mut agent = Agent::builtin();
@@ -803,10 +670,7 @@ mod tests {
         assert!(due(&routine, now, Some(&watch)));
     }
 
-    /// The bug this rule exists to prevent: a change that arrives while the
-    /// routine is inside its cooldown must still be pending when the cooldown
-    /// expires. Only a run — or a first look with nothing to compare against —
-    /// moves the watermark.
+    /// A change during the cooldown is still pending when it expires.
     #[test]
     fn a_change_during_the_cooldown_is_deferred_and_never_swallowed() {
         let now = Utc::now();
@@ -828,7 +692,8 @@ mod tests {
         assert_eq!(
             learning(&watch),
             None,
-            "a routine that has looked before never re-learns, so nothing moves its watermark              but a run"
+            "a routine that has looked before never re-learns, so nothing moves its watermark \
+             but a run"
         );
 
         // The floor expires with the same watch, and it fires.
@@ -871,10 +736,8 @@ mod tests {
         assert!(with_file >= empty, "{with_file} vs {empty}");
     }
 
-    /// The bug a real folder found: a file moved back in keeps the modification
-    /// time it had elsewhere, and a deleted file has none at all. Both change
-    /// the directory, and the directory is what the watch has to read — a walk
-    /// over files alone reports "nothing happened" for either.
+    /// A moved-in file (old mtime) and a deletion both register through the
+    /// directory's own stamp.
     #[test]
     fn removing_a_file_is_a_change_even_though_no_file_is_newer() {
         let dir = tempfile::TempDir::new().expect("temp dir");

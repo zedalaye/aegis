@@ -1,25 +1,12 @@
 /**
  * The transcript.
  *
- * Two things beyond drawing bubbles.
- *
- * The streaming buffer is rendered as one extra assistant bubble at the end,
- * synthesized rather than stored. When `turn:message` arrives the real message
- * takes its place and the buffer empties, so the text never appears twice —
- * the swap happens in one render because both come from the same store update.
- *
- * Scrolling follows the stream, but only when the reader is already at the
- * bottom. Someone who has scrolled up to re-read something is reading it; a
- * pane that yanks itself back down every 50 ms while a reply streams is a pane
- * that cannot be read at all. "Already at the bottom" is remembered from the
- * reader's own scrolling rather than measured after a render — see the effects
- * below, where the difference is the whole bug this once had.
- *
- * A compacted session draws a fold marker in place, after the last message the
- * model no longer carries (PLAN 7.3, Phase 14). Everything above it is still
- * drawn: a fold changes what the *model* reads, never what is on disk, and a
- * transcript that hid the folded half would be destroying the user's only copy
- * of the conversation to save tokens.
+ * - The streaming buffer is one synthesized bubble, replaced by the real
+ *   message in the same store update.
+ * - Scrolling follows only if the reader was already at the bottom, tracked
+ *   from their own scrolling (see the effects).
+ * - A compaction draws a fold marker; everything above it is still shown
+ *   (Phase 14).
  */
 
 import { Fragment, useCallback, useLayoutEffect, useRef } from "react";
@@ -35,17 +22,9 @@ import MessageBubble from "./MessageBubble";
 const STICK_THRESHOLD = 64;
 
 /**
- * What an empty transcript says, which depends on what would answer it.
- *
- * The scripted provider understands three cues and a real model does not, so
- * naming them unconditionally would be advice that stops working the moment a
- * provider is configured. The test mirrors `ProviderSettings::is_configured`,
- * as the badge in the header does.
- *
- * Settings not being loaded yet is its own case rather than a fall-through to
- * "no provider": that load resolves a frame or two after the window opens, and
- * telling a configured user their provider is missing — even briefly — is the
- * one wrong thing this paragraph could say.
+ * The empty-transcript hint: the scripted provider's cues only when no provider
+ * is configured (mirrors `ProviderSettings::is_configured`), and nothing while
+ * settings are still loading.
  */
 function EmptyTranscript() {
   const settings = useSettings((s) => s.settings);
@@ -86,16 +65,8 @@ function EmptyTranscript() {
 }
 
 /**
- * Which drawn bubble the fold marker goes after.
- *
- * The fold's pointer is the last message the model no longer carries, and that
- * is frequently a `tool` message — which the transcript does not draw at all.
- * So the marker is anchored to the last *visible* message at or before it,
- * rather than to the pointer itself, or a fold would silently fail to appear
- * exactly when the folded turn ended in tool calls.
- *
- * `null` means there is no drawn message above the fold, and the marker belongs
- * at the top of the pane.
+ * The last visible message at or before the fold pointer (often an undrawn
+ * `tool` message); `null` puts the marker at the top.
  */
 function foldAfter(
   messages: readonly Message[],
@@ -142,17 +113,8 @@ export default function MessageList() {
       ? null
       : foldAfter(detail.messages, compaction.through_message_id);
 
-  // Whether to follow the bottom is a fact about the *reader*, so the only
-  // thing that changes it is the reader scrolling. It is deliberately not
-  // re-derived from the geometry after a render: by the time any effect runs,
-  // React has already put the new bubble in the DOM, so the distance to the
-  // bottom is the height of the thing that was just added rather than where
-  // anybody was standing. Measuring there reads every arriving message as "the
-  // reader has scrolled up" — and once it does, nothing but a manual scroll
-  // ever sets it back.
-  //
-  // A programmatic scroll to the bottom fires this too, and lands on `true`,
-  // which is what keeps the two halves agreeing.
+  // Set only from scroll events: measured after a render, the new bubble's
+  // height would read as "scrolled up". Our own scroll-to-bottom sets `true`.
   const measure = useCallback(() => {
     const pane = paneRef.current;
     if (pane === null) {
@@ -175,23 +137,14 @@ export default function MessageList() {
     [measure],
   );
 
-  // A different transcript starts at its end, whatever the reader was doing in
-  // the last one. Scrolling up in one session is not a standing instruction
-  // about the next.
-  //
-  // A layout effect, and declared *above* the one that scrolls, because that is
-  // what orders the two: layout effects run in declaration order within a
-  // commit, and a passive one here would reset the flag a frame after the pane
-  // had already decided not to follow.
+  // A new session starts following. A layout effect declared before the
+  // scrolling one, since layout effects run in declaration order.
   useLayoutEffect(() => {
     stuckRef.current = true;
   }, [detail?.session.id]);
 
-  // After every render rather than on a list of things that might have grown.
-  // A message arriving is the obvious case, but a bubble also grows in place —
-  // a tool call resolving, a diff expanding, the fold marker appearing — and
-  // none of those changes `messages.length`. The write is already conditional,
-  // so a render that changed nothing costs one comparison.
+  // Every render: bubbles also grow in place without `messages.length`
+  // changing.
   useLayoutEffect(() => {
     const pane = paneRef.current;
     if (pane !== null && stuckRef.current) {

@@ -1,44 +1,18 @@
-//! The approval gate.
+//! The approval gate (PLAN 3).
 //!
-//! Every tool call the model makes passes through [`decide`] before anything
-//! touches the machine. The answer is one of three things (PLAN 4.2, step 3):
-//! run it, ask the user, or refuse outright. Phase 4 gives the tools something
-//! to do with that answer; this phase is the decision itself, on purpose —
-//! writing the tools first makes it tempting to scatter path checks inside
-//! each one, and a check that lives in five places is a check that is missing
-//! from one of them.
+//! Every tool call passes through [`decide`] before anything touches the
+//! machine, and gets one of three answers: run it, ask, or refuse. Arguments
+//! are parsed and paths resolved once, here; a tool receives a
+//! [`ResolvedCall`] and never the model's strings, so it cannot act on a path
+//! other than the one policy judged.
 //!
-//! The shape that prevents that is [`Decision`] carrying a [`ResolvedCall`]:
-//! arguments are parsed once, here; paths are resolved once, here; and a tool
-//! receives the already-resolved values rather than the strings the model
-//! sent. A tool cannot re-resolve a path differently from the way policy
-//! judged it, because it never sees the original.
+//! Before the table, [`decide_call`] refuses what no dialog could approve: a
+//! tool or skill outside the identity's allow-lists, and delegation from a
+//! delegated run. There is no sandbox (PLAN 3.3): the boundary is a person
+//! reading the exact call, and every call is audited.
 //!
-//! What this gate is *not* is stated as plainly in PLAN 3.3 and belongs
-//! repeated here: there is no sandbox. Tools run as the user, with the user's
-//! environment and privileges. The boundary is that the user reads the exact
-//! path, program, arguments and working directory before anything mutating
-//! runs — and that every call, approved or not, leaves an audit line.
-//!
-//! From Phase 12 one question is asked before the table is read: may this
-//! session's *identity* use this tool at all (PLAN 7.3)? That is not a
-//! judgement about a path, it does not depend on a workspace, and it cannot be
-//! approved past — so it is a check in [`decide_call`] rather than a row in the
-//! matrix. A tool the identity does hold is then judged exactly as before: an
-//! allow-list narrows what an identity could ever do, and never auto-allows a
-//! call. Phase 13 adds the second allow-list beside it, for the same three
-//! reasons: may this identity run this *skill*. Both refuse with `E_DENIED`
-//! and neither opens a dialog, because a prompt offering to let an identity
-//! exceed its own allow-list is a prompt that should not exist. Phase 15 adds
-//! the one question in [`decide_call`] that is not about an identity at all —
-//! whether this *run* is itself a delegated brief, since a specialist that
-//! routed work would be a second Chief of Staff (`COS.md` *Roles*) — and it is
-//! refused in the same place and for the same reason: it could not be
-//! meaningfully approved.
-//!
-//! Layout: [`path`] resolves and contains, [`matrix`] holds the decision table
-//! of PLAN 3, [`grants`] remembers what a session already approved, and this
-//! module is the entry point that puts the three together.
+//! [`path`] resolves and contains, [`matrix`] is the table, [`grants`] holds
+//! what a session already approved.
 
 pub mod grants;
 pub mod matrix;
@@ -102,11 +76,8 @@ pub enum Risk {
     High,
 }
 
-/// The structured half of an approval request: what the dialog draws.
-///
-/// One variant per tool, so the dialog renders a file path with a size or a
-/// command line with its working directory, rather than a JSON blob the user
-/// has to parse (PLAN 2.1, `ApprovalDetail`).
+/// What the approval dialog draws: one variant per tool, so the user reads a
+/// path or a command line rather than JSON (PLAN 2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -120,11 +91,8 @@ pub enum ApprovalDetail {
     FsRead {
         /// The resolved file.
         path: String,
-        /// Its size, or `None` when it does not exist yet.
-        ///
-        /// Exported as a `number` rather than a `bigint`: this crosses the IPC
-        /// boundary as JSON, where it is already a double, and a `bigint` in
-        /// the binding would be a type the value never has at runtime.
+        /// Its size, or `None` when it does not exist yet. A `number` in the
+        /// binding: over JSON it is never a `bigint`.
         #[ts(type = "number | null")]
         bytes: Option<u64>,
     },
@@ -140,12 +108,8 @@ pub enum ApprovalDetail {
         exists: bool,
         /// The first few kilobytes of the content, for the diff pane.
         preview: Option<String>,
-        /// The skill this write would make live, when it is the apply of a
-        /// proposal (PLAN 7.13).
-        ///
-        /// Set by policy from what the write *is* — the `PROPOSAL.md` beside
-        /// the target, copied byte for byte — so the dialog can say that this
-        /// is the moment a runbook is signed, and that it grants it to nobody.
+        /// The skill this write would make live, when it applies a proposal
+        /// (PLAN 7.13).
         applies: Option<String>,
     },
     /// Running a program.
@@ -156,34 +120,22 @@ pub enum ApprovalDetail {
         args: Vec<String>,
         /// The resolved working directory.
         cwd: String,
-        /// A display-only rendering of the whole command.
-        ///
-        /// Never executed and never parsed: `shell_exec` spawns `program` with
-        /// `args` directly, with no shell in between (PLAN 5.1). This string
-        /// exists so a user can read one line instead of five fields.
+        /// The whole command on one line, for reading only: never executed or
+        /// parsed (PLAN 5.1).
         shell_line: String,
-        /// The distribution this lands in, and the working directory as that
-        /// distribution spells it (PLAN 7.12).
-        ///
-        /// `None` — and every dialog before this slice — is this computer, and
-        /// then `cwd` above is the whole answer. When it is `Some`, `cwd` is
-        /// still true and still the folder policy contained the call against,
-        /// but it is no longer the directory the command starts in: the dialog
-        /// has to show both, or a user would be approving a path the command
-        /// never sees.
+        /// The distribution and its working directory, when the project has
+        /// an execution host (PLAN 7.12). `cwd` is then still the folder
+        /// containment was judged against, but not where the command starts,
+        /// so the dialog shows both.
         host: Option<ExecTarget>,
     },
     /// Capturing a display.
     Screen {
         /// Which display, named the way the dialog should say it.
         display: String,
-        /// Physical width in pixels, `0` when the geometry is not known.
-        ///
-        /// A capture crate returns the physical framebuffer, so this is the
-        /// size of the file that would be written. Both sizes are reported
-        /// because on a scaled display they differ, and a dialog that showed
-        /// only one of them would be describing a different picture from the
-        /// one on the screen (PLAN 5.1).
+        /// Physical width in pixels — the size of the file — or `0` when
+        /// unknown. The logical size sits beside it because the two differ on
+        /// a scaled display (PLAN 5.1).
         width: u32,
         /// Physical height in pixels, `0` when the geometry is not known.
         height: u32,
@@ -192,30 +144,19 @@ pub enum ApprovalDetail {
         /// Height in the display's own points.
         logical_height: u32,
     },
-    /// Remembering something (PLAN 7.3, Phase 14).
-    ///
-    /// The whole memory, not a preview of it: it is one sentence by
-    /// construction, and a memory is the one mutating call where reading the
-    /// entire thing costs the user less than reading a summary of it would.
+    /// Remembering something (PLAN 7.3, Phase 14): the whole sentence, not a
+    /// preview.
     Memory {
-        /// `preference`, `exception` or `convention`.
-        ///
-        /// Not `kind`, which is the enum's own discriminant tag on the wire.
-        /// The two are different axes — *which tool asked* and *what sort of
-        /// memory* — and one JSON object cannot spell them the same.
+        /// `preference`, `exception` or `convention`. Not `kind`, which is
+        /// this enum's tag on the wire.
         memory_kind: String,
         /// Exactly what would be remembered.
         text: String,
         /// What it would rest on, when the model named something.
         source: Option<String>,
     },
-    /// Handing work to other identities (PLAN 7.3, Phase 15).
-    ///
-    /// One row per brief, plus the reviewer's when one was asked for. The
-    /// dialog draws the goals and the owners rather than the whole objects: a
-    /// person deciding whether to spend four model runs is deciding *who is
-    /// about to work on what*, and the constraints and the definition of done
-    /// are in the brief file this names.
+    /// Handing work to other identities (PLAN 7.3, Phase 15): who works on
+    /// what. The full briefs are in the files `filed_in` names.
     Handoff {
         /// One row per brief, in the order they would go out.
         briefs: Vec<HandoffRow>,
@@ -224,15 +165,11 @@ pub enum ApprovalDetail {
         /// Where the briefs would be filed, when the workspace has a `.aegis/briefs/`.
         filed_in: Option<String>,
     },
-    /// Calling a tool that lives in another process (PLAN 7.3, Phase 18).
+    /// Calling a connector's tool (PLAN 7.3, Phase 18).
     ///
-    /// The one detail in this list that cannot say what would *happen*. For
-    /// every other row the runtime resolved the thing itself — the path, the
-    /// program, the working directory — so the dialog draws a fact. A
-    /// connector's tool is a program somebody else wrote: Aegis knows its name,
-    /// what the server says it is for, and the arguments the model wrote, and
-    /// it does not know which of those arguments is a path. So the dialog shows
-    /// exactly that, and says whose words each part is.
+    /// The one detail that cannot say what would happen: the runtime knows the
+    /// tool's name, the server's description and the model's arguments, and
+    /// nothing else, so the dialog shows exactly that, attributed.
     Connector {
         /// The connector's id — the part before the `__`.
         connector: String,
@@ -265,18 +202,11 @@ pub struct HandoffRow {
     pub inputs: u32,
 }
 
-/// Everything policy knows about a call it wants the user to approve.
-///
-/// The ids, timestamps and expiry of PLAN's `ApprovalRequest` are added by the
-/// approval registry in Phase 6; policy has no business inventing them. What
-/// policy owns is the wording and the scope.
+/// What policy knows about a call it wants approved: the wording and the
+/// scope. Ids and expiry are added by the approval registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskRequest {
-    /// Which tool asked.
-    ///
-    /// Owned rather than `&'static str` since Phase 18: a connector's tool is
-    /// named by the server that offers it, so the set of tool names is no
-    /// longer known when this binary is compiled.
+    /// Which tool asked. Owned, because connectors name their own tools.
     pub tool: String,
     /// The badge.
     pub risk: Risk,
@@ -286,14 +216,9 @@ pub struct AskRequest {
     pub summary: String,
     /// The structured detail the dialog renders.
     pub detail: ApprovalDetail,
-    /// The grant an `allow_session` answer would create, when this row offers
-    /// one.
-    ///
-    /// `None` is PLAN's `session_grant_allowed: false`, and it is more than a
-    /// hint to the UI: because the grant to record *is* this value, an
-    /// `allow_session` decision on a row that offers none has nothing to
-    /// store, and Phase 6 rejects it with `E_GRANT_NOT_ALLOWED` rather than
-    /// trusting the WebView to have hidden the button.
+    /// The grant an `allow_session` answer would create. With `None` there is
+    /// nothing to record, and such an answer is rejected with
+    /// `E_GRANT_NOT_ALLOWED` rather than trusting the UI to hide the button.
     pub grant: Option<Grant>,
     /// What an `allow_session` answer would cover, in words. Falls back to
     /// naming the single call when no grant is on offer.
@@ -302,11 +227,7 @@ pub struct AskRequest {
     pub reason: String,
 }
 
-/// What policy decided.
-///
-/// `PartialEq` but not `Eq` since Phase 18: a connector call carries the
-/// arguments the model wrote as a `serde_json::Value`, and JSON numbers are
-/// floats. Nothing keys a map on a decision, so the bound was never used.
+/// What policy decided. Not `Eq`: a connector call carries JSON.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     /// Run it without asking. Audited with `decision: "auto"`.
@@ -323,13 +244,8 @@ pub enum Decision {
         /// What to ask.
         request: Box<AskRequest>,
     },
-    /// Refuse, without offering an approval (PLAN 3.2).
-    ///
-    /// Reserved for calls that could not be meaningfully approved: a path that
-    /// does not resolve, a link that escapes the workspace while pretending
-    /// not to, a program that is this application. The model sees an ordinary
-    /// error envelope and can try something else — a denial is a result, not
-    /// an exception (PLAN 4.3).
+    /// Refuse without offering an approval (PLAN 3.2): calls nobody could
+    /// meaningfully approve. The model gets an ordinary error envelope.
     Deny {
         /// The stable code for the envelope.
         code: ErrorCode,
@@ -348,17 +264,12 @@ impl Decision {
     }
 }
 
-/// A call whose paths have been resolved, ready to execute.
+/// A call with its paths resolved, ready to execute.
 ///
-/// Produced only by [`decide`]. The tools in Phase 4 take this, never the raw
-/// arguments, which is what makes "policy resolved it, the tool ran something
-/// else" unrepresentable.
-///
-/// The guarantee is narrower for a connector call, and the type says so: there
-/// is nothing in a connector's arguments this process can resolve, because it
-/// does not know the tool's schema and the tool does not run here. What is
-/// carried is what the model wrote, which is also exactly what the dialog
-/// showed.
+/// Produced only by [`decide`], so a tool cannot run something other than what
+/// policy judged. A connector call is the exception the type admits: its
+/// arguments cannot be resolved, so it carries what the model wrote — which is
+/// what the dialog showed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedCall {
     /// `fs_list`, with the directory resolved.
@@ -396,16 +307,8 @@ pub enum ResolvedCall {
         /// The resolved working directory, on this computer.
         cwd: PathBuf,
         /// Where the command lands, when it is not this process (PLAN 7.12).
-        ///
-        /// Resolved here, with the path, and for the same reason: the
-        /// distribution and the Linux working directory the user read in the
-        /// dialog are the ones carried to the tool, so there is no second
-        /// translation anywhere that could answer differently.
-        ///
-        /// Boxed for the reason [`ResolvedCall::SkillReturn`]'s report is: two
-        /// strings in the widest variant is size every other call would
-        /// otherwise pay for, and this enum travels inside a `Result` through
-        /// the whole decision table.
+        /// Resolved here so the tool runs where the dialog said. Boxed to keep
+        /// the enum small.
         host: Option<Box<ExecTarget>>,
         /// Caller's deadline; the tool applies the hard ceiling.
         timeout_ms: Option<u64>,
@@ -416,29 +319,19 @@ pub enum ResolvedCall {
         display: String,
     },
     /// `skill_run`, with the name checked against the identity's allow-list.
-    ///
-    /// No path: a skill is named, not located, by the model. Where its runbook
-    /// lives is a fact about the installation and the workspace, resolved by
-    /// the tool from [`SkillCtx`](crate::skills::SkillCtx) — the same reason
-    /// `screen_capture` does not carry the capture directory.
+    /// The tool locates the runbook ([`SkillCtx`](crate::skills::SkillCtx)).
     SkillRun {
         /// The skill's name.
         name: String,
     },
-    /// `skill_return`, with every artefact path resolved and contained.
-    ///
-    /// Boxed because it is by far the widest variant and every other call
-    /// would otherwise pay for it in the size of the enum.
+    /// `skill_return`, with every artefact path resolved and contained. Boxed:
+    /// it is the widest variant.
     SkillReturn {
         /// The return, as `COS.md` writes one.
         report: Box<handoff::Report>,
     },
-    /// `memory_write`, with the kind already known to be one of the three.
-    ///
-    /// No identity: which identity is remembering is a fact about the turn,
-    /// carried by [`ToolCtx`](crate::tools::ToolCtx), never by an argument the
-    /// model writes. An identity cannot ask to remember something as somebody
-    /// else because there is nowhere in this shape to say so.
+    /// `memory_write`. No identity field: who remembers comes from the turn
+    /// ([`ToolCtx`](crate::tools::ToolCtx)), never from the model.
     MemoryWrite {
         /// Which of the three kinds this is.
         kind: memories::MemoryKind,
@@ -452,35 +345,21 @@ pub enum ResolvedCall {
         /// The words that must all appear.
         query: String,
     },
-    /// `handoff_delegate`, with every brief checked against `COS.md`'s shape.
-    ///
-    /// No owner resolution: which identity a name refers to is a fact about the
-    /// agent registry, which policy cannot see and has no business consulting.
-    /// The bus resolves it, and an owner nobody has heard of is a line on the
-    /// board rather than a refused call — the other briefs still ran.
-    ///
-    /// Boxed for the reason `SkillReturn` is: it is the widest variant, and
-    /// every other call would otherwise pay for it in the size of the enum.
+    /// `handoff_delegate`, with every brief checked against `COS.md` *Handoff*.
+    /// Owners are resolved by the bus: an unknown one is a line on the board,
+    /// not a refused call.
     HandoffDelegate {
         /// Who gets what, and who checks it.
         plan: Box<handoff::Plan>,
     },
-    /// `handoff_return`, with every artefact path resolved and contained.
-    ///
-    /// The same shape `SkillReturn` carries, because it is the same object: a
-    /// run closes with a report whether a runbook framed it or a brief did.
+    /// `handoff_return`: the same report as `SkillReturn`, artefacts contained.
     HandoffReturn {
         /// The return, as `COS.md` writes one.
         report: Box<handoff::Report>,
     },
-    /// A tool of an external connector (PLAN 7.3, Phase 18).
-    ///
-    /// One field carries the identity of the call, and it is the name the model
-    /// used: `git__status`. That is the string the allow-list holds, the string
-    /// a session grant is keyed on and the string the audit line records, and
-    /// keeping one spelling is what stops those three disagreeing. The
-    /// connector and the tool are read back out of it with
-    /// [`connectors::split_tool_name`].
+    /// A tool of an external connector (PLAN 7.3, Phase 18), identified by the
+    /// name the model used (`git__status`) — the same string the allow-list,
+    /// the grant and the audit line use.
     Connector {
         /// The full name, `<connector>__<tool>`.
         name: String,
@@ -490,13 +369,7 @@ pub enum ResolvedCall {
 }
 
 impl ResolvedCall {
-    /// The tool this call belongs to.
-    ///
-    /// Read by dispatch and by the audit line, so a call cannot be executed
-    /// under one name and logged under another.
-    ///
-    /// Borrowed rather than `&'static str` since Phase 18, for the reason
-    /// [`AskRequest::tool`] is owned: a connector names its own tools.
+    /// The tool this call belongs to, read by dispatch and by the audit line.
     pub fn tool(&self) -> &str {
         match self {
             Self::FsList { .. } => tool::FS_LIST,
@@ -597,13 +470,8 @@ pub enum ToolCall {
         /// The return, with its artefact paths still as the model wrote them.
         report: Box<handoff::Draft>,
     },
-    /// A tool of an external connector (PLAN 7.3, Phase 18).
-    ///
-    /// Recognized by the *shape* of the name — `<connector>__<tool>`, where the
-    /// first part is a legal connector id — and by nothing else. [`ToolCall::parse`]
-    /// holds no roster and should not: whether anything answers to `git` is a
-    /// question about this moment, and it is asked by the table, which does
-    /// hold the catalog.
+    /// A tool of an external connector, recognized by the shape of its name.
+    /// Whether anything answers to it is the table's question.
     Connector {
         /// The full name, as the model wrote it.
         name: String,
@@ -631,12 +499,9 @@ impl ToolCall {
         }
     }
 
-    /// Parses the arguments a model produced.
-    ///
-    /// The error is written for the model, not for a user: it goes back as a
-    /// `tool` message so the model can correct itself and the turn continues
-    /// (PLAN 4.1). Unknown fields are ignored rather than refused — a model
-    /// that adds a stray key should be answered, not stalled.
+    /// Parses the arguments a model produced. Errors are written for the model,
+    /// which gets them back and can correct itself (PLAN 4.1). Unknown fields
+    /// are ignored.
     pub fn parse(tool_name: &str, args: serde_json::Value) -> Result<Self, String> {
         fn convert<T: for<'de> Deserialize<'de>>(
             tool_name: &str,
@@ -685,10 +550,8 @@ impl ToolCall {
             tool::SKILL_RUN => {
                 let a: SkillRunArgs = convert(tool_name, args)?;
                 let name = a.name.trim();
-                // Checked here rather than by the tool, because the identity's
-                // allow-list is matched against this string a moment later and
-                // a name that could be `../../etc` would be a name the
-                // allow-list and the filesystem disagree about.
+                // Checked here because the allow-list matches this string next,
+                // and a name like `../../etc` must never reach it.
                 if !crate::skills::is_name(name) {
                     return Err(format!(
                         "`{name}` is not a skill name. They look like `inbox.triage`: lower-case \
@@ -721,9 +584,7 @@ impl ToolCall {
             }
             tool::MEMORY_WRITE => {
                 let a: MemoryWriteArgs = convert(tool_name, args)?;
-                // Parsed here rather than by the tool, so that "which of the
-                // three is this" is settled before the approval dialog has to
-                // name it. A dialog cannot ask about a kind nobody has read.
+                // Parsed here so the approval dialog can name the kind.
                 let Some(kind) = memories::MemoryKind::parse(&a.kind) else {
                     return Err(format!(
                         "`{}` is not a kind of memory. A memory is a `preference`, an \
@@ -744,12 +605,8 @@ impl ToolCall {
                     query: a.query.unwrap_or_default(),
                 })
             }
-            // A name this build does not declare, shaped like a connector's.
-            // Nothing is parsed out of the arguments here, on purpose: the
-            // schema is the server's, this process has never seen it, and a
-            // parser that guessed would refuse calls that would have worked.
-            // The one thing that is checked is that they are an object, because
-            // that is what `tools/call` carries.
+            // Shaped like a connector tool. Its arguments follow the server's
+            // schema, so they are only checked to be an object (`tools/call`).
             other => match connectors::split_tool_name(other) {
                 Some(_) if args.is_object() || args.is_null() => Ok(Self::Connector {
                     name: other.to_owned(),
@@ -820,11 +677,8 @@ struct SkillRunArgs {
     name: String,
 }
 
-/// Wire shape of `memory_write` arguments.
-///
-/// `kind` arrives as a string rather than as the enum, for the reason
-/// `skill_return`'s status does: an unrecognized one is then answered with the
-/// three that work, instead of with whatever `serde` says about a variant name.
+/// Wire shape of `memory_write` arguments. `kind` is a string so an unknown one
+/// is answered with the three that work.
 #[derive(Debug, Deserialize)]
 struct MemoryWriteArgs {
     kind: String,
@@ -840,16 +694,9 @@ struct MemorySearchArgs {
     query: Option<String>,
 }
 
-/// Wire shape of a return, for `skill_return` and `handoff_return` alike
-/// (`COS.md` *Handoff*).
-///
-/// One struct for both, because it is one object: a run closes with a report
-/// whether a runbook framed it or a brief did, and two structs would be two
-/// places for the shape to drift from `COS.md`.
-///
-/// `status` arrives as a string rather than as the enum so an unrecognized one
-/// is answered with the three that work, instead of with whatever `serde`
-/// says about a variant name.
+/// Wire shape of a return, shared by `skill_return` and `handoff_return`
+/// (`COS.md` *Handoff*). `status` is a string so an unknown one is answered with
+/// the three that work.
 #[derive(Debug, Deserialize)]
 struct ReportArgs {
     status: String,
@@ -893,10 +740,7 @@ struct BriefArgs {
     return_format: Option<String>,
 }
 
-/// One return, from the arguments as they arrived.
-///
-/// Shared by `skill_return` and `handoff_return`, which is the point: the same
-/// words mean the same thing whichever framed the run.
+/// One return, from its arguments. Shared by both return tools.
 fn draft(a: ReportArgs) -> Result<handoff::Draft, String> {
     let status = match a.status.trim() {
         "done" => handoff::Status::Done,
@@ -919,14 +763,9 @@ fn draft(a: ReportArgs) -> Result<handoff::Draft, String> {
     })
 }
 
-/// One brief, from the arguments as they arrived.
-///
-/// The words are checked here, before the shape is: a model that wrote
-/// `urgent` should be told the three that work rather than have `serde` refuse
-/// the whole call for a reason about a variant name. The *content* — a goal
-/// that is there, inputs that are paths — is [`handoff::check_brief`], applied
-/// by the table below, because a refusal about content should not be
-/// indistinguishable from one about spelling.
+/// One brief, from its arguments. Only the words are checked here; the content
+/// is [`handoff::check_brief`], so a refusal about content never looks like one
+/// about spelling.
 fn brief(a: BriefArgs) -> Result<handoff::Brief, String> {
     let priority = match a.priority.as_deref().map(str::trim) {
         None | Some("") | Some("normal") => handoff::Priority::Normal,
@@ -963,14 +802,9 @@ fn brief(a: BriefArgs) -> Result<handoff::Brief, String> {
     })
 }
 
-/// The geometry of the display a capture would take.
-///
-/// Supplied by the caller rather than measured here, so policy stays a pure
-/// function of its inputs and stays testable without a screen — the turn loop
-/// fills it from
-/// [`screenshot::geometry`](crate::tools::screenshot::geometry). `None` is a
-/// machine with no display the window server will describe, and the dialog
-/// then says the size is not known rather than inventing one.
+/// The geometry of the display a capture would take, supplied by the caller
+/// ([`screenshot::geometry`](crate::tools::screenshot::geometry)) so policy
+/// stays pure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenGeometry {
     /// How the display should be named to the user.
@@ -985,28 +819,16 @@ pub struct ScreenGeometry {
     pub logical_height: u32,
 }
 
-/// The identity a call is made under, as policy needs to see it
-/// (PLAN 7.3, Phase 12).
-///
-/// Two fields rather than the whole [`Agent`](crate::store::Agent): policy has
-/// no business with an identity's instructions or its provider binding, and
-/// keeping the borrow this narrow is what lets [`PolicyCtx`] stay `Copy`. The
-/// name is here because it goes in the refusal — "the Reviewer identity is not
-/// allowed to use `fs_write`" is an answer the model can act on, and "denied"
-/// is not.
+/// The identity a call is made under (PLAN 7.3, Phase 12): its name, for the
+/// refusal, and its allow-lists. Kept narrow so [`PolicyCtx`] stays `Copy`.
 #[derive(Debug, Clone, Copy)]
 pub struct Identity<'a> {
     /// How the identity is named to the user and to the model.
     pub name: &'a str,
     /// The tools it may call.
     pub tools: &'a [String],
-    /// The skills it may run (PLAN 7.3, Phase 13).
-    ///
-    /// A second allow-list rather than a wider first one, because they gate
-    /// different things: a tool is a verb on the machine, a skill is a runbook
-    /// that sequences those verbs. Holding a skill never adds a tool — the
-    /// runner refuses a run whose declared tools are not all in the list above
-    /// — and holding every tool never adds a skill.
+    /// The skills it may run (Phase 13). Holding a skill never adds a tool, and
+    /// holding every tool never adds a skill.
     pub skills: &'a [String],
 }
 
@@ -1027,78 +849,31 @@ impl Identity<'_> {
 pub struct PolicyCtx<'a> {
     /// The session the call belongs to. Grants are keyed on it.
     pub session_id: &'a str,
-    /// The session's workspace root, canonical and absolute.
-    ///
-    /// `None` means no project is bound, and PLAN 3.2 makes every tool call a
-    /// hard denial in that state: with no root, "contained" has no meaning,
-    /// and a decision table whose first column is undefined cannot be read.
+    /// The session's canonical workspace root. `None` refuses every call
+    /// (PLAN 3.2).
     pub workspace: Option<&'a Path>,
     /// Live session grants.
     pub grants: &'a GrantStore,
-    /// This application's own executable, when it is known.
-    ///
-    /// Used only to refuse `shell_exec` on ourselves. Passed in rather than
-    /// looked up so the check is exercisable in a test.
+    /// This application's own executable, so `shell_exec` can refuse to run it.
     pub self_exe: Option<&'a Path>,
     /// The display geometry a capture would use, when it is known.
     pub screen: Option<&'a ScreenGeometry>,
-    /// Whether this turn is itself a delegated run (PLAN 7.3, Phase 15).
-    ///
-    /// True inside a specialist working on a brief, false in a session a person
-    /// is typing into. It gates exactly one thing — `handoff_delegate` — and it
-    /// is a fact about the *run* rather than about the identity, which is why
-    /// it is here rather than on [`Identity`]: the same reviewer identity may be
-    /// a CoS in one session and a specialist in the next, and its tool list does
-    /// not change between them.
+    /// Whether this turn is a delegated run (Phase 15). A fact about the run,
+    /// not the identity.
     pub delegated: bool,
-    /// Whether there is nobody to ask (PLAN 7.3, Phase 16).
-    ///
-    /// True inside a run a routine fired, false in a session somebody could
-    /// answer a dialog in. Like [`PolicyCtx::delegated`] it is a fact about the
-    /// *run* rather than about the identity — the same identity is asked in one
-    /// session and unasked in the next — and it changes exactly one thing: an
-    /// [`Decision::Ask`] becomes a refusal, because a prompt nobody can see is
-    /// a turn parked until it times out, and a five-minute stall per call is a
-    /// worse answer than a refusal the model can report in a status.
-    ///
-    /// It never *widens* anything. What an unattended run may do beyond reading
-    /// is exactly what somebody signed onto the routine, and those arrive here
-    /// as ordinary session grants, judged by the line above this one.
+    /// Whether nobody can answer a dialog: a routine's run (Phase 16). Every
+    /// ask becomes a refusal; what the run may do is what was signed on the
+    /// routine, arriving as ordinary session grants.
     pub unattended: bool,
-    /// What the connectors offer right now (PLAN 7.3, Phase 18).
-    ///
-    /// Supplied by the caller rather than read here, for the reason
-    /// [`PolicyCtx::screen`] is: policy stays a pure function of its inputs,
-    /// and the table stays testable with no child process behind it. It is a
-    /// snapshot taken once per turn, so the tools the model was offered and the
-    /// tools its calls are judged against are the same list even if somebody
-    /// reconnects a connector mid-turn.
-    ///
-    /// `None` is a build with no roster — every test written before this phase
-    /// — and it means a connector call has nothing to resolve against, which
-    /// the table refuses rather than asks about.
+    /// The connector catalog, snapshotted once per turn (Phase 18) so the tools
+    /// offered and the tools judged are one list. `None` refuses connector
+    /// calls.
     pub connectors: Option<&'a mcp::Catalog>,
-    /// Where this project's commands run (PLAN 7.12).
-    ///
-    /// `None` is this process, which is every project that has not been given a
-    /// host and every test written before this slice. Supplied by the caller
-    /// rather than read here, for the reason [`PolicyCtx::screen`] is: the
-    /// table stays a pure function of its inputs, and a decision about a WSL
-    /// workspace stays testable on a machine that has never had WSL.
-    ///
-    /// It changes exactly one row — `shell_exec` — and it changes it in one
-    /// way: the working directory is translated into the distribution's own
-    /// spelling, and a folder that cannot be translated is refused here rather
-    /// than asked about. Nothing else in the table reads it, because nothing
-    /// else in the table leaves this process.
+    /// Where this project's commands run (PLAN 7.12). Only `shell_exec` reads
+    /// it.
     pub exec_host: Option<&'a ExecHost>,
-    /// The identity the call is made under, and the tools it holds.
-    ///
-    /// `None` is "no identity is bound to this decision", which means every
-    /// registered tool — the behaviour of Phases 4–11, and what a test that has
-    /// no opinion about identities gets. The turn loop always names one: it
-    /// resolves the session's identity before the first round and passes it
-    /// here, so the runtime never takes this branch.
+    /// The identity the call is made under. `None` applies no allow-list; only
+    /// tests use it, since the turn loop always names one.
     pub identity: Option<Identity<'a>>,
 }
 
@@ -1169,12 +944,7 @@ impl<'a> PolicyCtx<'a> {
     }
 }
 
-/// Decides what happens to one tool call.
-///
-/// The order is fixed and each step depends on the last: arguments have to
-/// parse before a path can be resolved, a workspace has to exist before
-/// containment means anything, and the decision table has to name a grant
-/// before the store can be asked whether the session holds it.
+/// Decides what happens to one tool call: parse it, then [`decide_call`].
 pub fn decide(ctx: &PolicyCtx<'_>, tool_name: &str, args: serde_json::Value) -> Decision {
     let call = match ToolCall::parse(tool_name, args) {
         Ok(call) => call,
@@ -1189,21 +959,12 @@ pub fn decide(ctx: &PolicyCtx<'_>, tool_name: &str, args: serde_json::Value) -> 
 
 /// [`decide`], for a call that is already parsed.
 pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
-    // Owned rather than borrowed since Phase 18: a connector call carries its
-    // own name, so the borrow would keep `call` alive past the point the table
-    // takes it.
+    // Owned: a connector call carries its own name, and the table takes `call`.
     let tool_name = call.tool().to_owned();
 
-    // Before the workspace, because it does not depend on one: an identity that
-    // holds no `fs_write` holds none whether or not a folder is mounted, and
-    // "you may not do this" is a truer answer than "there is nowhere to do it".
-    //
-    // The model was never shown this tool's schema
-    // ([`schemas_for`](crate::tools::schemas_for)), so reaching here means the
-    // call came from a transcript written under a wider grant, or the model
-    // invented the name. Both are refused the same way, and both are refused
-    // *here* rather than in the registry: a second enforcement point is a
-    // second rule to keep in step with this one.
+    // The allow-lists come before the workspace, which they do not depend on.
+    // The model was never shown an ungranted tool, so this catches names from
+    // an older transcript or invented ones.
     if let Some(identity) = ctx.identity {
         if !identity.allows(&tool_name) {
             tracing::info!(
@@ -1220,14 +981,7 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
             );
         }
 
-        // The second allow-list, in the same place and for the same reasons
-        // (PLAN 7.3, Phase 13). It does not depend on a workspace — a runbook
-        // in the library is granted or not whether or not a folder is mounted
-        // — and it cannot be approved past, because a dialog offering to let
-        // an identity run a skill it was not granted is the allow-list asking
-        // to be overruled. The name was never in the identity's catalog, so
-        // reaching here means an invented name or one out of an older
-        // transcript.
+        // The skill allow-list (Phase 13), for the same reasons.
         if let ToolCall::SkillRun { name } = &call {
             if !identity.allows_skill(name) {
                 tracing::info!(
@@ -1243,13 +997,8 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
         }
     }
 
-    // Depth is one, and it is enforced here rather than left to the tool
-    // because a dialog asking a person to approve a call that is going to be
-    // refused anyway is a dialog that teaches them to click through
-    // (PLAN 7.3, Phase 15; `COS.md` *Roles* — there are three, and a
-    // specialist that routes work is a second Chief of Staff). The model was
-    // not offered the schema either; reaching here means a name out of an
-    // older transcript, or an invented one.
+    // Delegation is one level deep (Phase 15, `COS.md` *Roles*), refused here
+    // so no dialog offers a call that would be refused anyway.
     if ctx.delegated && matches!(call, ToolCall::HandoffDelegate { .. }) {
         tracing::info!("a delegated run tried to delegate");
         return Decision::deny(
@@ -1282,11 +1031,8 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
             tracing::debug!(tool = tool_name, "covered by a session grant");
             Decision::Auto {
                 call,
-                // Said differently for a scheduled run, because it is a
-                // different fact: nobody clicked anything here, and an audit
-                // line reading "an earlier approval" would point at a dialog
-                // that never opened. What allowed it is the routine's standing
-                // approval, signed once, when it was saved.
+                // A routine's run was allowed by what was signed on it, not by
+                // a click, and the audit line says so.
                 reason: if ctx.unattended {
                     "allowed by the routine's standing approval"
                 } else {
@@ -1294,30 +1040,22 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
                 },
             }
         }
-        // Nobody can answer, so nobody is asked (PLAN 7.3, Phase 16). This is
-        // last on purpose: the identity's allow-list, the table and the grants
-        // have all had their say, so what is refused here is precisely a call
-        // that *would* have opened a dialog — and the refusal says which
-        // approval would have covered it, because that is the fix.
+        // Nobody can answer (Phase 16). Checked last, so only a call that would
+        // have opened a dialog is refused, and the refusal names the fix.
         _ if ctx.unattended => {
             tracing::info!(tool = tool_name, "an unattended run asked to ask");
             Decision::deny(
                 ErrorCode::Denied,
                 match &request.grant {
-                    // A row somebody could have signed for, and did not. The
-                    // call is named rather than the grant's own wording, which
-                    // is written as a promise about a *session* and would read
-                    // as nonsense in a run nobody opened.
+                    // The routine could have been signed for this.
                     Some(_) => format!(
                         "nobody is watching this run, and this routine was not signed for \
                          `{tool_name}` ({}). Do what you can without it, then return `blocked` \
                          and say what you needed",
                         request.summary
                     ),
-                    // A row nothing can sign for in advance (PLAN 3.1): outside
-                    // the workspace, a `.git/` write. Saying so is the point —
-                    // the model should stop looking for a way through rather
-                    // than trying a second path.
+                    // Nothing can be signed for this in advance (PLAN 3.1), so
+                    // the model should stop looking for a way through.
                     None => format!(
                         "nobody is watching this run, and `{tool_name}` here is put to a person \
                          every time it is asked ({}), which no routine can be signed for in \
@@ -1390,10 +1128,8 @@ mod tests {
             json!({ "path": "a.txt", "content": "x" }),
         ) {
             Decision::Deny { code, reason } => {
-                // `E_DENIED` rather than a code of its own: the system message
-                // already tells the model what to do with a denial, and a
-                // second vocabulary for "policy said no" is one more thing for
-                // it to get wrong.
+                // `E_DENIED`, not a code of its own: the model already knows
+                // what a denial means.
                 assert_eq!(code, ErrorCode::Denied);
                 assert!(reason.contains("Reviewer"), "{reason}");
                 assert!(reason.contains(tool::FS_WRITE), "{reason}");
@@ -1546,13 +1282,8 @@ mod tests {
         }
     }
 
-    /// Outside a brief it is a cabinet act, which in this harness is a dialog:
-    /// asked, at high risk, with a grant of its **own**.
-    ///
-    /// The grant is the half worth testing, because it is the half that could
-    /// be got wrong in the quiet direction. Founding a world is six files, so a
-    /// person can sign once — and what they signed covers the constitution and
-    /// nothing else.
+    /// Outside a brief, amending the world is asked at high risk, with a grant
+    /// of its own that covers the constitution and nothing else.
     #[test]
     fn amending_the_world_is_asked_and_signed_for_on_its_own() {
         let (_dir, root) = with_a_world();
@@ -1697,11 +1428,8 @@ mod tests {
             decide(&ctx, tool::FS_READ, json!({ "path": "sources.txt" })),
             Decision::Auto { .. }
         ));
-        // An empty `world/` is not a constitution, but a write into it is still
-        // a write into the directory the convention reserves — the gate reads
-        // the path, not the folder's contents, so the *first* file of a world
-        // is asked about the way every later one is. Which is what makes
-        // founding one with `world.draft` behave the same as amending one.
+        // An empty `world/` is not a world, but the gate reads the path, so the
+        // first file of a world is asked about like every later one.
         match decide(
             &ctx,
             tool::FS_WRITE,
@@ -1739,12 +1467,8 @@ mod tests {
         }
     }
 
-    /// With a host, the dialog names the distribution and the directory *in
-    /// it* — the one the command actually starts in — and keeps the Windows
-    /// folder beside it, which is what containment was measured against.
-    ///
-    /// The grant is unchanged: a user who allows `git` for the session allowed
-    /// running git, and `wsl.exe` is not a program anybody was asked about.
+    /// With a host, the dialog names the distribution and the Linux directory
+    /// beside the Windows folder, and the grant is still keyed on the program.
     #[cfg(windows)]
     #[test]
     fn a_wsl_host_puts_the_distro_and_the_linux_directory_in_the_dialog() {
@@ -1792,14 +1516,9 @@ mod tests {
         }
     }
 
-    /// A folder the distribution has no path for is refused here, before
-    /// anybody is asked. There is no answer a user could give that would make
-    /// the command runnable, and the one thing that must not happen — running
-    /// it on this computer instead — is not offered.
-    ///
-    /// The Windows case is a real directory belonging to *another*
-    /// distribution: it exists, it resolves, and it is still not somewhere this
-    /// project's distribution can start a command.
+    /// A folder of another distribution is refused before anyone is asked: no
+    /// answer could make the command runnable, and running it here instead is
+    /// not offered.
     #[cfg(windows)]
     #[tokio::test]
     async fn a_folder_of_another_distro_is_refused_rather_than_asked_about() {

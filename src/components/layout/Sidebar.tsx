@@ -2,29 +2,10 @@
  * The rail: every project, most recent first, and the open project's sessions
  * beneath them.
  *
- * Two lists in one scrolling column. Adding a project or a session is a "+"
- * on that section's heading, not a footer: the footer stole height from the
- * session list, and "Add workspace" named the folder rather than the row it
- * creates. The project list is the thing a user changes rarely and the
- * session list the thing they change constantly, which is why the sessions sit
- * closer to the conversation they belong to.
- *
- * Between them, on the project's side of that line, are three panels that
- * belong to the folder rather than to any one conversation: where its commands
- * run (PLAN 7.12), the shared files `briefs/`, `status/`, `artefacts/` and
- * `decisions/` (PLAN 7.3, Phase 11), and the world. The execution host is first
- * because it is the one to settle before any work starts; the world is last,
- * for the opposite reason and one stronger — it is the slowest-changing thing
- * here.
- *
- * A project row is also a drop target (PLAN 7.15): a file dropped on it is
- * copied into that project's `.aegis/briefs/`, or refused when the project has
- * no cabinet. See `state/intake.ts`.
- *
- * All of them are {@link Section}s, so any can be folded away and stays that
- * way. The whole stack is more than a laptop screen holds at once, and which
- * part matters is a question about what somebody is doing this week — the world
- * while founding one, the sessions the rest of the time.
+ * Between them, the open project's panels: execution host (PLAN 7.12), shared
+ * files, and the world. Adding is a `+` on each heading. Project rows accept
+ * file drops into `.aegis/briefs/` (PLAN 7.15, `state/intake.ts`). Every block
+ * is a collapsible {@link Section}.
  */
 
 import { useProjectDrops } from "../../state/intake";

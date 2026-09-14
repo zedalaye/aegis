@@ -1,25 +1,10 @@
 /**
  * The workspace explorer (PLAN 7.15): the open project's files, to see.
  *
- * A mode of the work area, like the board and Settings, rather than a rail
- * panel: a preview needs the width a transcript has, and a tree squeezed into
- * the rail beside five other sections would show nobody anything. The agent
- * was already *in* the folder — `fs_list`, `fs_read`, the digest. This is the
- * operator getting the same view without leaving the window, which is what
- * keeps the transcript from being the place a person looks.
- *
- * Preview in, save out. Nothing in this panel writes a file, and the one change
- * it can make to the workspace is a drop: a file from anywhere on the machine,
- * dropped onto the project or onto `.aegis/briefs/`, is copied into
- * `.aegis/briefs/`. The runtime holds the paths the OS handed over; this
- * component reads *where* the drop landed and names the drop by its id. A drop
- * onto `.aegis/artefacts/`, the rest of the cabinet or `world/` is refused
- * here, before anything is asked — and the runtime could not honour it anyway,
- * because the command takes no destination.
- *
- * A drop starts nothing. No turn, no runbook inferred from the extension, no
- * generated wrapper around the file: the file is the input, and what to do with
- * it is the operator's next sentence.
+ * A work-area mode (it needs the width). Read-only except drops: a file dropped
+ * on the project or `.aegis/briefs/` is copied there by id; drops on artefacts,
+ * the rest of the cabinet or `world/` are refused up front. A drop starts
+ * nothing.
  */
 
 import { useEffect } from "react";

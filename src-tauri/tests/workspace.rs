@@ -1,29 +1,14 @@
 //! The shared-workspace convention, through the crate's public surface.
 //!
-//! The unit tests inside `workspace.rs` cover scaffolding, the caps and the
-//! shape of the digest. This file covers the Phase 11 exit condition of
-//! `PLAN.md` § 7.3, which is a claim about the *whole* runtime rather than
-//! about that module: a decision and a status can be filed **without any new
-//! agent type**. So nothing here reaches for a new command, a new tool or a
-//! second write path — the agent files a decision with the `fs_write` it has
-//! had since Phase 4, through the approval gate it has had since Phase 6, and
-//! the next request carries the result back to it.
+//! Phase 11's exit condition (PLAN 7.3): decisions and status are filed with
+//! existing tools, no new agent type.
 //!
-//! Three claims, in the order they matter:
+//! 1. Scaffolding is opt-in and never overwrites.
+//! 2. The files reach the next request's system message.
+//! 3. A gated `fs_write` of `DECISIONS.md` is audited, durable and visible next
+//!    request, and nothing is committed (PLAN 7.11).
 //!
-//! 1. Scaffolding is opt-in and never destructive. A folder nobody asked about
-//!    is untouched, and a `DECISIONS.md` someone already keeps survives.
-//! 2. The read path reaches the model. What is in the files is in the system
-//!    message of the next request, and what is not in the files is not.
-//! 3. The write path is the ordinary one. A turn that writes
-//!    `.aegis/decisions/DECISIONS.md` is gated, audited and durable, and the decision
-//!    is in the following request — and it does not commit, which is the
-//!    PLAN 7.11 half: the folder gets a repository when the convention is laid
-//!    down, and nothing in the runtime ever puts anything on a branch.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is, against real files in
-//! a temporary directory.
+//! Commands need a Tauri app; everything below them runs here on temp files.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -279,9 +264,7 @@ fn scaffolding_lays_down_what_is_missing_and_keeps_what_is_not() {
 /// PLAN 7.11: the convention is laid down *and* the folder is versioned, in
 /// one press. Nothing is committed by it.
 ///
-/// The two halves are folded here the way `workspace_scaffold` folds them —
-/// the command itself needs a running Tauri application and is not reachable
-/// from a test binary, so what is exercised is everything under it.
+/// Folded as `workspace_scaffold` folds them.
 #[tokio::test]
 async fn scaffolding_leaves_a_repository_with_no_commits_in_it() {
     let app = App::new();

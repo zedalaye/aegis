@@ -1,17 +1,8 @@
 //! Identity commands (PLAN 7.3, Phase 12).
 //!
-//! Four thin commands over [`AgentStore`](crate::store::AgentStore). There is
-//! deliberately no fifth that *runs* as an identity: an identity is bound when
-//! a session is created (`session_create`), and everything after that goes
-//! through the turn loop the WebView already has. A command that could switch
-//! the identity of a session mid-conversation would leave a transcript whose
-//! history was made by someone else — `fs_write` calls in the record of an
-//! identity that was never allowed to make one.
-//!
-//! Nor is there a command that grants a tool to a running session. The
-//! allow-list is part of the identity, edited on the identity, and read at the
-//! start of every turn; a per-session override would be a second place a grant
-//! lives, and the two would disagree.
+//! Thin CRUD over [`AgentStore`](crate::store::AgentStore). No command switches
+//! a session's identity (bound at `session_create`) or grants a tool per
+//! session: the allow-list lives only on the identity, read every turn.
 
 use tauri::State;
 

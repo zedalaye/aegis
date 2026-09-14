@@ -1,32 +1,12 @@
 //! Calling a tool that lives in another process (PLAN 7.3, Phase 18).
 //!
-//! The thinnest tool in this directory, and deliberately so. `fs_write` and
-//! `shell_exec` are most of their files because they have to be careful about
-//! what they touch; this one has nothing to be careful about, because it does
-//! nothing. It hands the arguments the user read to the connector the user
-//! installed, and turns what comes back into the one envelope shape the model
-//! knows (PLAN 4.3).
+//! Passes approved arguments to the connector and wraps the answer in an
+//! envelope (PLAN 4.3); all checks happened earlier in policy.
 //!
-//! Every guarantee this call has was made before it: the identity holds the
-//! tool ([`policy::decide_call`](crate::policy::decide_call)), the table asked
-//! and a person answered ([`policy::matrix`](crate::policy::matrix)), the line
-//! is written by [`tools::run`](super::run) like every other. What this file
-//! adds is two distinctions the model would otherwise have to guess at.
-//!
-//! **A tool that failed is not a connector that failed.** `isError: true` in a
-//! `tools/call` result is the server saying *this did not work* — a path that
-//! was not there, a branch that does not exist — and the answer came back
-//! normally. A transport failure is the connector not answering at all. Both
-//! are `ok: false` envelopes, because both are failures the model has to react
-//! to, and `meta.reached_the_server` says which it was, because "try different
-//! arguments" and "this connector is down" are different next moves.
-//!
-//! **What comes back is text, and nothing but text.** An MCP result may carry
-//! images, audio and embedded resources; they are described rather than
-//! inlined ([`mcp::read_answer`](crate::mcp::read_answer)). That is the same
-//! decision `screen_capture` makes for the same reason: a megabyte of base64
-//! in the transcript is a megabyte the model cannot use and the context window
-//! cannot spare.
+//! * `isError` and transport failures are both `ok: false`;
+//!   `meta.reached_the_server` tells them apart.
+//! * Non-text content is described, not inlined
+//!   ([`mcp::read_answer`](crate::mcp::read_answer)).
 
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -39,10 +19,7 @@ use super::Produced;
 
 /// Runs one connector call.
 ///
-/// `name` is the full name — `git__status` — which is what the allow-list, the
-/// grant and the audit line all spell. It is split here rather than earlier
-/// because it is one string everywhere else, and a second field carrying the
-/// connector id would be a second thing that can disagree with the first.
+/// `name` is the full `git__status` form, split only here.
 pub(crate) async fn call(
     connectors_roster: &Connectors,
     name: &str,

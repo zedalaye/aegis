@@ -1,81 +1,28 @@
 //! The shell tool: `shell_exec`.
 //!
-//! The name is a misnomer inherited from the schema, and the first thing to
-//! say about this module is what it does *not* do. There is no shell. The
-//! program is looked up, spawned with its arguments as a vector, and that is
-//! all: no `sh -c`, no `cmd /c` around an arbitrary string, so there is no
-//! metacharacter layer to escape and none to defeat (PLAN 3.3, 5.1). Pipes,
-//! redirection, globbing, `&&` and variable expansion simply are not features,
-//! and the tool's description says so to the model rather than letting it
-//! discover it through a confusing failure.
+//! There is no shell. The program is looked up and spawned with its arguments
+//! as a vector — no `sh -c`, no `cmd /c` around a string — so pipes, globs and
+//! `&&` do not exist and there is no metacharacter layer (PLAN 3.3, 5.1). The
+//! dialog shows exactly what runs; nothing is sandboxed.
 //!
-//! What that buys is honesty in the approval dialog: the `program`, `args` and
-//! `cwd` the user reads are literally what will be executed. It buys nothing
-//! else. There is no sandbox — the command runs as the user, with the user's
-//! environment (PLAN 3.3). The gate is the user's attention, and everything
-//! here exists to keep that attention worth something.
+//! * **It ends**: a deadline, capped at 120 s (PLAN 4.3).
+//! * **It can be stopped**: the turn's cancellation is in the same `select!` as
+//!   the pipes.
+//! * **It cannot flood**: 48 KB of head and 16 KB of tail in the envelope, and
+//!   progress frames coalesced every ~50 ms and capped (PLAN 5.4). The pipes are
+//!   still drained so the child never blocks.
+//! * **It is answered**: a non-zero exit is a result (`ok: true`,
+//!   `meta.exit_code`); `ok: false` means it did not run or did not finish.
 //!
-//! Four properties beyond that, each of which is a way a child process can go
-//! wrong:
+//! On Windows, `PATHEXT` resolution finds `.cmd` shims, and `Command` (Rust
+//! ≥ 1.77.2) launches them through `cmd.exe` with the arguments escaped for
+//! `cmd` — which a hand-written `cmd /c` would not do. Children get
+//! `CREATE_NO_WINDOW`.
 //!
-//! * **It ends.** A command gets a deadline — the caller's, capped at 120
-//!   seconds (PLAN 4.3) — and it is killed when the deadline passes.
-//! * **It can be stopped.** The turn's cancellation token is awaited in the
-//!   same `select!` as the pipes, so Stop kills the child rather than leaving
-//!   it to finish into a turn nobody is listening to.
-//! * **It cannot flood.** The envelope carries at most 64 KB of combined
-//!   output — 48 KB of head, 16 KB of tail, an elision marker between them —
-//!   and the `tool:progress` stream to the WebView is coalesced into ~50 ms
-//!   frames and capped as well (PLAN 5.4). A command that prints a gigabyte is
-//!   still drained, because a full pipe would block the child forever; it is
-//!   just not repeated.
-//! * **It is answered.** A program that exits non-zero is not a tool failure:
-//!   `grep` finding nothing, `test` saying no and `cargo` reporting errors are
-//!   all *results*. The envelope is `ok: true` with `meta.exit_code`, and the
-//!   output is preserved — which is the point, since the output is where the
-//!   error message is. `ok: false` is reserved for the cases where the command
-//!   did not run or did not finish: it could not be found or spawned, it hit
-//!   the deadline, or the turn was cancelled.
-//!
-//! ## Windows
-//!
-//! `CreateProcess` cannot launch a `.cmd` or `.bat` shim, which is what
-//! `pnpm`, `npm` and `yarn` are on Windows (PLAN 5.1). Resolution therefore
-//! walks `PATHEXT`, so a bare `pnpm` finds `pnpm.cmd`. Launching it goes
-//! through the standard library rather than a hand-written `cmd /c`: since
-//! 1.77.2 `Command` recognizes a batch target, invokes it through `cmd.exe`
-//! itself, and escapes the arguments for `cmd`'s own parser — which is the
-//! part that matters. Writing the `cmd /c` by hand would hand `cmd` an
-//! argument string quoted for the C runtime instead, and `&`, `|` and `^`
-//! inside a model-supplied argument would become operators. The observable
-//! behaviour is what PLAN 5.1 asks for; the escaping is the library's, on
-//! purpose.
-//!
-//! Children are also spawned with `CREATE_NO_WINDOW`, or every call flashes a
-//! console window on the user's screen.
-//!
-//! ## An execution host
-//!
-//! All of the above describes *this* process as the place a command lands,
-//! which is the default and is every project until somebody says otherwise. A
-//! project may instead name an execution host — today, a WSL distribution
-//! (PLAN 7.12) — and then the program is looked up on that distribution's PATH
-//! and run there, by `wsl.exe -d <distro> --cd <dir> --exec <program> <args>`.
-//!
-//! What that changes here is deliberately small. The schema does not move: the
-//! model still sends `program`, `args` and `cwd`, and never a distribution and
-//! never `wsl`. The arguments stay a vector, and `--exec` is what keeps them
-//! one — there is no login shell between `wsl.exe` and the program, so the
-//! absence of a metacharacter layer survives the crossing. PATHEXT, the `.cmd`
-//! shims and `CreateProcess`' inability to launch them are facts about the
-//! Windows host and apply only when the host *is* Windows.
-//!
-//! What it must never do is fall back. A distribution that is not there, or a
-//! working directory it cannot see, fails with `E_EXEC_HOST` before anything is
-//! spawned — checked by an explicit probe, because `wsl.exe --cd` answers a
-//! directory it cannot find by silently starting in `/`, and a command that ran
-//! in the wrong place having been approved for the right one is the one outcome
-//! worse than a refusal.
+//! With a WSL execution host (PLAN 7.12) the command runs as
+//! `wsl.exe -d <distro> --cd <dir> --exec <program> <args>`: still a vector,
+//! with no login shell. A probe checks the directory first, because `wsl --cd`
+//! silently starts in `/`, and nothing ever falls back to this computer.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -94,12 +41,8 @@ use crate::exec_host::ExecTarget;
 use crate::policy::matrix::shell_line;
 use crate::policy::tool;
 
-/// The longest deadline a caller may ask for, in milliseconds (PLAN 4.1).
-///
-/// Also the default. A model that names no deadline gets the ceiling rather
-/// than some shorter number invented here: the user is watching the output
-/// arrive and can stop it, and a tool that killed `cargo build` after ten
-/// seconds would be a tool nobody could use for the one thing it is for.
+/// The longest deadline a caller may ask for, in milliseconds, and the default
+/// (PLAN 4.1): the user can press Stop, and a shorter default kills builds.
 pub const TIMEOUT_CEILING_MS: u64 = 120_000;
 
 /// How much of the output is kept from the start (PLAN 4.3).
@@ -108,49 +51,30 @@ const HEAD_BYTES: usize = 48 * 1024;
 /// How much is kept from the end (PLAN 4.3).
 const TAIL_BYTES: usize = 16 * 1024;
 
-/// How long a `tool:progress` frame stays open (PLAN 5.4).
-///
-/// The same 50 ms as `turn:delta`, for the same reason: waking the WebView per
-/// pipe read is what makes a streaming pane slower than a batched one.
+/// How long a `tool:progress` frame stays open (PLAN 5.4), as for `turn:delta`.
 const PROGRESS_FRAME: Duration = Duration::from_millis(50);
 
-/// Most bytes of output the progress stream will carry to the WebView.
-///
-/// The pane is a live view, not a record: past this the envelope and the audit
-/// line are what remain, and `truncated` on `tool:finished` tells the UI to
-/// say so. Matching [`EXEC_MAX_BYTES`] keeps the two limits one number.
+/// Most output the progress stream carries. Past it the envelope and the audit
+/// line remain, and `truncated` on `tool:finished` tells the UI.
 const PROGRESS_MAX_BYTES: u64 = EXEC_MAX_BYTES;
 
-/// How much text may accumulate in a frame before it is sent early.
-///
-/// A command that prints faster than 50 ms of frames can carry should still
-/// arrive smoothly rather than in one 64 KB jolt at the end.
+/// Text that sends a frame early, so fast output still arrives smoothly.
 const FRAME_MAX_BYTES: usize = 8 * 1024;
 
 /// How much is read from a pipe at a time.
 const PIPE_CHUNK: usize = 8 * 1024;
 
-/// Chunks the two pump tasks may queue before they wait.
-///
-/// Backpressure by design: a child printing faster than this loop can account
-/// for it is a child that gets blocked on its own `write`, which is the
-/// correct thing to happen and is what stops memory growing without bound.
+/// Chunks the pumps may queue. A child printing faster blocks on its own
+/// write, which bounds memory.
 const PIPE_QUEUE: usize = 16;
 
-/// `CREATE_NO_WINDOW` — the child gets no console (PLAN 5.1).
-///
-/// Shared with [`exec_host`](crate::exec_host), which spawns `wsl.exe` to ask
-/// what is installed and would otherwise flash a console of its own.
+/// `CREATE_NO_WINDOW`: no console for the child (PLAN 5.1). Shared with
+/// [`exec_host`](crate::exec_host).
 #[cfg(windows)]
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// How long the execution-host probe may take before it is written off
-/// (PLAN 7.12).
-///
-/// Generous, because the first command into a stopped distribution starts it,
-/// and that is seconds rather than milliseconds. Short enough that a broken
-/// WSL service is a refusal rather than the caller's whole deadline spent
-/// waiting for one.
+/// How long the execution-host probe may take (PLAN 7.12): long enough to
+/// start a stopped distribution.
 #[cfg(windows)]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -190,18 +114,12 @@ pub fn exec_schema() -> Value {
     })
 }
 
-/// Runs a program and collects what it said.
+/// Runs a program and collects its output.
 ///
-/// `cwd` was resolved and judged by [`policy`](crate::policy); `program` was
-/// not, and is resolved here — that is the one path decision this module makes
-/// and it is deliberate. Containment does not apply to it: the row the user
-/// approved is about the *working directory*, and `git` living in `/usr/bin`
-/// is not a fact anyone was asked about.
-///
-/// `host` is where the command lands (PLAN 7.12). `None` is this process, and
-/// then everything above is true as written. `Some` is a distribution, and then
-/// the program is *not* resolved here at all: PATH belongs to the distribution,
-/// and a lookup done on Windows would be answering about the wrong machine.
+/// `cwd` was judged by [`policy`](crate::policy); `program` is resolved here,
+/// outside containment, since the approval is about the working directory.
+/// With a `host` (PLAN 7.12) nothing is resolved here: PATH is the
+/// distribution's.
 pub(crate) async fn exec(
     program: &str,
     args: &[String],
@@ -232,8 +150,7 @@ pub(crate) async fn exec(
     } = launch;
 
     command
-        // A command that reads stdin would otherwise wait for input nobody can
-        // type, and look exactly like a hang until the deadline killed it.
+        // A command reading stdin would wait for input nobody can type.
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -241,8 +158,7 @@ pub(crate) async fn exec(
         // without reaching the kill below, the child still goes.
         .kill_on_drop(true);
 
-    // `tokio::process::Command` carries this natively on Windows; without it
-    // every call flashes a console window in the user's face (PLAN 5.1).
+    // No console window per call (PLAN 5.1).
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
@@ -279,9 +195,7 @@ pub(crate) async fn exec(
         "exit_code": ended.exit_code(),
         "bytes": capture.total,
     });
-    // Added rather than always present: a command on this computer produces the
-    // envelope every phase before this one produced, and a model reading
-    // `exec_host` at all is a model whose command really did land elsewhere.
+    // Only when the command landed elsewhere.
     if let Some(distro) = &distro {
         meta["exec_host"] = json!(distro);
     }
@@ -314,9 +228,8 @@ pub(crate) async fn exec(
                 meta,
             )
         }
-        // The pipes closed and the process could not be reaped. Rare enough
-        // that the honest answer is to say what is and is not known rather
-        // than to invent an exit code.
+        // The pipes closed but the process could not be reaped: no exit code
+        // to report.
         Ended::Lost(message) => Produced::failed(
             tool::SHELL_EXEC,
             ErrorCode::ToolFailed,
@@ -329,13 +242,8 @@ pub(crate) async fn exec(
 // Where it lands
 // ---------------------------------------------------------------------------
 
-/// A configured child, and the words for what it is about to do.
-///
-/// The three strings are what the envelope's `meta` and the log will say, and
-/// they are built beside the command rather than derived from it afterwards:
-/// which program was found and which working directory it starts in are
-/// answered differently by the two hosts, and a second derivation is a second
-/// chance for the record to disagree with the run.
+/// A configured child, and how the record names its program and directory —
+/// built together, since the two hosts answer those differently.
 struct Launch {
     /// The child, short of its pipes.
     command: Command,
@@ -348,14 +256,9 @@ struct Launch {
     distro: Option<String>,
 }
 
-/// Decides where the command lands and prepares it, or refuses.
-///
-/// `Err` is a finished envelope rather than a message, because the two failures
-/// that live here are of different kinds: a program that is nowhere is
-/// `E_TOOL_FAILED`, and an execution host that cannot take the command is
-/// `E_EXEC_HOST` — and the probe in between can also be *stopped*, which is
-/// neither. It is boxed because an envelope is a wide thing to carry in the
-/// unhappy half of a `Result` that every call passes through.
+/// Decides where the command lands and prepares it. `Err` is a finished
+/// envelope — `E_TOOL_FAILED`, `E_EXEC_HOST` or cancelled — boxed because
+/// envelopes are wide.
 async fn plan(
     program: &str,
     args: &[String],
@@ -386,15 +289,9 @@ async fn plan(
     wsl(program, args, target, cancel).await
 }
 
-/// Prepares a command to run inside a WSL distribution (PLAN 7.12).
-///
-/// `--exec` rather than a bare command line: it is what stops WSL putting a
-/// login shell between itself and the program, so `args` stays a vector on both
-/// sides of the crossing and there is still no metacharacter layer. `--cd`
-/// names the working directory in the distribution's own spelling — the one the
-/// user read in the dialog.
-///
-/// The probe before it is the whole reason this is `async` and not four lines.
+/// Prepares a command inside a WSL distribution (PLAN 7.12), after the probe.
+/// `--exec` keeps the vector with no login shell; `--cd` is the directory the
+/// dialog showed.
 #[cfg(windows)]
 async fn wsl(
     program: &str,
@@ -418,10 +315,7 @@ async fn wsl(
     command
         .args(["-d", &target.distro, "--cd", &target.cwd, "--exec", program])
         .args(args);
-    // Deliberately no `current_dir`: `--cd` has already said where this starts,
-    // and a Windows working directory would be a second answer to the same
-    // question — one that `wsl.exe` translates by its own rules and that can
-    // therefore differ from the path the dialog showed.
+    // No `current_dir`: `--cd` is the one answer to where it starts.
 
     Ok(Launch {
         command,
@@ -431,12 +325,8 @@ async fn wsl(
     })
 }
 
-/// Prepares a command to run inside a WSL distribution. Never, off Windows.
-///
-/// Not unreachable: a `projects.json` written on Windows and opened on another
-/// machine carries the host with it. Refusing is the point — the alternative is
-/// running the command on this computer instead, which is the wrong operating
-/// system and would look exactly like success.
+/// Off Windows a WSL host always refuses. Reachable through a `projects.json`
+/// written on Windows; running here instead would be the wrong OS.
 #[cfg(not(windows))]
 async fn wsl(
     _program: &str,
@@ -455,18 +345,9 @@ async fn wsl(
     )))
 }
 
-/// Asks the distribution whether it exists and can see the working directory.
-///
-/// Both questions at once, because `wsl.exe` answers them in the same breath:
-/// `test -d` exits 0 for a directory that is there and 1 for one that is not,
-/// and anything else — including the `-1` WSL returns for a name nobody is
-/// registered under — is WSL itself refusing before the program ran.
-///
-/// It is a spawn the caller pays for on every hosted call, and it buys the one
-/// guarantee this slice cannot do without. `wsl.exe --cd` answers a directory
-/// it cannot find by starting in `/` and saying nothing: without this, a
-/// `rm -rf build` approved for `/home/p/proj` would run somewhere else and
-/// report success.
+/// Asks the distribution whether it exists and can see the directory:
+/// `test -d` exits 0 or 1, and anything else is WSL refusing. Worth a spawn per
+/// call, because `wsl --cd` silently starts in `/` for a missing directory.
 #[cfg(windows)]
 async fn probe(
     wsl: &Path,
@@ -523,9 +404,7 @@ async fn probe(
              workspace may be on a drive that distribution does not mount",
             target.cwd, target.distro
         ))),
-        // WSL's own refusal — no such distribution, the service is not
-        // running, the virtual machine would not start. Its words, because
-        // they name which of those it was.
+        // WSL's own refusal, in its words, which say why.
         _ => {
             let said = crate::exec_host::message(&asked.stderr);
             let said = if said.is_empty() {
@@ -558,11 +437,8 @@ enum Ended {
 }
 
 impl Ended {
-    /// The exit code for the envelope's `meta`, when there is one.
-    ///
-    /// `None` for a command that was killed, and also for one terminated by a
-    /// signal — in both cases there is no code, and a `0` invented to fill the
-    /// field would read as success.
+    /// The exit code for `meta`. `None` when killed or signalled — never an
+    /// invented `0`.
     fn exit_code(&self) -> Option<i32> {
         match self {
             Self::Exited(status) => status.code(),
@@ -580,14 +456,8 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
-    /// Drains the child's pipes to the end, or to whichever deadline arrives
-    /// first, and reaps it.
-    ///
-    /// Both pipes are read by their own task and funnelled into one channel,
-    /// so the two are interleaved in arrival order — which is what a terminal
-    /// shows, and what makes a compiler's diagnostics line up with the
-    /// progress it printed. The distinction is not lost: every frame carries
-    /// which pipe it came from.
+    /// Drains both pipes — interleaved in arrival order, each chunk tagged with
+    /// its pipe — until EOF or a deadline, then reaps the child.
     async fn drive(mut self) -> (Ended, Capture) {
         let (tx, mut rx) = mpsc::channel::<(Stream, Vec<u8>)>(PIPE_QUEUE);
         if let Some(pipe) = self.child.stdout.take() {
@@ -609,9 +479,7 @@ impl Run<'_> {
         let mut ticker = tokio::time::interval(PROGRESS_FRAME);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        // `biased` so a cancel that lands alongside a chunk wins: the user
-        // pressed Stop, and output emitted afterwards is output from a command
-        // they stopped.
+        // `biased`: a Stop that lands alongside a chunk wins.
         let drained = loop {
             tokio::select! {
                 biased;
@@ -631,11 +499,8 @@ impl Run<'_> {
             }
         };
 
-        // Reaching here with `None` means both pipes are at EOF, which for
-        // almost every program means it has exited. Almost: a child that
-        // spawned a grandchild holding the pipes open has already closed its
-        // own, and one that closed them and kept working has not exited at
-        // all — so the wait is still under the same two deadlines.
+        // Both pipes at EOF usually means the child exited, but it may have
+        // closed them and kept working, so the wait stays under both deadlines.
         let ended = match drained {
             Some(ended) => ended,
             None => tokio::select! {
@@ -658,28 +523,13 @@ impl Run<'_> {
         (ended, capture)
     }
 
-    /// Kills a command that has run out of deadline or out of turn.
+    /// Kills a command that ran out of deadline or of turn.
     ///
-    /// On Windows the tree goes, not just the process. Every `.cmd` shim is
-    /// launched through a `cmd.exe` that is not itself doing the work, and
-    /// Windows does not take a process' children with it — so killing only the
-    /// child would leave the actual build running, holding the pipes open, and
-    /// the Stop button would be a lie. `taskkill` is the tool the platform
-    /// provides for this; the alternative is a job object, which is a
-    /// meaningful amount of `unsafe` for the same effect.
-    ///
-    /// On Unix a shell `exec`s its last command, so killing the child kills
-    /// what the user was told would run in the ordinary case. A script that
-    /// spawns and then waits is not covered; that needs process groups, and it
-    /// is noted in the README rather than half-done here.
-    ///
-    /// A command in a WSL distribution is the Windows case and is covered by
-    /// it, which is worth saying because it is not obvious: the child here is
-    /// `wsl.exe`, a relay, and the program is a Linux process in the
-    /// distribution's own namespace that `taskkill` has never heard of. Ending
-    /// the relay ends the session it opened, and the Linux process goes with
-    /// it — so Stop kills `cargo`, and not only the thing that launched it
-    /// (PLAN 7.12).
+    /// On Windows the whole tree (`taskkill /T`): a `.cmd` shim's `cmd.exe` is
+    /// not the process doing the work, and Windows does not kill children with
+    /// their parent. Ending `wsl.exe` also ends the Linux process it started
+    /// (PLAN 7.12). On Unix only the child is killed: a script that spawns and
+    /// waits can leave work running, until process groups are used.
     async fn terminate(&mut self) {
         #[cfg(windows)]
         if let Some(pid) = self.child.id() {
@@ -692,9 +542,7 @@ impl Run<'_> {
                 .status()
                 .await;
 
-            // A non-zero status is ordinary: it means the tree was already
-            // gone. Only a `taskkill` that would not run at all is worth a
-            // line, and the `kill` below is the answer either way.
+            // Non-zero means the tree was already gone; `kill` below runs anyway.
             if let Err(err) = reaped {
                 tracing::warn!(%err, "taskkill would not run");
             }
@@ -708,11 +556,8 @@ impl Run<'_> {
     }
 }
 
-/// Reads one pipe to EOF, forwarding what it finds.
-///
-/// Errors end the pump rather than being reported: a broken pipe is what a
-/// killed child looks like from here, and there is nothing the turn would do
-/// with the distinction that it is not already doing.
+/// Reads one pipe to EOF. A read error ends the pump: that is what a killed
+/// child looks like.
 async fn pump<R>(mut pipe: R, stream: Stream, tx: mpsc::Sender<(Stream, Vec<u8>)>)
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -734,11 +579,8 @@ where
 // What the model sees
 // ---------------------------------------------------------------------------
 
-/// The bounded copy of a command's output (PLAN 4.3).
-///
-/// Head and tail rather than a plain prefix, because the two ends of a build
-/// log are the useful parts: what it started doing, and how it ended. The
-/// middle is where the repetition lives.
+/// The bounded copy of a command's output (PLAN 4.3): head and tail, the useful
+/// ends of a build log.
 #[derive(Debug, Default)]
 struct Capture {
     /// The first [`HEAD_BYTES`].
@@ -763,9 +605,7 @@ impl Capture {
             return;
         }
 
-        // A chunk longer than the whole tail window replaces it outright,
-        // which keeps the per-chunk cost bounded by the chunk rather than by
-        // how much has been thrown away so far.
+        // A chunk longer than the tail window replaces it outright.
         if rest.len() >= TAIL_BYTES {
             self.tail.clear();
             self.tail
@@ -779,19 +619,9 @@ impl Capture {
         }
     }
 
-    /// The text for the envelope, and whether anything was dropped.
-    ///
-    /// Decoded, never refused. `fs_read` reports a binary file as binary
-    /// because reading one is a mistake worth naming; a command's output is a
-    /// different thing — it is text, possibly in the platform's legacy
-    /// encoding, and the lines are still the answer. The same [`Decoder`] the
-    /// live pane uses does the work, so the two cannot disagree about what a
-    /// command said, and one decoder spans both halves so the encoding it
-    /// settled on for the head also applies to the tail.
-    ///
-    /// The elision marker between the halves is inside the content as well as
-    /// on the envelope, so a model that only reads the text still learns that
-    /// a middle is missing.
+    /// The text for the envelope, and whether anything was dropped. Decoded,
+    /// never refused, by the pane's [`Decoder`] spanning both halves; the
+    /// elision marker is in the text so the model sees the gap.
     fn render(&self) -> (String, bool) {
         let kept = self.head.len().saturating_add(self.tail.len()) as u64;
         let elided = self.total.saturating_sub(kept);
@@ -811,11 +641,8 @@ impl Capture {
 
         if !self.tail.is_empty() {
             let tail: Vec<u8> = self.tail.iter().copied().collect();
-            // The tail is cut out of the middle of a stream, so in UTF-8 it
-            // can begin inside a character. Those bytes are dropped rather
-            // than shown as damage — but only while the stream still reads as
-            // UTF-8, because in a legacy encoding the very same bytes are
-            // ordinary letters.
+            // In UTF-8 the tail may start mid-character: drop those bytes. In a
+            // legacy encoding the same bytes are letters.
             let start = if decoder.legacy {
                 0
             } else {
@@ -840,11 +667,8 @@ fn leading_fragment(bytes: &[u8]) -> usize {
         .count()
 }
 
-/// The coalescing buffer behind `tool:progress` (PLAN 5.4).
-///
-/// One decoder per pipe, because a chunk boundary can fall inside a multi-byte
-/// character and a frame that split one would put a replacement character in
-/// the middle of a word that is not broken.
+/// The coalescing buffer behind `tool:progress` (PLAN 5.4), with one decoder
+/// per pipe so a character split across chunks stays whole.
 #[derive(Debug, Default)]
 struct Frames {
     stdout: Frame,
@@ -879,10 +703,7 @@ impl Frames {
                 continue;
             }
             let text = std::mem::take(&mut frame.text);
-            // Past the cap the pane stops filling. It is a live view of a
-            // running command, not the record — the envelope and the audit
-            // line are — and `truncated` on `tool:finished` is what tells the
-            // UI to say so.
+            // Past the cap the pane stops; `truncated` on `tool:finished` says so.
             if emitted < PROGRESS_MAX_BYTES {
                 emitted = emitted.saturating_add(text.len() as u64);
                 progress.chunk(stream, &text);
@@ -892,11 +713,7 @@ impl Frames {
         self.pending = 0;
     }
 
-    /// Flushes, including whatever the decoders were still holding.
-    ///
-    /// A trailing incomplete character is emitted as a replacement rather than
-    /// dropped: the bytes were on the pipe, and a pane that silently loses the
-    /// last character of a command's output is one nobody can trust.
+    /// Flushes, including what the decoders held.
     fn finish(&mut self, progress: &dyn ProgressSink) {
         for frame in [&mut self.stdout, &mut self.stderr] {
             let trailing = frame.decoder.finish();
@@ -908,13 +725,8 @@ impl Frames {
     }
 }
 
-/// One pipe's half of a frame.
-///
-/// Two stages, because they answer two different questions: [`Decoder`] turns
-/// bytes into text, [`Sanitizer`] decides which of that text is meant for a
-/// terminal rather than for a reader. Both are per-pipe and both carry state
-/// across chunks, since either a character or a control sequence can be split
-/// by wherever the pipe happened to break.
+/// One pipe's half of a frame: [`Decoder`] makes text and [`Sanitizer`] strips
+/// terminal control. Both keep state across chunks.
 #[derive(Debug, Default)]
 struct Frame {
     decoder: Decoder,
@@ -922,20 +734,10 @@ struct Frame {
     text: String,
 }
 
-/// Incremental decoding across chunk boundaries.
-///
-/// UTF-8 first, because that is what the tools anyone runs an agent against
-/// emit. It holds back at most three bytes — an incomplete character at the
-/// end of a chunk — and hands them to the next one, so a frame boundary never
-/// splits a word.
-///
-/// A byte that cannot be UTF-8 at all is not damage to be papered over with a
-/// replacement character: on Windows it is the ordinary case, because a program
-/// writing to a pipe encodes in the locale's code page. So the first such byte
-/// switches the decoder to [`legacy_text`] for the rest of the stream. That is a
-/// per-stream decision rather than a per-chunk one because a program does not
-/// change encoding halfway through, and because guessing again on every chunk
-/// would make the answer depend on where the pipe happened to break.
+/// Incremental decoding across chunks: UTF-8, holding back an incomplete
+/// character. The first byte that cannot be UTF-8 switches the whole stream to
+/// [`legacy_text`]: on Windows piped output is in the locale's code page, and a
+/// program does not change encoding halfway.
 #[derive(Debug, Default)]
 struct Decoder {
     /// Bytes held back for the next chunk.
@@ -964,9 +766,8 @@ impl Decoder {
             .to_owned();
         self.carry.drain(..valid);
 
-        // `None` is an incomplete character at the very end: keep it, the rest
-        // of it is in the next chunk. Anything else means this is not UTF-8 at
-        // all, and everything from here on is read the other way.
+        // `None`: an incomplete character at the end, completed by the next
+        // chunk. Anything else: the stream is not UTF-8.
         if err.error_len().is_some() {
             self.legacy = true;
             text.push_str(&self.take_legacy());
@@ -982,11 +783,8 @@ impl Decoder {
         text
     }
 
-    /// Decodes whatever is left when the pipe closes.
-    ///
-    /// A trailing incomplete character is emitted as a replacement rather than
-    /// dropped: the bytes were on the pipe, and a pane that silently loses the
-    /// last character of a command's output is one nobody can trust.
+    /// Decodes what is left when the pipe closes. A partial character becomes a
+    /// replacement character rather than vanishing.
     fn finish(&mut self) -> String {
         if self.carry.is_empty() {
             return String::new();
@@ -1000,27 +798,13 @@ impl Decoder {
     }
 }
 
-/// Removes what a command wrote for a terminal rather than for a reader.
+/// Removes what a command wrote for a terminal: control sequences (colour,
+/// cursor movement, window titles) and every control character but `\n` and
+/// `\t`, from both the model's text and the pane.
 ///
-/// Output on a pipe carries two kinds of thing. One is text. The other is
-/// control sequences — `ESC[36m` to turn the next word cyan, `ESC[2K` to erase
-/// a line, `ESC]0;…BEL` to retitle a window — which mean something to a
-/// terminal emulator and nothing anywhere else. Aegis' transcript is not a
-/// terminal, so they are dropped from both what the model reads and what the
-/// pane shows.
-///
-/// Dropping rather than rendering is a decision, and the reason is the second
-/// kind of sequence rather than the first. Colour alone would be easy to
-/// render; but the tools that emit colour — `cargo`, `pnpm`, `docker` — emit
-/// cursor movement in the same breath, to draw a progress bar by erasing and
-/// redrawing one line. A pane that honoured the colours and ignored the
-/// movement would show every frame of that bar stacked on top of each other,
-/// which is worse than plain text, and honouring the movement means writing a
-/// terminal emulator. Plain text is the honest floor.
-///
-/// Carriage returns go with them, which also fixes the ordinary Windows case:
-/// output is CRLF, and a lone `CR` before every newline would double every
-/// line break in the pane. Only `\n` and `\t` survive as control characters.
+/// Dropped rather than rendered: tools that colour also redraw progress bars
+/// with cursor movement, and honouring that means writing a terminal emulator.
+/// Dropping CR also stops CRLF from doubling line breaks.
 #[derive(Debug, Default)]
 struct Sanitizer {
     /// A control sequence that began at the end of a chunk, held until the
@@ -1031,12 +815,8 @@ struct Sanitizer {
 /// The escape that starts every sequence.
 const ESC: char = '\u{1b}';
 
-/// Longest sequence held across chunks before it is written off.
-///
-/// A real one is a handful of characters. Something longer is a stray `ESC` in
-/// the middle of output that is not a sequence at all, and holding the rest of
-/// the stream hostage waiting for a terminator that will never come is the one
-/// failure mode this guard exists to prevent.
+/// Longest sequence held across chunks. Anything longer is a stray `ESC`, not
+/// worth stalling the stream for.
 const MAX_SEQUENCE: usize = 64;
 
 impl Sanitizer {
@@ -1056,9 +836,8 @@ impl Sanitizer {
                 }
                 continue;
             }
-            // `\n` and `\t` are layout a reader needs. Every other control
-            // character — CR, BEL, backspace, form feed — is an instruction to
-            // a terminal.
+            // `\n` and `\t` are layout; other control characters are terminal
+            // instructions.
             if ch == '\n' || ch == '\t' || !ch.is_control() {
                 out.push(ch);
             }
@@ -1067,22 +846,16 @@ impl Sanitizer {
         out
     }
 
-    /// Forgets a sequence the command ended in the middle of.
-    ///
-    /// Nothing is emitted: an unfinished `ESC[3` is not text that was cut
-    /// short, it is half an instruction, and printing it would put exactly the
-    /// noise this type exists to remove into the last line of the pane.
+    /// Forgets a sequence the command ended mid-way: half an instruction is not
+    /// text.
     fn discard(&mut self) {
         self.pending.clear();
     }
 }
 
-/// Consumes one control sequence, `ESC` already taken.
-///
-/// `Err` carries back everything consumed so far, for a sequence the chunk
-/// ended in the middle of. A sequence that runs past [`MAX_SEQUENCE`] is
-/// treated as finished — dropped, rather than held for a terminator that is
-/// not coming.
+/// Consumes one control sequence, `ESC` already taken. `Err` returns what was
+/// consumed when the chunk ended mid-sequence; past [`MAX_SEQUENCE`] it counts
+/// as finished.
 fn skip_sequence(chars: &mut std::str::Chars<'_>) -> Result<(), String> {
     let mut held = String::from(ESC);
 
@@ -1116,34 +889,13 @@ fn skip_sequence(chars: &mut std::str::Chars<'_>) -> Result<(), String> {
     }
 }
 
-/// Decodes bytes that are not UTF-8, in whatever this platform's programs
-/// actually write **to a pipe**.
+/// Decodes non-UTF-8 bytes as programs write them **to a pipe**. On Windows
+/// that is the ANSI code page (`GetACP`, 1252 on a Western install), not the
+/// console's OEM page: a child with no console, as every child here is, uses
+/// the locale's page (Python's `locale.getpreferredencoding()`, for one).
 ///
-/// On Windows that is the system **ANSI** code page — 1252 on a Western
-/// install — and the emphasis is the whole of this function's history. Windows
-/// has two legacy code pages, and which one a program writes depends on what it
-/// is writing *to*: the OEM page (850 here, 437 on a US box) is the console's,
-/// and the ANSI page is the locale's. A program with no console attached takes
-/// the second. `shell_exec` pipes both streams and never gives a child a
-/// console, so that is always the case here.
-///
-/// This read `GetOEMCP` first, on the grounds that `cmd`'s built-ins write the
-/// OEM page redirected or not — which is true, and beside the point: this tool
-/// spawns programs directly with no shell, so a built-in is only reachable
-/// through an explicit `cmd /c`. What it actually runs is CRT and interpreter
-/// programs, and those pick the locale's page. Python is the clearest case: for
-/// a non-console stdout it encodes with `locale.getpreferredencoding()`, which
-/// on Windows is the ANSI page.
-///
-/// The symptom that found it, and the one to recognise if this is ever wrong
-/// again: accented letters arriving as *other* accented letters, consistently —
-/// `é`→`Ú`, `û`→`¹`, `è`→`Þ`. Those are exactly the cp1252 bytes `0xE9`, `0xFB`
-/// and `0xE8` read as cp850. Not replacement characters, which is why it reads
-/// as a broken font or a broken PDF rather than as a decoding bug, and why the
-/// model that hit it spent two rounds blaming its extraction library.
-///
-/// `GetACP` rather than `GetConsoleOutputCP` for the reason the old comment
-/// gave about `GetOEMCP`: a windowed application has no console to report one.
+/// If this is ever wrong again, the symptom is accents arriving as other
+/// accents (`é`→`Ú`, `û`→`¹`): cp1252 bytes read as cp850.
 #[cfg(windows)]
 fn legacy_text(bytes: &[u8]) -> String {
     use windows_sys::Win32::Globalization::{GetACP, MultiByteToWideChar};
@@ -1200,12 +952,8 @@ fn legacy_text(bytes: &[u8]) -> String {
     }
 }
 
-/// Decodes bytes that are not UTF-8.
-///
-/// Everywhere but Windows there is nothing better to try: the locale is UTF-8
-/// on any machine this runs on, so a byte that is not UTF-8 is damage rather
-/// than another encoding, and saying so with a replacement character is the
-/// honest answer.
+/// Decodes non-UTF-8 bytes. Off Windows the locale is UTF-8, so they are damage
+/// and become replacement characters.
 #[cfg(not(windows))]
 fn legacy_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -1215,31 +963,17 @@ fn legacy_text(bytes: &[u8]) -> String {
 // Finding the program
 // ---------------------------------------------------------------------------
 
-/// Turns the program a caller named into a path to spawn.
-///
-/// Shared with [`mcp::client`](crate::mcp::client) since Phase 18, which needs
-/// exactly the same answer for exactly the same reason: on Windows `npx` is a
-/// `.cmd` and `CreateProcess` cannot launch one, so a connector configured the
-/// way every MCP host documents would simply never start. One resolver rather
-/// than two, so "which npx" cannot mean different things in two places.
-///
-/// Resolved here rather than left to `Command`, which searches PATH relative
-/// to *this* process' working directory and not to `current_dir` — so a
-/// relative program name would find something different from what the user
-/// read in the dialog, or nothing at all, depending on the platform. Doing it
-/// explicitly makes the answer the same everywhere and lets the failure say
-/// which of the two things went wrong.
+/// Turns the program a caller named into a path to spawn. Shared with
+/// [`mcp::client`](crate::mcp::client), so `npx` resolves the same way in both.
+/// Done here rather than by `Command`, which would resolve relative to this
+/// process's directory instead of `cwd`.
 pub(crate) fn resolve(program: &str, cwd: &Path) -> Result<PathBuf, String> {
     let program = program.trim();
     let named = Path::new(program);
 
     // A name with a separator in it is a path, not a PATH lookup — the same
     // rule every shell uses.
-    let has_separator = named
-        .parent()
-        .is_some_and(|parent| !parent.as_os_str().is_empty());
-
-    if has_separator {
+    if crate::policy::grants::names_a_path(program) {
         let candidate = if named.is_absolute() {
             named.to_path_buf()
         } else {
@@ -1296,11 +1030,8 @@ fn executable(candidate: &Path) -> Option<PathBuf> {
     runnable.then(|| candidate.to_path_buf())
 }
 
-/// Whether a candidate path names something this platform can execute.
-///
-/// Windows decides by extension, and a bare name is not a file: `pnpm` has to
-/// be tried as `pnpm.exe`, `pnpm.cmd` and whatever else `PATHEXT` lists, in
-/// that order, because that order is what the user's own shell would use
+/// Whether a candidate path names something this platform can execute: on
+/// Windows by extension, trying `PATHEXT` in order, as a shell would
 /// (PLAN 5.1).
 #[cfg(windows)]
 fn executable(candidate: &Path) -> Option<PathBuf> {
@@ -1334,11 +1065,7 @@ fn path_extensions() -> Vec<String> {
         .collect()
 }
 
-/// Names `cmd.exe` handles itself, which are therefore not on PATH.
-///
-/// Only used to write a better error. `echo` and `dir` are the two a model
-/// reaches for first, and "not a program on PATH" is a true but unhelpful
-/// thing to tell it about them.
+/// `cmd.exe` builtins, which are not on PATH. Only used for a better error.
 #[cfg(windows)]
 fn is_cmd_builtin(program: &str) -> bool {
     const BUILTINS: &[&str] = &[
@@ -1364,9 +1091,7 @@ fn spawn_failure(program: &Path, err: &std::io::Error) -> String {
     let shown = program.display();
     match err.kind() {
         std::io::ErrorKind::PermissionDenied => format!("`{shown}` is not executable by you"),
-        // What the standard library returns for a batch file whose arguments
-        // cannot be escaped safely for `cmd.exe`. Refusing is the correct
-        // answer; saying why is this function's job.
+        // A batch file whose arguments cannot be escaped safely for `cmd.exe`.
         std::io::ErrorKind::InvalidInput => format!(
             "`{shown}` could not be started with those arguments: one of them cannot be passed \
              safely to a Windows batch file"
@@ -1502,10 +1227,8 @@ mod tests {
         assert_eq!(decoder.finish(), "");
     }
 
-    /// A byte that cannot be UTF-8 settles the question for the whole stream:
-    /// this is text in the platform's own encoding, not UTF-8 with damage in
-    /// it. That is exactly what `cmd /c dir` looks like on any non-English
-    /// Windows.
+    /// A byte that cannot be UTF-8 switches the stream to the platform encoding,
+    /// as `cmd /c dir` output needs on a non-English Windows.
     #[test]
     fn a_byte_that_is_not_utf8_switches_the_stream_over() {
         let mut decoder = Decoder::default();
@@ -1515,15 +1238,8 @@ mod tests {
         assert!(decoded.starts_with("num"), "{decoded:?}");
     }
 
-    /// The point of the switch, on the platform that needs it: a Python script
-    /// printing `numéro` to a pipe comes back as `numéro`, not `num?ro` and not
-    /// `numÚro`.
-    ///
-    /// `0xE9` is the byte, because that is what the locale's code page uses for
-    /// `é` and the locale's page is what a program with no console writes —
-    /// which is every program this tool runs, since it pipes both streams. The
-    /// exact letter is asserted only where that page is a Western one;
-    /// elsewhere the OS still decodes, and "no replacement character" holds.
+    /// Piped `numéro` comes back as `numéro`. The letter is asserted only under
+    /// a Western code page; everywhere, no replacement character appears.
     #[cfg(windows)]
     #[test]
     fn piped_output_comes_back_as_the_letters_it_was() {
@@ -1541,13 +1257,7 @@ mod tests {
         }
     }
 
-    /// The regression, in the shape it was actually found in.
-    ///
-    /// A PDF extractor printing accented text through a pipe came back with
-    /// every accent mapped to a *different* accented letter — `é`→`Ú`, `û`→`¹`,
-    /// `è`→`Þ` — which is cp1252 bytes read as cp850, the console's page rather
-    /// than the locale's. No replacement characters anywhere, which is why it
-    /// reads as a broken font rather than as a decoding bug.
+    /// The regression as found: cp1252 accents read as cp850 (`é`→`Ú`).
     #[cfg(windows)]
     #[test]
     fn accents_do_not_come_back_as_other_accents() {
@@ -1768,11 +1478,7 @@ mod tests {
         );
     }
 
-    /// An execution host on a build that has no WSL is refused, not quietly
-    /// run here instead. The distinction is the whole point of the code: the
-    /// project says its commands belong in a Linux distribution, and running
-    /// them on this machine would be the wrong operating system reporting
-    /// success.
+    /// A WSL host on a build without WSL refuses rather than running here.
     #[cfg(not(windows))]
     #[tokio::test]
     async fn a_wsl_host_off_windows_refuses_rather_than_falling_back() {
@@ -1808,19 +1514,14 @@ mod tests {
         );
     }
 
-    /// The first distribution this machine has, or nothing to test against.
-    ///
-    /// A machine without WSL is an ordinary machine, and the two tests below
-    /// are about behaviour that only exists on one that has it. They skip
-    /// rather than fail, the same way the code-page assertions above do.
+    /// The first installed distribution. Tests that need one skip without it.
     #[cfg(windows)]
     async fn a_distro() -> Option<String> {
         crate::exec_host::installed().await.into_iter().next()
     }
 
-    /// The exit condition of PLAN 7.12, at the level that does the work: a
-    /// command runs *inside* the distribution, in the directory it was told,
-    /// with that distribution's own filesystem under it.
+    /// PLAN 7.12's exit: the command runs inside the distribution, in the
+    /// directory it was given.
     #[cfg(windows)]
     #[tokio::test]
     async fn a_command_runs_in_the_distro_and_in_the_directory_it_was_given() {
@@ -1829,9 +1530,7 @@ mod tests {
         };
         let target = ExecTarget {
             distro: distro.clone(),
-            // `/etc` rather than the workspace: every distribution has one, and
-            // what is being proved is that the working directory crosses over,
-            // not that this machine's folders do.
+            // Every distribution has `/etc`.
             cwd: "/etc".to_owned(),
         };
         let cwd = std::env::current_dir().expect("a working directory");
@@ -1858,10 +1557,8 @@ mod tests {
         );
     }
 
-    /// The failure `wsl.exe --cd` would otherwise hide. Asked for a directory
-    /// that is not there, WSL starts in `/` and says nothing — so a command
-    /// approved for one folder would run in another and report success. The
-    /// probe is what turns that into a refusal.
+    /// `wsl --cd` would silently start in `/` for a missing directory; the
+    /// probe refuses instead.
     #[cfg(windows)]
     #[tokio::test]
     async fn a_directory_the_distro_cannot_see_refuses_instead_of_running() {
@@ -1897,9 +1594,7 @@ mod tests {
         );
     }
 
-    /// A distribution nobody has installed is named and refused, rather than
-    /// reaching the model as a program that exited non-zero — which is what it
-    /// would look like if `wsl.exe`'s own complaint were treated as output.
+    /// An unknown distribution is a host failure, not a non-zero exit.
     #[cfg(windows)]
     #[tokio::test]
     async fn an_unknown_distro_is_a_host_failure_and_not_an_exit_code() {

@@ -1,22 +1,9 @@
 /**
  * What an identity has learned (PLAN 7.3, Phase 14; `COS.md` *Memory*).
  *
- * A section of the settings panel, under Identities, because a memory belongs
- * to an identity and to nothing else — there is no view of everybody's, and the
- * runtime has no query that would answer one. Pick who, and you see what they
- * know.
- *
- * This panel is the half of role memory that belongs to the person. `COS.md`
- * *Roles* gives the human three jobs — irreversible decisions, the quality bar,
- * and **memory correction** — and the model's own tools stop short of all
- * three: it may write a memory (under the approval gate) and search its own,
- * and there is deliberately no tool that deletes one. So Forget is here, and
- * only here.
- *
- * Each row says the four things that decide whether you would keep it: which
- * kind it is, what it says, what it rests on, and when it was last confirmed. A
- * memory with no source is drawn as what it is — a hypothesis — because that is
- * exactly how the model is told to read it.
+ * Under Identities in Settings, one identity at a time. The only place to
+ * forget a memory. Rows show kind, text, source (none reads as a hypothesis)
+ * and last confirmation.
  */
 
 import { useEffect, useState } from "react";

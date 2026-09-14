@@ -1,21 +1,9 @@
 /**
  * Typed `listen` wrappers — one entry per event the runtime emits.
  *
- * Components and stores never call `listen` directly. The event name and its
- * payload type are paired exactly once, in {@link EventPayloads}, so a handler
- * that reads `payload.turn_id` on an event that has none is a compile error
- * rather than an `undefined` at runtime.
- *
- * Payload types are generated from the Rust structs into `./bindings.ts`; this
- * file only maps names to them.
- *
- * Two properties of the runtime side shape how these are used, and both are
- * documented in `PLAN.md` § 2.2:
- *
- * - Every payload carries `session_id`, so a listener showing one session can
- *   drop another's traffic without knowing what the event means.
- * - `seq` on `turn:delta` is a per-turn counter from zero. A listener that
- *   drops anything it has already seen re-syncs safely after a reload.
+ * Names are paired with generated payload types once, in
+ * {@link EventPayloads}. Every payload carries `session_id`; `seq` counts
+ * per turn from zero (PLAN 2.2).
  */
 
 import { listen } from "@tauri-apps/api/event";
@@ -65,31 +53,20 @@ export type EventPayloads = {
   /** A tool call is blocked on a human. The turn is parked until it is answered. */
   "tool:approval_required": ApprovalRequest;
   /**
-   * An approval stopped being pending — by a click, a timeout, or a cancelled
-   * turn. Emitted for every ending, so a card is never left on screen for a
-   * call nothing will run. May arrive twice for one answer (once from the
-   * command, once from the turn waking up); handlers key on `request_id` and
-   * are idempotent.
+   * An approval stopped being pending, however it ended. May arrive twice;
+   * handlers key on `request_id`.
    */
   "tool:approval_resolved": ToolApprovalResolved;
   /** A tool was cleared and is running. */
   "tool:started": ToolStarted;
   /**
-   * How far the model has got writing a tool call's arguments, in bytes.
-   *
-   * The mirror of `tool:progress`, one step earlier: that is a tool's output
-   * while it runs, this is its input while it is being written. A file passed
-   * to `fs_write` is generated as the call's arguments, so a large one is
-   * minutes during which a turn is working and emits no assistant text at all.
-   * Coalesced into the same ~50 ms frames as `turn:delta`, and silent while
-   * the count is unchanged.
+   * Bytes of tool-call arguments written so far, so a long `fs_write` does not
+   * look hung. Coalesced like `turn:delta`.
    */
   "tool:drafting": ToolDrafting;
   /**
-   * Output from a tool that is still running — `shell_exec` only. Frames are
-   * coalesced to ~50 ms and the total is capped, so this is a live view rather
-   * than the record: `tool:finished` carrying `truncated` is what says the
-   * pane stopped short of everything the command printed.
+   * Live `shell_exec` output, coalesced and capped; `tool:finished.truncated`
+   * says it stopped short.
    */
   "tool:progress": ToolProgress;
   /** A tool ended, whatever became of it. */
@@ -98,26 +75,11 @@ export type EventPayloads = {
   "session:updated": SessionSummary;
   /** A line was appended to the audit log. */
   "audit:appended": AuditEntry;
-  /**
-   * The provider settings changed — a save, or a key cleared. Carries the same
-   * masked payload `settings_get` returns, so a panel open in one place and a
-   * change made in another cannot disagree.
-   */
+  /** Provider settings changed; the same masked payload as `settings_get`. */
   "settings:changed": MaskedSettings;
-  /**
-   * A routine's row changed — a run ended, or the scheduler paused it after
-   * two that never reported (PLAN 7.3, Phase 16). The one event that is not
-   * about a turn: it arrives while nobody is looking, which is exactly when a
-   * routine does its work.
-   */
+  /** A routine's row changed: a run ended or it paused itself (Phase 16). */
   "routine:updated": Routine;
-  /**
-   * A connector's row changed — it came up, it changed what it offers, or its
-   * process ended (PLAN 7.3, Phase 18). The second event that is not about a
-   * turn, and it arrives for the same reason the first one does: a connector
-   * settles a minute after the window did, and dies at an hour nobody is
-   * watching.
-   */
+  /** A connector's row changed: up, new tools, or exited (Phase 18). */
   "connector:updated": ConnectorView;
   /**
    * The OS dropped files on the window (PLAN 7.15). Names, an id and where it
@@ -132,13 +94,7 @@ export type EventPayloads = {
 /** Any event name the runtime emits. */
 export type EventName = keyof EventPayloads;
 
-/**
- * Subscribes to one event.
- *
- * Resolves to the function that cancels the subscription. Callers that mount
- * and unmount must await it and call the result — a listener left attached
- * outlives the component and writes into a store nothing is rendering.
- */
+/** Subscribes to one event; resolves to the unsubscribe function. */
 export function on<K extends EventName>(
   name: K,
   handler: (payload: EventPayloads[K]) => void,
@@ -154,12 +110,8 @@ export type Handlers = {
 };
 
 /**
- * Subscribes to several events at once.
- *
- * Returns a single function that detaches all of them. Subscriptions are
- * established concurrently but the caller may unmount before they resolve, so
- * the returned function is safe to call at any point: listeners that arrive
- * after it are detached immediately rather than leaked.
+ * Subscribes to several events; the returned detach is safe to call before
+ * they resolve.
  */
 export async function subscribe(handlers: Handlers): Promise<UnlistenFn> {
   let cancelled = false;

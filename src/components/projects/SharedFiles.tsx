@@ -1,31 +1,10 @@
 /**
  * The shared-workspace convention, in the rail (PLAN 7.3, Phase 11).
  *
- * Five directories inside the open project's `.aegis/` — `briefs/`, `status/`,
- * `artefacts/`, `decisions/` and, from Phase 13, `skills/` — with one button to
- * lay down whatever is missing. That is this panel. Seeing the files is *Files*
- * in the title bar (PLAN 7.15, a read-only explorer of the folder); this
- * surface stays the scaffold.
- * There is no editor here: a panel that could rewrite `DECISIONS.md` without
- * passing the gate would be a second write path around it.
- *
- * One directory rather than five at the root, because five things somebody did
- * not ask for beside their `src/` is five things too many. The one that is
- * *not* under it is `world/` — see {@link WorldPanel}: the cabinet is the
- * harness's working surface over a project, and the world is the project.
- *
- * It sits in the rail rather than the work area because it is a fact about the
- * project, not about the session — and it stays collapsed to a single line once
- * everything is there, since a convention that is already in place is not
- * something to look at every day. "Everything" is both halves: the directories
- * and the repository behind them (PLAN 7.11). A workspace laid down before that
- * slice existed has every tick and no history, and collapsing on the ticks
- * alone would leave it nothing to press.
- *
- * The one thing it says beyond the ticks is whether the folder is a git work
- * tree (PLAN 7.11) — measured, like everything else here, rather than
- * remembered. See {@link Versioned} for why that is a fact about the convention
- * and not the first corner of a git client.
+ * The `.aegis/` directories and whether the folder is versioned, with one
+ * button to lay down what is missing (no editor; browsing is *Files*,
+ * PLAN 7.15). `world/` is separate ({@link WorldPanel}). Collapses to one line
+ * once the directories and the git work tree (PLAN 7.11) are both present.
  */
 
 import type { Versioning } from "../../ipc/bindings";
@@ -65,16 +44,8 @@ function Entry({
 }
 
 /**
- * Whether the folder these files live in has a history (PLAN 7.11).
- *
- * A fact about the convention, like the ticks above it: a `STATUS.md` is a
- * board rewritten in place, and without a repository behind it yesterday's
- * board is gone and the transcript is the only log again.
- *
- * One sentence, and deliberately not the start of a git client. There is no
- * log here, no stage, no push and no Commit button — a commit from this window
- * would be a second write path around the dialog the session already goes
- * through. Committing is asked for: in your own terminal, or in the session.
+ * Whether the folder has a history (PLAN 7.11). One sentence, no git client:
+ * committing happens in a terminal or through the session's gate.
  */
 function Versioned({ versioning }: { readonly versioning: Versioning }) {
   if (versioning.tree === "here") {
@@ -181,12 +152,7 @@ export default function SharedFiles() {
           <button
             type="button"
             className="button button--wide"
-            // The skill catalog is re-measured after, because one of the five
-            // directories this creates is `skills/` and one of the seed files
-            // is a runbook. The panel that lists runbooks is in another
-            // surface and would otherwise be stale until someone thought to
-            // press *Re-read* — which is a thing nobody thinks to do about a
-            // folder they have just been told was created for them.
+            // Scaffolding seeds a runbook, so re-measure the skill catalog.
             onClick={press}
             disabled={busy}
             // Said on the control rather than in a confirmation: the promise

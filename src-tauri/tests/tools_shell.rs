@@ -1,19 +1,9 @@
 //! The shell tool, driven the way the turn loop drives it.
 //!
-//! Like `tools_fs.rs`, nothing here calls the tool directly: every test goes
-//! `policy::decide` → `tools::run`, because a command that could be reached
-//! without a decision would be a command outside the gate.
-//!
-//! The programs under test are written into the workspace by the fixture
-//! rather than borrowed from the platform. That is not an affectation — it is
-//! the only way to ask for *exactly* eighty kilobytes of output, or an exit
-//! code of 3, or a process that will still be running in thirty seconds, on
-//! three operating systems that agree on none of their built-in commands. It
-//! also means the Windows runs exercise the `.cmd` launch path (PLAN 5.1) for
-//! real, which is the platform detail most likely to break.
-//!
-//! The exit criterion of the phase is at the bottom: a command runs under
-//! approval, its output streams while it runs, and the audit log has the line.
+//! Every test goes `policy::decide` → `tools::run`. The fixture writes its own
+//! scripts (exact output sizes, exit codes, long runs on every OS), which also
+//! exercises the Windows `.cmd` path (PLAN 5.1). Phase 7's exit criterion is
+//! last.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,7 +11,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
-use aegis_lib::policy::{decide, tool, Decision, Grant, GrantStore, PolicyCtx};
+use aegis_lib::policy::{decide, tool, Decision, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, ProgressSink, Stream, ToolCtx, ToolOutcome};
 use aegis_lib::HandoffCtx;
 use aegis_lib::{MemoryStore, SkillCtx, DEFAULT_AGENT_ID};
@@ -109,11 +99,7 @@ impl Fixture {
     /// Writes a runnable program into the workspace and returns the `program`
     /// argument that names it.
     ///
-    /// The two bodies are the same program written for the two shells that
-    /// will interpret them. The name is returned with a `./` on it so
-    /// resolution treats it as a path rather than a PATH lookup — the point
-    /// being to run *this* file and not something with the same name that
-    /// happens to be installed on the machine running the tests.
+    /// One body per shell; the `./` prefix forces a path, not a PATH lookup.
     fn script(&self, name: &str, windows: &str, unix: &str) -> String {
         if cfg!(windows) {
             let path = self.workspace.join(format!("{name}.cmd"));
@@ -248,7 +234,13 @@ async fn a_session_grant_covers_one_program_and_no_other() {
     let allowed = fixture.script("allowed", "echo yes", "echo yes");
     let other = fixture.script("other", "echo no", "echo no");
 
-    assert!(fixture.grants.insert("session-1", Grant::shell(&allowed)));
+    // The grant the dialog offered, as the approval path would record it: a
+    // program named by a path is keyed on where it resolves.
+    let grant = match fixture.judge(&json!({ "program": allowed })) {
+        Decision::Ask { request, .. } => request.grant.expect("a grant is offered"),
+        other => panic!("expected an ask, got {other:?}"),
+    };
+    assert!(fixture.grants.insert("session-1", grant));
 
     match fixture.judge(&json!({ "program": allowed })) {
         Decision::Auto { .. } => {}
@@ -327,13 +319,8 @@ async fn a_command_runs_and_its_output_comes_back() {
 #[tokio::test]
 async fn arguments_reach_the_program_as_a_vector() {
     let fixture = Fixture::new();
-    // Two arguments, the second carrying a space. A layer that joined them
-    // into a command line and re-split it would lose the distinction.
-    //
-    // `%~1` rather than `%1`: cmd hands a batch file its parameters with the
-    // quoting intact, and the tilde is how a batch file asks for the value
-    // rather than the quoted spelling of it. That is a fact about batch files,
-    // not about what was passed.
+    // The second argument has a space; re-splitting would lose it. `%~1`
+    // strips the quotes cmd passes to a batch file.
     let program = fixture.script("args", "echo [%~1] [%~2]", r#"echo "[$1] [$2]""#);
 
     let outcome = fixture

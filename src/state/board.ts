@@ -1,31 +1,9 @@
 /**
  * Board state (PLAN 7.3, Phase 17).
  *
- * The panel that answers "who ran, what did it cost, why did it fail" without
- * opening a chat. Four decisions shape this store.
- *
- * **It holds no truth of its own.** Every line on the board is measured by the
- * runtime on the read: the file half comes off disk, the live half from the
- * turn registry, the approval registry and the routine document, and the runs
- * are folded out of `audit.jsonl`. Nothing here derives a status, and there is
- * no command anywhere in the WebView that writes one — a board the window could
- * edit would stop being a record and become a second opinion.
- *
- * **It reads only while the panel is open.** A board is a composition over four
- * stores and a log; paying for it when nobody is looking would be a file read
- * per turn for a panel that is not on screen. Open fetches, closed forgets.
- *
- * **It refetches rather than patches.** The audit drawer can prepend the one
- * line the runtime just wrote, because a line is self-contained. A board is
- * not: one finished turn can move a run between two columns, change a total and
- * add an artefact. So the events it listens to are triggers to ask again rather
- * than deltas to apply, and they are the ones that mark a *column* changing —
- * never `audit:appended`, which fires per tool call.
- *
- * **A trace is fetched, never assembled here.** The detail pane shows the audit
- * lines of one run in the order they happened; they come from the runtime as
- * they are on disk. A window that rendered a story it had assembled itself
- * would be worth less than the file.
+ * Read-only view of the runtime's board and traces: nothing is derived or
+ * written here. Fetched only while the panel is open; events trigger a refetch,
+ * never a patch.
  */
 
 import { create } from "zustand";
@@ -153,28 +131,9 @@ export const useBoard = create<BoardState>((set, get) => ({
 }));
 
 /**
- * Keeps the board in step with what the runtime is doing.
- *
- * One event per column, which is the rule for what belongs here: a board is a
- * composition rather than a list of lines, so the question is never "did
- * something happen" but "did one of these three columns change".
- *
- * * `turn:started` and `turn:finished` are **In flight** opening and closing —
- *   and the second is also when a run's status, its cost and its artefacts all
- *   settle at once.
- * * `tool:approval_required` and `tool:approval_resolved` are **Attention**.
- *   Without them the most urgent column would be the least current, which is
- *   the one thing a board must not be: a question raised while somebody is
- *   looking at the board would sit there until they pressed Refresh.
- * * `routine:updated` is a clock that stopped itself, or a run that ended while
- *   nobody was looking.
- *
- * `audit:appended` is deliberately absent. It fires per tool call, and a board
- * re-read six times inside one turn would be six compositions over four stores
- * and a log to show the same three columns.
- *
- * All of them are no-ops while the panel is shut: `refresh` returns immediately
- * unless the board is open on a project.
+ * Refetches the open board on events that change a column: `turn:started` and
+ * `turn:finished` (In flight, run results), `tool:approval_*` (Attention),
+ * `routine:updated`. Not `audit:appended`, which fires per tool call.
  */
 export function attachBoardEvents(): Promise<UnlistenFn> {
   const again = () => {

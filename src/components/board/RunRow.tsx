@@ -1,15 +1,9 @@
 /**
  * One run in the list under the board.
  *
- * The row is the answer to the phase's own question, in one line: **who** ran
- * it, **what it cost**, and — when it did not go well — **why**. Everything
- * else is behind the disclosure the row opens, because a list where every row
- * is six lines tall is a list nobody scrolls.
- *
- * The status word is the run's own. A run that reported `done` is drawn as
- * done even if a call inside it was refused: the refusal is on the row as a
- * number, and re-reading it as a failure would be the window overruling the
- * only thing in the loop that knew what the work needed.
+ * One line: who, cost, and why when it went wrong; the rest behind a
+ * disclosure. The status is the run's own report, even with refused calls
+ * inside (shown as a count).
  */
 
 import type { Run, RunKind, RunStatus } from "../../ipc/bindings";

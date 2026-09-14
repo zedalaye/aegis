@@ -1,20 +1,10 @@
 /**
  * The open project's folder, as a tree (PLAN 7.15).
  *
- * One folder at a time: a row's children are listed by the runtime when it is
- * opened, never before. Rows are buttons — a folder opens, a file previews —
- * and nothing else: no rename, no delete, no new file. A tree that could
- * change the folder would be a second write path around the approval gate.
- *
- * The cabinet is marked as the working surface without being made the only
- * thing here. `.aegis/` and `world/` are ordinary rows with a word beside
- * them, among the project's other files — a brief names inputs anywhere in the
- * workspace, and a tree that showed only the convention could not show those.
- *
- * Each row also says what a drop onto it would do, in a `data-drop` attribute
- * the panel reads when the OS reports where a drop landed. `.aegis/briefs/`
- * takes one; artefacts, the rest of the cabinet and the world refuse; every
- * other row is the project, and a drop there lands in briefs too.
+ * Children load on expand. Rows only open or preview — no rename or delete.
+ * `.aegis/` and `world/` are labelled ordinary rows. Each row's `data-drop` tells
+ * the panel what a drop there does (briefs accepted, cabinet and world refused,
+ * elsewhere to briefs).
  */
 
 import type { TreeEntry, Zone } from "../../ipc/bindings";

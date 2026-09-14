@@ -1,26 +1,15 @@
 //! Workspace explorer commands (PLAN 7.15).
 //!
-//! Four commands, and three of them only read. None of them is a way to edit a
-//! file: writing `DECISIONS.md` or a `SKILL.md` stays `fs_write`, under the
-//! gate, on the audit log. A save path from this window would be the second
-//! write around that gate PLAN 7.5 refuses by name.
+//! No command edits files (PLAN 7.5).
 //!
-//! * [`workspace_tree`] lists one folder of the open project.
+//! * [`workspace_tree`] lists one folder.
 //! * [`workspace_preview`] describes one file, with its text when it is text.
-//! * [`workspace_image`] hands an image over as raw bytes, which the window
-//!   turns into a blob URL of its own. Never a `file://`, and not the `asset:`
-//!   protocol either: that scope is the capture directory and nothing else.
-//! * [`workspace_import_brief`] is the one write, and it is the operator's —
-//!   the files the OS just dropped on the window, copied into
-//!   `.aegis/briefs/`. See [`intake`].
+//! * [`workspace_image`] returns raw bytes for a blob URL (never `file://` or
+//!   `asset:`).
+//! * [`workspace_import_brief`] copies a drop into `.aegis/briefs/` ([`intake`]).
 //!
-//! Every path argument is resolved inside the open project's canonical
-//! workspace, through the same door `workspace_reveal` uses. Arbitrary paths
-//! from the WebView are refused; the capabilities file gains nothing.
-//!
-//! `async` so a large folder or a sixteen-megabyte image is read off the main
-//! thread: a synchronous Tauri command runs on it, and the window would freeze
-//! while the disk answered.
+//! Paths resolve inside the workspace like `workspace_reveal`. `async` keeps
+//! disk reads off the main thread.
 
 use tauri::ipc::Response;
 use tauri::{AppHandle, State};
@@ -78,14 +67,8 @@ pub async fn workspace_image(
 
 /// Copies the files of one drop into the project's `.aegis/briefs/`.
 ///
-/// `drop_id` is what `workspace:dropped` carried. The paths behind it were
-/// recorded by the runtime when the OS handed them over, so the window names a
-/// drop and never a path.
-///
-/// The workspace is checked before the drop is claimed, and that order is the
-/// point: a folder with no `.aegis/briefs/` refuses without spending the drop,
-/// so the operator can set up the shared files and add what they dropped
-/// without dropping it again.
+/// `drop_id` comes from `workspace:dropped`. The workspace is checked before
+/// the drop is claimed, so a missing `.aegis/briefs/` keeps it for a retry.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn workspace_import_brief(
     app: AppHandle,

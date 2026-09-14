@@ -1,15 +1,8 @@
 /**
  * The message box.
  *
- * The text is local state rather than store state: it changes on every
- * keystroke, and putting it in the store would re-render the transcript with
- * each one. It is cleared only once the send is accepted, so a rejected send —
- * `E_TURN_BUSY`, or a session deleted underneath — leaves what the user typed
- * exactly where they left it.
- *
- * Enter sends, Shift+Enter breaks the line. That is the convention every chat
- * client uses, and the box grows with the text so a multi-line message is
- * visible while it is being written.
+ * Local state (no transcript re-render per keystroke), cleared only once a
+ * send is accepted. Enter sends, Shift+Enter breaks; the box auto-grows.
  */
 
 import { useEffect, useRef, useState } from "react";

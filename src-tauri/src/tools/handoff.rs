@@ -1,37 +1,12 @@
 //! `handoff_delegate` and `handoff_return` (PLAN 7.3, Phase 15).
 //!
-//! The two verbs of the Chef-de-Cabinet loop: **hand this out** and **here is
-//! what came of it**. Like the skill tools beside them they are ordinary
-//! registry entries, because the model has exactly one channel for saying "I am
-//! routing this now", and a second dispatch path would be a second place to
-//! remember the audit line.
+//! Hand work out, report back — ordinary gated, audited tool calls.
 //!
-//! Four properties are worth reading the code for.
-//!
-//! **A brief is checked before a person is asked about it.** The whole
-//! validation happens in the policy table ([`handoff::check_brief`]), so a
-//! delegation that would be refused never reaches an approval dialog. What is
-//! left here is what only the runtime knows: whether this turn is allowed to
-//! delegate at all.
-//!
-//! **The wait is bounded and the CoS keeps its turn.** [`delegate`] awaits the
-//! bus, which runs every brief in parallel under its own deadline and gives up
-//! after two failures ([`bus`]). The tool cannot hang: the worst case is one
-//! [`bus::ATTEMPT_TIMEOUT`] plus a review, and the result is a board that says
-//! who did not answer.
-//!
-//! **What comes back is a board, never a transcript.** [`bus::Board::render`]
-//! is statuses, artefact paths and open questions. There is no code path from a
-//! specialist's messages to the CoS's context, and that is structural rather
-//! than careful: the only thing a delegated run can produce is a
-//! [`handoff::Report`],
-//! and a report has no field wide enough for a conversation (`COS.md`: *the CoS
-//! aggregates status, not histories*).
-//!
-//! **A return is checked against the shape, not against taste.** [`ret`] is
-//! [`handoff::check`], the same function `skill_return` uses — including going
-//! and looking at the artefacts a `done` names, which catches the commonest
-//! failure there is: a model describing a file it never wrote.
+//! * Briefs are validated in policy ([`handoff::check_brief`]) before any
+//!   dialog.
+//! * [`delegate`] waits on the [`bus`], bounded by [`bus::ATTEMPT_TIMEOUT`] per
+//!   attempt, and returns a board ([`bus::Board::render`]) — never a transcript.
+//! * [`ret`] is [`handoff::check`], shared with `skill_return`.
 
 use serde_json::{json, Value};
 
@@ -43,19 +18,13 @@ use super::Produced;
 
 /// Where a delegation is recorded, in [`ToolResult::meta`](super::ToolResult).
 ///
-/// The turn reads it out of the envelope rather than out of the arguments, for
-/// the reason [`META_SKILL`](crate::skills::META_SKILL) is read that way: what
-/// happened is what the tool decided, and a loop that re-derived it from the
-/// call would be a second copy of that decision.
+/// Read from the result, like [`META_SKILL`](crate::skills::META_SKILL).
 pub const META_HANDOFF: &str = "handoff";
 
 /// What a handoff tool needs from the runtime around it.
 ///
-/// Held by [`ToolCtx`](super::ToolCtx) rather than resolved inside the tool,
-/// for the reason the skill library is: who can run a brief, and whether this
-/// turn is itself one, are facts about the application and the session, not
-/// about what the model asked for. A tool that went looking for them could not
-/// be tested without an application.
+/// Passed in through [`ToolCtx`](super::ToolCtx), so the tools test without an
+/// app.
 #[derive(Clone, Copy)]
 pub struct HandoffCtx<'a> {
     /// Who carries a brief, when this turn is allowed to hand one out.
@@ -65,9 +34,8 @@ pub struct HandoffCtx<'a> {
     pub bus: Option<&'a std::sync::Arc<dyn bus::Runner>>,
     /// The delegated run this turn *is*, when it is one.
     ///
-    /// `Some` exactly when a brief opened this turn. It is where a
-    /// `handoff_return` lands, and it is what puts the delegation's id on every
-    /// audit line the run writes.
+    /// `Some` when a brief opened this turn: receives `handoff_return` and tags
+    /// audit lines.
     pub open: Option<&'a handoff::Open>,
 }
 
@@ -183,7 +151,10 @@ pub fn report_schema() -> Value {
             "evidence": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "What backs the claim — a test that passed, a diff, a capture, or                                 simply the file you read. Required for a `done` that names no                                 artefacts: a done pointing at nothing is refused, because nobody                                 can check it afterwards.",
+                "description": "What backs the claim — a test that passed, a diff, a capture, or \
+                                simply the file you read. Required for a `done` that names no \
+                                artefacts: a done pointing at nothing is refused, because nobody \
+                                can check it afterwards.",
             },
             "open_questions": {
                 "type": "array",
@@ -252,9 +223,7 @@ pub(crate) async fn delegate(
 
 /// Records the result of the brief this run was given.
 ///
-/// Refused when no brief opened this turn: a return with nothing behind it is a
-/// status object about nothing, and accepting it would put a `done` on the
-/// audit log for work nobody asked for.
+/// Refused when no brief opened this turn.
 pub(crate) fn ret(report: &handoff::Report, ctx: HandoffCtx<'_>) -> Produced {
     let Some(open) = ctx.open else {
         return Produced::failed(

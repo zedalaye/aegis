@@ -1,23 +1,10 @@
 //! The wire, end to end: a real socket, a real HTTP response, real SSE framing
 //! (PLAN 6, Phase 8 — `tests/wire.rs`: "SSE parse + tool-call assembly").
 //!
-//! The unit tests inside `agent/provider/openai.rs` cover the decoder and the
-//! frame mapping against values built in memory. What they cannot cover is the
-//! half that only exists once there is a socket: whether the request Aegis
-//! actually sends is the one PLAN 4.1 documents, whether the key travels as a
-//! header and never in the body, whether a payload split across TCP writes
-//! still assembles, and whether a cancelled turn actually closes the
-//! connection rather than politely reading to the end of a reply nobody wants.
-//!
-//! The last test is the phase's exit criterion rather than a unit of it: a
-//! real provider driving a real turn, streaming a reply, running the tool the
-//! model asked for, and sending the result back on the next request — with
-//! nothing in `agent/turn.rs` aware that the events came off a socket.
-//!
-//! The server is a page of `tokio::net` rather than a mock HTTP crate on
-//! purpose. What is being tested is behaviour against bytes, and a fixture
-//! that speaks the same library as the client would agree with it about
-//! exactly the things worth doubting.
+//! Covers what needs a socket: the request body (PLAN 4.1), the key only in a
+//! header, payloads split across writes, and cancel closing the connection. The
+//! last test is Phase 8's exit criterion: a full tool round trip. The server is
+//! raw `tokio::net`, so it cannot share the client's HTTP assumptions.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -86,10 +73,7 @@ enum Answer {
 
 /// A server that answers a fixed list of requests, one connection each.
 ///
-/// One connection per answer rather than one for the lot: every response says
-/// `Connection: close`, which is what makes the end of the body unambiguous
-/// without chunked encoding. A turn that runs a tool sends two requests, so the
-/// fixture has to outlive the first.
+/// `Connection: close` on each marks the end of the body without chunking.
 struct Server {
     base_url: String,
     recorded: mpsc::Receiver<Recorded>,
@@ -630,12 +614,8 @@ impl EventSink for Recorder {
 /// the scripted one does, with nothing in `agent/turn.rs` aware of the
 /// difference.
 ///
-/// The model streams a sentence, asks for `fs_list` inside the workspace —
-/// which policy allows on its own, so no human is involved — and then, given
-/// the result, streams a closing sentence. What is asserted is the whole round
-/// trip: the events the window would have drawn, the transcript on disk, the
-/// audit line, and the second request carrying the tool result back to the
-/// server.
+/// Text, an auto-allowed `fs_list`, then text: asserts events, transcript,
+/// audit line and the tool result in the second request.
 #[tokio::test]
 async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
     let dir = tempfile::TempDir::new().expect("temp dir");
@@ -775,10 +755,7 @@ fn probe_settings(base_url: &str) -> ProviderSettings {
 
 /// The probe exercises the endpoint a turn would use, not a models listing.
 ///
-/// This is the case that sent it there: `GET /models` on a base URL whose
-/// `/models` is a different vendor's own endpoint fails on a configuration
-/// where chat works perfectly, and a test that fails on working settings is
-/// one people learn to ignore.
+/// `/models` can fail on a working configuration.
 #[tokio::test]
 async fn the_probe_asks_the_chat_endpoint_and_names_the_model_that_answered() {
     let mut server = Server::start(vec![Answer::Json(

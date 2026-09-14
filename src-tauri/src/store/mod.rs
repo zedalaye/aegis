@@ -1,33 +1,12 @@
-//! On-disk persistence.
+//! On-disk persistence: small, hand-editable JSON documents under the OS
+//! application-data directory, one per store, each with its own schema version
+//! (`docs/guide/data.md`).
 //!
-//! Seven JSON documents under the OS application-data directory:
-//! `projects.json` ([`projects`]), `sessions.json` ([`sessions`]),
-//! `settings.json` ([`settings`]), from Phase 12 `agents.json` ([`agents`]),
-//! from Phase 14 `memories.json` ([`memories`]), from Phase 16
-//! `routines.json` ([`routines`]) and from Phase 18 `connectors.json`
-//! ([`connectors`]). All of them are small,
-//! human-readable and hand-editable on purpose — a user who has to recover from a bad state should be able to open
-//! the file and see why.
-//!
-//! Three properties matter more than the format, and this module is where they
-//! are implemented once for both documents:
-//!
-//! * **Writes are atomic.** A document is written to a sibling temporary file,
-//!   flushed, then renamed over the target. A crash or a power cut leaves
-//!   either the old document or the new one, never a half-written one.
-//! * **A damaged document never blocks the app.** Unparseable content is moved
-//!   aside with a timestamped name and the app starts with an empty list,
-//!   because a tray app that refuses to boot has no way to tell anyone why.
-//! * **Derived facts are never persisted.** Whether a workspace folder is
-//!   still there, and whether a session has a turn running, are facts about
-//!   *right now*. They are measured on every read. A stored copy would be
-//!   wrong the moment a drive is unplugged or the process is killed mid-turn.
-//!
-//! The documents are deliberately separate files with separate schema
-//! versions. They change at very different rates — a project list is edited by
-//! a human a few times a week, a transcript grows on every token, provider
-//! settings change a few times a year, identities barely at all — and a
-//! migration to one has no business quarantining the others.
+//! * **Writes are atomic**: temporary sibling, `sync_all`, rename.
+//! * **A damaged document never blocks the app**: it is moved aside and the
+//!   store starts empty.
+//! * **Derived facts are never persisted**: workspace presence and running
+//!   turns are measured on every read.
 
 pub mod agents;
 pub mod connectors;
@@ -55,40 +34,25 @@ pub use sessions::{
 };
 pub use settings::{AuthKind, AuthPreset, MaskedSettings, ProviderSettings, SettingsStore};
 
-/// Rename attempts before a failed save gives up.
-///
-/// The replace step is a single `MoveFileEx` on Windows, which an antivirus or
-/// an indexer holding the old file open can make fail for a few milliseconds
-/// (see the README's Windows notes). Retrying briefly turns a transient
-/// scanner collision back into a successful save.
+/// Rename attempts before a failed save gives up: on Windows an antivirus or
+/// indexer can hold the old file for a few milliseconds
+/// (`docs/troubleshooting.md`).
 const RENAME_ATTEMPTS: u32 = 3;
 const RENAME_BACKOFF: Duration = Duration::from_millis(20);
 
-/// Now, as fixed-width UTC RFC3339 (`2026-08-28T09:41:07.412Z`).
-///
-/// Fixed width and a fixed offset are what let timestamps be compared as
-/// strings, both here and in the UI.
+/// Now, as fixed-width UTC RFC3339 (`2026-08-28T09:41:07.412Z`), so timestamps
+/// compare as strings.
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// Drops a leading UTF-8 byte-order mark.
-///
-/// JSON has no BOM, and `serde_json` rejects one outright. Windows editors —
-/// Notepad, and PowerShell's `Set-Content -Encoding utf8` — write one anyway,
-/// so a user who takes up the invitation to edit `projects.json` by hand would
-/// otherwise watch their project list get quarantined for a change they cannot
-/// see. Aegis never writes a BOM; it only tolerates one.
+/// Drops a leading UTF-8 BOM, which Windows editors add and `serde_json`
+/// rejects. Aegis never writes one.
 fn strip_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
 }
 
-/// Moves a document aside so a fresh one can be written.
-///
-/// Best effort by design: the caller is already on the "the store is
-/// unusable" path, and failing to rename it must not stop the app from
-/// starting. The original is kept rather than deleted — it may be the only
-/// copy of what it held, and a human may well be able to repair it.
+/// Moves a damaged document aside, keeping it for repair. Best effort.
 fn quarantine(path: &Path) {
     let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
     let backup = path.with_extension(format!("corrupt-{stamp}.json"));
@@ -99,14 +63,10 @@ fn quarantine(path: &Path) {
     }
 }
 
-/// Writes `bytes` to `path` so that readers see either the old file or the
-/// whole new one.
-///
-/// Temporary file in the same directory (a rename across filesystems is not
-/// atomic), `sync_all` before the rename (a rename can otherwise outrun the
-/// data and survive a crash pointing at empty content), then a replacing
-/// rename. The temporary file is removed if the rename never succeeds, so a
-/// failing store does not leave litter behind.
+/// Writes `bytes` to `path` so readers see the old file or the whole new one:
+/// a temporary file in the same directory, `sync_all` so the rename cannot
+/// outrun the data, then a replacing rename. The temporary file is removed on
+/// failure.
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path
         .parent()

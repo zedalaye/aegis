@@ -1,28 +1,9 @@
 /**
  * The settings surface: one panel, one provider.
  *
- * It takes over the work area rather than floating over it as a modal, for the
- * same reason the approval prompt does not float either — the window is one
- * thing at a time, and a dialog that traps focus to prevent a mistake it does
- * not actually prevent is worth less than a page the user can leave.
- *
- * Reachable with no project open, deliberately: configuring where the model
- * comes from is not something that should require picking a folder first. The
- * identities of Phase 12 sit here for the same reason — an identity is a fact
- * about the application, not about any one project. The skills of Phase 13 sit
- * beside them because the two are halves of one question: a skill is what an
- * identity may run, and an identity is who may run a skill. Half of that list
- * does come from the open project's folder, and it is still here rather than in
- * the rail, so "which `inbox.triage` will run" is answerable in one place.
- * The memories of Phase 14 follow Identities for the same reason again: a
- * memory belongs to an identity and to nothing else, and this panel is the
- * only place a person can correct one. The connectors of Phase 18 sit between
- * Identities and Memory because they are the other half of the tools question:
- * an identity is who may call a tool, and a connector is where a tool comes
- * from when this build did not write it. The routines of Phase 16 come last
- * because they stand on all of it: a routine is a runbook, run as an identity,
- * on a clock — and this is the only place a person can see what the machine
- * will do while they are not here.
+ * Takes over the work area (not a modal) and works with no project open:
+ * provider, identities, skills, connectors, memory and routines are
+ * application-level.
  */
 
 import { useEffect } from "react";
@@ -39,11 +20,8 @@ import SkillList from "../skills/SkillList";
 import ProviderForm from "./ProviderForm";
 
 /**
- * Which provider will answer the next message.
- *
- * Mirrors `ProviderSettings::is_configured` in `store/settings.rs`. The
- * runtime is still the one that decides — this is the sentence, not the rule
- * — and "Test connection" is the authoritative answer when there is any doubt.
+ * Which provider will answer next; mirrors `ProviderSettings::is_configured`
+ * for display only.
  */
 function ActiveProvider() {
   const settings = useSettings((s) => s.settings);

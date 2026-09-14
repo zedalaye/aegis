@@ -1,22 +1,8 @@
 /**
  * The window's frame: header, project rail, and the work area beside it.
  *
- * Two responsibilities beyond layout.
- *
- * It owns the subscription to the runtime's event stream — one listener set
- * for the whole app, attached on mount and detached on unmount. Attaching per
- * component would mean a delta applied once per mounted listener. It also does
- * the one-off loads that several panes depend on: the projects, the provider
- * settings, and the identities.
- *
- * And it keeps the session store following the open project. The two stores
- * are deliberately separate — a project is a folder, a session is a
- * conversation — so something has to notice when one changes and reload the
- * other. That something is here, where both are already in scope.
- *
- * Errors surface once, above everything. A failure in either store is not
- * local to the control that triggered it, and this is the only place both the
- * sidebar and the work area can be seen to be affected by it.
+ * Also owns the app's single set of event listeners and shared initial loads,
+ * reloads sessions when the open project changes, and shows one error banner.
  */
 
 import { useEffect } from "react";
@@ -44,13 +30,7 @@ import SettingsPanel from "../settings/SettingsPanel";
 import Sidebar from "./Sidebar";
 import TitleBar from "./TitleBar";
 
-/**
- * What fills the work area before there is a project to chat in.
- *
- * Once one is open the pane belongs to the conversation; the project's own
- * facts are the workspace path and the name, and both are already in the title
- * bar where they stay visible while the transcript scrolls.
- */
+/** What fills the work area before a project is open. */
 function NoProject() {
   const status = useProjects((s) => s.status);
 
@@ -68,10 +48,8 @@ function NoProject() {
 }
 
 /**
- * The last failure from any store, dismissible, above the panes.
- *
- * The audit drawer is deliberately absent: a log that would not read is a fact
- * about that one panel, and the panel is on screen with a place to say it.
+ * The last failure from any store, dismissible. The audit drawer reports its
+ * own errors.
  */
 function ErrorBanner() {
   const projectError = useProjects((s) => s.error);
@@ -93,11 +71,7 @@ function ErrorBanner() {
   const dismissAgents = useAgents((s) => s.dismissError);
   const dismissExplorer = useExplorer((s) => s.dismissError);
 
-  // The most recent one wins. Stacking banners pushes the thing the user was
-  // looking at off the screen, and the later ones are usually a consequence of
-  // the first. Approvals come first because a refused click is the one the user
-  // is waiting on an answer to; settings next, because that panel is in front
-  // of the user when it fails.
+  // One banner, never stacked; approvals first, then settings.
   const error =
     approvalError ??
     settingsError ??
@@ -182,16 +156,8 @@ export default function AppShell() {
     void loadAgents();
   }, [load, loadSettings, loadAgents]);
 
-  // The routines are loaded on mount for the reason the identities are — the
-  // clock is already running in the runtime whether or not this window is open,
-  // and a panel that only learned what was scheduled when somebody opened
-  // Settings would be the last place to find out a routine had paused itself.
-  //
-  // And they are re-measured whenever the set of projects changes, because a
-  // routine belongs to one: deleting a project deletes its routines in the
-  // runtime (`commands/project.rs`), and nothing announces that. Without this
-  // the panel keeps drawing a clock that no longer exists — and one that cannot
-  // even be opened, since the project it named is gone from the picker.
+  // Routines load on mount and whenever the project set changes: deleting a
+  // project silently deletes its routines (`commands/project.rs`).
   useEffect(() => {
     void loadRoutines();
   }, [projectIds, loadRoutines]);

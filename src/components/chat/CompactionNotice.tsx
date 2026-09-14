@@ -1,21 +1,9 @@
 /**
  * The fold marker in the transcript (PLAN 7.3, Phase 14).
  *
- * Drawn in place, immediately after the last message that folded, because that
- * is where the fold actually is. A banner at the top of the pane would say the
- * same words and answer a different question: what a reader wants to know is
- * *from here on, the model is reading this again*, and *above this line, it is
- * reading four lines of state instead*.
- *
- * The state it folded to is shown on demand rather than by default. It is the
- * answer to "what does it still know", which is worth being able to check and
- * is not worth six lines of the transcript on every scroll past.
- *
- * The thing this component has to make unambiguous is that nothing was
- * deleted. The messages above the line are still on screen, still on disk, and
- * still in the audit log — a fold changes what the *model* carries, and a
- * reader who thought their conversation had been trimmed would be right to be
- * alarmed and wrong about what happened.
+ * Drawn right after the last folded message; the folded state is shown on
+ * demand. It must make clear that nothing was deleted, only what the model
+ * reads changed.
  */
 
 import { useState } from "react";

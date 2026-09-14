@@ -1,15 +1,8 @@
 /**
  * The identities a session can be opened as (PLAN 7.3, Phase 12).
  *
- * A section of the settings panel rather than a surface of its own: an identity
- * is a fact about the application, like the provider, and not about any project
- * — the same reason Settings is reachable with nothing open.
- *
- * Each row says the three things that decide whether you would pick it: what
- * it is for, what it can touch, and which runbooks it may follow. The tools are
- * spelled out rather than counted, because "3 tools" is not an answer to "may
- * this thing write to my repo", and the skills are spelled out for the same
- * reason.
+ * In Settings, since identities are app-wide. Rows show role, and tools and
+ * skills spelled out rather than counted.
  */
 
 import type { Agent } from "../../ipc/bindings";

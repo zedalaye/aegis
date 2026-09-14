@@ -1,20 +1,10 @@
 //! Open a workspace path in the OS file manager (PLAN 7.10).
 //!
-//! This is the command behind the title-bar button, not a tool the model can
-//! call. The WebView never opens `file://` and never gains an opener, `fs:` or
-//! `shell:` permission — those stay a review flag in `capabilities/main.json`.
-//! What it may ask for is a project, and optionally a path; what it may not
-//! ask for is an arbitrary location on the machine.
+//! A command, not a model tool; the WebView has no opener, `fs:` or `shell:`
+//! permission.
 //!
-//! Two steps, kept apart so the containment check can be tested without
-//! spawning Explorer.
-//!
-//! * [`target`] turns the argument into a path that is inside the workspace.
-//!   No path, or an empty one, is the workspace root — that is the button.
-//!   A path that escapes, or that only *looked* contained, is refused.
-//! * [`open`] hands that path to the desktop's folder handler. A file is
-//!   revealed selected, when the OS can; a directory is opened. Still the
-//!   file manager, never an editor hardcoded by name.
+//! * [`target`] resolves the argument inside the workspace (empty is the root).
+//! * [`open`] hands it to the file manager, selecting a file when possible.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

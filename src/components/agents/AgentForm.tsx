@@ -1,32 +1,12 @@
 /**
  * Creating or editing one identity (PLAN 7.3, Phases 12 and 13).
  *
- * Four things to fill in and two allow-lists: a name, a role, what it should
- * carry into every request, the tools it holds, and the runbooks it may run.
- * The two lists are the part that matters, so they are sets of checkboxes and
- * chips rather than text fields — an allow-list you type is an allow-list you
- * typo.
- *
- * Neither list is written here. The tools come from the built-in identity,
- * which holds every tool this build has by construction, so it *is* the
- * catalogue; the skills come from the runbooks the runtime found on disk. Both
- * would drift if the UI kept a copy.
- *
- * Since Phase 18 there is a third list under the first, and it is a different
- * kind of thing: the tools of the connectors that are running. They are granted
- * by full name — `git__status`, never `git` — because a server may add a tool
- * at any time, and a grant that covered the connector would quietly cover
- * something nobody read. Only live connectors are offered, since a checkbox for
- * a tool nothing answers to is a grant nobody can act on; a name granted
- * earlier and no longer offered stays on the identity, and is listed below the
- * boxes rather than silently dropped.
- *
- * The skills field stays a text input under those chips, because a workspace
- * runbook is only discoverable while that project is open, and an identity has
- * to be grantable a skill that is not in front of you right now.
- *
- * A refused value lands under the input it is about, like the provider form's,
- * because the runtime says which field it was talking about.
+ * Allow-lists are checkboxes and chips, not free text. Built-in tools come from
+ * the built-in identity (it holds all of them), skills from the runtime's
+ * catalog, and connector tools (Phase 18) from live connectors, granted by full
+ * name; stale granted names are listed, not dropped. Skills also accept typed
+ * names, for workspace runbooks of other projects. Refusals land under their
+ * field.
  */
 
 import { useEffect, useState } from "react";
@@ -57,24 +37,14 @@ const TOOL_SUMMARY: Record<string, string> = {
 };
 
 /**
- * The two tools an identity granted a skill has to hold.
- *
- * Mirrors the check in `store/agents.rs`: a runbook it cannot load is a grant
- * that does nothing. They are ticked here rather than added silently on save,
- * so the widening is something the user watches happen and can undo — which is
- * the difference between an affordance and an allow-list that grows by itself.
+ * The tools a skill grant requires (checked in `store/agents.rs`), ticked
+ * visibly rather than added on save.
  */
 const SKILL_TOOLS = ["skill_run", "skill_return"] as const;
 
 /**
- * The connector tools this identity holds, and the ones it could (Phase 18).
- *
- * Drawn as its own fieldset rather than mixed into the list above, because the
- * two lists answer to different things. The tools above are this build's, and
- * they are the same on every machine. These belong to programs the operator
- * installed: they appear when a connector is up and go when it is not, and a
- * name that is granted but no longer offered is still granted — the runtime
- * keeps it and refuses it — which is why it is named here instead of vanishing.
+ * Connector tools held and offered (Phase 18), in their own fieldset; granted
+ * names no longer offered are still listed.
  */
 function ConnectorTools({
   draft,
@@ -247,12 +217,8 @@ export default function AgentForm({
 
   const granted = parseSkills(skillsText);
 
-  // Granting a runbook to an identity that cannot load one is a grant that does
-  // nothing, and the runtime refuses to save it. Ticking the two boxes here is
-  // that rule made visible *before* the save rather than reported after it —
-  // and it only ever adds, so a user who unticks one is not fought with.
-  // Keyed on the text rather than on the parsed list: that list is a new array
-  // on every render, and an effect keyed on it would never stop running.
+  // Tick the skill tools when skills are typed (only ever adds). Keyed on the
+  // text: the parsed list is a new array every render.
   useEffect(() => {
     if (parseSkills(skillsText).length === 0) {
       return;

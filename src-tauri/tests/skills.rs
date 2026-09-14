@@ -1,37 +1,14 @@
 //! The skill runner, through the crate's public surface.
 //!
-//! The unit tests inside `skills/` cover the format, the catalog, the handoff
-//! rules and the two tools. This file covers the Phase 13 exit condition of
-//! `PLAN.md` § 7.3, which is a claim about the *whole* runtime:
+//! Phase 13's exit condition (PLAN 7.3):
 //!
-//! > the catalog is listable; one global skill (e.g. never-send-without-review)
-//! > and one workspace stub (`inbox.triage`: file in, status + artefact out)
-//! > run end-to-end; the body is absent from the system prompt of turns that
-//! > did not invoke it.
+//! 1. The catalog lists both scopes, narrowed by the allow-list, one line each.
+//! 2. A library skill and the `inbox.triage` stub run end to end.
+//! 3. The body is absent from turns that did not invoke it.
+//! 4. Audit lines inside a run carry the skill name (PLAN 7.6).
 //!
-//! Four claims, in the order they matter:
-//!
-//! 1. **The catalog is listable, and it is a catalog.** Both scopes are found,
-//!    the identity's allow-list narrows them, and what reaches the system
-//!    message is a line per runbook — never a step.
-//! 2. **A run goes end-to-end.** `skill_run` hands the body over, the steps
-//!    are carried out with the ordinary tools through the ordinary gate, and
-//!    `skill_return` closes it with a status object that had to pass. The
-//!    workspace stub does what its name says: file in, status and artefact
-//!    out.
-//! 3. **The body does not linger.** A turn that did not invoke the skill has
-//!    no step of it in its system message.
-//! 4. **A run is on the record.** Every audit line between the two skill calls
-//!    carries the skill's name, which is what makes a run budgetable and
-//!    replayable (PLAN 7.6).
-//!
-//! And one claim in the other direction, which is what keeps this phase a
-//! no-op for everything before it: an identity granted no skills sends the
-//! request Phase 12 sent.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is, against real files in
-//! a temporary directory.
+//! And an identity with no skills sends the Phase 12 request. Commands need a
+//! Tauri app; everything below them runs here on temp files.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -770,13 +747,8 @@ async fn a_runbook_the_identity_cannot_carry_out_fails_closed() {
 /// Claim 5, written from a run of the Phase 19 `review.diff` runbook against a
 /// real diff: **a run survives the turn boundary the round cap creates.**
 ///
-/// `IDEAS.md` § 10 has the trace. One review took five turns, because the cap
-/// ends a turn at eight rounds; the run's name lived in a turn local; so every
-/// audit line after the first boundary carried no skill — the `fs_write` of the
-/// artefact the run existed to produce among them — and the closing
-/// `skill_return` was refused, because by then nothing was open to close. PLAN
-/// 7.6 asks one thing of a run, that it can be budgeted and replayed, and a
-/// name that stops at the first boundary cannot deliver it.
+/// Regression from `IDEAS.md` § 10: the run name was turn-local, so later audit
+/// lines lost it and the final `skill_return` was refused.
 #[tokio::test]
 async fn a_run_carries_across_turns_and_closes_in_a_later_one() {
     let app = App::new();

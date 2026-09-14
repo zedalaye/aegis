@@ -1,30 +1,10 @@
 /**
  * Shared-workspace state (PLAN 7.3, Phase 11; PLAN 7.2 for the world).
  *
- * The convention — `briefs/`, `status/`, `artefacts/`, `decisions/` — lives in
- * the user's own folder, so this store holds no copy of it. It holds the answer
- * to one question, "is it there right now", refetched rather than patched: a
- * user can create `decisions/` in a terminal between two renders, and a panel
- * that trusted its own cache would be confidently wrong about a directory it
- * does not own.
- *
- * The world is the second layer in that same folder, measured beside the first
- * and on the same terms. There is no action for *creating* it, and that is the
- * point of it being opt-in: five empty templates in a workspace with no essence
- * are theatre, so a world starts when somebody writes `world/essence.md` and
- * this store reports what they wrote.
- *
- * Deliberately separate from the project store even though it follows the same
- * project. A project is a record Aegis keeps; this is a fact about someone
- * else's filesystem, measured on demand, and folding the two together would
- * mean every project refetch also went to disk.
- *
- * There is no action here for *writing* a decision or a status. That is
- * `fs_write` through the approval gate, driven by the conversation — a second
- * write path around the gate is exactly what this phase is not allowed to add.
- *
- * Errors are held rather than thrown, like every other store: the shell renders
- * the last one.
+ * Measurements of the user's folder — the cabinet layout and the world —
+ * always refetched, never patched. Nothing here creates a world or writes
+ * files; that is `fs_write` under the gate. Separate from the project store so
+ * a project refetch does not hit the disk. Errors are held, not thrown.
  */
 
 import { create } from "zustand";
@@ -48,42 +28,21 @@ export type WorkspaceState = {
   /** The convention's state in the open project, or `null` when none is. */
   readonly layout: WorkspaceLayout | null;
   /**
-   * The world in that same folder, or `null` when none has been measured.
-   *
-   * Beside the layout rather than folded into it: they are two layers with
-   * opposite mutation rules (PLAN 7.2), and the measurement costs differently —
-   * the cabinet is a handful of `stat` calls, the world reads the sources it
-   * declares. `present: false` is the ordinary answer and not an error.
+   * The world in that folder, or `null` before measurement. Kept apart from
+   * the layout: it costs more to measure (PLAN 7.2).
    */
   readonly world: WorldStatus | null;
   readonly status: LoadStatus;
   /** True while scaffolding, so the button can say it is working. */
   readonly busy: boolean;
-  /**
-   * What the last scaffolding run created, for the line that reports it.
-   *
-   * Empty after a run that created nothing — which is the ordinary second run,
-   * and worth saying out loud rather than leaving the user to guess whether
-   * the button did anything.
-   */
+  /** What the last scaffolding run created; empty is reported too. */
   readonly created: readonly string[];
   /**
-   * Whether the last run is what made the folder a git work tree (PLAN 7.11).
-   *
-   * Kept beside {@link created} rather than derived from `layout.versioning`,
-   * because they answer different questions: the layout says whether the folder
-   * is versioned *now*, and this says whether pressing the button is what did
-   * that. Only the second is worth reporting back to somebody who has just
-   * pressed it.
+   * Whether the last run created the git work tree (PLAN 7.11) — unlike
+   * `layout.versioning`, which says whether it is versioned now.
    */
   readonly initialized: boolean;
-  /**
-   * Why the folder is still not versioned, when it is not.
-   *
-   * `git` missing from PATH is the ordinary reason, and it is not an error:
-   * the directories were the job and they were created. So it is held here and
-   * said in the panel, rather than raised as a failed command.
-   */
+  /** Why the folder is still not versioned (usually no `git`); not an error. */
   readonly problem: string | null;
   /** Whether a scaffolding run has finished since the panel was last loaded. */
   readonly scaffolded: boolean;
@@ -92,12 +51,8 @@ export type WorkspaceState = {
   /** Measures the convention in a project, or clears it for `null`. */
   loadFor: (projectId: string | null) => Promise<void>;
   /**
-   * Re-measures the open project, in place.
-   *
-   * Not {@link loadFor}: this runs while somebody is looking at the panel, so
-   * it must not pass through `loading` — which blanks both panels — and must not
-   * clear the line reporting what the last scaffold created. It changes what is
-   * drawn only when the folder has actually changed.
+   * Re-measures the open project in place: unlike {@link loadFor}, no
+   * `loading` state and the scaffold report is kept.
    */
   refresh: () => Promise<void>;
   /** Lays down what is missing, then re-measures. */
@@ -189,14 +144,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ busy: true, error: null });
     try {
       const report = await workspaceScaffold(projectId);
-      // Re-measured from disk rather than derived from the report. The report
-      // says what this run did; the panel shows what is there, and those come
-      // apart the moment anything else touches the folder.
-      //
-      // The world is re-measured with it even though scaffolding never touches
-      // `world/`: the button is the moment somebody looks at this panel, and a
-      // constitution written in an editor since the project was opened is
-      // exactly what would otherwise be stale.
+      // Re-measured from disk, world included, rather than derived from the
+      // report.
       const [layout, world] = await Promise.all([
         workspaceLayout(projectId),
         worldStatus(projectId),
@@ -221,25 +170,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 }));
 
 /**
- * Re-measures the folder when something may have changed it.
- *
- * Both panels are a picture of somebody else's directory, and until this
- * existed they were measured once — when the project opened — and never again.
- * A session that wrote `world/essence.md` through the gate left the World panel
- * saying *not written* about a file it had just created, which reads as a
- * broken panel rather than as a stale one.
- *
- * Two events, and neither is `tool:finished`: that fires for every read as well,
- * and re-measuring is the expensive half here — `world_status` hashes every
- * declared source. What is used instead is the pair the board already uses, for
- * the same reason it does.
- *
- * * **`tool:approval_resolved`** — every gated write passes through it, and a
- *   write into `world/` is *always* gated, so the panel follows a session
- *   founding a world file by file.
- * * **`turn:finished`** — the catch-all, once per turn. It covers what the
- *   first misses: a write running under a standing grant, a `shell_exec` that
- *   touched the folder, a connector's own tool.
+ * Re-measures the folder when something may have changed it: on
+ * `tool:approval_resolved` (every gated write, including all `world/` writes)
+ * and `turn:finished` (the catch-all). Not `tool:finished`, which fires on
+ * every read and would re-hash world sources.
  */
 export function attachWorkspaceEvents(): Promise<() => void> {
   const again = () => {

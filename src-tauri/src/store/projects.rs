@@ -1,13 +1,7 @@
 //! The project document: `projects.json`.
 //!
-//! A project is a workspace folder plus a name. From Phase 3 it is also the
-//! root every path check is measured against, which is why the path is
-//! canonicalized on the way in and stored canonical — everything downstream
-//! compares against a resolved path rather than against whatever string the UI
-//! happened to hold.
-//!
-//! The atomic write, the quarantine and the timestamp format all live in the
-//! parent module, shared with [`sessions`](super::sessions).
+//! A project is a workspace folder plus a name. The path is stored canonical,
+//! since every containment check measures against it.
 
 use std::fs;
 use std::io;
@@ -28,9 +22,7 @@ const PROJECTS_FILE: &str = "projects.json";
 
 /// Schema version of [`ProjectsFile`].
 ///
-/// A document carrying anything else is treated exactly like a damaged one:
-/// quarantined, not guessed at. Bumping this is how a future migration
-/// announces itself.
+/// Any other version is quarantined.
 const SCHEMA_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
@@ -55,20 +47,11 @@ pub struct Project {
     pub workspace_exists: bool,
     /// The WSL distribution whose filesystem the folder is in, if any.
     ///
-    /// Derived from the path on every read, like `workspace_exists`, and never
-    /// stored — it is a fact about where the folder is, not a decision anybody
-    /// made. It is emphatically **not** `exec_host` and never sets it: PLAN
-    /// 7.12 forbids flipping the host from a `\\wsl$\` path, because picking a
-    /// folder is not consent. All it does is let the picker mark the row a
-    /// person is most likely to want, which still takes their click.
+    /// Derived on read, never stored, and never sets `exec_host` (PLAN 7.12):
+    /// it only hints the picker.
     pub workspace_distro: Option<String>,
-    /// Where this project's commands run (PLAN 7.12).
-    ///
-    /// `None` is this process — the default, what every project had before this
-    /// slice, and what a project keeps unless somebody chooses otherwise.
-    /// Sessions inherit it; they do not override it, because "which operating
-    /// system does the toolchain live in" is a fact about the folder rather
-    /// than about a conversation in it.
+    /// Where this project's commands run (PLAN 7.12); `None` is this computer.
+    /// Sessions inherit it.
     pub exec_host: Option<ExecHost>,
 }
 
@@ -79,9 +62,7 @@ pub struct ProjectDetail {
     pub project: Project,
     /// The project's sessions, newest first.
     ///
-    /// Filled by the command layer rather than by [`Store::open`]: a summary
-    /// carries the session's *live* state, and only [`AppState`] can see both
-    /// the session document and the turns currently running.
+    /// Filled by [`AppState`], which knows live turn states.
     ///
     /// [`AppState`]: crate::state::AppState
     pub sessions: Vec<SessionSummary>,
@@ -100,8 +81,7 @@ struct ProjectsFile {
 
 /// A project record as persisted.
 ///
-/// Deliberately not [`Project`]: `workspace_exists` is derived on read, and
-/// keeping the two types apart makes it impossible to persist it by accident.
+/// Not [`Project`], so derived fields cannot be persisted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredProject {
     id: String,
@@ -110,12 +90,8 @@ struct StoredProject {
     created_at: String,
     #[serde(default)]
     last_opened_at: Option<String>,
-    /// Where this project's commands run (PLAN 7.12).
-    ///
-    /// Absent rather than null when there is none, and `#[serde(default)]` on
-    /// the way in: every row written before this slice has no such field, and a
-    /// document those rows still round-trip through unchanged is what makes
-    /// "existing projects keep working" a property rather than a hope.
+    /// Where this project's commands run (PLAN 7.12). Omitted when `None`, so
+    /// older documents round-trip unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exec_host: Option<ExecHost>,
 }
@@ -142,10 +118,7 @@ impl StoredProject {
 
 /// The project store: the in-memory list plus the document backing it.
 ///
-/// The whole list is held under one mutex and written out on every mutation.
-/// That is the right trade at this size — a handful of records, changed only
-/// by a human clicking — and it makes "what is on disk" always equal to "what
-/// is in memory" after a command returns, with no flush to forget.
+/// One mutex over the list, written out on every mutation.
 #[derive(Debug)]
 pub struct Store {
     path: PathBuf,
@@ -155,9 +128,8 @@ pub struct Store {
 impl Store {
     /// Loads the store from `data_dir`, which is created if missing.
     ///
-    /// Never fails. A store that cannot be read starts empty and says so in
-    /// the log; the failure resurfaces honestly on the first save, where there
-    /// is a user waiting for an answer and an error can be shown.
+    /// Never fails: an unreadable store starts empty; the error surfaces on
+    /// save.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(PROJECTS_FILE);
 
@@ -202,12 +174,7 @@ impl Store {
         }
     }
 
-    /// Locks the list.
-    ///
-    /// A poisoned mutex means some other command panicked mid-mutation. The
-    /// data behind it is a plain `Vec` that is only ever replaced wholesale,
-    /// so it cannot be torn: recovering the inner value is strictly better
-    /// than propagating a panic through every later command.
+    /// Locks the list, recovering from poison: it cannot be left torn.
     fn projects(&self) -> MutexGuard<'_, Vec<StoredProject>> {
         self.projects
             .lock()
@@ -216,10 +183,8 @@ impl Store {
 
     /// Every project, most recently opened first.
     ///
-    /// Timestamps are fixed-width UTC RFC3339, so the reverse lexicographic
-    /// order below *is* reverse chronological order. A project never opened
-    /// falls back to its creation time, which keeps a fresh project at the top
-    /// where the user just put it.
+    /// Sorted as strings (fixed-width RFC3339); never-opened projects use their
+    /// creation time.
     pub fn list(&self) -> Vec<Project> {
         let projects = self.projects();
 
@@ -237,10 +202,7 @@ impl Store {
 
     /// One project by id, without touching `last_opened_at`.
     ///
-    /// Deliberately not [`Store::open`]: a command that only needs to know
-    /// where a project's folder is — where its shared files live, say — is not
-    /// the user opening it, and stamping recency for it would reorder the
-    /// sidebar behind their back.
+    /// Unlike [`Store::open`], does not reorder the sidebar.
     pub fn get(&self, id: &str) -> AppResult<Project> {
         self.projects()
             .iter()
@@ -253,11 +215,7 @@ impl Store {
     ///
     /// `workspace` must already be canonical (see [`canonical_workspace`]).
     ///
-    /// Adding a folder that is already a project returns the existing record
-    /// rather than a second one. Two projects over one folder would share a
-    /// workspace root, and therefore every path grant made against it — a
-    /// duplicate is never what the user meant, and silently reusing the
-    /// original is the behaviour that cannot surprise them.
+    /// A folder already registered returns the existing project.
     pub fn create(&self, name: &str, workspace: &Path) -> AppResult<Project> {
         let workspace_path = path_to_string(workspace)?;
         let mut projects = self.projects();
@@ -289,10 +247,7 @@ impl Store {
         Ok(created)
     }
 
-    /// Opens a project, stamping `last_opened_at`.
-    ///
-    /// The stamp is what orders the sidebar, so it is written here rather than
-    /// left to the UI: opening a project is the act that makes it recent.
+    /// Opens a project, stamping `last_opened_at` (the sidebar order).
     pub fn open(&self, id: &str) -> AppResult<ProjectDetail> {
         let mut projects = self.projects();
 
@@ -318,15 +273,8 @@ impl Store {
 
     /// Says where this project's commands run, or clears it (PLAN 7.12).
     ///
-    /// `None` puts the project back on this process, which is where every
-    /// project starts. Whether the host is one this machine can actually use is
-    /// settled by the command above this — the store's job is to remember what
-    /// was chosen, and a store that also validated would be a second opinion
-    /// that can disagree with the first.
-    ///
-    /// Deliberately not part of `open`: choosing a host is a decision somebody
-    /// makes once, and stamping recency for it would reorder the sidebar
-    /// underneath them.
+    /// `None` is this computer. Validation is the command's; recency is not
+    /// stamped.
     pub fn set_exec_host(&self, id: &str, host: Option<ExecHost>) -> AppResult<Project> {
         let mut projects = self.projects();
 
@@ -361,9 +309,6 @@ impl Store {
     }
 
     /// Serializes the list and replaces the document atomically.
-    ///
-    /// Takes the guard so a caller cannot mutate the list and forget to
-    /// persist it: the only way to reach this is to already hold the lock.
     fn save(&self, projects: &[StoredProject]) -> AppResult<()> {
         let file = ProjectsFile {
             version: SCHEMA_VERSION,
@@ -394,15 +339,8 @@ impl Store {
 
 /// Resolves a user-supplied workspace path to a canonical absolute directory.
 ///
-/// `dunce::canonicalize` is `fs::canonicalize` without the Windows verbatim
-/// prefix: the plain `fs` version returns `\\?\C:\work`, which is correct but
-/// unreadable in a UI and compares unequal to every path the user will ever
-/// type. Symlinks are still resolved, so the stored path is the real location
-/// of the folder rather than a link that may later point elsewhere.
-///
-/// This is the whole of Aegis' path handling for now. Phase 3 introduces
-/// `policy/path.rs` as the single owner of resolution and workspace
-/// containment; this helper moves there rather than being duplicated.
+/// Uses `dunce::canonicalize` (no `\\?\` prefix), resolving symlinks.
+/// Containment for tool paths is [`policy::path`](crate::policy::path)'s.
 pub fn canonical_workspace(raw: &str) -> AppResult<PathBuf> {
     let trimmed = raw.trim();
     let invalid = |reason: &str| AppError::WorkspacePath {
@@ -434,9 +372,7 @@ pub fn canonical_workspace(raw: &str) -> AppResult<PathBuf> {
 
 /// A canonical path as a string, or a structured error.
 ///
-/// Paths are OS strings and need not be UTF-8. Rejecting the handful that are
-/// not is better than lossily converting one and storing a path that no longer
-/// opens the folder it names.
+/// Non-UTF-8 paths are rejected rather than stored lossily.
 fn path_to_string(path: &Path) -> AppResult<String> {
     path.to_str()
         .map(str::to_owned)
@@ -448,8 +384,7 @@ fn path_to_string(path: &Path) -> AppResult<String> {
 
 /// The folder's own name, used when the UI supplies no project name.
 ///
-/// A drive or filesystem root has no file name; naming the project after the
-/// root itself (`C:\`, `/`) is clearer there than an empty label.
+/// A root (`C:\`, `/`) is named after itself.
 fn default_name(workspace: &Path) -> String {
     workspace
         .file_name()
@@ -501,11 +436,8 @@ mod tests {
         }
     }
 
-    /// `src/ipc/bindings.ts` is generated from these structs, so a renamed
-    /// field reaches TypeScript on its own. What generation cannot check is
-    /// that the names still match the contract in `PLAN.md` § 2.1 — a rename
-    /// would regenerate happily and silently change the wire format. This test
-    /// is that check, and it is why it lists the names literally.
+    /// Generated bindings follow a rename silently; this pins the wire names
+    /// to PLAN 2.1.
     #[test]
     fn payloads_carry_the_documented_field_names() {
         let detail = ProjectDetail {
@@ -774,10 +706,7 @@ mod tests {
         );
     }
 
-    /// The rule that lets this field be added to a document already on
-    /// someone's disk: a row written before it existed still loads, and a
-    /// project with no host writes no field at all — so the two documents are
-    /// the same bytes and a downgrade loses nothing.
+    /// Older rows load, and a project without a host writes no field.
     #[test]
     fn rows_from_before_the_host_existed_still_load() {
         let fx = Fixture::new();

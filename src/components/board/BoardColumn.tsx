@@ -1,15 +1,8 @@
 /**
  * One column of the board: attention, in flight, or blocked.
  *
- * Every line says where it came from — a badge on the row, not a heading over
- * a group — because the two halves of a board interleave by urgency rather
- * than by source. What somebody wrote in `STATUS.md` and what the runtime can
- * see right now are equally true; they are not equally *current*, and the
- * badge is how a reader tells them apart.
- *
- * An empty column says nothing at all beyond its own name. PLAN 7.2 row 9 asks
- * the board to stay silent when there is nothing to report, and a column that
- * explained its emptiness would be the opposite of that.
+ * Lines interleave file and runtime sources, each with a source badge. An
+ * empty column shows only its name (PLAN 7.2 row 9).
  */
 
 import type { BoardItem, BoardSource } from "../../ipc/bindings";

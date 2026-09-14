@@ -1,29 +1,9 @@
 /**
  * The world, in the rail (`PLAN.md` § 7.2 — the missed half of Phase 11).
  *
- * The other layer in the same folder as *Shared files*, with the opposite
- * mutation rule. The cabinet is in-flight work and is rewritten every turn; the
- * constitution is what the project *is*, and specialists read it and do not
- * write it.
- *
- * Two things this panel deliberately does not have.
- *
- * There is **no button**. `Set up shared files` lays down the cabinet because a
- * convention is worth having in an empty folder; a constitution is not. Five
- * empty templates in a workspace with no essence are theatre, and a workspace
- * that has an essence has somebody who can write it. So a world starts in an
- * editor, or as an `fs_write` through the approval dialog, and this panel
- * reports what is there.
- *
- * There is **no editor**, for the reason *Shared files* has none: a panel that
- * could rewrite `essence.md` without passing the gate would be a second write
- * path around it — and this is the one file where that matters most, since
- * amending the world is a human decision.
- *
- * What it is for is the one question the folder cannot answer at a glance:
- * whether the sources this world was perceived from are still the ones on disk.
- * A source that has moved holds every brief that is not about the delta, so
- * seeing it here is seeing why nothing is going out.
+ * Reports the world's files and, mainly, whether its declared sources have
+ * drifted (which blocks briefs). No scaffold button and no editor: a world is
+ * written in an editor or through a gated `fs_write`.
  */
 
 import type { SourceState, WorldSource } from "../../ipc/bindings";

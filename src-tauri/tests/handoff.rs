@@ -1,34 +1,13 @@
 //! The handoff bus and the Chef-de-Cabinet loop, end to end.
 //!
-//! The unit tests inside `handoff/` cover the two objects and the bus's policy
-//! — parallel, bounded, two attempts, then the human — against a scripted
-//! runner. This file covers the Phase 15 exit condition of `PLAN.md` § 7.3,
-//! which is a claim about the *whole* runtime:
+//! Phase 15's exit condition (PLAN 7.3), with the production [`Delegating`]
+//! runner:
 //!
-//! > one brief fans out to two specialists in parallel and the CoS returns a
-//! > five-line status, not a concatenated transcript.
-//!
-//! Five claims, in the order they matter:
-//!
-//! 1. **Two briefs go out at once and come back as a board.** Two sessions
-//!    open, under the two identities the briefs named, each runs its own turn,
-//!    and what lands in the Chief of Staff's transcript is statuses and paths.
-//! 2. **What comes back is not their transcripts.** The specialists say things
-//!    in their own sessions. None of it reaches the CoS — structurally, because
-//!    a report is the only thing a delegated run can produce.
-//! 3. **A specialist works under its own perimeter.** The identity a brief
-//!    names is the identity that runs, with the tools *it* holds — and it
-//!    cannot re-delegate, because there are three roles and not four.
-//! 4. **A run that does not answer escalates to the human, twice and no more.**
-//!    Two attempts in the same session, then a `needs_you` on the board.
-//! 5. **One run id covers the CoS and everyone under it.** Every audit line of
-//!    every specialist carries the delegation the brief came from, beside the
-//!    identity that made the call.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is — including
-//! [`Delegating`], which is the production runner with its application-shaped
-//! wiring lifted out into `HandoffHost`.
+//! 1. Two briefs run in parallel sessions and return a board.
+//! 2. No specialist text reaches the CoS.
+//! 3. Specialists run under their own identity and cannot re-delegate.
+//! 4. A silent run gets two attempts, then `needs_you`.
+//! 5. Every specialist audit line carries the delegation id.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -196,10 +175,7 @@ impl App {
 /// The production runner, wired to the test's stores instead of to an
 /// application.
 ///
-/// This is [`Delegating`] — the same `file`, the same `attempt`, the same
-/// sessions, turns and audit lines the shipping build uses. What is replaced is
-/// only where the stores come from and which provider answers, which is exactly
-/// the seam [`HandoffHost`] exists to be.
+/// Only the stores and provider differ, via [`HandoffHost`].
 struct TestRunner {
     app: &'static App,
     inner: Delegating,

@@ -1,19 +1,8 @@
 /**
  * Connectors: tools that live in other processes (PLAN 7.3, Phase 18).
  *
- * A section of Settings under Identities, because it is the same question from
- * the other side: an identity is who may call a tool, and a connector is where
- * a tool comes from when this build did not write it.
- *
- * Each row says the four things that decide whether you would leave it
- * installed: what program it runs, whether it is up, what it offers, and — when
- * it is not up — what it said on the way down. The last of those is the one a
- * panel usually withholds, and it is the only thing that makes a mistyped
- * package name fixable: `npx` says what went wrong on stderr and nowhere else.
- *
- * Nothing here is remembered between launches except the record. Whether a
- * process is running is measured, and a row drawn as connected after its server
- * has quietly gone is the one wrong thing this panel could show.
+ * Rows show program, live state, tools, and the stderr tail when down (where
+ * start errors appear). State is measured, never remembered.
  */
 
 import type { ConnectorView } from "../../ipc/bindings";

@@ -1,41 +1,14 @@
 //! The connector document: `connectors.json` (PLAN 7.3, Phase 18).
 //!
-//! A connector is an external MCP server: a program on this machine that Aegis
-//! starts, speaks JSON-RPC to over its own stdin and stdout, and asks for a
-//! list of tools. This module is the *record* of one — the id, the program, its
-//! arguments, the environment it is given — the way [`routines`](super::routines)
-//! is the record of a clock. What talks to it is [`mcp`](crate::mcp), and what
-//! the tools it exposes are allowed to do is the same decision table everything
-//! else goes through.
+//! The record of an external MCP server (id, program, args, named env vars);
+//! [`mcp`](crate::mcp) runs it.
 //!
-//! Four decisions shape it, and each one is a thing this file makes impossible
-//! rather than a thing it warns about.
-//!
-//! **Only a person adds a connector.** There is no `connector_add` tool and
-//! there never will be: adding one names a program to run, and a model that
-//! could name a program to run would have `shell_exec` without the dialog in
-//! front of it. The whole surface is Settings, which is a human typing.
-//!
-//! **The id is part of the tool's name.** A connector's tools reach the model
-//! as `<id>__<tool>` — `git__status`, `files__read_text_file` — so the id is
-//! not a label, it is a namespace. That is why it is restricted to lower-case
-//! letters, digits and `-`, with no `_` at all: the split at the first `__` is
-//! then unambiguous, and no connector can be named so as to collide with a
-//! built-in tool (`fs_read`, `shell_exec`) or to shadow another connector.
-//!
-//! **Secrets are not in this file.** A connector says which environment
-//! variables it needs by *name*; the values come from the environment Aegis
-//! itself was started in. Nothing here writes a token to disk, and there is no
-//! field to put one in. The child is given exactly the variables the connector
-//! names plus the platform's minimum ([`mcp::child_env`](crate::mcp::child_env))
-//! — not the whole environment this process happens to hold, which is the one
-//! place a connector is handled more carefully than `shell_exec` handles a
-//! command.
-//!
-//! **Whether it is running is not stored.** A connector that was connected
-//! when the process died is not connected now. That state lives in
-//! [`mcp::Connectors`](crate::mcp::Connectors) and is measured, never
-//! persisted — the property every document in [`store`](super) is held to.
+//! * **Only a person adds one**, in Settings — no tool can name a program to run.
+//! * **The id namespaces its tools** (`<id>__<tool>`): lower-case, digits and
+//!   `-`, no `_`, so names split unambiguously and cannot shadow built-ins.
+//! * **No secrets stored**: env vars are named; values come from Aegis's
+//!   environment ([`mcp::child_env`](crate::mcp::child_env)).
+//! * **Running state is not stored** ([`mcp::Connectors`](crate::mcp::Connectors)).
 
 use std::fs;
 use std::io;
@@ -56,9 +29,7 @@ const SCHEMA_VERSION: u32 = 1;
 
 /// Longest connector id.
 ///
-/// Short on purpose: it is a prefix on every tool name the model reads, and
-/// the providers cap a function name at 64 characters. A long id spends that
-/// budget on the connector rather than on the tool.
+/// Short: providers cap function names at 64 characters, id included.
 pub const ID_MAX_CHARS: usize = 24;
 
 /// Longest human label.
@@ -72,17 +43,14 @@ const ENV_MAX: usize = 16;
 
 /// Most connectors one installation may hold.
 ///
-/// Each one is a process Aegis keeps alive, and each one's tools are read by
-/// the model on every request. The ceiling is about the prompt more than about
-/// the processes: a roster nobody narrowed is the "one generalist agent with
-/// every MCP connector loaded" PLAN 7.5 refuses.
+/// Bounds the processes and, mostly, the tool schemas in every prompt
+/// (PLAN 7.5).
 pub const CONNECTORS_MAX: usize = 16;
 
 /// The separator between a connector's id and one of its tool names.
 ///
-/// Two underscores rather than a `.` or a `/`, because the providers accept
-/// `[A-Za-z0-9_-]` in a function name and nothing else. An id may not contain
-/// `_`, so the split at the first occurrence is the only split there is.
+/// Providers allow only `[A-Za-z0-9_-]`; ids have no `_`, so the split is
+/// unique.
 pub const NAME_SEPARATOR: &str = "__";
 
 /// One external MCP server, as it is stored.
@@ -99,10 +67,8 @@ pub struct Connector {
     pub args: Vec<String>,
     /// Environment variables the server needs, by name.
     ///
-    /// The values are read from Aegis' own environment when the child is
-    /// spawned. A name that is not set there is reported on the row rather
-    /// than passed as an empty string, because a server that reads an empty
-    /// token usually fails in a way that is much harder to read.
+    /// Values come from Aegis's environment at spawn; unset names are reported,
+    /// not passed empty.
     pub env: Vec<String>,
     /// Whether Aegis starts it at all.
     pub enabled: bool,
@@ -131,9 +97,7 @@ pub struct ConnectorDraft {
 
 /// Whether `id` may name a connector.
 ///
-/// Lower-case letters, digits and `-`, starting with a letter or a digit. No
-/// `_`, which is what keeps `<id>__<tool>` splittable, and no `.`, which the
-/// providers do not accept in a function name.
+/// Lower-case letters, digits and `-`, starting with a letter or digit.
 pub fn is_id(id: &str) -> bool {
     !id.is_empty()
         && id.chars().count() <= ID_MAX_CHARS
@@ -153,10 +117,8 @@ pub fn tool_name(connector: &str, tool: &str) -> String {
 
 /// Splits a tool name back into the connector and the tool, when it is one.
 ///
-/// Deliberately ignorant of what is installed: this is a question about the
-/// *shape* of a name, asked by [`ToolCall::parse`](crate::policy::ToolCall) in
-/// a place that has no connector list to consult. Whether anything answers to
-/// the id is settled later, by the thing that would have to make the call.
+/// Shape only, for [`ToolCall::parse`](crate::policy::ToolCall); whether the
+/// connector exists is checked at call time.
 pub fn split_tool_name(name: &str) -> Option<(&str, &str)> {
     let (connector, tool) = name.split_once(NAME_SEPARATOR)?;
     if !is_id(connector) || tool.is_empty() {
@@ -182,10 +144,7 @@ pub struct ConnectorStore {
 impl ConnectorStore {
     /// Loads the store from `data_dir`.
     ///
-    /// Never fails, for the reason the other documents do not: a tray app that
-    /// will not boot cannot explain why it did not. A damaged document costs
-    /// the connectors in it — nothing starts, and the panel is empty — rather
-    /// than the app.
+    /// Never fails: a damaged document starts empty.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(CONNECTORS_FILE);
 
@@ -248,12 +207,8 @@ impl ConnectorStore {
 
     /// Creates a connector, or replaces one.
     ///
-    /// `editing` is the id of the row being changed; `None` creates. The id is
-    /// itself editable, which is why the uniqueness check takes it: renaming a
-    /// connector renames every one of its tools, and the identities that were
-    /// granted the old names do not hold the new ones. That is not a bug to
-    /// paper over — an allow-list that silently followed a rename would be an
-    /// allow-list that grants what nobody read.
+    /// `editing` is the row being changed (`None` creates). Renaming renames
+    /// its tools; allow-lists deliberately do not follow.
     pub fn save(&self, editing: Option<&str>, draft: &ConnectorDraft) -> AppResult<Connector> {
         let mut connectors = self.write();
 
@@ -291,12 +246,7 @@ impl ConnectorStore {
 
     /// Deletes a connector.
     ///
-    /// The identities that were granted its tools keep those names in their
-    /// allow-lists. They are refused anyway — nothing answers to them — and
-    /// leaving them is the honest behaviour: re-adding the connector should not
-    /// silently re-grant it, and rewriting every identity because one row was
-    /// deleted is a change nobody asked for. Settings says which grants no
-    /// longer point at anything.
+    /// Allow-lists keep the dangling names; Settings flags them.
     pub fn delete(&self, id: &str) -> AppResult<()> {
         let mut connectors = self.write();
         let before = connectors.len();

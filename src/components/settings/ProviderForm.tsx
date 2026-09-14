@@ -1,15 +1,8 @@
 /**
  * Where the model comes from: a base URL, a model id, and a key.
  *
- * The key field is write-only and starts empty every time. Leaving it empty
- * keeps whatever is stored — changing a model is not a reason to retype a
- * credential — and there is no way to read a key back out, because the WebView
- * is never given one. What it can show is where the key came from and four
- * characters of it, which is enough to recognize *which* key is installed and
- * not enough to use it.
- *
- * A refused value lands under the input it is about rather than in a banner,
- * because the runtime says which field it was talking about.
+ * The key is write-only: empty keeps the stored one, and only its source and a
+ * four-character hint are shown. Errors land under the field the runtime names.
  */
 
 import { useEffect } from "react";

@@ -1,25 +1,9 @@
 /**
  * A collapsible section of the rail.
  *
- * The rail stacks four things — projects, shared files, the world, sessions —
- * and on a folder with a world laid down that is more than fits on a laptop
- * screen at once. Which of them matters depends entirely on what somebody is
- * doing: the world is the thing to watch while founding one and noise for the
- * next month, and the project list is the reverse.
- *
- * So each carries its own disclosure, and the choice sticks. The heading is a
- * button rather than a separate caret to hit — the title is the target, which
- * is what makes it usable in a rail this narrow — and the caret is decorative,
- * because the button already announces its state. An optional action (`+`)
- * sits at the end of the row as a sibling: a button nested in the disclosure
- * would be invalid HTML and would fold the section when it meant to add.
- *
- * What is remembered is one boolean per section, in `localStorage`. It is a
- * preference about a window, worth nothing to anybody else, and losing it costs
- * one click — so it does not go near the stores that hold the user's actual
- * data, and every access is guarded: a WebView with site data blocked throws
- * on the property itself, and a rail that would not render because of that
- * would be a rail broken by a setting that has nothing to do with it.
+ * The whole heading is the toggle (the caret is decorative); an optional `+`
+ * action is a sibling, not nested. Open state persists per section in
+ * `localStorage`, with every access guarded, since it can throw.
  */
 
 import { useCallback, useState } from "react";
@@ -56,13 +40,7 @@ export default function Section({
   title,
   className,
   children,
-  /**
-   * Drawn on the heading whether or not the section is open.
-   *
-   * For the one thing a collapsed section still has to be able to say — the
-   * world's *drifted*, a count — so that collapsing it does not hide the reason
-   * somebody would want to open it.
-   */
+  /** Shown on the heading even when collapsed (e.g. *drifted*, a count). */
   badge = null,
   /**
    * Trailing control on the heading — the "+" that adds a project or a

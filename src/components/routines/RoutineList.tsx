@@ -1,19 +1,8 @@
 /**
  * What is on a clock (PLAN 7.3, Phase 16).
  *
- * A section of Settings beside Identities and Skills, because a routine is the
- * third side of the same question: a skill is what may be run, an identity is
- * who may run it, and a routine is when it runs with nobody watching.
- *
- * Each row says the four things that decide whether you would leave it running:
- * when it fires, what it fires, how it went last time, and what it is allowed to
- * do while nobody is there. The last of those is spelled out rather than
- * counted — "2 approvals" is not an answer to "may this thing write to my repo
- * at four in the morning".
- *
- * A row that cannot fire says so. That sentence is measured by the runtime on
- * every list, never remembered here: a clock drawn as running when its runbook
- * was un-granted is the one wrong thing this panel could show.
+ * Rows show schedule, runbook, last run, standing approvals spelled out, and
+ * the runtime's current problem if it cannot fire.
  */
 
 import type { Grant, Routine } from "../../ipc/bindings";

@@ -1,9 +1,6 @@
 //! The status board (PLAN 7.3, Phase 17; PLAN 7.2, rows 3 and 9).
 //!
-//! `COS.md` gives the Chief of Staff one loop and it starts by reading the
-//! sources of truth and `/status`. Phase 11 made `/status` a file in the user's
-//! own folder; this is the **structured read** of it, beside the half a file
-//! cannot know.
+//! The structured read of `/status`, merged with what only the runtime knows.
 //!
 //! ```text
 //!  .aegis/status/STATUS.md ─┐
@@ -14,47 +11,17 @@
 //!  runs (trace) ─────┘
 //! ```
 //!
-//! ## Two halves, and why neither is enough
+//! The **file** holds what somebody decided is true; the **runtime** half is
+//! what this process knows now. Each line says which it came from. Nothing here
+//! writes the file — corrections are `fs_write` under the gate (PLAN 7.6).
 //!
-//! The **file** is what somebody — a person, or the CoS through an ordinary
-//! `fs_write` — decided is true. It holds the things no runtime can see: a
-//! client who has not answered, a decision waiting on a meeting, a piece of
-//! work that is late. It is also the half that can be wrong, because it is only
-//! as current as the last write.
+//! * **Attention**: a person must act (approval, `needs_you`, a routine that
+//!   gave up).
+//! * **In flight**: running now.
+//! * **Blocked**: stopped short, not waiting on a person.
 //!
-//! The **runtime** half is what this process knows for certain right now: what
-//! is running, what is waiting on a dialog, which clock has stopped itself,
-//! which run came back `needs_you`. None of it is in the file, and none of it
-//! should be — a board that the harness rewrote would stop being the CoS's
-//! board and start being a log.
-//!
-//! So both are read into the same three columns and each line says where it
-//! came from. Nothing here writes the file. There is no `board_write`, and the
-//! way a status is corrected is the way `COS.md` says: an `fs_write` under the
-//! gate, on the audit log, in the folder the user owns (PLAN 7.6, *Authoring*).
-//!
-//! ## Silence when empty
-//!
-//! PLAN 7.2 row 9 is explicit that the CoS stays silent when there is nothing
-//! to say, and the seeded `STATUS.md` says so in italics — `_Nothing waiting on
-//! a human._`. [`sections`] drops a line that is entirely emphasis, so the
-//! placeholder does not become a board item saying that there are no board
-//! items. An empty column is drawn as empty.
-//!
-//! ## The three columns
-//!
-//! They are the three headings PLAN 7.2 names and the seed file already
-//! carries, and each has one meaning:
-//!
-//! * **Attention** — a person has to do something. An approval on screen, a
-//!   run that returned `needs_you`, a routine that gave up and named a human.
-//! * **In flight** — something is running now.
-//! * **Blocked** — something stopped short and is not waiting on a person: a
-//!   runbook that could not find its source, a routine that cannot fire as it
-//!   stands, a run that failed.
-//!
-//! `needs_you` is Attention and not Blocked, deliberately. The difference is
-//! who has to move next, which is the only thing a board is read to find out.
+//! All-emphasis placeholder lines (`_Nothing blocked._`) are dropped by
+//! [`sections`], so an empty column stays empty (PLAN 7.2 row 9).
 
 pub mod trace;
 
@@ -64,17 +31,10 @@ use ts_rs::TS;
 use crate::approval::ApprovalRequest;
 use crate::store::{Cost, Routine, SessionState, SessionSummary};
 
-/// Most items one column will hold.
-///
-/// A board is read on one screen; that is what `COS.md` asks the file to be,
-/// and a runtime that appended two hundred rows underneath it would break the
-/// same rule from the other side.
+/// Most items one column will hold: a board fits one screen.
 const COLUMN_MAX: usize = 40;
 
-/// Most stuck runs the *Blocked* column names.
-///
-/// The run list below the board has all of them. This is the summary above it,
-/// and a summary that lists everything is the list.
+/// Most stuck runs the *Blocked* column names; the run list has the rest.
 const STUCK_MAX: usize = 8;
 
 /// Longest line kept from the file.
@@ -86,9 +46,7 @@ const LINE_MAX_CHARS: usize = 200;
 
 /// Where a line on the board came from.
 ///
-/// On every item, because the two halves of a board are not equally current
-/// and a reader has to be able to tell them apart: the file is what somebody
-/// wrote down, the rest is what this process can see for itself.
+/// On every item, since the file and the runtime are not equally current.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts", rename = "BoardSource")]
@@ -107,9 +65,7 @@ pub enum Source {
 
 /// One line of the board.
 ///
-/// `BoardItem` on the wire, not `Item`: the generated bindings are one flat
-/// namespace shared by every payload in the runtime, and a type called `Item`
-/// there would be a name the next phase has to work around.
+/// `BoardItem` on the wire: the generated bindings share one namespace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts", rename = "BoardItem")]
 pub struct Item {
@@ -182,11 +138,8 @@ pub struct Board {
     pub blocked: Vec<Item>,
     /// Every run in the window, newest first.
     pub runs: Vec<trace::Run>,
-    /// What every session of the project has spent, in total.
-    ///
-    /// The whole project rather than the runs, because the runs are a window
-    /// on the audit log and the sessions are all of them: a total that only
-    /// counted what was still in the window would fall as the log grew.
+    /// What every session of the project has spent — not just the runs in the
+    /// audit window.
     pub cost: Cost,
 }
 
@@ -202,9 +155,6 @@ pub struct Sections {
 }
 
 /// Everything a board is assembled from, besides the file.
-///
-/// A struct rather than six arguments, and borrowed rather than owned: the
-/// caller already holds all of it, and the assembly reads it once.
 #[derive(Debug)]
 pub struct Facts<'a> {
     /// The project.
@@ -228,11 +178,7 @@ pub struct Facts<'a> {
 
 /// The headings each column answers to, lower-cased.
 ///
-/// More than one spelling per column because the file belongs to the user and
-/// is written by hand as often as by a model. What is *not* here is a guess:
-/// an unrecognized heading ends the section it follows rather than being
-/// folded into the nearest column, so a board with a fourth heading loses
-/// nothing and invents nothing.
+/// Several spellings per column; an unrecognized heading ends the section.
 const HEADINGS: [(&str, &[&str]); 3] = [
     ("attention", &["attention", "needs you", "needs a human"]),
     ("in flight", &["in flight", "in-flight", "running"]),
@@ -241,22 +187,9 @@ const HEADINGS: [(&str, &[&str]); 3] = [
 
 /// Reads `STATUS.md` into its three columns.
 ///
-/// Line by line, and one line is one item. Markdown is not parsed beyond what
-/// the seeded file uses — a heading, a bullet, a placeholder in italics —
-/// because the file is a board a person keeps, not a document format this
-/// runtime owns. Anything it does not recognize is kept verbatim, which is the
-/// safe direction: a line that reads oddly on the board is visible, and a line
-/// silently dropped is not.
-///
-/// Dropped, deliberately:
-///
-/// * blank lines, and the fenced or indented blocks a template's example sits
-///   in — an example is not a board item;
-/// * a line that is entirely emphasis (`_Nothing blocked._`), which is how the
-///   seed writes an empty column and how PLAN 7.2 row 9 asks a board to stay
-///   silent;
-/// * everything before the first recognized heading, which in the seeded file
-///   is the explanation of what the file is for.
+/// One line, one item; unrecognized lines are kept verbatim. Dropped: blank
+/// lines, fenced or indented blocks, all-emphasis lines, and anything before
+/// the first recognized heading.
 pub fn sections(text: &str) -> Sections {
     let mut found = Sections::default();
     let mut column: Option<usize> = None;
@@ -344,10 +277,7 @@ fn is_placeholder(text: &str) -> bool {
 
 /// Builds the board.
 ///
-/// The runtime's own lines come first in each column and the file's follow.
-/// Not because the file matters less — it is the half that holds everything
-/// this process cannot see — but because the runtime's half is the half that
-/// is certainly true *now*, and a board is read from the top.
+/// Runtime lines first in each column (certainly current), then the file's.
 pub fn assemble(facts: Facts<'_>) -> Board {
     let Facts {
         project_id,
@@ -411,10 +341,8 @@ pub fn assemble(facts: Facts<'_>) -> Board {
     for session in sessions {
         let word = match session.state {
             SessionState::Running => "running",
-            // A turn parked on a dialog is in flight *and* in the attention
-            // column, through the approval that parked it. Both are true, and
-            // the two lines say different things: one is a piece of work, the
-            // other is a question.
+            // A turn parked on a dialog also appears in Attention, via its
+            // approval.
             SessionState::AwaitingApproval => "waiting on an approval",
             SessionState::Idle | SessionState::Error => continue,
         };
@@ -431,10 +359,7 @@ pub fn assemble(facts: Facts<'_>) -> Board {
 
     // --- Blocked: something stopped short ---------------------------------
 
-    // A clock that cannot fire as it stands: the runbook was un-granted, the
-    // folder was unplugged, the identity was deleted. Derived on every read
-    // (`schedule::inspect`), never stored, which is why it belongs on a board
-    // rather than in a notification nobody would see twice.
+    // Routines that cannot fire now (`schedule::inspect`).
     for routine in routines {
         let Some(problem) = &routine.problem else {
             continue;

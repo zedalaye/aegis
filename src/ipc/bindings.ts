@@ -17,10 +17,7 @@ name: string,
  */
 role: string, 
 /**
- * What it carries into the system message of every request it makes.
- *
- * Empty for the built-in identity, which is what keeps a default session's
- * prompt exactly what it was before identities existed.
+ * What it carries into every system message; empty for the built-in one.
  */
 instructions: string, 
 /**
@@ -28,33 +25,18 @@ instructions: string,
  */
 provider_id: string, 
 /**
- * The tools it may call, in registry order.
- *
- * The allow-list in both directions: the model is shown only these
- * schemas, and policy refuses anything outside the list even when the
- * model asks for it anyway.
+ * The tools it may call, in registry order: the only schemas shown, and
+ * policy refuses the rest.
  */
 tools: Array<string>, 
 /**
- * The skills it may run (PLAN 7.3, Phase 13).
- *
- * The per-agent scope of `COS.md` *Skills*: not a directory, but a
- * selection from the runbooks the library and the workspace hold. It
- * never widens [`Agent::tools`] — a skill sequences tools, it does not
- * grant them, and a run whose runbook calls a tool this identity lacks is
- * refused before its first step.
- *
- * Empty for the built-in identity, which is what it was before this phase
- * and stays: a skill is always something someone granted.
+ * The skills it may run (Phase 13). Never widens [`Agent::tools`]; empty
+ * for the built-in identity.
  */
 skills: Array<string>, 
 /**
- * Most scheduled runs it may make in a day (PLAN 7.3, Phase 16).
- *
- * Counted across every routine that fires as this identity, and spent
- * before a run opens a session. Zero is an identity nothing may schedule,
- * which is a real thing to want: a Chief of Staff you talk to and never
- * put on a clock.
+ * Most scheduled runs it may make in a day (Phase 16); zero means never
+ * scheduled.
  */
 runs_per_day: number, 
 /**
@@ -65,10 +47,6 @@ builtin: boolean, };
 
 /**
  * What a create or an update carries.
- *
- * One struct rather than six command arguments: the fields are all strings and
- * lists of strings, and a call site that transposed `name` and `role` would
- * still compile.
  */
 export type AgentDraft = { 
 /**
@@ -98,20 +76,14 @@ tools: Array<string>,
  */
 skills: Array<string>, 
 /**
- * Most scheduled runs a day, capped at [`AGENT_RUNS_PER_DAY_MAX`].
- *
- * `#[serde(default)]` so a caller written before Phase 16 — and the
- * tests that were — still send a valid draft; the default is the same
- * ceiling a new identity gets.
+ * Most scheduled runs a day, capped at [`AGENT_RUNS_PER_DAY_MAX`];
+ * defaulted for older callers.
  */
 runs_per_day: number, };
 
 /**
- * The structured half of an approval request: what the dialog draws.
- *
- * One variant per tool, so the dialog renders a file path with a size or a
- * command line with its working directory, rather than a JSON blob the user
- * has to parse (PLAN 2.1, `ApprovalDetail`).
+ * What the approval dialog draws: one variant per tool, so the user reads a
+ * path or a command line rather than JSON (PLAN 2.1).
  */
 export type ApprovalDetail = { "kind": "fs_list", 
 /**
@@ -123,11 +95,8 @@ path: string, } | { "kind": "fs_read",
  */
 path: string, 
 /**
- * Its size, or `None` when it does not exist yet.
- *
- * Exported as a `number` rather than a `bigint`: this crosses the IPC
- * boundary as JSON, where it is already a double, and a `bigint` in
- * the binding would be a type the value never has at runtime.
+ * Its size, or `None` when it does not exist yet. A `number` in the
+ * binding: over JSON it is never a `bigint`.
  */
 bytes: number | null, } | { "kind": "fs_write", 
 /**
@@ -148,12 +117,8 @@ exists: boolean,
  */
 preview: string | null, 
 /**
- * The skill this write would make live, when it is the apply of a
- * proposal (PLAN 7.13).
- *
- * Set by policy from what the write *is* — the `PROPOSAL.md` beside
- * the target, copied byte for byte — so the dialog can say that this
- * is the moment a runbook is signed, and that it grants it to nobody.
+ * The skill this write would make live, when it applies a proposal
+ * (PLAN 7.13).
  */
 applies: string | null, } | { "kind": "shell", 
 /**
@@ -169,23 +134,15 @@ args: Array<string>,
  */
 cwd: string, 
 /**
- * A display-only rendering of the whole command.
- *
- * Never executed and never parsed: `shell_exec` spawns `program` with
- * `args` directly, with no shell in between (PLAN 5.1). This string
- * exists so a user can read one line instead of five fields.
+ * The whole command on one line, for reading only: never executed or
+ * parsed (PLAN 5.1).
  */
 shell_line: string, 
 /**
- * The distribution this lands in, and the working directory as that
- * distribution spells it (PLAN 7.12).
- *
- * `None` — and every dialog before this slice — is this computer, and
- * then `cwd` above is the whole answer. When it is `Some`, `cwd` is
- * still true and still the folder policy contained the call against,
- * but it is no longer the directory the command starts in: the dialog
- * has to show both, or a user would be approving a path the command
- * never sees.
+ * The distribution and its working directory, when the project has
+ * an execution host (PLAN 7.12). `cwd` is then still the folder
+ * containment was judged against, but not where the command starts,
+ * so the dialog shows both.
  */
 host: ExecTarget | null, } | { "kind": "screen", 
 /**
@@ -193,13 +150,9 @@ host: ExecTarget | null, } | { "kind": "screen",
  */
 display: string, 
 /**
- * Physical width in pixels, `0` when the geometry is not known.
- *
- * A capture crate returns the physical framebuffer, so this is the
- * size of the file that would be written. Both sizes are reported
- * because on a scaled display they differ, and a dialog that showed
- * only one of them would be describing a different picture from the
- * one on the screen (PLAN 5.1).
+ * Physical width in pixels — the size of the file — or `0` when
+ * unknown. The logical size sits beside it because the two differ on
+ * a scaled display (PLAN 5.1).
  */
 width: number, 
 /**
@@ -215,11 +168,8 @@ logical_width: number,
  */
 logical_height: number, } | { "kind": "memory", 
 /**
- * `preference`, `exception` or `convention`.
- *
- * Not `kind`, which is the enum's own discriminant tag on the wire.
- * The two are different axes — *which tool asked* and *what sort of
- * memory* — and one JSON object cannot spell them the same.
+ * `preference`, `exception` or `convention`. Not `kind`, which is
+ * this enum's tag on the wire.
  */
 memory_kind: string, 
 /**
@@ -270,9 +220,7 @@ arguments: string, };
 /**
  * One approval, as the dialog receives it (PLAN 2.1, `ApprovalRequest`).
  *
- * Half of this comes from [`AskRequest`] — the wording, the badge, the
- * structured detail, the scope — and half is added here: the id to answer
- * with, and the window during which answering it means anything.
+ * [`AskRequest`]'s content plus the id and the answerable window.
  */
 export type ApprovalRequest = { 
 /**
@@ -333,18 +281,8 @@ requested_at: string,
 expires_at: string, };
 
 /**
- * A file a tool call left on disk, identified without the log holding a copy.
- *
- * `screen_capture` is the only tool that produces one today, and PLAN 5.4
- * names exactly what its line may carry: the path, the dimensions and a
- * digest, never the image. That is enough to say afterwards *which* capture a
- * call produced, and to check that the file still on disk is the one this line
- * is about.
- *
- * The dimensions are pixels because the only artefact so far is an image; a
- * later tool that writes something else will widen this shape rather than
- * borrow it, and the field being optional is what lets it (PLAN 7.1: the audit
- * schema has to be able to grow).
+ * A file a tool call left on disk, identified by path, digest and size —
+ * never a copy (PLAN 5.4). Only `screen_capture` produces one today.
  */
 export type AuditArtifact = { 
 /**
@@ -370,11 +308,8 @@ height: number, };
 export type AuditDecision = "auto" | "allow_once" | "allow_session" | "deny" | "operator";
 
 /**
- * One line of the log.
- *
- * Serialized and deserialized with the same struct on purpose: the file *is*
- * the wire format for `audit_tail`, so a field the writer adds is a field the
- * reader sees, and there is no second shape to keep in step.
+ * One line of the log, and the `audit_tail` wire format. Later fields default
+ * so older lines still parse.
  */
 export type AuditEntry = { 
 /**
@@ -387,17 +322,7 @@ ts: string,
  */
 session_id: string, 
 /**
- * Which identity it was made as (PLAN 7.3, Phase 12).
- *
- * The first half of "who ran, what did it cost, why did it fail" (PLAN
- * 7.2, row 10). A tool call is gated on the identity's allow-list, so a
- * record of the call that does not name the identity cannot be read back
- * against the grant that let it through.
- *
- * `#[serde(default)]` for the lines written before identities existed: the
- * file is its own wire format, and a reader that refused those lines would
- * lose the history the log is kept for. Those lines carry an empty string,
- * which is not an identity and is drawn as none.
+ * Which identity it was made as (Phase 12); empty on older lines.
  */
 agent_id: string, 
 /**
@@ -413,49 +338,17 @@ call_id: string,
  */
 tool: string, 
 /**
- * The skill run this call was part of (PLAN 7.3, Phase 13).
- *
- * "A run without `skill` on the line cannot be budgeted or replayed"
- * (PLAN 7.6). Every call made between a `skill_run` and its
- * `skill_return` carries the name — not only the two the skill tools make
- * — so the question a replay asks is answerable: *what did this runbook
- * actually do, and what was it refused*.
- *
- * Empty for a call made outside a run, and for every line written before
- * this phase. `#[serde(default)]` for the same reason `agent_id` carries
- * one: the file is its own wire format, and a reader that refused the
- * older lines would lose the history the log is kept for.
+ * The skill run this call belongs to (Phase 13; PLAN 7.6): every call
+ * between `skill_run` and `skill_return`. Empty otherwise.
  */
 skill: string, 
 /**
- * The delegation this call was part of (PLAN 7.3, Phase 15).
- *
- * The other half of "one run id over CoS + specialists" (PLAN 7.2, row
- * 10): the CoS's `handoff_delegate` line carries it, and so does every
- * call every specialist makes while working on one of its briefs — in
- * their own sessions, under their own identities. Given `agent_id` beside
- * it, a replay can say who ran, under whose brief, and what it cost.
- *
- * Empty outside a delegation, and on every line written before this
- * phase. `#[serde(default)]` for the reason `agent_id` and `skill` carry
- * one: the file is its own wire format, and a reader that refused the
- * older lines would lose the history the log is kept for.
+ * The delegation this call belongs to (Phase 15): the CoS's
+ * `handoff_delegate` and every call specialists make on its briefs.
  */
 handoff: string, 
 /**
- * The routine whose run this call was part of (PLAN 7.3, Phase 16).
- *
- * The third id over a run, beside `agent_id` and `skill`, and the one that
- * answers a question only this phase can raise: *what did the machine do
- * while nobody was here*. Every call a scheduled run makes carries it, so
- * a week of a watch routine is one grep — and so is the budget it spent,
- * which is the "cannot be budgeted or replayed" of `COS.md` applied to the
- * only runs nobody watched.
- *
- * Empty outside a routine's run, and on every line written before this
- * phase. `#[serde(default)]` for the reason the three before it carry one:
- * the file is its own wire format, and a reader that refused the older
- * lines would lose the history the log is kept for.
+ * The routine whose run this call belongs to (Phase 16).
  */
 routine: string, 
 /**
@@ -467,11 +360,8 @@ decision: AuditDecision,
  */
 policy_reason: string, 
 /**
- * SHA-256 of the canonical arguments JSON, hex.
- *
- * The digest is over the arguments in full, including anything the
- * redacted copy shortened, so two calls can be compared for identity even
- * though neither line quotes what they carried.
+ * SHA-256 of the full canonical arguments JSON, hex — including what the
+ * redacted copy shortened.
  */
 args_digest: string, 
 /**
@@ -500,29 +390,22 @@ bytes_out: number,
 error_code: string | null, 
 /**
  * The file this call wrote, when it wrote one.
- *
- * `#[serde(default)]` because the file is its own wire format: a log
- * written by an earlier build has no such key, and a reader that refused
- * those lines would lose the history the log exists to keep.
  */
 artifact: AuditArtifact | null, };
 
 /**
  * How a configured provider authenticates.
  *
- * Persisted, not a secret: it names a *source*, never a token. `api_key` is
- * the original path (keyring / `AEGIS_API_KEY`), aimed at an OpenAI-compatible
- * host. [`AuthKind::Gemini`] is the same store, a different dialect: Google's
- * Generative Language API, not `/chat/completions`. The CLI variants reuse a
- * login the official agent already wrote on this machine.
+ * Names a credential source, never a token. `api_key`: keyring or
+ * `AEGIS_API_KEY` for an OpenAI-compatible host; [`AuthKind::Gemini`]: same
+ * store, Google's API; CLI variants reuse an existing login.
  */
 export type AuthKind = "api_key" | "gemini" | "claude_cli" | "codex_cli" | "grok_cli";
 
 /**
  * The URL and model Settings prefills for one [`AuthKind`].
  *
- * Not a secret. The form uses this when the user switches authentication so
- * the fields show the CLI's own endpoint instead of a leftover OpenAI URL.
+ * Used when the user switches authentication.
  */
 export type AuthPreset = { 
 /**
@@ -570,20 +453,15 @@ blocked: Array<BoardItem>,
  */
 runs: Array<Run>, 
 /**
- * What every session of the project has spent, in total.
- *
- * The whole project rather than the runs, because the runs are a window
- * on the audit log and the sessions are all of them: a total that only
- * counted what was still in the window would fall as the log grew.
+ * What every session of the project has spent — not just the runs in the
+ * audit window.
  */
 cost: Cost, };
 
 /**
  * One line of the board.
  *
- * `BoardItem` on the wire, not `Item`: the generated bindings are one flat
- * namespace shared by every payload in the runtime, and a type called `Item`
- * there would be a name the next phase has to work around.
+ * `BoardItem` on the wire: the generated bindings share one namespace.
  */
 export type BoardItem = { 
 /**
@@ -620,9 +498,7 @@ run: RunRef | null, };
 /**
  * Where a line on the board came from.
  *
- * On every item, because the two halves of a board are not equally current
- * and a reader has to be able to tell them apart: the file is what somebody
- * wrote down, the rest is what this process can see for itself.
+ * On every item, since the file and the runtime are not equally current.
  */
 export type BoardSource = "status" | "approval" | "session" | "routine" | "run";
 
@@ -657,13 +533,8 @@ name: string,
 reason: string, };
 
 /**
- * What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
- *
- * A pointer and a summary, never a deletion: `through_message_id` names the
- * last message that no longer reaches the model, and the transcript on disk
- * still holds every one of them. That split is the whole design — the user
- * keeps scrolling through the conversation they had, and the model stops
- * paying for it ([`compact`](crate::compact)).
+ * What a session has folded (Phase 14): a pointer and derived state, never a
+ * deletion ([`compact`](crate::compact)).
  */
 export type Compaction = { 
 /**
@@ -707,10 +578,8 @@ args: Array<string>,
 /**
  * Environment variables the server needs, by name.
  *
- * The values are read from Aegis' own environment when the child is
- * spawned. A name that is not set there is reported on the row rather
- * than passed as an empty string, because a server that reads an empty
- * token usually fails in a way that is much harder to read.
+ * Values come from Aegis's environment at spawn; unset names are reported,
+ * not passed empty.
  */
 env: Array<string>, 
 /**
@@ -750,10 +619,8 @@ enabled: boolean, };
 /**
  * A connector and everything measured about it right now.
  *
- * The record comes from [`ConnectorStore`](crate::store::ConnectorStore); the
- * rest is measured on every read, which is why it is one struct rather than a
- * document with a status column. A stored "connected" is exactly the lie
- * [`store`](crate::store) refuses to hold.
+ * The record from [`ConnectorStore`](crate::store::ConnectorStore) plus live
+ * measurements, never stored.
  */
 export type ConnectorView = { 
 /**
@@ -773,11 +640,7 @@ tools: Array<ToolInfo>,
  */
 error: string | null, 
 /**
- * The last lines the server wrote to its stderr.
- *
- * The panel shows these because an `npx` that could not resolve a package
- * says so there and nowhere else, and a row reading only "it would not
- * start" is a row nobody can act on.
+ * The last lines the server wrote to stderr, where start failures appear.
  */
 log: Array<string>, 
 /**
@@ -789,21 +652,13 @@ server: string | null,
  */
 protocol: string | null, 
 /**
- * Variables it names that are not in this application's environment.
- *
- * Measured, not stored: a token that was exported in the shell Aegis was
- * started from is there for this process and gone for the next one.
+ * Variables it names that this process's environment lacks (measured).
  */
 missing_env: Array<string>, };
 
 /**
- * Tokens spent over some set of turns (PLAN 7.3, Phase 17).
- *
- * The unit the UI counts in. `unreported` is carried beside the totals rather
- * than folded into them so a number can say how much of itself is missing: a
- * session of ten turns where three providers stayed silent is *at least* this
- * many tokens, and a board that could not say "at least" would be inventing
- * precision it does not have.
+ * Tokens spent over some turns (Phase 17). `unreported` is kept apart so a
+ * total can read "at least".
  */
 export type Cost = { 
 /**
@@ -838,20 +693,9 @@ completion_tokens: number, };
 export type Decision = "allow_once" | "allow_session" | "deny";
 
 /**
- * Why a session exists, when a person did not open it (PLAN 7.3, Phase 15).
- *
- * A delegated run is an ordinary session in every way that matters — same
- * transcript, same approval gate, same audit lines, same identity binding —
- * and this record is the difference: it says which delegation opened it, which
- * session was delegating, and where the brief was filed.
- *
- * It is on the session rather than in a store of its own because a delegated
- * run *is* a session, and a second document listing which sessions are really
- * runs would be a second thing to keep in step with this one. It is also what
- * keeps the work visible: a specialist's session opens in the sidebar like any
- * other, so "what did the reviewer actually do" is a click rather than a
- * forensic exercise (`COS.md` aggregates status for the *CoS*, not for the
- * person).
+ * Why a session exists when a brief opened it (Phase 15): which delegation,
+ * which session delegated, where the brief was filed. Otherwise an ordinary
+ * session, visible in the sidebar.
  */
 export type Delegated = { 
 /**
@@ -863,10 +707,8 @@ handoff_id: string,
  */
 from_session_id: string, 
 /**
- * Where the brief was filed, relative to the workspace root.
- *
- * `None` when the workspace has no `.aegis/briefs/` — the brief then lives only
- * in the first message of this transcript, which is still a record of it.
+ * Where the brief was filed, relative to the workspace. `None` without
+ * `.aegis/briefs/`: the brief is then only the first message.
  */
 brief: string | null, };
 
@@ -876,11 +718,8 @@ brief: string | null, };
 export type EntryKind = "dir" | "file" | "other";
 
 /**
- * Where a project's commands run.
- *
- * `Option<ExecHost>` is the whole type: `None` — an absent field on disk — is
- * this process, which is what every project had before this slice and what
- * every project still has until somebody says otherwise.
+ * Where a project's commands run; stored as `Option<ExecHost>`, `None` being
+ * this computer.
  */
 export type ExecHost = { "kind": "wsl", 
 /**
@@ -889,11 +728,7 @@ export type ExecHost = { "kind": "wsl",
 distro: string, };
 
 /**
- * One choice on the picker.
- *
- * Deliberately not `Option<ExecHost>`: a list of hosts has to be able to say
- * "this computer" as a row like any other, and a `null` in an array is not a
- * row somebody can click.
+ * One choice on the picker, where "this computer" is a row of its own.
  */
 export type ExecHostOption = { "kind": "host" } | { "kind": "wsl", 
 /**
@@ -904,10 +739,8 @@ distro: string, };
 /**
  * Where one command will actually land, once policy has resolved it.
  *
- * Built by the decision table, carried on the resolved call, drawn by the
- * approval dialog and read by the tool — one value, so the distribution and
- * the working directory the user *read* are the ones that are *run*, with no
- * second translation anywhere to disagree with the first.
+ * Built by policy and used by both the dialog and the tool, so what the user
+ * reads is what runs.
  */
 export type ExecTarget = { 
 /**
@@ -949,12 +782,7 @@ zone: Zone,
 body: PreviewBody, };
 
 /**
- * One `allow_session` grant.
- *
- * The variants are the scopes, not the tools: `fs_read` appears only as
- * [`Grant::FsReadLarge`] because the only `fs_read` row that offers a grant
- * is the large-file one, and a grant that covered every read would be a
- * different, much broader thing than what the user was asked about.
+ * One `allow_session` grant. The variants are scopes, not tools.
  */
 export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "kind": "world_amend" } | { "kind": "shell", 
 /**
@@ -1018,11 +846,7 @@ export type KeySource = "keyring" | "env" | "claude_cli" | "codex_cli" | "grok_c
  */
 export type LastRun = { 
 /**
- * When it started, RFC3339, UTC.
- *
- * The start rather than the end, because it is also what the next fire is
- * counted from: a run that took ten minutes must not be followed by one
- * starting the moment it finishes.
+ * When it started, RFC3339 UTC; intervals count from here.
  */
 at: string, 
 /**
@@ -1041,8 +865,7 @@ detail: string, };
 /**
  * Everything the WebView is allowed to know about the provider settings.
  *
- * The name is the contract. There is no unmasked counterpart and no command
- * that returns one: a key can be written and cleared, never read back.
+ * No unmasked counterpart exists: a key is written or cleared, never read.
  */
 export type MaskedSettings = { 
 /**
@@ -1061,11 +884,7 @@ model: string,
  * The output ceiling the provider's catalog reported for that model, or
  * `None` for an endpoint that does not publish one.
  *
- * Shown rather than kept internal because its absence is invisible
- * otherwise: a lookup that failed leaves the provider's own conservative
- * default in place, which is the behaviour that made large `fs_write`
- * calls fail silently in the first place. A number here is the panel
- * saying the catalog was actually read.
+ * Shown so a failed lookup (and a low default cap) is visible.
  */
 max_output_tokens: number | null, 
 /**
@@ -1080,8 +899,7 @@ key_hint: string | null,
 /**
  * Whether this machine has a credential store that answered.
  *
- * `false` on headless Linux and on a locked keychain; the panel then
- * explains the environment variable instead of offering to save a key.
+ * `false` on headless Linux or a locked keychain.
  */
 keyring_available: boolean, 
 /**
@@ -1143,12 +961,8 @@ text: string,
 source: string | null, };
 
 /**
- * What a memory *is*, which is also the whole vocabulary.
- *
- * Three variants and no `other`. The discipline is the one the seven skill
- * headings impose: naming which of the three a memory is forces whoever
- * writes it to notice when it is none of them, and a memory that is none of
- * them belongs in a file or in a runbook.
+ * What a memory *is*. No `other`: anything else belongs in a file or a
+ * runbook.
  */
 export type MemoryKind = "preference" | "exception" | "convention";
 
@@ -1229,11 +1043,7 @@ mime: string, } | { "kind": "binary",
 mime: string | null, };
 
 /**
- * How soon a brief wants attention.
- *
- * Three words and no number. A scale of ten is a scale nobody calibrates, and
- * what the field is for is the order a board is read in — which of these is
- * waiting on a person, and which can sit.
+ * How soon a brief wants attention: three words, not an uncalibrated number.
  */
 export type Priority = "high" | "normal" | "low";
 
@@ -1268,22 +1078,13 @@ workspace_exists: boolean,
 /**
  * The WSL distribution whose filesystem the folder is in, if any.
  *
- * Derived from the path on every read, like `workspace_exists`, and never
- * stored — it is a fact about where the folder is, not a decision anybody
- * made. It is emphatically **not** `exec_host` and never sets it: PLAN
- * 7.12 forbids flipping the host from a `\\wsl$\` path, because picking a
- * folder is not consent. All it does is let the picker mark the row a
- * person is most likely to want, which still takes their click.
+ * Derived on read, never stored, and never sets `exec_host` (PLAN 7.12):
+ * it only hints the picker.
  */
 workspace_distro: string | null, 
 /**
- * Where this project's commands run (PLAN 7.12).
- *
- * `None` is this process — the default, what every project had before this
- * slice, and what a project keeps unless somebody chooses otherwise.
- * Sessions inherit it; they do not override it, because "which operating
- * system does the toolchain live in" is a fact about the folder rather
- * than about a conversation in it.
+ * Where this project's commands run (PLAN 7.12); `None` is this computer.
+ * Sessions inherit it.
  */
 exec_host: ExecHost | null, };
 
@@ -1294,9 +1095,7 @@ export type ProjectDetail = { project: Project,
 /**
  * The project's sessions, newest first.
  *
- * Filled by the command layer rather than by [`Store::open`]: a summary
- * carries the session's *live* state, and only [`AppState`] can see both
- * the session document and the turns currently running.
+ * Filled by [`AppState`], which knows live turn states.
  *
  * [`AppState`]: crate::state::AppState
  */
@@ -1336,10 +1135,8 @@ export type ResolvedBy = "user" | "policy" | "timeout";
 /**
  * What the brief asks to come back (`COS.md`: `status | artefact | question`).
  *
- * It does not change the shape of the [`Report`] — every return is a report,
- * which is what makes fan-in cheap. What it changes is what a *complete* one
- * looks like, and the owner is told which was asked for so it can tell the
- * difference between "say what you found" and "produce the file".
+ * Every return is still a [`Report`]; this changes what a complete one must
+ * contain.
  */
 export type ReturnFormat = "status" | "artefact" | "question";
 
@@ -1497,12 +1294,8 @@ paused: boolean,
  */
 paused_reason: string, 
 /**
- * When it started counting.
- *
- * Set when the routine is created, and again whenever its schedule changes
- * or somebody un-pauses it. Windows before it do not fire: a routine saved
- * at three in the afternoon and set to run at seven does not immediately
- * decide it is late (see [`crate::schedule::due`]).
+ * When it started counting: set on create, schedule change and un-pause.
+ * Earlier windows never fire ([`crate::schedule::due`]).
  */
 armed_at: string, 
 /**
@@ -1510,14 +1303,8 @@ armed_at: string,
  */
 last: LastRun | null, 
 /**
- * Why this routine cannot fire as it stands.
- *
- * Derived, never stored — the property [`store`](super) holds every
- * document to, and the one that matters most here. A skill that was
- * un-granted, a folder that was unplugged, an identity that was deleted:
- * all facts about *right now*, and a stored copy of any of them is exactly
- * what would let a clock keep firing at a runbook nobody may run. Filled
- * by [`crate::schedule::inspect`].
+ * Why this routine cannot fire now; derived by
+ * [`crate::schedule::inspect`], never stored.
  */
 problem: string | null, 
 /**
@@ -1585,10 +1372,7 @@ started_at: string,
  */
 ended_at: string, 
 /**
- * The identities that ran under it, in the order they first appear.
- *
- * More than one only for a delegation, which is the point of that kind:
- * "who ran" is a list when a Chief of Staff hands work to two specialists.
+ * The identities that ran under it, in first-appearance order.
  */
 agents: Array<string>, 
 /**
@@ -1634,12 +1418,8 @@ status: RunStatus,
  */
 reason: string, 
 /**
- * Tool execution time, summed over the calls.
- *
- * Not the wall clock: a run parked for five minutes on an approval dialog
- * did not spend five minutes working, and the two numbers differing is
- * usually the interesting part. The wall clock is `ended_at` less
- * `started_at`, which the UI has both halves of.
+ * Tool execution time summed over calls — not wall clock, which excludes
+ * waiting on approvals.
  */
 tool_ms: number, 
 /**
@@ -1653,23 +1433,15 @@ cost: Cost, };
 export type RunKind = "handoff" | "routine" | "skill" | "session";
 
 /**
- * How a run ended, as the routine list draws it.
- *
- * The first three are the statuses a `skill_return` carries (`COS.md`
- * *Handoff*), which is the whole vocabulary a finished run has. The fourth is
- * what the runtime saw when there was no return at all — a separate value
- * rather than a fourth status, because a `blocked` is an answer and a silence
- * is not (PLAN 7.3, Phase 15, *When nobody answers*).
+ * How a run ended: the three `skill_return` statuses, or no return at all.
  */
 export type RunOutcome = "done" | "blocked" | "needs_you" | "failed";
 
 /**
  * What ties a set of audit lines into one run.
  *
- * A kind and an id rather than an enum with four payloads, because this is
- * also a map key and a value the UI hands back to ask for one run again.
- * `session_id` is part of the key for everything except a delegation, which
- * is the one kind that spans sessions on purpose.
+ * Also a map key and the value the UI sends back. `session_id` is part of the
+ * key except for a delegation, which spans sessions.
  */
 export type RunRef = { 
 /**
@@ -1689,22 +1461,15 @@ session_id: string, };
 /**
  * How a run ended, in the vocabulary `COS.md` already uses.
  *
- * Four words plus one. The first four are a report's own — a run that
- * returned says how it went, and nothing here second-guesses it.
- * [`Ran`](RunStatus::Ran) is the fifth, and it is not a failure: it is work
- * that made calls and never filed a report, which is what an ordinary
- * conversation is.
+ * A report's own statuses, plus [`Ran`](RunStatus::Ran): calls made with no
+ * report, like an ordinary conversation.
  */
 export type RunStatus = "done" | "blocked" | "needs_you" | "failed" | "ran";
 
 /**
  * One run, and the lines it is replayed from.
  *
- * The replay of PLAN 7.2 row 10, and it is deliberately not a rendering: the
- * entries are the audit lines themselves, in the order they happened, so what
- * the pane shows is what is on disk rather than a story assembled about it.
- * A person reading this is checking the record against the transcript, and a
- * record that had been prettied up first would be worth less than the file.
+ * The replay of PLAN 7.2 row 10: the raw audit entries, in order.
  */
 export type RunTrace = { 
 /**
@@ -1717,12 +1482,8 @@ run: Run,
 entries: Array<AuditEntry>, };
 
 /**
- * What one scaffolding run did.
- *
- * Two lists rather than a count: the point of the report is that the user can
- * see nothing of theirs was overwritten, and only naming what was kept says
- * that. Paths are relative to the workspace root, in the form the convention
- * is written in.
+ * What one scaffolding run did: files created and files kept untouched,
+ * relative to the root.
  */
 export type ScaffoldReport = { 
 /**
@@ -1742,32 +1503,18 @@ kept: Array<string>,
  */
 versioning: Versioning, 
 /**
- * Whether this run is what made the folder a work tree.
- *
- * Separate from `versioning` because they answer different questions and a
- * person needs both: *is it versioned* is about the folder, *did you just
- * do that to my folder* is about this press. A repository that was already
- * there reports `versioning` and `initialized: false`.
+ * Whether this run created the work tree (vs. one already there).
  */
 initialized: boolean, 
 /**
- * Why the folder is still not versioned, when it is not.
- *
- * `git` missing from PATH is the ordinary reason and it is not a failure:
- * the directories were the job, they were created, and this is the line
- * that says the other half did not happen.
+ * Why the folder is still not versioned — usually `git` missing, which is
+ * not a failure of the scaffold.
  */
 problem: string | null, };
 
 /**
- * When a routine fires.
- *
- * Three shapes, and the third is the "or a trigger" of PLAN 7.3, Phase 16. It
- * is deliberately the *only* trigger: the sources of truth a routine would
- * really like to watch — mail, a ticket queue, a pull request — arrive as MCP
- * connectors in Phase 18, and a trigger invented here for one of them would be
- * a domain inside the runtime (PLAN 7.5). A folder in the workspace is the one
- * thing this process can already see change.
+ * When a routine fires. A watched folder is the only trigger; anything
+ * domain-specific belongs in connectors (PLAN 7.5).
  */
 export type Schedule = { "kind": "every", 
 /**
@@ -1789,14 +1536,8 @@ minute: number, } | { "kind": "on_change",
 dir: string, };
 
 /**
- * Why a session exists, when a clock opened it (PLAN 7.3, Phase 16).
- *
- * The routine's record on the run, and the mirror of [`Delegated`]: a
- * scheduled run is an ordinary session in every way that matters, and this is
- * the difference. The routine's *name* is copied rather than only its id, so a
- * row still says what fired it after the routine has been renamed or deleted —
- * a transcript is a record of something that happened, and it should not stop
- * explaining itself because a document moved on.
+ * Why a session exists when a routine opened it (Phase 16). The routine's name
+ * is copied so the row still explains itself after a rename or deletion.
  */
 export type Scheduled = { 
 /**
@@ -1826,28 +1567,17 @@ session: SessionSummary,
 messages: Array<Message>, 
 /**
  * What has been folded out of the model's context, if anything.
- *
- * On the detail rather than on the summary because it is about the
- * *transcript*, and the summary is a sidebar row: what a fold changes is
- * how the conversation is drawn, and the sidebar does not draw one.
  */
 compaction: Compaction | null, 
 /**
- * Approvals this session is blocked on.
- *
- * Filled by [`AppState::session_detail`](crate::AppState::session_detail)
- * rather than here: the transcript is on disk, and what a session is
- * waiting for is a fact about this process. It is on the detail at all so
- * that a window reopened mid-turn re-draws the dialog it missed, instead
- * of leaving a turn blocked on a prompt nobody can see.
+ * Approvals this session is blocked on, filled by
+ * [`AppState::session_detail`](crate::AppState::session_detail) so a
+ * reopened window redraws the dialog.
  */
 pending_approvals: Array<ApprovalRequest>, };
 
 /**
- * Lifecycle of a session.
- *
- * Derived from the turn registry on every read, never stored — see the module
- * documentation.
+ * Lifecycle of a session, derived on every read and never stored.
  */
 export type SessionState = "idle" | "running" | "awaiting_approval" | "error";
 
@@ -1866,14 +1596,9 @@ id: string,
  */
 project_id: string, 
 /**
- * The identity this session runs as (PLAN 7.3, Phase 12).
- *
- * Always a concrete id, never absent: a session written before identities
- * existed stored nothing, and resolves to
- * [`DEFAULT_AGENT_ID`](super::agents::DEFAULT_AGENT_ID) here. The store
- * keeps the distinction — "chose nothing" and "chose the default" are
- * different facts about a document — and the payload does not, because a
- * UI that had to handle both would draw the same badge twice.
+ * The identity this session runs as (Phase 12). Always concrete: a session
+ * from before identities resolves to
+ * [`DEFAULT_AGENT_ID`](super::agents::DEFAULT_AGENT_ID).
  */
 agent_id: string, 
 /**
@@ -1897,38 +1622,22 @@ message_count: number,
  */
 state: SessionState, 
 /**
- * The brief that opened this session, when one did (PLAN 7.3, Phase 15).
- *
- * `None` for every session a person started, which is every session before
- * this phase. The sidebar draws it as a badge rather than hiding the row:
- * work done on your behalf should be as visible as work you asked for.
+ * The brief that opened this session (Phase 15), drawn as a badge.
  */
 delegated: Delegated | null, 
 /**
- * The routine that opened this session, when one did (PLAN 7.3, Phase 16).
- *
- * The other way a session comes to exist without anybody typing. It is a
- * second field rather than a variant beside [`SessionSummary::delegated`]
- * because the two are different facts and a session could one day be both
- * — a routine's run is not a brief, and a brief is not on a clock.
+ * The routine that opened this session (Phase 16). Its own field: a
+ * routine's run is not a brief.
  */
 scheduled: Scheduled | null, 
 /**
- * What the whole conversation has spent (PLAN 7.3, Phase 17).
- *
- * Summed on read from the per-turn records rather than kept as a running
- * total, for the reason `message_count` is: a stored aggregate is a second
- * copy of a fact, and the two disagree the first time anything goes wrong.
+ * What the conversation spent (Phase 17), summed on read, never stored.
  */
 cost: Cost, };
 
 /**
- * One catalog entry.
- *
- * Everything except the runbook. A `Skill` is what the panel draws, what the
- * system message is built from, and what the allow-list is matched against;
- * the body is [`load`]ed only by a run, which is the whole point of the type
- * not having a field for it.
+ * One catalog entry: everything except the body, which only a run
+ * [`load`]s.
  */
 export type Skill = { 
 /**
@@ -1957,29 +1666,18 @@ tools: Array<string>,
  */
 path: string, 
 /**
- * Whether a workspace skill of this name is hiding a library one.
- *
- * Reported rather than silently resolved: two runbooks with one name is
- * exactly the state where somebody is running the one they did not mean
- * to, and the panel can say so.
+ * Whether this workspace skill hides a library one of the same name, so
+ * the panel can say so.
  */
 shadows: boolean, 
 /**
- * Why this one cannot run, when it cannot.
- *
- * A file that will not parse stays in the catalog carrying its refusal,
- * rather than disappearing: the author is the only person who can fix it,
- * and a skill that vanished would tell them nothing. It is never offered
- * to the model — [`granted`] drops it.
+ * Why this one cannot run. Kept in the catalog for its author, never
+ * offered to the model ([`granted`]).
  */
 problem: string | null, };
 
 /**
- * One `PROPOSAL.md` in a workspace, as Settings lists it.
- *
- * The fields a person decides on — what it is for, what it would call, whether
- * it parses — and never the body. A proposal's body reaches nobody's system
- * prompt, and nothing in the window needs it: the path is on the row.
+ * One `PROPOSAL.md` in a workspace, as Settings lists it — never its body.
  */
 export type SkillProposal = { 
 /**
@@ -2017,10 +1715,8 @@ state: ProposalState,
 problem: string | null, };
 
 /**
- * Which of `COS.md`'s scopes a skill was found in.
- *
- * The per-agent scope is not here because it is not a place: it is the
- * identity's allow-list, applied to what these two found.
+ * Which directory a skill was found in. The per-agent scope is an allow-list,
+ * not a place.
  */
 export type SkillScope = "library" | "workspace";
 
@@ -2035,11 +1731,8 @@ export type SourceState = "in_step" | "drifted" | "missing" | "unrecorded";
 export type State = "off" | "starting" | "ready" | "failed";
 
 /**
- * How a delegated run — or a skill run — ended (`COS.md` *Handoff*).
- *
- * Three states and no fourth. "Partly done" is `needs_you` with the rest in
- * `open_questions`; a runner that offered a fourth would be offering a place
- * to put work nobody then picks up.
+ * How a delegated or skill run ended (`COS.md` *Handoff*). "Partly done" is
+ * `needs_you` with open questions.
  */
 export type Status = "done" | "blocked" | "needs_you";
 
@@ -2069,10 +1762,7 @@ calls: number, };
 /**
  * `tool:approval_resolved` — an approval stopped being pending.
  *
- * Emitted for every way one can end, not only for a click: a turn that was
- * cancelled while waiting and a request that expired both produce this, with
- * `resolved_by` saying which. A UI that only removed a card on the user's own
- * answer would leave a dialog on screen for a call nothing will ever run.
+ * Emitted however it ended — answer, cancel or expiry — per `resolved_by`.
  */
 export type ToolApprovalResolved = { 
 /**
@@ -2101,12 +1791,8 @@ decision: Decision,
 resolved_by: ResolvedBy, };
 
 /**
- * One tool call, as the transcript records it.
- *
- * `args_json` is what the model actually sent, kept verbatim so the card in
- * the UI shows the call that was made rather than the call policy resolved.
- * `summary` is the one human line — never a raw blob, because a transcript
- * that inlines 200 KB of file content is a transcript nobody scrolls.
+ * One tool call as the transcript records it: `args_json` verbatim as the
+ * model sent it, `summary` one human line, never a blob.
  */
 export type ToolCallRecord = { 
 /**
@@ -2130,15 +1816,8 @@ status: ToolCallStatus,
  */
 summary: string | null, 
 /**
- * A local image the call produced, for the transcript to show.
- *
- * Only `screen_capture` sets it, and it is a path rather than the bytes
- * (PLAN 5.4): the WebView loads it through the asset protocol, which is
- * scoped to the capture directory. Persisted, so re-opening a session
- * shows the capture again instead of a line saying one was taken.
- *
- * `#[serde(default)]` for the transcripts written before this field
- * existed — a session on disk must keep opening.
+ * A capture's path for the transcript (PLAN 5.4), persisted so a reopened
+ * session shows it. Defaulted for older transcripts.
  */
 image_path: string | null, };
 
@@ -2150,23 +1829,9 @@ export type ToolCallStatus = "pending" | "approved" | "denied" | "running" | "ok
 /**
  * `tool:drafting` — the model is still writing a call's arguments.
  *
- * The mirror of [`ToolProgress`], one step earlier: that one is a tool's
- * *output* while it runs, this is its *input* while it is being written. The
- * gap it fills is the same one, and it opened wider when turns stopped being
- * capped at 8192 output tokens. A file written by `fs_write` is emitted as
- * the arguments of a call, so a large one is twenty thousand tokens that
- * produce no assistant text at all: several minutes in which the runtime is
- * working perfectly and the window has nothing to show. That is
- * indistinguishable from a hang, and people kill turns that look like one.
- *
- * Bytes rather than the text. The arguments are a JSON string being built a
- * fragment at a time, so any prefix of it is malformed, and a pane that
- * streamed it would be showing escaped source with the closing brace missing.
- * A number that climbs answers the only question being asked, which is
- * whether anything is still happening.
- *
- * Coalesced into the same 50 ms window as `turn:delta`, and for the same
- * reason: these fragments arrive far faster than a window can usefully draw.
+ * The input-side mirror of [`ToolProgress`]: a large `fs_write` streams
+ * minutes of arguments with no text, which looks like a hang. Carries a byte
+ * count (partial JSON is unreadable), coalesced like `turn:delta`.
  */
 export type ToolDrafting = { 
 /**
@@ -2231,13 +1896,8 @@ duration_ms: number,
  */
 truncated: boolean, 
 /**
- * A local image the call produced, for the transcript to show.
- *
- * A path and not the bytes (PLAN 5.4): the WebView loads it through the
- * asset protocol, scoped to the capture directory. Carried on the event
- * as well as persisted on the record so the thumbnail appears when the
- * capture does, rather than when the turn ends and the transcript is
- * re-read.
+ * A capture's path (PLAN 5.4), on the event so the thumbnail shows
+ * immediately.
  */
 image_path: string | null, };
 
@@ -2258,11 +1918,7 @@ connector_name: string,
  */
 name: string, 
 /**
- * The name the model is given: `<connector>__<tool>`.
- *
- * This is the string an identity's allow-list holds, the string a session
- * grant is keyed on, and the string the audit line records. There is one
- * spelling, and it is this one.
+ * `<connector>__<tool>`: the name in allow-lists, grants and audit lines.
  */
 full_name: string, 
 /**
@@ -2270,25 +1926,15 @@ full_name: string,
  */
 description: string, 
 /**
- * Whether the server *claims* the tool only reads.
- *
- * Shown in the approval dialog, attributed to the server. Nothing in this
- * runtime branches on it.
+ * Whether the server *claims* the tool only reads; display only.
  */
 read_only_hint: boolean, };
 
 /**
  * `tool:progress` — output from a tool that is still running.
  *
- * `shell_exec` only (PLAN 2.2): a file is read in one call, but a command can
- * take two minutes, and a pane that only fills in at the end is
- * indistinguishable from a hang.
- *
- * Frames are coalesced to roughly 50 ms and the total is capped, so this is
- * a live view rather than a record — the transcript keeps the one-line
- * summary and the audit log keeps the byte counts. A `tool:finished` carrying
- * `truncated` is what says the pane stopped short of everything the command
- * printed.
+ * `shell_exec` only (PLAN 2.2). A coalesced, capped live view, not a record;
+ * `tool:finished.truncated` says the pane stopped short.
  */
 export type ToolProgress = { 
 /**
@@ -2367,10 +2013,7 @@ tool: string, };
 /**
  * Payload of [`EVENT_TRAY_ACTIVATE`].
  *
- * `action` is `"show"` today. PLAN 2.2 also lists `"new_session"`, for a tray
- * item that starts a session directly; the menu has no such item yet, so the
- * variant is not invented here — a payload the runtime never sends is a
- * branch the UI would carry for nothing.
+ * `action` is `"show"`; PLAN 2.2's `"new_session"` has no menu item yet.
  */
 export type TrayActivate = { 
 /**
@@ -2436,21 +2079,9 @@ hidden: number,
 more: number, };
 
 /**
- * What one turn spent, as the provider reported it (PLAN 7.3, Phase 17).
- *
- * One record per finished turn, whatever the turn did — a reply that only
- * talked costs tokens as surely as one that ran six tools, and a ledger that
- * only counted the second kind would answer "what did it cost" with a number
- * nobody could reconcile against a bill.
- *
- * `turn_id` is the same id the audit line carries, which is the whole reason
- * this can be joined to a run: the log says *which* turns a delegation or a
- * runbook made its calls in, and this says what each of those turns spent.
- *
- * `reported` is the honesty flag. Not every OpenAI-compatible server sends a
- * `usage` object, and a turn whose cost is unknown is recorded as unknown
- * rather than as zero — a counter that quietly added nothing would read as a
- * free turn, which is the one thing it certainly was not.
+ * What one finished turn spent, as the provider reported it (Phase 17),
+ * whatever the turn did. `turn_id` joins it to the audit lines;
+ * `reported: false` means unknown, not free.
  */
 export type TurnCost = { 
 /**
@@ -2462,11 +2093,8 @@ turn_id: string,
  */
 prompt_tokens: number, 
 /**
- * Of those, how many were served out of the prompt cache.
- *
- * Defaulted rather than required: sessions charged before this was
- * recorded are read back as turns that cached nothing, which is what a
- * turn that predates the field did.
+ * Of those, how many were served from the prompt cache. Defaulted for
+ * older records.
  */
 cache_read_tokens: number, 
 /**
@@ -2490,10 +2118,7 @@ at: string, };
 /**
  * `turn:delta` — a frame of assistant text.
  *
- * Deltas are coalesced into roughly 50 ms frames before they are sent
- * (PLAN 4.2), so this is a phrase rather than a token: waking the WebView
- * once per token is what makes a streamed reply feel slower than a batched
- * one.
+ * Coalesced into ~50 ms frames (PLAN 4.2), not one per token.
  */
 export type TurnDelta = { 
 /**
@@ -2517,9 +2142,7 @@ text: string, };
 /**
  * `turn:error`.
  *
- * Always followed by a `turn:finished` carrying [`StopReason::Error`], so a
- * UI that only tracks the lifecycle does not have to special-case failure to
- * re-enable its composer.
+ * Always followed by a `turn:finished` carrying [`StopReason::Error`].
  */
 export type TurnError = { 
 /**
@@ -2565,10 +2188,8 @@ stop_reason: StopReason,
 usage: Usage | null, };
 
 /**
- * What `session_send` hands back (PLAN 2.1).
- *
- * The turn itself is reported through events; this is only the handle needed
- * to cancel it.
+ * What `session_send` returns (PLAN 2.1): the handle to cancel the turn, which
+ * reports through events.
  */
 export type TurnHandle = { 
 /**
@@ -2621,12 +2242,8 @@ export type Usage = {
 /**
  * Tokens in the request, whether or not they were paid for at full price.
  *
- * The *whole* prompt, always — which is the one definition that means the
- * same thing across providers and across a cache hit. Anthropic reports
- * its own `input_tokens` net of both cache figures below, so the provider
- * puts them back before filling this in; the Responses API counts them in
- * already and does not. Getting that wrong would make a well-cached turn
- * look like a cheap one instead of a cheaply-*served* one.
+ * Always the whole prompt: Anthropic's net `input_tokens` get the cache
+ * figures added back.
  */
 prompt_tokens: number, 
 /**
@@ -2638,8 +2255,7 @@ cache_read_tokens: number,
  * Of `prompt_tokens`, how many were written to the cache for a later turn
  * to read, at a premium over the plain price.
  *
- * Anthropic only: providers whose caching is automatic charge nothing to
- * write and so report nothing, which is a zero here rather than a gap.
+ * Anthropic only; zero elsewhere.
  */
 cache_creation_tokens: number, 
 /**
@@ -2660,21 +2276,13 @@ export type Versioning = {
  */
 tree: WorkTree, 
 /**
- * The folder holding the `.git`, absolute — `None` when there is none.
- *
- * Named rather than left implicit because the answer a person needs from
- * [`WorkTree::Ancestor`] is *which* folder: "this is inside a repository"
- * is only useful once you can see whether it is the one you meant.
+ * The folder holding the `.git`, absolute, or `None`.
  */
 at: string | null, };
 
 /**
- * Whether the folder is in a work tree, and whose.
- *
- * Three answers rather than a boolean because the middle one changes what the
- * panel should say and what [`ensure`] must not do: a workspace inside a
- * larger repository is already versioned, and initialising it would split the
- * history it is already part of.
+ * Whether the folder is in a work tree, and whose. An ancestor's counts:
+ * [`ensure`] must not split its history.
  */
 export type WorkTree = "here" | "ancestor" | "unversioned";
 
@@ -2704,11 +2312,7 @@ x: number,
 y: number, };
 
 /**
- * One directory of the convention, as the UI sees it.
- *
- * Both flags are measured on every read and never stored: a user can create
- * `decisions/` in a terminal, or delete it, and the panel has to be right
- * about a folder it does not own.
+ * One directory of the convention, as the UI sees it, measured on every read.
  */
 export type WorkspaceEntry = { 
 /**
@@ -2743,34 +2347,15 @@ root: string,
 entries: Array<WorkspaceEntry>, 
 /**
  * Whether every directory and seed file is there.
- *
- * Derived here rather than in the UI, so that "set up" means the same
- * thing to the panel, to a test, and to whatever later phase asks.
  */
 complete: boolean, 
 /**
- * Convention directories found at the workspace *root*, from the layout
- * this build no longer uses. Bare names: `briefs`, `decisions`, …
- *
- * The cabinet moved under [`CABINET_DIR`], and a folder set up before that
- * still has its `.aegis/status/STATUS.md` where it always was — full of work the
- * runtime has just stopped being able to see. So they are named, and that
- * is all: nothing here moves a directory in somebody's repository. Picking
- * a folder was never consent to rearrange it, and the same rule that keeps
- * [`scaffold`] from overwriting a file keeps this from relocating one.
- *
- * Empty for every workspace that never had the old layout, which is the
- * ordinary case and draws nothing.
+ * Convention directories still at the workspace *root* from the pre-`.aegis`
+ * layout (bare names). Reported, never moved.
  */
 strays: Array<string>, 
 /**
  * Whether the folder is in a git work tree, and whose (PLAN 7.11).
- *
- * A fact about the convention, like the four ticks, and reported for the
- * same reason: these files are a shared memory, and a shared memory with
- * no history is a board nobody can read backwards. It is not the start of
- * a git client — there is no log here, no stage and no push, and the only
- * thing that ever changes it is the button beside it.
  */
 versioning: Versioning, };
 
@@ -2805,19 +2390,11 @@ path: string,
 state: SourceState, };
 
 /**
- * The world's state in one workspace.
- *
- * Measured on every call and never stored, for the reason
- * [`WorkspaceLayout`](crate::workspace::WorkspaceLayout) is: the folder
- * belongs to the user, who may have written `world/essence.md` in their editor
- * a minute ago.
+ * The world's state in one workspace, measured on every call.
  */
 export type WorldStatus = { 
 /**
  * Whether there is a world in this workspace at all.
- *
- * False for every workspace that never opted in, which is most of them,
- * and the panel then says only what a world is and how one is started.
  */
 present: boolean, 
 /**
@@ -2830,9 +2407,6 @@ files: Array<WorldFile>,
 sources: Array<WorldSource>, 
 /**
  * Whether any declared source has moved since it was perceived.
- *
- * Derived here rather than in the UI so that "drifted" means the same
- * thing to the panel, to the brief that will not launch, and to a test.
  */
 drifted: boolean, 
 /**
@@ -2843,10 +2417,7 @@ problem: string | null, };
 /**
  * Which part of the workspace a path is in, as far as a drop is concerned.
  *
- * Measured here rather than in the window so the convention's names are
- * spelled in one language. The window uses it for two things: marking the
- * cabinet as the working surface, and refusing a drop before it asks —
- * [`intake`](crate::intake) takes no destination at all, so a refusal there
- * is the window being honest about a target, not the enforcement.
+ * Lets the window mark the cabinet and pre-refuse drop targets; enforcement is
+ * [`intake`](crate::intake)'s.
  */
 export type Zone = "plain" | "briefs" | "artefacts" | "cabinet" | "world";

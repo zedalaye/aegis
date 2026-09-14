@@ -1,28 +1,11 @@
 /**
  * The pending approval queue, and the grants answering one can create.
  *
- * The runtime owns both. This store is a cache with one job beyond mirroring:
- * making sure the card on screen and the request the runtime is parked on are
- * the same thing, or that the card goes away.
- *
- * Three rules follow from that, and they are the whole design.
- *
- * **Events add and remove; the command list reconciles.** A
- * `tool:approval_required` queues a card, a `tool:approval_resolved` removes
- * one. Neither is trusted to be complete — a window that was closed, reloaded
- * or switched between sessions missed events it can never get back — so
- * {@link ApprovalsState.syncFor} refetches the authoritative queue whenever the
- * open session changes.
- *
- * **A stale answer is a failure, not a no-op.** `E_APPROVAL_STALE` means the
- * click did nothing: the request expired, was already answered, or its turn was
- * cancelled. The card is dropped and the queue re-synced rather than closed
- * on the belief that something was approved.
- *
- * **`allow_session` is offered only where the request says it may be.** The
- * button is not drawn when `session_grant_allowed` is false, and the runtime
- * refuses the decision anyway (PLAN 3.1) — this is the display half of a rule
- * enforced in Rust, never the rule itself.
+ * - Events add and remove cards; {@link ApprovalsState.syncFor} refetches the
+ *   runtime's queue when the open session changes.
+ * - `E_APPROVAL_STALE` drops the card and re-syncs.
+ * - `allow_session` is hidden when `session_grant_allowed` is false; the
+ *   runtime enforces it anyway (PLAN 3.1).
  */
 
 import { create } from "zustand";

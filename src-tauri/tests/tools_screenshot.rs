@@ -1,24 +1,12 @@
 //! `screen_capture`, driven the way the turn loop drives it.
 //!
-//! Every test goes `policy::decide` → `tools::run` or `tools::refuse`, for the
-//! same reason the filesystem tests do: a capture that could be reached without
-//! a decision would be a capture outside the gate.
+//! Every test goes `policy::decide` → `tools::run` or `tools::refuse`.
 //!
-//! The one thing that cannot be asserted from a test is what is on the screen,
-//! and one property here is deliberately written as an alternative rather than
-//! an assertion about pixels: a capture either produces exactly one PNG whose
-//! digest matches the audit line, or it is refused with `E_SCREEN_PERMISSION`
-//! and produces nothing. That covers every machine this suite runs on — a
-//! developer's desktop, a macOS box that has not been granted Screen Recording,
-//! a headless runner — without any of them needing a special case, and it is
-//! the property that actually matters: there is no third outcome in which a
-//! file appears that nothing recorded, or a success is reported with no file
-//! behind it.
-//!
-//! What *is* asserted unconditionally is everything around the pixels: that the
-//! gate always asks, that a refusal writes nothing, that the audit line carries
-//! the path, the size and a digest and never the image, and that a session
-//! grant covers later captures without a second prompt.
+//! A capture either yields one PNG whose digest matches the audit line, or
+//! `E_SCREEN_PERMISSION` with no file — so the suite passes on desktops,
+//! unauthorized macOS and headless runners alike. Always asserted: the gate
+//! asks, refusals write nothing, the audit line has no image, and a session
+//! grant covers later captures.
 
 use std::fs;
 use std::path::PathBuf;
@@ -33,10 +21,7 @@ use tempfile::TempDir;
 
 /// A capture directory, a workspace, the grants and a fresh audit log.
 ///
-/// A workspace is here because policy refuses every call without one
-/// (PLAN 3.2), not because a capture goes anywhere near it — captures are
-/// written under the application-data directory, and one of the tests below
-/// says so.
+/// The workspace exists only because policy requires one (PLAN 3.2).
 struct Fixture {
     _dir: TempDir,
     workspace: PathBuf,
@@ -298,11 +283,8 @@ fn allowing_captures_for_the_session_stops_the_prompt() {
 
 /// The exit criterion of Phase 9 (PLAN § 6), as far as a test can state it.
 ///
-/// Two outcomes are legitimate and there is no third. Either the platform
-/// handed over a frame — one PNG on disk, an envelope naming it, an audit line
-/// whose digest matches the bytes — or it refused, which is
-/// `E_SCREEN_PERMISSION` and an empty directory. What this rules out is the
-/// failure PLAN 5.2 names: a black image reported as a screenshot.
+/// A matching PNG, or `E_SCREEN_PERMISSION` and nothing — never a blank
+/// screenshot reported as success (PLAN 5.2).
 #[test]
 fn a_capture_either_writes_one_png_or_explains_why_not() {
     let fixture = Fixture::new();
@@ -384,9 +366,7 @@ fn a_capture_never_lands_in_the_workspace() {
 /// The dialog is given the display's own name and both of its sizes, so a user
 /// can check the prompt against the screen in front of them (PLAN 5.1).
 ///
-/// Skipped where there is no display to measure; there is nothing to assert
-/// about a machine that has none, and refusing to run at all would make the
-/// suite untrustworthy on a headless runner rather than more thorough.
+/// Skipped without a display.
 #[test]
 fn the_prompt_describes_the_display_it_would_capture() {
     let Some(screen) = aegis_lib::tools::screenshot::geometry() else {

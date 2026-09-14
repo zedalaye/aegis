@@ -1,43 +1,21 @@
 //! The session document: `sessions.json`.
 //!
-//! A session is a conversation inside a project: a title, a transcript, and
-//! the timestamps that order it in the sidebar. Everything the UI shows about
-//! a session that survives a restart is here; everything that does not — most
-//! importantly whether a turn is running — is deliberately absent.
+//! A session is a conversation in a project: title, transcript, timestamps.
+//! Whether a turn is running is never persisted — [`SessionState`] is derived
+//! from the turn registry on read — so a session interrupted by a crash comes
+//! back idle.
 //!
-//! That absence is the one design decision worth stating up front. A session's
-//! [`SessionState`] is derived on read from the live turn registry, never
-//! persisted, for the same reason `workspace_exists` is never persisted: if
-//! Aegis is killed mid-turn, a stored `running` would come back after the
-//! restart and there would be nothing left to finish it. A session that was
-//! interrupted is idle, because that is what it is.
+//! A [`Compaction`] (Phase 14) is a pointer plus derived state, never a
+//! deletion: the transcript stays whole, and only what [`compact::tail`] hands
+//! the model changes.
 //!
-//! One document holds every session of every project. At MVP scale — a handful
-//! of projects, transcripts a human typed — that is a file a person can open
-//! and read, which is worth more than the write amplification it costs. A
-//! transcript that outgrows it wants its own file; the seam for that is
-//! [`SessionStore::save`], the only place the whole document is serialized.
-//!
-//! From Phase 14 a session may also carry a [`Compaction`], and it is worth
-//! being clear about what that is not: it is a *pointer* plus derived state,
-//! never a deletion. The transcript above it stays in this document, whole and
-//! in order — [`SessionStore::compact`] adds a record and removes no message.
-//! What a fold changes is which messages [`compact::tail`] hands to the model,
-//! and nothing else. A store that trimmed the transcript to save the model
-//! tokens would be destroying the only copy of a conversation somebody is
-//! still reading.
-//!
-//! From Phase 17 it also carries what each turn *cost*: one [`TurnCost`] per
-//! finished turn, and [`Cost`] over any set of them. That is here rather than
-//! on the audit line for a reason worth writing down, because PLAN 7.1 lists
-//! `tokens` beside `agent_id` and `skill` as a field the log could grow.
-//! **Tokens are not a property of a tool call.** They are spent by a model
-//! round, several calls can come out of one round, and — the fact that settles
-//! it — a turn that called no tool at all still spends them. A counter built
-//! from the audit log would silently omit every reply that only talked, which
-//! is most of them. So cost is recorded where it is spent, keyed by the same
-//! `turn_id` the audit line carries, and a run's cost is the join of the two
+//! Each finished turn's [`TurnCost`] (Phase 17) is stored here rather than on
+//! the audit line: tokens are spent per model round, and a turn that called no
+//! tool still spends them. A run's cost joins the two on `turn_id`
 //! ([`board::trace`](crate::board::trace)).
+//!
+//! One document holds every session; [`SessionStore::save`] is the seam if a
+//! transcript ever needs a file of its own.
 
 use std::fs;
 use std::io;
@@ -58,30 +36,20 @@ use crate::error::{AppError, AppResult};
 /// Name of the document under the application-data directory.
 const SESSIONS_FILE: &str = "sessions.json";
 
-/// Schema version of [`SessionsFile`].
-///
-/// Independent of the project document's version: the two files change at very
-/// different rates, and a migration to one has no business quarantining the
-/// other.
+/// Schema version of [`SessionsFile`], independent of the project document's.
 const SCHEMA_VERSION: u32 = 1;
 
 /// Title given to a session created without one.
 const DEFAULT_TITLE: &str = "New session";
 
 /// How much of the first user message becomes the session title.
-///
-/// Long enough to tell two sessions apart in a sidebar, short enough not to
-/// wrap.
 const TITLE_MAX_CHARS: usize = 48;
 
 // ---------------------------------------------------------------------------
 // IPC payloads (PLAN 2.1, "Sessions and turns")
 // ---------------------------------------------------------------------------
 
-/// Lifecycle of a session.
-///
-/// Derived from the turn registry on every read, never stored — see the module
-/// documentation.
+/// Lifecycle of a session, derived on every read and never stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -108,10 +76,7 @@ pub enum Role {
     Assistant,
     /// A tool result, answering one of the assistant's calls.
     Tool,
-    /// The instructions the runtime prepends.
-    ///
-    /// Never persisted in a transcript: it is rebuilt for every request,
-    /// because the workspace path it names can change between turns.
+    /// The runtime's instructions. Never persisted: rebuilt for every request.
     System,
 }
 
@@ -136,12 +101,8 @@ pub enum ToolCallStatus {
     Cancelled,
 }
 
-/// One tool call, as the transcript records it.
-///
-/// `args_json` is what the model actually sent, kept verbatim so the card in
-/// the UI shows the call that was made rather than the call policy resolved.
-/// `summary` is the one human line — never a raw blob, because a transcript
-/// that inlines 200 KB of file content is a transcript nobody scrolls.
+/// One tool call as the transcript records it: `args_json` verbatim as the
+/// model sent it, `summary` one human line, never a blob.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ToolCallRecord {
@@ -155,22 +116,12 @@ pub struct ToolCallRecord {
     pub status: ToolCallStatus,
     /// One human line naming the result, or `null` before there is one.
     pub summary: Option<String>,
-    /// A local image the call produced, for the transcript to show.
-    ///
-    /// Only `screen_capture` sets it, and it is a path rather than the bytes
-    /// (PLAN 5.4): the WebView loads it through the asset protocol, which is
-    /// scoped to the capture directory. Persisted, so re-opening a session
-    /// shows the capture again instead of a line saying one was taken.
-    ///
-    /// `#[serde(default)]` for the transcripts written before this field
-    /// existed — a session on disk must keep opening.
+    /// A capture's path for the transcript (PLAN 5.4), persisted so a reopened
+    /// session shows it. Defaulted for older transcripts.
     #[serde(default)]
     pub image_path: Option<String>,
-    /// Gemini thought signature to echo on the next request.
-    ///
-    /// Opaque encrypted state. Not shown in the WebView (`ts(skip)`); kept on
-    /// disk so a tool round after a restart still has it. Missing in
-    /// transcripts written before this field existed.
+    /// Gemini's thought signature, echoed on the next request. Opaque, kept on
+    /// disk across restarts, never sent to the WebView.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub thought_signature: Option<String>,
@@ -230,10 +181,7 @@ impl Message {
         }
     }
 
-    /// Whether this message carries nothing at all.
-    ///
-    /// A turn that produced no text and made no calls has nothing to record,
-    /// and an empty bubble in the transcript is worse than no bubble.
+    /// Whether this message carries nothing, and so is not recorded.
     pub fn is_empty(&self) -> bool {
         self.text.trim().is_empty() && self.tool_calls.is_empty()
     }
@@ -249,14 +197,9 @@ pub struct SessionSummary {
     pub id: String,
     /// The project this session belongs to.
     pub project_id: String,
-    /// The identity this session runs as (PLAN 7.3, Phase 12).
-    ///
-    /// Always a concrete id, never absent: a session written before identities
-    /// existed stored nothing, and resolves to
-    /// [`DEFAULT_AGENT_ID`](super::agents::DEFAULT_AGENT_ID) here. The store
-    /// keeps the distinction — "chose nothing" and "chose the default" are
-    /// different facts about a document — and the payload does not, because a
-    /// UI that had to handle both would draw the same badge twice.
+    /// The identity this session runs as (Phase 12). Always concrete: a session
+    /// from before identities resolves to
+    /// [`DEFAULT_AGENT_ID`](super::agents::DEFAULT_AGENT_ID).
     pub agent_id: String,
     /// Display title. Taken from the first user message when not given.
     pub title: String,
@@ -268,24 +211,12 @@ pub struct SessionSummary {
     pub message_count: u32,
     /// What the session is doing *right now*.
     pub state: SessionState,
-    /// The brief that opened this session, when one did (PLAN 7.3, Phase 15).
-    ///
-    /// `None` for every session a person started, which is every session before
-    /// this phase. The sidebar draws it as a badge rather than hiding the row:
-    /// work done on your behalf should be as visible as work you asked for.
+    /// The brief that opened this session (Phase 15), drawn as a badge.
     pub delegated: Option<Delegated>,
-    /// The routine that opened this session, when one did (PLAN 7.3, Phase 16).
-    ///
-    /// The other way a session comes to exist without anybody typing. It is a
-    /// second field rather than a variant beside [`SessionSummary::delegated`]
-    /// because the two are different facts and a session could one day be both
-    /// — a routine's run is not a brief, and a brief is not on a clock.
+    /// The routine that opened this session (Phase 16). Its own field: a
+    /// routine's run is not a brief.
     pub scheduled: Option<Scheduled>,
-    /// What the whole conversation has spent (PLAN 7.3, Phase 17).
-    ///
-    /// Summed on read from the per-turn records rather than kept as a running
-    /// total, for the reason `message_count` is: a stored aggregate is a second
-    /// copy of a fact, and the two disagree the first time anything goes wrong.
+    /// What the conversation spent (Phase 17), summed on read, never stored.
     pub cost: Cost,
 }
 
@@ -298,35 +229,16 @@ pub struct SessionDetail {
     /// Oldest first — the order the transcript is read in.
     pub messages: Vec<Message>,
     /// What has been folded out of the model's context, if anything.
-    ///
-    /// On the detail rather than on the summary because it is about the
-    /// *transcript*, and the summary is a sidebar row: what a fold changes is
-    /// how the conversation is drawn, and the sidebar does not draw one.
     pub compaction: Option<Compaction>,
-    /// Approvals this session is blocked on.
-    ///
-    /// Filled by [`AppState::session_detail`](crate::AppState::session_detail)
-    /// rather than here: the transcript is on disk, and what a session is
-    /// waiting for is a fact about this process. It is on the detail at all so
-    /// that a window reopened mid-turn re-draws the dialog it missed, instead
-    /// of leaving a turn blocked on a prompt nobody can see.
+    /// Approvals this session is blocked on, filled by
+    /// [`AppState::session_detail`](crate::AppState::session_detail) so a
+    /// reopened window redraws the dialog.
     pub pending_approvals: Vec<ApprovalRequest>,
 }
 
-/// Why a session exists, when a person did not open it (PLAN 7.3, Phase 15).
-///
-/// A delegated run is an ordinary session in every way that matters — same
-/// transcript, same approval gate, same audit lines, same identity binding —
-/// and this record is the difference: it says which delegation opened it, which
-/// session was delegating, and where the brief was filed.
-///
-/// It is on the session rather than in a store of its own because a delegated
-/// run *is* a session, and a second document listing which sessions are really
-/// runs would be a second thing to keep in step with this one. It is also what
-/// keeps the work visible: a specialist's session opens in the sidebar like any
-/// other, so "what did the reviewer actually do" is a click rather than a
-/// forensic exercise (`COS.md` aggregates status for the *CoS*, not for the
-/// person).
+/// Why a session exists when a brief opened it (Phase 15): which delegation,
+/// which session delegated, where the brief was filed. Otherwise an ordinary
+/// session, visible in the sidebar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct Delegated {
@@ -334,21 +246,13 @@ pub struct Delegated {
     pub handoff_id: String,
     /// The session whose turn handed the brief out.
     pub from_session_id: String,
-    /// Where the brief was filed, relative to the workspace root.
-    ///
-    /// `None` when the workspace has no `.aegis/briefs/` — the brief then lives only
-    /// in the first message of this transcript, which is still a record of it.
+    /// Where the brief was filed, relative to the workspace. `None` without
+    /// `.aegis/briefs/`: the brief is then only the first message.
     pub brief: Option<String>,
 }
 
-/// Why a session exists, when a clock opened it (PLAN 7.3, Phase 16).
-///
-/// The routine's record on the run, and the mirror of [`Delegated`]: a
-/// scheduled run is an ordinary session in every way that matters, and this is
-/// the difference. The routine's *name* is copied rather than only its id, so a
-/// row still says what fired it after the routine has been renamed or deleted —
-/// a transcript is a record of something that happened, and it should not stop
-/// explaining itself because a document moved on.
+/// Why a session exists when a routine opened it (Phase 16). The routine's name
+/// is copied so the row still explains itself after a rename or deletion.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct Scheduled {
@@ -360,13 +264,8 @@ pub struct Scheduled {
     pub skill: String,
 }
 
-/// What a session has folded, and what it folded to (PLAN 7.3, Phase 14).
-///
-/// A pointer and a summary, never a deletion: `through_message_id` names the
-/// last message that no longer reaches the model, and the transcript on disk
-/// still holds every one of them. That split is the whole design — the user
-/// keeps scrolling through the conversation they had, and the model stops
-/// paying for it ([`compact`](crate::compact)).
+/// What a session has folded (Phase 14): a pointer and derived state, never a
+/// deletion ([`compact`](crate::compact)).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct Compaction {
@@ -381,21 +280,9 @@ pub struct Compaction {
     pub at: String,
 }
 
-/// What one turn spent, as the provider reported it (PLAN 7.3, Phase 17).
-///
-/// One record per finished turn, whatever the turn did — a reply that only
-/// talked costs tokens as surely as one that ran six tools, and a ledger that
-/// only counted the second kind would answer "what did it cost" with a number
-/// nobody could reconcile against a bill.
-///
-/// `turn_id` is the same id the audit line carries, which is the whole reason
-/// this can be joined to a run: the log says *which* turns a delegation or a
-/// runbook made its calls in, and this says what each of those turns spent.
-///
-/// `reported` is the honesty flag. Not every OpenAI-compatible server sends a
-/// `usage` object, and a turn whose cost is unknown is recorded as unknown
-/// rather than as zero — a counter that quietly added nothing would read as a
-/// free turn, which is the one thing it certainly was not.
+/// What one finished turn spent, as the provider reported it (Phase 17),
+/// whatever the turn did. `turn_id` joins it to the audit lines;
+/// `reported: false` means unknown, not free.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct TurnCost {
@@ -404,11 +291,8 @@ pub struct TurnCost {
     /// Tokens in the requests this turn made, cached ones included.
     #[ts(type = "number")]
     pub prompt_tokens: u64,
-    /// Of those, how many were served out of the prompt cache.
-    ///
-    /// Defaulted rather than required: sessions charged before this was
-    /// recorded are read back as turns that cached nothing, which is what a
-    /// turn that predates the field did.
+    /// Of those, how many were served from the prompt cache. Defaulted for
+    /// older records.
     #[serde(default)]
     #[ts(type = "number")]
     pub cache_read_tokens: u64,
@@ -427,11 +311,7 @@ pub struct TurnCost {
 }
 
 impl TurnCost {
-    /// A turn whose provider reported what it spent.
-    ///
-    /// The two counts are per turn, not per request: a turn that ran three
-    /// rounds of tool calls made three requests, and what is stored is their
-    /// sum, because the turn is the smallest thing a person asked for.
+    /// A turn whose provider reported usage, summed over the turn's requests.
     pub fn reported(turn_id: &str, prompt_tokens: u64, completion_tokens: u64) -> Self {
         Self {
             turn_id: turn_id.to_owned(),
@@ -444,12 +324,8 @@ impl TurnCost {
         }
     }
 
-    /// How much of [`Self::prompt_tokens`] went through the cache.
-    ///
-    /// Separate from `reported` because it is a different kind of silence: a
-    /// provider that reports usage but no cache figures is one that does not
-    /// cache, and zero is the honest answer for it — unlike a provider that
-    /// reported nothing at all, which is what `reported: false` is for.
+    /// How much of [`Self::prompt_tokens`] went through the cache. Zero is honest
+    /// for a provider that reports usage without cache figures.
     pub const fn with_cache(mut self, read: u64, created: u64) -> Self {
         self.cache_read_tokens = read;
         self.cache_creation_tokens = created;
@@ -475,13 +351,8 @@ impl TurnCost {
     }
 }
 
-/// Tokens spent over some set of turns (PLAN 7.3, Phase 17).
-///
-/// The unit the UI counts in. `unreported` is carried beside the totals rather
-/// than folded into them so a number can say how much of itself is missing: a
-/// session of ten turns where three providers stayed silent is *at least* this
-/// many tokens, and a board that could not say "at least" would be inventing
-/// precision it does not have.
+/// Tokens spent over some turns (Phase 17). `unreported` is kept apart so a
+/// total can read "at least".
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct Cost {
@@ -550,19 +421,14 @@ impl Cost {
             .saturating_add(other.completion_tokens);
     }
 
-    /// Whether anything at all is known here.
-    ///
-    /// A board draws nothing rather than "0 tokens" for a run that never
-    /// reached a model.
+    /// Whether nothing is known: a board then draws nothing, not "0 tokens".
     pub const fn is_empty(&self) -> bool {
         self.turns == 0
     }
 }
 
-/// What `session_send` hands back (PLAN 2.1).
-///
-/// The turn itself is reported through events; this is only the handle needed
-/// to cancel it.
+/// What `session_send` returns (PLAN 2.1): the handle to cancel the turn, which
+/// reports through events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct TurnHandle {
@@ -583,21 +449,15 @@ struct SessionsFile {
     sessions: Vec<StoredSession>,
 }
 
-/// A session record as persisted.
-///
-/// Deliberately not [`SessionSummary`]: `state` and `message_count` are both
-/// derived, and keeping the two types apart makes it impossible to persist
-/// either by accident.
+/// A session record as persisted. Not [`SessionSummary`], so derived fields
+/// cannot be persisted by accident. Every later field is `#[serde(default)]`,
+/// which is how older documents keep loading.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSession {
     id: String,
     project_id: String,
-    /// The identity this session is bound to.
-    ///
-    /// `#[serde(default)]` and `Option` together are the migration: every
-    /// session written before Phase 12 has no such key, reads back as `None`,
-    /// and resolves to the built-in identity — which is the assistant it was
-    /// already running as. Nothing is rewritten on load.
+    /// The bound identity; `None` before Phase 12, resolving to the built-in
+    /// one.
     #[serde(default)]
     agent_id: Option<String>,
     title: String,
@@ -605,37 +465,17 @@ struct StoredSession {
     updated_at: String,
     #[serde(default)]
     messages: Vec<Message>,
-    /// What has been folded, or `None` for a session that never has been.
-    ///
-    /// `#[serde(default)]` is the migration, as it was for `agent_id`: a
-    /// session written before Phase 14 reads back with none, which is exactly
-    /// what it had — a transcript that reaches the model whole.
+    /// What has been folded, if anything.
     #[serde(default)]
     compaction: Option<Compaction>,
-    /// The brief that opened this session, when one did.
-    ///
-    /// `#[serde(default)]` is the migration, as it was for `agent_id` and
-    /// `compaction`: a session written before Phase 15 reads back with none,
-    /// which is exactly what it is — one somebody opened themselves.
+    /// The brief that opened this session, if one did.
     #[serde(default)]
     delegated: Option<Delegated>,
-    /// The routine that opened this session, when one did.
-    ///
-    /// `#[serde(default)]` is the migration, for the fourth time and for the
-    /// same reason: a session written before Phase 16 reads back with none,
-    /// which is exactly what it is — one nothing scheduled.
+    /// The routine that opened this session, if one did.
     #[serde(default)]
     scheduled: Option<Scheduled>,
-    /// What each finished turn spent, oldest first.
-    ///
-    /// A list rather than a running total because a *run* is rarely a whole
-    /// session: a runbook, or a brief, occupies some of a conversation's turns
-    /// and not others, and only the per-turn rows can answer what that part of
-    /// it cost. The audit line names the turn; this says what the turn spent.
-    ///
-    /// `#[serde(default)]` is the migration, for the fifth time: a session
-    /// written before Phase 17 reads back with none, which is what is known
-    /// about it — nothing was recorded, so nothing is claimed.
+    /// What each finished turn spent, oldest first. Per turn, because a run
+    /// covers only some of a session's turns.
     #[serde(default)]
     costs: Vec<TurnCost>,
 }
@@ -667,16 +507,9 @@ impl StoredSession {
 // Store
 // ---------------------------------------------------------------------------
 
-/// The session store: the in-memory sessions plus the document backing them.
-///
-/// Same shape as [`Store`](super::projects::Store), and for the same reasons:
-/// one mutex over the whole list, written out on every mutation, so "what is
-/// on disk" always equals "what is in memory" once a call returns.
-///
-/// Every method that produces a [`SessionSummary`] is *given* the state to
-/// stamp on it rather than inventing one. The store cannot see the turn
-/// registry, and a default of `Idle` invented here is exactly the lie that
-/// would draw a running session as idle.
+/// The session store: one mutex over the list, written out on every mutation.
+/// Methods that produce a [`SessionSummary`] take its state from the caller,
+/// since the store cannot see the turn registry.
 #[derive(Debug)]
 pub struct SessionStore {
     path: PathBuf,
@@ -684,10 +517,8 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
-    /// Loads the store from `data_dir`.
-    ///
-    /// Never fails, for the reason [`Store::load`](super::projects::Store::load)
-    /// does not: a tray app that will not boot cannot explain why it did not.
+    /// Loads the store from `data_dir`. Never fails: an unreadable document
+    /// starts empty.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(SESSIONS_FILE);
 
@@ -728,31 +559,18 @@ impl SessionStore {
         }
     }
 
-    /// Locks the list, recovering from a poisoned mutex.
-    ///
-    /// Same reasoning as the project store: the guarded value is a `Vec` that
-    /// is only ever replaced wholesale, so it cannot be torn, and propagating
-    /// a panic through every later command is strictly worse.
+    /// Locks the list, recovering from poison: it cannot be left torn.
     fn sessions(&self) -> MutexGuard<'_, Vec<StoredSession>> {
         self.sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Creates a session in `project_id`, bound to `agent_id`.
-    ///
-    /// An empty title becomes [`DEFAULT_TITLE`], which the first user message
-    /// then replaces — see [`SessionStore::append`].
-    ///
-    /// The identity is fixed here and never changed afterwards. There is
-    /// deliberately no way to rebind one: a transcript is a record of what an
-    /// identity did, and moving it under a different one would leave `fs_write`
-    /// calls in the history of an identity that was never allowed to make any.
-    /// Working as someone else is a new session, which costs a click.
-    ///
-    /// Whether the identity exists is checked by the caller — this store cannot
-    /// see the agent document, and
-    /// [`AppState::create_session`](crate::AppState::create_session) can.
+    /// Creates a session in `project_id`, bound to `agent_id` for good: a
+    /// transcript is the record of what that identity did. An empty title
+    /// becomes [`DEFAULT_TITLE`] until the first user message
+    /// ([`SessionStore::append`]). The caller checks the identity exists
+    /// ([`AppState::create_session`](crate::AppState::create_session)).
     pub fn create(
         &self,
         project_id: &str,
@@ -762,11 +580,8 @@ impl SessionStore {
         self.open_session(project_id, title, agent_id, None, None)
     }
 
-    /// Creates the session a brief opens (PLAN 7.3, Phase 15).
-    ///
-    /// The same call with a [`Delegated`] on it. Deliberately the same session
-    /// in every other respect: a specialist's run is gated, audited, titled and
-    /// listed exactly as a session someone typed into, because it is one.
+    /// Creates the session a brief opens (Phase 15): an ordinary session with a
+    /// [`Delegated`] on it.
     pub fn create_delegated(
         &self,
         project_id: &str,
@@ -777,11 +592,8 @@ impl SessionStore {
         self.open_session(project_id, title, agent_id, Some(delegated), None)
     }
 
-    /// Creates the session a routine opens (PLAN 7.3, Phase 16).
-    ///
-    /// The same call again, with a [`Scheduled`] on it, and for the same
-    /// reason: a run nobody watched should be as readable afterwards as one
-    /// somebody sat through.
+    /// Creates the session a routine opens (Phase 16), with a [`Scheduled`] on
+    /// it.
     pub fn create_scheduled(
         &self,
         project_id: &str,
@@ -828,11 +640,8 @@ impl SessionStore {
         Ok(created)
     }
 
-    /// A project's sessions, most recently active first.
-    ///
-    /// `state_of` is asked for each session's live state; the store has no way
-    /// to know it. Timestamps are fixed-width UTC RFC3339, so comparing them as
-    /// strings *is* comparing them as instants.
+    /// A project's sessions, most recently active first, stamped by `state_of`.
+    /// Fixed-width UTC RFC3339 strings sort as instants.
     pub fn list(
         &self,
         project_id: &str,
@@ -879,36 +688,19 @@ impl SessionStore {
         Ok(Self::find(&sessions, id)?.messages.clone())
     }
 
-    /// The transcript and what has been folded out of it (PLAN 7.3, Phase 14).
-    ///
-    /// Both under one lock, because they are one fact. Read separately, a
-    /// compaction landing between the two reads would produce a pointer into a
-    /// transcript that does not match it, and the request built from the pair
-    /// would be missing a turn nobody folded.
+    /// The transcript and its compaction (Phase 14), under one lock so they
+    /// match.
     pub fn context(&self, id: &str) -> AppResult<(Vec<Message>, Option<Compaction>)> {
         let sessions = self.sessions();
         let session = Self::find(&sessions, id)?;
         Ok((session.messages.clone(), session.compaction.clone()))
     }
 
-    /// Folds the older part of a transcript into state, and reports what is
-    /// now folded.
-    ///
-    /// `force` is the button; without it the transcript also has to have grown
-    /// past [`compact::COMPACT_AT_BYTES`]. `Ok(None)` means nothing moved —
-    /// too few turns, or a fold that would land exactly where the last one did
-    /// — which is an ordinary answer and not a failure: pressing "compact" on
-    /// a short session should say "there is nothing to fold", not fail.
-    ///
-    /// The state is re-derived from the messages every time rather than folded
-    /// into whatever the previous compaction said. Deriving from the record is
-    /// what keeps a session compacted five times from being a summary of a
-    /// summary of a summary — the transcript is still all there, so there is
-    /// never a reason to compound.
-    ///
-    /// `updated_at` is deliberately not touched. A fold is maintenance, not
-    /// activity, and a sidebar that reordered itself because a session tidied
-    /// its own context would be reporting something that did not happen.
+    /// Folds the older part of a transcript, returning the new compaction or
+    /// `None` when nothing moved (too few turns, or the same cut as before).
+    /// `force` is the button; otherwise the transcript must pass
+    /// [`compact::COMPACT_AT_BYTES`]. The state is derived from the messages
+    /// every time, never from a previous fold. `updated_at` is left alone.
     pub fn compact(&self, id: &str, force: bool) -> AppResult<Option<Compaction>> {
         let mut sessions = self.sessions();
         let session = Self::find_mut(&mut sessions, id)?;
@@ -944,21 +736,8 @@ impl SessionStore {
         Ok(Some(compaction))
     }
 
-    /// Records what a turn spent (PLAN 7.3, Phase 17).
-    ///
-    /// Called once per finished turn, whatever the turn did and however it
-    /// ended — a cancelled turn spent the tokens it had already spent, and a
-    /// ledger that only counted the tidy endings would be one nobody could
-    /// reconcile.
-    ///
-    /// `updated_at` is deliberately not touched, for the reason
-    /// [`SessionStore::compact`] does not touch it: the turn that just ran has
-    /// already bumped it by appending its message, and stamping it a second
-    /// time would reorder the sidebar for a bookkeeping write.
-    ///
-    /// Charging the same turn twice replaces rather than adds. Nothing calls it
-    /// twice today; if something ever does, the second figure is a correction
-    /// of the first, never a second turn's worth of tokens.
+    /// Records what a turn spent (Phase 17), for every ending. Charging the same
+    /// turn again replaces the figure. `updated_at` is left alone.
     pub fn charge(&self, id: &str, cost: TurnCost) -> AppResult<Cost> {
         let mut sessions = self.sessions();
         let session = Self::find_mut(&mut sessions, id)?;
@@ -977,10 +756,8 @@ impl SessionStore {
         Ok(total)
     }
 
-    /// What each of a session's turns spent, oldest first.
-    ///
-    /// The join a trace makes: given the turn ids on a run's audit lines, this
-    /// is what those turns cost ([`board::trace`](crate::board::trace)).
+    /// Each turn's cost, oldest first, joined to runs by
+    /// [`board::trace`](crate::board::trace).
     pub fn costs(&self, id: &str) -> AppResult<Vec<TurnCost>> {
         let sessions = self.sessions();
         Ok(Self::find(&sessions, id)?.costs.clone())
@@ -1060,15 +837,8 @@ impl SessionStore {
         Ok(updated)
     }
 
-    /// Updates one tool call inside whichever assistant message holds it.
-    ///
-    /// Addressed by `call_id` alone: the id is the model's, unique within the
-    /// turn, and scanning for it costs nothing at transcript scale. `summary`
-    /// of `None` leaves the existing one alone, so a status change does not
-    /// erase the line a finished call already wrote.
-    ///
-    /// Returns whether a call was found. A caller that silently updated
-    /// nothing is a bug worth seeing in the log.
+    /// Updates one tool call by `call_id`, returning whether it was found. A
+    /// `None` summary or image keeps what an earlier update recorded.
     pub fn set_tool_call_status(
         &self,
         id: &str,
@@ -1090,9 +860,6 @@ impl SessionStore {
                 if summary.is_some() {
                     call.summary = summary;
                 }
-                // Same rule as the summary, for the same reason: a later
-                // status change carrying nothing must not erase what an
-                // earlier one recorded.
                 if image_path.is_some() {
                     call.image_path = image_path;
                 }
@@ -1126,11 +893,7 @@ impl SessionStore {
         Ok(())
     }
 
-    /// Deletes every session of a project, and reports how many went.
-    ///
-    /// Called when a project is forgotten. Sessions of a project that no
-    /// longer exists are unreachable, and leaving them behind would grow the
-    /// document forever with transcripts nothing can open.
+    /// Deletes every session of a forgotten project, returning how many went.
     pub fn delete_for_project(&self, project_id: &str) -> AppResult<usize> {
         let mut sessions = self.sessions();
 
@@ -1165,9 +928,6 @@ impl SessionStore {
     }
 
     /// Serializes the list and replaces the document atomically.
-    ///
-    /// Takes the guard, so the only way to reach it is to already hold the
-    /// lock: a caller cannot mutate the list and forget to persist it.
     fn save(&self, sessions: &[StoredSession]) -> AppResult<()> {
         let file = SessionsFile {
             version: SCHEMA_VERSION,
@@ -1192,20 +952,15 @@ impl SessionStore {
     }
 }
 
-/// A session title taken from the first thing the user said.
-///
-/// Whitespace collapses, so a pasted block does not become a title with a line
-/// break in it. The cut prefers the last word boundary in the final quarter of
-/// the budget: cutting mid-word reads as a bug, cutting a little short does
-/// not.
+/// A session title from the first user message: whitespace collapsed, cut at
+/// the last word boundary in the final quarter of the budget.
 fn title_from(text: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.is_empty() {
         return DEFAULT_TITLE.to_owned();
     }
 
-    // `char_indices` rather than byte slicing: a title is user text, and
-    // cutting a multi-byte character in half would panic.
+    // By character, so a multi-byte character is never split.
     let Some(end) = flat.char_indices().map(|(i, _)| i).nth(TITLE_MAX_CHARS) else {
         return flat;
     };
@@ -1765,10 +1520,8 @@ mod tests {
         assert!(fx.reopen().list("p", &idle).is_empty());
     }
 
-    /// `src/ipc/bindings.ts` is generated from these structs, so a renamed
-    /// field reaches TypeScript on its own. What generation cannot check is
-    /// that the names still match the contract in `PLAN.md` § 2.1 — a rename
-    /// would regenerate happily and silently change the wire format.
+    /// Generated bindings follow a rename silently; this pins the wire names
+    /// to PLAN 2.1.
     #[test]
     fn payloads_carry_the_documented_field_names() {
         let detail = SessionDetail {
