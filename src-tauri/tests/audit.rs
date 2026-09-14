@@ -1,15 +1,9 @@
 //! The audit log as a file on disk.
 //!
-//! `tests/tools_fs.rs` checks that tool calls produce lines. This file checks
-//! the properties of the log itself — the ones a person auditing a machine
-//! actually depends on:
-//!
-//! * every call leaves exactly one line, in the order the calls were made;
-//! * the line carries the documented field names, because the file *is* the
-//!   wire format `audit_tail` returns and a renamed field is a broken UI;
-//! * a file's contents never appear in it, whatever a tool was asked to write;
-//! * reading survives a log that a killed process left half-written, and one
-//!   that has grown past anything a reader wants in memory.
+//! * one line per call, in order;
+//! * documented field names (the file is `audit_tail`'s wire format);
+//! * no file contents, ever;
+//! * reads survive a half-written tail and a very large log.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;

@@ -1,15 +1,8 @@
 /**
  * The open project's sessions, most recently active first.
  *
- * Sits under the project rail in the sidebar. It draws nothing at all when no
- * project is open: a "+" with nowhere to put the session is a button that can
- * only produce an error.
- *
- * Adding one is the "+" on the heading. With a single identity that click
- * creates a session, the way it always has. With more than one it opens a
- * menu of identities — the choice is only ever made once, because a session
- * is bound when it is created and stays bound, so a control offering the
- * choice later would be offering something that cannot be done.
+ * Hidden when no project is open. The heading's "+" creates a session, or
+ * offers an identity menu when there are several (binding is permanent).
  */
 
 import { DEFAULT_AGENT_ID, useAgents } from "../../state/agents";

@@ -1,16 +1,9 @@
 /**
  * A markdown file, drawn as elements (PLAN 7.15).
  *
- * The tree comes from `lib/markdown.ts`; this only maps nodes to elements.
- * There is no `dangerouslySetInnerHTML` here and there must never be one: every
- * string ends up as a text node, which is what makes a hostile file inert. See
- * the parser's header for what that costs — no loaded images, no navigating
- * links — and why each is the point.
- *
- * What it does add is the one affordance a preview of a *brief* needs: a path
- * the file names can be opened. A relative link opens the file it points at; a
- * code span that reads as a path offers the same. Both go through the runtime's
- * preview command, which is contained to the workspace whatever the file says.
+ * Maps `lib/markdown.ts` nodes to elements. Never `dangerouslySetInnerHTML`:
+ * every string is a text node. Relative links and path-like code spans open in
+ * the (contained) preview.
  */
 
 import { createElement, useMemo } from "react";

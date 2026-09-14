@@ -1,15 +1,12 @@
 //! Claude Code and Codex via `motosan-ai`, Grok via the OpenAI-compatible path,
 //! Gemini via the Generative Language API.
 //!
-//! Also an API key aimed at Anthropic's own host, which is not a CLI login at
-//! all and arrives here anyway: `/v1/messages` is where prompt caching lives,
-//! and the `/chat/completions` layer on the same host does not have it. The
-//! credential is the only thing that differs — see [`credentials`]. Gemini is
-//! the same shape: a pasted AI Studio key, a different dialect.
+//! Anthropic API keys come here too, for `/v1/messages` prompt caching; only
+//! the credential differs ([`credentials`]). Gemini likewise takes a pasted key.
 //!
-//! Construction still never fails: a missing CLI login becomes the stream's
-//! first [`ModelEvent::Error`]. Refresh happens at the start of the stream so
-//! a settings panel that merely *opens* does not hit the token endpoint.
+//! Construction never fails (errors are the stream's first
+//! [`ModelEvent::Error`]), and tokens refresh when the stream starts, not when
+//! Settings opens.
 
 use std::collections::HashMap;
 

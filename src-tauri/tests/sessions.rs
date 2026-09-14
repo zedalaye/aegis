@@ -1,15 +1,8 @@
 //! Sessions and turns, through the crate's public surface.
 //!
-//! The unit tests inside `agent/turn.rs` cover the loop's branches. This file
-//! covers what only an outside caller can see: that the pieces Phase 5 added
-//! compose into the walkthrough of `PLAN.md` § 6 — send a message, watch a
-//! reply stream, find it still there after a restart, and cancel one mid-flight
-//! — and that they compose using only what `lib.rs` exports.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is, and is exercised here
-//! against real files in a temporary directory: the same stores, the same
-//! policy, the same tools, the same audit log the application uses.
+//! Phase 5's walkthrough (PLAN 6): send, stream, survive a restart, cancel
+//! mid-flight, using only `lib.rs` exports. Commands need a Tauri app;
+//! everything below them runs here on temp files.
 
 use std::path::PathBuf;
 use std::sync::Mutex;

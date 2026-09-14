@@ -7,11 +7,10 @@
 //! * **The door** ([`check`]): a live skill, granted to the identity, and
 //!   already carried to a `skill_return` by it according to the audit log
 //!   (PLAN 7.13).
-//! * **Always unattended**, `Run now` included: [`policy`](crate::policy) turns every
-//!   *ask* into a refusal
-//!   ([`PolicyCtx::unattended`](crate::policy::PolicyCtx::unattended)), so a run may do only what the
-//!   routine's signed [`Grant`](crate::policy::Grant)s allow — and [`check`]
-//!   bounds those by the runbook's declared tools and the identity's allow-list.
+//! * **Always unattended**, `Run now` included: every *ask* is refused
+//!   ([`PolicyCtx::unattended`](crate::policy::PolicyCtx::unattended)), so a
+//!   run does only what its signed [`Grant`](crate::policy::Grant)s allow,
+//!   which [`check`] bounds by the runbook's tools and the allow-list.
 //! * **Not a chat**: the opening message is written here ([`opening`]); two
 //!   silent runs in a row pause the routine.
 
