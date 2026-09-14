@@ -1,23 +1,9 @@
 /**
  * Per-identity memory state (PLAN 7.3, Phase 14).
  *
- * What one identity has learned: the preferences, exceptions and conventions
- * that reach the top of every request it makes. Keyed by identity, because
- * "whose memory" is the whole question — there is no view of everybody's, and
- * the runtime has no query that would answer one.
- *
- * Unlike the skill store, this one *writes*. That is not an inconsistency: a
- * runbook changes what the agent will do and so belongs behind the approval
- * gate and on the audit log, while a memory typed here is the human speaking
- * as themselves, which is the authority the gate exists to serve. What goes
- * through the gate is the model writing one — `memory_write`, audited like
- * every other call.
- *
- * The list is refetched after every write rather than patched in place. A
- * write can *touch an existing memory* instead of creating one (the store
- * consolidates on identical text), so the row that comes back is not reliably
- * a new row, and a store that spliced it in would sometimes show the same
- * memory twice.
+ * One identity's memories at a time. Writes from here are the human's own, so
+ * they skip the gate. Refetched after each write, since a save may touch an
+ * existing memory instead of adding one.
  */
 
 import { create } from "zustand";

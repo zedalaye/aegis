@@ -1,19 +1,8 @@
 //! Settings commands (PLAN 2.1, "Settings and audit").
 //!
-//! Four commands over one provider configuration, and the shape of the set is
-//! the security property: a key can be *written* and *cleared*, never read.
-//! There is no `settings_get_key`, and [`settings_get`] answers with a
-//! [`MaskedSettings`] — a source and four characters — because a command that
-//! could return the key would put the key in the WebView, which is the one
-//! thing `AGENTS.md` says must never happen.
-//!
-//! [`settings_probe_provider`] exists for the same reason the audit log has a
-//! path command: a configuration you cannot test is a configuration you argue
-//! with. It separates the three failures that look identical from a chat
-//! window — the address is wrong, the key is wrong, the server is down.
-//!
-//! Every change emits `settings:changed` to the main window, so a panel open
-//! in one place and a change made in another do not disagree.
+//! A key can be written and cleared, never read: [`settings_get`] returns
+//! [`MaskedSettings`]. [`settings_probe_provider`] tells a bad address, a bad
+//! key and a down server apart. Every change emits `settings:changed`.
 
 use tauri::{AppHandle, Emitter, Runtime, State};
 
@@ -36,21 +25,10 @@ pub fn settings_get(state: State<'_, AppState>) -> AppResult<MaskedSettings> {
 
 /// Saves the base URL and the model, and the key when one is given.
 ///
-/// `api_key` is `None` for the ordinary case — a user changing their model
-/// does not retype their key — and an all-whitespace value is treated the same
-/// way, because a form field that was focused and left alone must not clear a
-/// credential. Removing a key is [`settings_clear_key`], which says so.
-///
-/// The two halves are ordered deliberately: the settings are validated and
-/// written first, and the key only afterwards. A rejected base URL therefore
-/// leaves the credential store untouched, and a credential store that refuses
-/// the write leaves settings the user can still correct — neither failure
-/// leaves half a configuration behind that the panel does not show.
-/// The model's output ceiling is resolved here, once, rather than per turn:
-/// saving is when the model can change, somebody is already waiting on a
-/// button, and the lookup is allowed to fail. It is deliberately *not* part of
-/// what makes this command succeed — a provider that cannot be asked leaves
-/// the ceiling unset, which is what the previous behaviour was anyway.
+/// A `None` or blank `api_key` keeps the stored key (clearing is
+/// [`settings_clear_key`]). Settings are validated and written before the key,
+/// so a rejected URL never touches the credential store. The model's output
+/// ceiling is looked up here; a failed lookup leaves it unset.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn settings_set<R: Runtime>(
     app: AppHandle<R>,
@@ -81,10 +59,7 @@ pub async fn settings_set<R: Runtime>(
 
 /// Removes the stored key.
 ///
-/// Only the one in the credential store. A key in the environment is the
-/// process's own inheritance and Aegis does not edit it, so the answer this
-/// returns may still report `key_source: "env"` — which is the honest result
-/// and is exactly what the panel needs to say so.
+/// From the credential store only; the result may still say `key_source: "env"`.
 #[tauri::command(rename_all = "snake_case")]
 pub fn settings_clear_key<R: Runtime>(
     app: AppHandle<R>,
@@ -97,10 +72,7 @@ pub fn settings_clear_key<R: Runtime>(
 
 /// Asks the configured server whether it is there and whether the key works.
 ///
-/// Never fails as a command. Everything it can find out — unreachable, 401,
-/// 404, nothing configured at all — is a [`ProviderProbe`] describing what
-/// happened, because "the probe failed" is not a useful thing to hand someone
-/// who pressed a button to find out what is wrong.
+/// Never fails: every outcome is a [`ProviderProbe`].
 #[tauri::command(rename_all = "snake_case")]
 pub async fn settings_probe_provider(state: State<'_, AppState>) -> AppResult<ProviderProbe> {
     Ok(state.probe_provider().await)
@@ -121,10 +93,7 @@ pub async fn settings_list_models(
 
 /// Emits `settings:changed` and hands the payload back to the caller.
 ///
-/// `emit_to` rather than `emit`: like the streaming events, this goes to the
-/// one window that renders it and not out as a global broadcast (PLAN 2.2). A
-/// failure is logged and swallowed — the command itself succeeded, and the
-/// caller already has the new value in its own reply.
+/// `emit_to` the main window (PLAN 2.2); an emit failure is only logged.
 fn announce<R: Runtime>(app: &AppHandle<R>, settings: MaskedSettings) -> MaskedSettings {
     if let Err(err) = app.emit_to(MAIN_WINDOW, EVENT_SETTINGS_CHANGED, &settings) {
         tracing::debug!(%err, "no window to receive {EVENT_SETTINGS_CHANGED}");

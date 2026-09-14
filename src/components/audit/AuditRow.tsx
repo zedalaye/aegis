@@ -1,24 +1,9 @@
 /**
  * One line of the audit log.
  *
- * The row answers, in order, the four questions someone opening the drawer
- * has: *when*, *what tool*, *did it run*, and *how did it end*. A fifth sits
- * beside the tool when there is one — which skill the call was part of, since
- * that is what turns a column of verbs back into a procedure. Everything else
- * — the ids, the identity it ran as, the delegation it belonged to, the digest,
- * the file a capture left behind — is behind a disclosure, because a drawer
- * that made every row six lines tall would be a drawer nobody scrolls.
- *
- * Two things this deliberately does not do.
- *
- * **It does not re-render the arguments as anything but text.** They are the
- * model's own output, already redacted by the runtime, and they go into a
- * `<pre>` — the WebView holds the whole UI, and a log viewer is the last place
- * that should be interpreting what it displays.
- *
- * **It does not restate the decision as an outcome when they are the same
- * fact.** A refused call always ends "never ran"; showing both chips would
- * read as two findings where there is one.
+ * When, tool (and skill), decision and outcome; ids, identity, delegation,
+ * digest and artifact behind a disclosure. Arguments are plain text in a
+ * `<pre>`. A refusal shows no separate "never ran" outcome.
  */
 
 import { useState } from "react";

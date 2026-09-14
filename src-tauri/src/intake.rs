@@ -1,31 +1,12 @@
 //! A file dropped onto the project becomes a brief (PLAN 7.15).
 //!
-//! The one write the explorer is allowed, and it is the operator's rather than
-//! the agent's — the same class as *Set up shared files*, and as picking the
-//! folder in the first place. So it does not go through the approval dialog. It
-//! does leave an audit line: a brief that arrived from outside with no record is
-//! intake nobody can see afterwards.
+//! An operator act, so no dialog — but it is audited.
 //!
-//! What it will and will not do is narrow on purpose.
-//!
-//! * **Only into `.aegis/briefs/`.** A brief is work going *in*. There is no
-//!   destination argument anywhere in this module, so a drop cannot land in
-//!   `.aegis/artefacts/` — work coming *out*, written under the gate — or in
-//!   `world/`, the constitution. The window refuses those targets before it
-//!   asks; this module could not honour them if it did.
-//! * **Only paths the OS handed this process.** A drop is recorded by the
-//!   window-event handler in `lib.rs`, under an id, and the command names that
-//!   id. The WebView never supplies a source path, so this is not a way to copy
-//!   an arbitrary file off the machine into a workspace.
-//! * **Copy, never move, never overwrite.** The original stays where the
-//!   operator keeps it. A name that is taken keeps both, the promise scaffold
-//!   already makes.
-//! * **The file is the input.** No generated markdown around it, no runbook
-//!   inferred from its extension, no turn started. The next `fs_list` of
-//!   `.aegis/briefs/` is how a runbook finds it (PLAN 7.6: a file in
-//!   `.aegis/briefs/` is a valid input).
-//! * **A drop does not lay down the convention.** A workspace without
-//!   `.aegis/briefs/` refuses; creating it is a separate press.
+//! * **Only into `.aegis/briefs/`**: there is no destination argument.
+//! * **Only OS-provided paths**, recorded in `lib.rs` under an id.
+//! * **Copy, never move or overwrite**; a taken name keeps both.
+//! * **The file is the input**: nothing generated, no turn started.
+//! * **No `.aegis/briefs/`, no import**: scaffolding is a separate press.
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -383,11 +364,8 @@ fn create_unique(dir: &Path, name: &str) -> io::Result<(fs::File, String)> {
 /// A dropped file's name, made safe to create on any platform the folder may
 /// be cloned to.
 ///
-/// Separators and the characters Windows refuses become `_`; leading dots go,
-/// so a drop never makes a hidden file or a `..`; trailing dots and spaces go,
-/// because Windows strips them and two names would collide; a reserved device
-/// name is prefixed. What is left is the name the operator recognises, not a
-/// generated one.
+/// Separators and Windows-invalid characters become `_`; leading dots and
+/// trailing dots or spaces are removed; reserved device names are prefixed.
 pub fn brief_name(raw: &str) -> String {
     let cleaned: String = raw
         .chars()

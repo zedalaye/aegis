@@ -1,35 +1,14 @@
 //! One connection to one MCP server (PLAN 7.3, Phase 18).
 //!
-//! The transport is stdio and only stdio: Aegis spawns the program, writes
-//! newline-delimited JSON-RPC to its stdin and reads the same off its stdout.
-//! There is no HTTP transport here and there is not going to be one in this
-//! build — a connector that listened on a socket would be the thing PLAN 7.4
-//! refuses ("do not expose the runtime on the public internet"), and a
-//! connector Aegis *dialled* would be an outbound reach that belongs behind
-//! the approval gate as a tool rather than under the tool list.
+//! Stdio only: newline-delimited JSON-RPC over the child's pipes; no HTTP
+//! transport (PLAN 7.4).
 //!
-//! Three properties are worth reading the code for.
-//!
-//! **Aegis advertises no client capabilities.** The `initialize` request
-//! carries an empty `capabilities` object, which means this client does not
-//! offer `sampling`, `roots` or `elicitation`. That is deliberate and it is the
-//! most important line in the file: `sampling` would let a server ask *our*
-//! model to generate something, and a server that could drive the model would
-//! be a second agent loop with no session, no identity and no approval dialog
-//! in front of it. A server that asks anyway gets a JSON-RPC "method not
-//! found" — an answer, never a hang.
-//!
-//! **The child is given the environment the operator named, and nothing
-//! else.** [`child_env`](super::child_env) builds it. `shell_exec` inherits
-//! this process's whole environment because the user is reading the command
-//! line and pressing Allow each time; a connector is started once and then
-//! answers for the rest of the session, so what it can read is decided when it
-//! is installed rather than call by call.
-//!
-//! **Nothing here decides anything.** A `tools/call` is made only after
-//! [`policy`](crate::policy) has judged it and [`tools::run`](crate::tools::run)
-//! has been reached, exactly like `fs_write`. This module can start a server,
-//! ask it what it has, and pass a call through. It cannot allow one.
+//! * **No client capabilities** in `initialize` — above all no `sampling`,
+//!   which would let a server drive the model outside any session or gate.
+//!   Such requests get "method not found".
+//! * **Only the named environment** ([`child_env`](super::child_env)).
+//! * **No decisions**: `tools/call` happens only after
+//!   [`policy`](crate::policy) and [`tools::run`](crate::tools::run).
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
@@ -47,17 +26,13 @@ use crate::store::Connector;
 
 /// `CREATE_NO_WINDOW` — the child gets no console.
 ///
-/// The same flag `shell_exec` spawns with, and for the same reason: a
-/// connector started from the tray would otherwise flash a console window
-/// every time Aegis boots.
+/// As for `shell_exec`: no console window flashing at boot.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// The protocol version this client speaks.
 ///
-/// Sent in `initialize`; a server that answers with a different one is
-/// accepted and its answer is recorded, because the negotiated version is the
-/// server's to choose and refusing over it would break connectors that work.
+/// Sent in `initialize`; a different version in the answer is accepted.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// How long a handshake may take before the connector is called dead.
@@ -71,17 +46,12 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How many lines of a server's stderr are kept for the Settings panel.
 ///
-/// Bounded because a chatty server would otherwise grow this without limit.
-/// The last lines rather than the first: an `npx` that could not resolve a
-/// package says so at the end.
+/// The last lines, where start failures are reported.
 const LOG_LINES: usize = 40;
 
 /// Longest single line accepted from a server's stdout.
 ///
-/// A frame is one JSON object, and a server that sends a megabyte of it is
-/// either broken or hostile. Past this the connection is dropped rather than
-/// buffered, because the alternative is an unbounded allocation driven from
-/// outside this process.
+/// Past this the connection is dropped rather than buffered.
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 /// What a server told us about itself during the handshake.
@@ -106,9 +76,7 @@ pub struct RawTool {
     pub input_schema: Value,
     /// Whether the server *claims* the tool only reads.
     ///
-    /// A claim, never a fact: it is the thing being gated describing its own
-    /// gate. It changes what the approval dialog says and nothing else — see
-    /// [`policy::matrix`](crate::policy::matrix).
+    /// Only changes the dialog text ([`policy::matrix`](crate::policy::matrix)).
     pub read_only_hint: bool,
 }
 
@@ -167,20 +135,14 @@ impl Drop for Client {
 impl Client {
     /// Starts the program and completes the MCP handshake.
     ///
-    /// Returns the connection, what the server said about itself, and the tools
-    /// it declared. An error here is written for the Settings panel — a person
-    /// who typed `npx` and a package name needs to read what went wrong, and
-    /// the last lines of the server's own stderr are usually the answer.
+    /// Returns the connection, server info and tools. Errors carry the stderr
+    /// tail for the Settings panel.
     pub async fn start(
         connector: &Connector,
         notices: mpsc::UnboundedSender<Notice>,
     ) -> Result<(Self, ServerInfo, Vec<RawTool>), String> {
-        // Resolved through the same function `shell_exec` uses, and that is
-        // not a nicety on Windows: `npx` is a `.cmd`, `CreateProcess` cannot
-        // launch one, and a connector configured the way every MCP host
-        // documents would otherwise never start. The base for a relative name
-        // is this process's own directory, since a connector — unlike a
-        // command — has no workspace it was approved against.
+        // `shell_exec`'s resolver, so `npx.cmd` launches on Windows; relative
+        // names resolve against this process's directory.
         let here = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let program = crate::tools::shell::resolve(&connector.command, &here)?;
 
@@ -407,9 +369,7 @@ impl Client {
 
     /// A failure with the server's own last words attached.
     ///
-    /// The difference between "it would not start" and a readable diagnosis is
-    /// almost always on stderr, and a person looking at the Settings row has no
-    /// other way to see it.
+    /// The stderr tail usually holds the real diagnosis.
     fn with_log(&self, err: &str) -> String {
         let log = self.log();
         if log.is_empty() {

@@ -1,20 +1,9 @@
 /**
  * Creating or editing one routine (PLAN 7.3, Phase 16).
  *
- * Five things to decide, and the form is shaped so that four of them can only
- * be answered with something the runtime would accept: the identity comes from
- * the registry, the runbook from that identity's own allow-list, and the
- * standing approvals from the tools that runbook says it will call. What is
- * left to type is a name, an interval and a budget.
- *
- * That is deliberate. The door this form stands in front of — a live skill,
- * already granted, already run under watch — is enforced in Rust and is the
- * whole point of the phase, so the form's job is to make the *shape* of a
- * routine obvious and let the runtime say the one thing it alone knows: whether
- * anybody has actually watched this runbook run.
- *
- * There is no message field, and there is nowhere to put one. A routine names a
- * runbook; a routine that could carry a paragraph would be a chat on a timer.
+ * Identity, runbook and standing approvals are picked from valid options; name,
+ * schedule and budget are typed. The runtime enforces the door. No message
+ * field.
  */
 
 import { useState } from "react";

@@ -1,24 +1,12 @@
 //! The MCP client, against a real server on the other end of a real pipe
 //! (PLAN 7.3, Phase 18).
 //!
-//! The unit tests inside `mcp/` cover the pure halves — how a tool list becomes
-//! a catalog, how a `tools/call` result becomes text, what environment a child
-//! is given. What only an outside caller can see is the thing this phase is
-//! actually claiming: that a program Aegis did not write can be started, asked
-//! what it has, and *called under the same approval dialog as `fs_write`*.
-//! That is the Phase 18 exit condition, and it is
-//! [`the_exit_condition_a_connector_call_is_gated_like_a_write`] below.
+//! Phase 18's exit condition:
+//! [`the_exit_condition_a_connector_call_is_gated_like_a_write`].
 //!
-//! **The server is this binary.** [`mock_mcp_server`] is an `#[ignore]`d test
-//! that speaks MCP on stdin and stdout, and the tests spawn `current_exe()`
-//! with a filter that selects it. That is worth one paragraph of explanation
-//! because it looks like a trick, and the alternatives are worse: a Node or
-//! Python server would make this suite depend on a runtime that is not on
-//! every machine, and a second `[[bin]]` would ship a mock MCP server inside
-//! the application. Re-entering the test binary needs nothing that is not
-//! already here, works the same on all three platforms, and — the part that
-//! matters — exercises the real transport: a real process, real pipes, real
-//! newline-delimited JSON-RPC.
+//! **The server is this binary**: [`mock_mcp_server`] is an `#[ignore]`d test
+//! speaking MCP on stdio, spawned via `current_exe()`. No Node/Python
+//! dependency, no shipped mock binary, and the real transport is exercised.
 
 use std::io::{BufRead as _, Write as _};
 use std::path::PathBuf;
@@ -46,10 +34,8 @@ const SERVER_TEST: &str = "mock_mcp_server";
 
 /// Not a test: the MCP server the other tests in this file talk to.
 ///
-/// Ignored, so `cargo test` never runs it on its own; the tests spawn it by
-/// name. It writes with `io::stdout()` rather than `println!` on purpose —
-/// libtest's capture intercepts the macros and not the handle, so the frames
-/// reach the pipe whether or not `--nocapture` was passed.
+/// Spawned by name. Uses `io::stdout()`, not `println!`, which libtest's
+/// capture would swallow.
 #[test]
 #[ignore = "not a test: this is the MCP server the other tests spawn"]
 fn mock_mcp_server() {

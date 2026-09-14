@@ -1,22 +1,9 @@
 /**
  * The status board, and the runs underneath it (PLAN 7.3, Phase 17).
  *
- * It takes over the work area rather than floating over it, like Settings and
- * for the same reason: the window is one thing at a time, and a board is
- * something you read rather than something you dismiss.
- *
- * Two halves, in the order a person reads them. **The board** is the three
- * columns `COS.md` names — who has to move next, what is running, what stopped
- * short — assembled from `status/STATUS.md` and from what the runtime can see
- * for itself. **The runs** are every piece of work in the window of the audit
- * log, newest first, each answering who ran it and what it spent; opening one
- * shows the lines it is replayed from, which are the lines on disk rather than
- * a story assembled about them.
- *
- * Nothing here writes. There is no "mark as done", no way to edit a status
- * line, and no button that clears a run. Correcting the board means editing
- * `STATUS.md` — in an editor, or by asking the agent, which is an ordinary
- * `fs_write` through the approval gate.
+ * Takes over the work area. The board's three columns come from `STATUS.md`
+ * and runtime state; below, runs newest first, each opening to its raw audit
+ * lines. Read-only: corrections go through `STATUS.md`.
  */
 
 import { useEffect } from "react";
@@ -38,13 +25,7 @@ const NOTES = {
   blocked: "Stopped short, and not waiting on a person.",
 } as const;
 
-/**
- * The replay of one run: its lines, oldest first.
- *
- * The same rows the audit drawer draws, because they are the same lines — the
- * drawer is a tail of the whole log and this is one run out of it, and a
- * separate rendering would be a second thing to keep honest.
- */
+/** One run's audit lines, oldest first, using the audit drawer's rows. */
 function Trace() {
   const trace = useBoard((s) => s.trace);
   const tracing = useBoard((s) => s.tracing);

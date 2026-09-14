@@ -2,11 +2,8 @@
  * The work area when a project is open: a session header, the transcript, and
  * the composer.
  *
- * The header shows what the turn is doing, who is doing it and what is
- * answering, rather than only what the session is called — those are the
- * questions a user has while a reply streams. When no session is open it explains the two
- * states worth telling apart — no sessions yet, or one not chosen — since the
- * fix differs.
+ * The header shows the turn's activity, identity and model. Without an open
+ * session it distinguishes "no sessions yet" from "none chosen".
  */
 
 import { useProjects } from "../../state/projects";
@@ -44,16 +41,8 @@ function StatusLine() {
       </span>
     );
   }
-  // A turn writing a tool call produces no assistant text at all, and a large
-  // `fs_write` is minutes of it: the file's content is generated as the call's
-  // arguments. A bare "streaming…" through all of that is what makes a working
-  // turn look like a hung one, so the size stands in for the words there are
-  // none of.
-  //
-  // "sent" rather than a bare size, because the two are not the same number
-  // and the difference is confusing exactly when someone is watching this: it
-  // counts the escaped JSON arguments, not the file. A reader who takes it for
-  // the file's size will think the model has overshot when it has not.
+  // While a tool call's arguments stream (a large `fs_write` takes minutes),
+  // show their size. "sent", because it counts escaped JSON, not the file.
   if (streaming?.drafting != null) {
     const { tool, bytes } = streaming.drafting;
     return (
@@ -77,23 +66,9 @@ function StatusLine() {
 }
 
 /**
- * What this conversation has spent (PLAN 7.3, Phase 17).
- *
- * In the header beside the model, because that is where the question is asked:
- * a person wondering what a long session is costing is looking at the session.
- * The board is where the same number is asked *about* something — a run, a
- * routine, the whole project.
- *
- * Absent rather than "0 tokens" until a turn has been charged, and the phrasing
- * says "at least" when some provider reported no usage at all, because a total
- * that read as exact when it is a floor would be worse than none.
- *
- * The cached share sits in the badge rather than only in the tooltip because
- * it is not a detail of the total, it is what the total *means*: the same
- * number of tokens costs about a tenth as much when it came out of the cache,
- * and a session whose share has collapsed is a session that has started paying
- * full price to re-send itself. Hidden when the provider does not cache at
- * all, so a percentage never appears where it could only ever read zero.
+ * What this conversation has spent (Phase 17). Hidden until a turn is charged;
+ * "at least" when usage went unreported. The cached share is in the badge
+ * because it drives the real cost; hidden when the provider does not cache.
  */
 function CostBadge() {
   const cost = useSessions((s) => s.detail?.session.cost ?? null);
@@ -128,17 +103,8 @@ function CostBadge() {
 }
 
 /**
- * Folds this session's older turns into state, on demand (PLAN 7.3, Phase 14).
- *
- * In the header rather than beside the composer: it is about the session, not
- * about the message being typed, and it is not part of sending one. Long
- * sessions fold themselves once the transcript has grown expensive; this is for
- * the times you would rather it happened now — before asking for something
- * long, say.
- *
- * Hidden while a turn runs. A fold mid-turn would change what the next round
- * carries, halfway through the reasoning the model is already doing, and the
- * runtime folds at the top of a turn for exactly that reason.
+ * Folds older turns now (Phase 14); sessions also fold automatically. Hidden
+ * while a turn runs.
  */
 function CompactButton() {
   const session = useSessions((s) => s.detail?.session ?? null);
@@ -172,12 +138,8 @@ function CompactButton() {
 }
 
 /**
- * The approval the user is being asked about, if any.
- *
- * One at a time, oldest first. The turn runs its calls sequentially and parks
- * on each in turn, so a second prompt only exists when a *second session* is
- * also blocked — and the count on the card says so rather than stacking two
- * dialogs over each other.
+ * The oldest pending approval; more than one means other sessions are blocked,
+ * shown as a count.
  */
 function ApprovalQueue() {
   const pending = useApprovals((s) => s.pending);

@@ -1,34 +1,13 @@
 /**
  * The structured detail of an approval: what would actually happen.
  *
- * This is the part that matters. The MVP has no sandbox (PLAN 3.3) — the
- * boundary is that a person reads the exact path, program, arguments and
- * working directory before anything mutating runs. So everything here is drawn
- * as fields and plain text, never as a JSON blob and never as markup: the
- * content is the model's output, and a preview that rendered it would put
- * whatever it said one escaping bug away from the DOM.
+ * With no sandbox (PLAN 3.3), this is what the person reads before anything
+ * runs, so everything is fields and plain text, never markup.
  *
- * "Diff" is the name PLAN gives this pane; for `fs_write` the runtime supplies
- * the first 4 KB of the pending content, and whether the file already exists.
- * A real before/after diff needs the old text too, which is a Phase 10 nicety —
- * what a user needs before allowing a write is the path, the size, whether it
- * overwrites, and a look at what is going in.
- *
- * The `connector` case is the one that cannot show what would *happen*, and it
- * says so. Every other detail here is a fact the runtime established — the
- * resolved path, the program that was found on PATH, the working directory. A
- * connector's tool is a program somebody else wrote: what is drawn is its name,
- * the server's own description of it, and the arguments the model wrote, each
- * labelled with whose words it is. That is less than the other rows offer, and
- * pretending otherwise would be the dialog claiming a guarantee this build does
- * not have.
- *
- * `screen_capture` is the one case with no preview of its subject, and that is
- * the point rather than an omission: capturing the screen to illustrate a
- * question about capturing the screen would already have done the thing being
- * asked about (PLAN 5.4). The prompt names the display and both of its sizes
- * and says what a capture contains; the picture appears in the transcript
- * afterwards, once someone has said yes.
+ * - `fs_write`: path, size, whether it overwrites, and the first 4 KB.
+ * - Connector calls: name, the server's description and the model's arguments,
+ *   each labelled by source — the runtime cannot say what will happen.
+ * - `screen_capture`: display and sizes, no preview (PLAN 5.4).
  */
 
 import type { ApprovalDetail } from "../../ipc/bindings";

@@ -59,13 +59,7 @@ export class IpcError extends Error {
   readonly retryable: boolean;
   /** The command that failed, for logs and bug reports. */
   readonly command: string;
-  /**
-   * The input this failure is about, when the runtime named one.
-   *
-   * Only `E_INVALID_SETTING` carries it today — from the provider form and,
-   * since Phase 12, the identity form. A form uses it to mark the field the
-   * user has to fix instead of raising a banner over the whole panel.
-   */
+  /** The form input this failure is about (`E_INVALID_SETTING` only). */
   readonly field: string | null;
 
   constructor(

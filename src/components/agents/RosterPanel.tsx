@@ -1,19 +1,9 @@
 /**
  * A project's roster proposal, and the apply that creates it (PLAN 7.14).
  *
- * Under Identities, because what it creates is identities. A session running
- * `cabinet.found` writes `.aegis/roster/PROPOSAL.md`; this panel shows what
- * applying it would do, identity by identity, and applying it is the grant.
- *
- * The preview *is* the allow-lists. Every tool and runbook a new identity would
- * hold is spelled out, the way a row in the list above is, because "a Chief of
- * Staff" is not an answer to "may this write to my repo". A name that already
- * exists is marked as skipped and its proposed lists are not shown: apply never
- * widens it, and drawing a wider list beside it would read as if it might.
- *
- * What the file says about clocks and connectors is listed as it was written
- * and acted on nowhere here. A routine is saved in Routines once its identity
- * has run the runbook under watch; a connector is installed in Connectors.
+ * Previews each new identity's full allow-lists (applying is the grant).
+ * Existing names are marked skipped, without lists. Intended routines and
+ * connectors are listed only.
  */
 
 import { useEffect } from "react";

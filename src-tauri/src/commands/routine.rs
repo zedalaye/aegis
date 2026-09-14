@@ -1,17 +1,8 @@
 //! Routines: what is on a clock (PLAN 7.3, Phase 16).
 //!
-//! Five commands, and between them they are the whole surface a person has on
-//! the scheduler: list, save, delete, pause, run now. What is deliberately
-//! *not* here is as much of the phase as what is.
-//!
-//! There is no command that sends a routine a message, because a routine has no
-//! message: it names a runbook, and the run's opening is written by the runtime
-//! from that name (`schedule::opening`). There is no command that grants
-//! anything: a routine's standing approvals are checked against the runbook's
-//! declared tools and the identity's allow-list, both of which are edited
-//! elsewhere. And there is none that skips the door — **Run now** takes exactly
-//! the path the clock takes, unattended and all, because a button that behaved
-//! better than the schedule would be a button that proves nothing.
+//! List, save, delete, pause, run now. No command sends a routine a message,
+//! grants anything, or skips the door: **Run now** takes the clock's unattended
+//! path.
 
 use tauri::{AppHandle, State};
 
@@ -23,10 +14,7 @@ use crate::store::{Routine, RoutineDraft};
 
 /// Every routine, each carrying whatever is wrong with it right now.
 ///
-/// The `problem` on a row is measured, never stored: a skill that was
-/// un-granted, a folder that was unplugged and an identity that was deleted are
-/// facts about this moment, and the panel draws them beside the routine rather
-/// than pretending the clock is fine.
+/// `problem` is measured on each call, never stored.
 #[tauri::command]
 pub fn routine_list(state: State<'_, AppState>) -> Vec<Routine> {
     state.routine_list()
@@ -34,15 +22,9 @@ pub fn routine_list(state: State<'_, AppState>) -> Vec<Routine> {
 
 /// Creates a routine, or replaces one.
 ///
-/// `routine_id` of `None` creates; otherwise that routine is updated, keeping
-/// its id, its ledger for today and — unless the schedule itself changed — its
-/// place in the cycle.
-///
-/// This is where the door of PLAN 7.13 is enforced: the skill has to be live,
-/// granted to the identity, and already carried to a `skill_return` by it at
-/// least once. A refusal rejects with `E_INVALID_SETTING` and an `error.field`
-/// naming the input, the same shape the identity and provider forms use, so the
-/// message lands beside the thing that has to change.
+/// `None` creates; an update keeps id, today's ledger and (unless the schedule
+/// changed) its cycle. Enforces the PLAN 7.13 door; refusals are
+/// `E_INVALID_SETTING` with `error.field`.
 #[tauri::command(rename_all = "snake_case")]
 pub fn routine_save(
     state: State<'_, AppState>,
@@ -74,10 +56,7 @@ pub fn routine_save(
 
 /// Deletes a routine.
 ///
-/// The sessions its runs opened are not touched. They are transcripts of things
-/// that happened, and each one still says which routine fired it and what it
-/// was asked to run — a record should not stop explaining itself because the
-/// clock was taken off the wall.
+/// The sessions its runs opened are kept.
 #[tauri::command(rename_all = "snake_case")]
 pub fn routine_delete(state: State<'_, AppState>, routine_id: String) -> AppResult<()> {
     state.routines().delete(&routine_id)
@@ -85,10 +64,7 @@ pub fn routine_delete(state: State<'_, AppState>, routine_id: String) -> AppResu
 
 /// Stops or restarts a routine's clock.
 ///
-/// Un-pausing re-arms it, so a routine that was stopped for a fortnight does
-/// not immediately fire for a window nobody was there for. It also clears the
-/// reason, including one the scheduler wrote itself after two silent runs:
-/// restarting a paused routine is a person saying they have looked.
+/// Resuming re-arms (no catch-up run) and clears the pause reason.
 #[tauri::command(rename_all = "snake_case")]
 pub fn routine_set_paused(
     state: State<'_, AppState>,
@@ -101,16 +77,9 @@ pub fn routine_set_paused(
 
 /// Fires a routine now.
 ///
-/// Returns as soon as the run is started — the session opens, the row updates
-/// and the transcript fills through the ordinary `session:updated`,
-/// `routine:updated` and `turn:*` events. What it does *not* do is behave
-/// differently from the clock: the run is unattended, so a call the routine was
-/// not signed for is refused here exactly as it would be at four in the
-/// morning, which is the only way to find that out before it happens.
-///
-/// Rejects when the routine could not run at all — a folder that is gone, a
-/// skill that was un-granted, a budget that is spent, a run already going — so
-/// the button can say why nothing happened.
+/// Returns once started, unattended exactly like the clock; progress arrives as
+/// events. Rejects when it cannot run at all (folder gone, skill un-granted,
+/// budget spent, already running).
 #[tauri::command(rename_all = "snake_case")]
 pub fn routine_run_now(
     app: AppHandle,

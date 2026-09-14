@@ -1,28 +1,9 @@
 /**
  * The runbooks this install can run (PLAN 7.3, Phase 13).
  *
- * A section of the settings panel, beside Identities, because the two answer
- * halves of one question: a skill is what an identity may run, and an identity
- * is who may run a skill. It sits here rather than in the rail even though half
- * the rows come from the open project's folder — the library half is a fact
- * about the application, and splitting the list across two surfaces would make
- * "which `inbox.triage` is going to run" a question you had to look in two
- * places to answer.
- *
- * Each row says the four things that decide whether you would grant it: what it
- * is for, where it came from, what it will touch, and whether it works. There
- * is no editor and no "new skill" button. A runbook is a `SKILL.md` in a folder
- * you own; writing one is what your editor is for, and the row carries the path
- * so you can go and open it.
- *
- * A runbook that will not parse is listed with the reason rather than hidden.
- * The author is the only person who can fix it, and a skill that quietly
- * vanished from the list would tell them nothing at all.
- *
- * Proposals (PLAN 7.13) are listed under the catalog, and there is no Apply
- * button on them either. Applying is a session's `fs_write` of the proposal to
- * `SKILL.md`, and the approval dialog of that write is where the runbook is
- * signed — a button here would be a second write around the gate.
+ * In Settings beside Identities, library and workspace together. Rows show
+ * purpose, source, tools, path and any parse problem. No editor, and no Apply
+ * for proposals (PLAN 7.13): that is a session's gated `fs_write`.
  */
 
 import type { Skill, SkillProposal } from "../../ipc/bindings";

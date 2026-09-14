@@ -1,36 +1,15 @@
 //! Per-agent memory and compaction, through the crate's public surface.
 //!
-//! The unit tests inside `store/memories.rs`, `compact.rs` and `tools/memory.rs`
-//! cover the store, the derivation and the two tools on their own. This file
-//! covers the Phase 14 exit condition of `PLAN.md` § 7.3, which is a claim
-//! about the *whole* runtime:
+//! Phase 14's exit condition (PLAN 7.3):
 //!
-//! > after a forced compaction, the agent still knows the current goal, the
-//! > open blockers, and the path to `DECISIONS.md`; it does not replay the
-//! > whole chat.
+//! 1. An approved memory reaches the next system message; a refused one does not.
+//! 2. Memories do not leak across identities.
+//! 3. A forced compaction keeps goal, blockers and the decisions path, and
+//!    leaves the transcript on disk untouched.
+//! 4. Memory and the workspace digest are still in the request after the fold.
 //!
-//! Four claims, in the order they matter:
-//!
-//! 1. **A memory goes end-to-end.** The model asks to remember something, the
-//!    user is asked, the record lands in the store, and the *next* turn's
-//!    system message carries it. A refusal records nothing.
-//! 2. **A memory belongs to one identity.** What one identity remembers does
-//!    not reach another's prompt, or another's `memory_search`.
-//! 3. **A forced compaction folds the old turns to state.** The goal, the
-//!    blockers and the decisions ledger survive; the folded conversation does
-//!    not reach the model; the transcript on disk is untouched, because the
-//!    user is still reading it.
-//! 4. **Retrieve-after-compact holds.** Memory and the workspace digest are in
-//!    the request *after* the fold, because they were never in the part that
-//!    folded.
-//!
-//! And one claim in the other direction, which is what keeps this phase a
-//! no-op for everything before it: an identity that has learned nothing, in a
-//! session short enough not to fold, sends the request Phase 13 sent.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is, against real files in
-//! a temporary directory.
+//! And an identity with nothing learned sends the Phase 13 request. Commands
+//! need a Tauri app; everything below them runs here on temp files.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -199,10 +178,7 @@ impl App {
 
     /// Waits for the next approval the turn raises, and answers it.
     ///
-    /// Polled rather than awaited on a channel, the way `tests/approvals.rs`
-    /// does it: the turn is a concurrent future here, exactly as it is a
-    /// spawned task in the application, and a test that resolved before running
-    /// would not be testing a gate at all.
+    /// Polled while the turn runs concurrently, as in `tests/approvals.rs`.
     async fn answer_next(&self, session_id: &str, decision: ApprovalDecision) {
         for _ in 0..500 {
             if let Some(request) = self.approvals.list(Some(session_id)).into_iter().next() {

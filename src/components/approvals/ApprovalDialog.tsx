@@ -1,22 +1,9 @@
 /**
  * The approval prompt: the one place a person says yes or no.
  *
- * Rendered inline above the composer rather than as a modal overlay. A turn
- * blocked on an approval is not a blocked application — the user may want to
- * scroll the transcript, read what the model said, or look at another session
- * before deciding, and a modal takes all of that away to prevent a mistake it
- * does not actually prevent.
- *
- * What the prompt has to make true is smaller and stricter: the user reads the
- * exact thing that would happen before it happens (PLAN 3.3). So the path, the
- * arguments and the pending content come first, the buttons are last, and none
- * of the three answers is the default — there is no auto-focused Allow, and
- * pressing Enter in the composer does not approve anything.
- *
- * "Allow for this session" appears only when the runtime says the row offers a
- * grant, and it is labelled with what it would actually cover, in the runtime's
- * own words. The rule is enforced in Rust either way (PLAN 3.1); hiding the
- * button is how the interface tells the truth, not how the rule holds.
+ * Inline above the composer, not a modal. Details first, buttons last, and no
+ * default answer (PLAN 3.3). "Allow for this session" appears only when the
+ * runtime offers a grant, labelled with its scope (enforced in Rust, PLAN 3.1).
  */
 
 import type { ApprovalRequest, Decision } from "../../ipc/bindings";

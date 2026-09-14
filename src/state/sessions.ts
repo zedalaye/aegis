@@ -1,32 +1,13 @@
 /**
  * Session and transcript state.
  *
- * The runtime owns the truth. This store holds a cache of it plus the one
- * thing that has no counterpart on disk: the buffer a reply streams into
- * before it is finalized.
+ * **Events render, `turn:finished` reconciles**: streamed changes apply
+ * locally, then the session is re-opened so the screen matches disk.
  *
- * The reconciliation rule is worth stating, because everything else follows
- * from it. **Events render, `turn:finished` reconciles.** Deltas and finalized
- * messages are applied locally so the transcript moves while the turn runs;
- * when the turn ends the session is re-opened and the authoritative transcript
- * replaces whatever was assembled here. That keeps the optimistic path simple
- * — it never has to be exactly right, only close — while guaranteeing that
- * what is on screen after a turn is what is on disk. It is also what fills in
- * the parts the UI never sees streamed, such as the `tool` messages carrying
- * result envelopes.
- *
- * Two filters are applied to incoming events:
- *
- * - Anything for a session other than the open one is ignored, except
- *   `session:updated`, which keeps the sidebar honest for every row.
- * - `turn:delta` and `tool:progress` are dropped unless their `seq` is greater
- *   than the last one applied, so a duplicated or reordered frame cannot
- *   double a word.
- *
- * Live command output is the one thing here that reconciliation does *not*
- * replace. It has no counterpart on disk — the runtime keeps a one-line
- * summary and an audit line, not the transcript of every build — so the pane
- * is kept in this store, keyed by call, for as long as the session stays open.
+ * - Events for other sessions are ignored, except `session:updated`.
+ * - `turn:delta` and `tool:progress` are applied only for a newer `seq`.
+ * - Live command output is not on disk, so it is kept here per call while the
+ *   session stays open.
  */
 
 import { create } from "zustand";
@@ -55,23 +36,13 @@ import type { IpcError } from "../lib/errors";
 export type Streaming = {
   /** The turn, for cancelling it. */
   readonly turnId: string;
-  /**
-   * The model the runtime started this turn with.
-   *
-   * Reported rather than assumed: the provider is chosen per turn from
-   * settings, so this is the only thing that knows what is actually writing
-   * the text arriving on screen. `aegis-fake-1` when that is the truth.
-   */
+  /** The model the runtime reported for this turn (`aegis-fake-1` if fake). */
   readonly model: string;
   /** Text accumulated from `turn:delta` since the last finalized message. */
   readonly text: string;
   /**
-   * The tool call the model is part-way through writing, or `null`.
-   *
-   * The stretch where a turn is working and has nothing to say: arguments are
-   * generated as output tokens, so a large `fs_write` is minutes of silence on
-   * every other channel. Cleared on `turn:message`, which is the runtime
-   * saying the round's arguments are complete and its calls are about to run.
+   * The tool call whose arguments are still being written, or `null`; cleared
+   * on `turn:message`.
    */
   readonly drafting: Drafting | null;
   /** Highest `seq` applied. Frames at or below it are duplicates. */
@@ -144,15 +115,8 @@ export type SessionsState = {
   /** Cancels the running turn, if there is one. */
   cancel: () => Promise<void>;
   /**
-   * Folds the open session's older turns into state (PLAN 7.3, Phase 14).
-   *
-   * Nothing is deleted: the transcript stays whole and the pane still scrolls
-   * through all of it. What changes is what the next request carries, which is
-   * why the detail is replaced with what comes back rather than patched.
-   *
-   * A session with too few turns to fold comes back unchanged, and the pane
-   * shows that by finding no fold — which is the honest answer rather than an
-   * error.
+   * Folds the open session's older turns (Phase 14), replacing the detail with
+   * the result. Too few turns is not an error.
    */
   compact: () => Promise<void>;
   /** Clears the last error. */
@@ -171,21 +135,8 @@ export function isVisible(message: Message): boolean {
 }
 
 /**
- * Sorts sessions the way the runtime does: most recently active first.
- *
- * Applied again here because a `session:updated` bumps `updated_at`, and a
- * sidebar that only re-sorted on a refetch would leave the session the user is
- * typing in halfway down the list. Timestamps are fixed-width UTC RFC3339, so
- * comparing them as strings is comparing them as instants.
- */
-/**
- * Adds a frame to what a call has printed.
- *
- * Consecutive frames from the same pipe are merged into one run: a command
- * printing steadily produces a frame every 50 ms, and one node per frame would
- * be thousands of nodes for a build that says nothing interesting. The pane
- * keeps the *end* of a long run rather than the start — the tail of a build log
- * is the part someone watching it is waiting for.
+ * Adds a frame to what a call has printed, merging consecutive frames from the
+ * same pipe; {@link capped} keeps the tail.
  */
 function appended(
   current: ToolOutput | undefined,
@@ -227,6 +178,10 @@ function capped(runs: readonly OutputRun[]): OutputRun[] {
   return kept;
 }
 
+/**
+ * Most recently active first, like the runtime; re-applied locally because
+ * `session:updated` bumps `updated_at`.
+ */
 function ordered(sessions: readonly SessionSummary[]): SessionSummary[] {
   return [...sessions].sort(
     (a, b) =>
@@ -253,11 +208,8 @@ export const useSessions = create<SessionsState>((set, get) => {
   };
 
   /**
-   * Re-reads a session, replacing whatever was assembled locally.
-   *
-   * Used where an optimistic change has to be undone. The failure is dropped
-   * rather than reported: the caller is already on an error path, and a second
-   * banner about the refetch would bury the first.
+   * Re-reads a session to undo an optimistic change; its own failure is not
+   * reported over the caller's.
    */
   const reconcile = async (sessionId: string): Promise<void> => {
     try {
@@ -300,11 +252,8 @@ export const useSessions = create<SessionsState>((set, get) => {
       }
       const outcome = await guard("session_open", () => sessionOpen(sessionId));
       if (outcome.ok) {
-        // The streaming buffer and the output panes belong to the session
-        // being left, not to this one. A turn still running elsewhere keeps
-        // going; its events are filtered out until the user comes back and
-        // re-opens it — and what a command printed is not on disk, so coming
-        // back shows the summary rather than the pane.
+        // Buffer and output panes belong to the session being left; its turn
+        // keeps running, and on return only the summary remains.
         set({ detail: outcome.value, streaming: null, output: {} });
       }
     },
@@ -484,11 +433,8 @@ export function attachSessionEvents(): Promise<() => void> {
                 ...state.detail,
                 messages: [...state.detail.messages, message],
               },
-              // The buffer has been superseded by the finalized message. A
-              // turn with tool calls streams again after this, into an empty
-              // buffer.
-              // ...and whatever call was being written has finished being
-              // written, which is what this event means.
+              // The finalized message supersedes the buffer and the drafting
+              // call.
               streaming:
                 state.streaming === null
                   ? null
@@ -628,13 +574,8 @@ export function attachSessionEvents(): Promise<() => void> {
     "session:updated": (summary) => {
       setState((state) => {
         const known = state.sessions.some((session) => session.id === summary.id);
-        // An unknown row is inserted rather than dropped when it belongs to the
-        // list being shown, because from Phase 15 a session can appear without
-        // anyone clicking New: a brief opens one, under the identity it names
-        // (PLAN 7.3). Dropping it would leave a specialist working — and
-        // possibly waiting on an approval — with no row in the sidebar to say
-        // so. It is still scoped to this project's list: a summary for another
-        // project is not this list's business.
+        // Insert unknown rows for this project: briefs and routines open
+        // sessions nobody clicked (Phase 15).
         const belongs = state.sessions.some(
           (session) => session.project_id === summary.project_id,
         );

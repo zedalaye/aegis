@@ -1,24 +1,10 @@
 /**
  * Project state.
  *
- * The runtime owns the truth; this store is a cache of it plus the transient
- * UI state around the "add a workspace" flow. Every mutation therefore ends by
- * refetching the list rather than by patching it locally — the runtime already
- * reorders projects by recency and deduplicates workspaces, and guessing at
- * those rules here is how the two drift apart.
- *
- * The one thing this store does decide is the *display* order, and it is a
- * presentation concern rather than a second opinion about recency. The runtime
- * lists most-recently-opened first, which is right for the question "where was
- * I", asked once, at startup. It is wrong for a list somebody is clicking:
- * opening a project stamps it, so the row jumps to the top under the cursor and
- * the next click lands on a different project than the one aimed at. So the
- * order is taken from the runtime once and then held for the lifetime of the
- * window — see `stabilize`.
- *
- * Errors are held rather than thrown. Every action resolves; a failure lands
- * in `error` for the shell to render, because there is no boundary above these
- * calls that could do anything better with a rejection.
+ * A cache of the runtime's projects: mutations refetch rather than patch. The
+ * display order is taken from the runtime once and then held (`stabilize`), so
+ * opening a project does not move it under the cursor. Errors are held in
+ * `error`, not thrown.
  */
 
 import { create } from "zustand";
@@ -39,13 +25,7 @@ import type { IpcError } from "../lib/errors";
 /** Whether the list has been loaded yet. */
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
-/**
- * A workspace the user has picked but not yet confirmed.
- *
- * Naming is a separate step from picking so the proposed name is editable
- * before anything is written — `project_create` takes a name, and asking for
- * it after the fact would need a rename command the MVP does not have.
- */
+/** A picked workspace awaiting confirmation, so the name can be edited first. */
 export type PendingWorkspace = {
   readonly path: string;
   readonly name: string;
@@ -104,13 +84,8 @@ export type ProjectsState = {
 
 export const useProjects = create<ProjectsState>((set, get) => {
   /**
-   * The order the sidebar is showing, as project ids.
-   *
-   * Seeded from the runtime's own order the first time a list arrives, and
-   * amended only by what actually changed: an id that has gone is dropped, and
-   * one that is new goes to the top, which is where somebody who has just added
-   * a workspace looks for it. A project the user merely *opened* keeps its
-   * place, which is the whole point.
+   * The sidebar's order as ids: seeded from the runtime, then removed ids are
+   * dropped and new ones go to the top; opened projects keep their place.
    */
   let order: readonly string[] = [];
 
@@ -145,11 +120,7 @@ export const useProjects = create<ProjectsState>((set, get) => {
   };
 
   /**
-   * Refetches the list and leaves exactly one project open.
-   *
-   * `preferredId` is the project the caller just acted on. Falling back to the
-   * first entry — the most recently opened — is what makes a restart land
-   * where the user left off, and what fills the empty pane after a delete.
+   * Refetches and opens `preferredId`, else the most recently opened project.
    */
   const refresh = async (preferredId?: string): Promise<void> => {
     const projects = await projectList();

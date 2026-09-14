@@ -1,40 +1,12 @@
 //! `memory_write` and `memory_search` (PLAN 7.3, Phase 14).
 //!
-//! Role memory as two verbs: **remember this** and **what do I know about
-//! that**. Both are scoped to the identity the turn is running as, by the
-//! runtime and not by the arguments — there is no field on either call that
-//! names an identity, so an identity reading or writing another's memories is
-//! not a thing these signatures can express.
+//! Both are scoped to the turn's identity by the runtime; no argument names one.
 //!
-//! ## There is no third verb
-//!
-//! Deliberately no `memory_forget`. `COS.md` *Roles* gives the human three
-//! jobs — irreversible decisions, the quality bar, and **memory correction** —
-//! and deleting a memory is the first and third at once: it is irreversible,
-//! and what it most often deletes is a correction a person made. So forgetting
-//! lives in the Memory panel ([`commands::memory`](crate::commands::memory)),
-//! where the person who owns the identity does it, sees what went, and can
-//! retype it.
-//!
-//! What the model gets instead is [`memories::prompt_block`] telling it plainly
-//! that it cannot delete these and should say so when one is wrong. That is the
-//! honest division: the agent notices, the human corrects. An agent that could
-//! quietly retire the memories it found inconvenient would be an agent whose
-//! memory is exactly as reliable as its judgement on its worst turn.
-//!
-//! ## Why a write is asked about
-//!
-//! `memory_write` goes through the approval gate like `fs_write`, and for the
-//! same reason: it is durable and it changes what happens later. A memory
-//! reaches the system message of *every* future turn this identity takes, which
-//! makes it closer to an instruction than to a note. The dialog shows the exact
-//! sentence that would be remembered, which is a great deal less to read than a
-//! diff, and `allow_session` is offered because "let it remember things while
-//! we work" is a scope a person can picture and a session can end.
-//!
-//! `memory_search` is auto: it reads records this identity already holds, it
-//! reaches nothing outside the process, and there is no version of it a user
-//! could usefully be asked about.
+//! * No `memory_forget`: forgetting is the human's, in the Memory panel
+//!   ([`commands::memory`](crate::commands::memory)); the prompt block tells the
+//!   model to flag wrong memories ([`memories::prompt_block`]).
+//! * `memory_write` is asked (it shapes every future turn), with a session grant
+//!   offered; `memory_search` is auto.
 
 use serde_json::{json, Value};
 
@@ -94,11 +66,7 @@ pub fn search_schema() -> Value {
 
 /// Records a memory for the identity this turn is running as.
 ///
-/// The store consolidates: a write repeating something already held touches
-/// that record instead of storing a second copy, and the result says which
-/// happened. Saying so matters — a model told "recorded" twice would have no
-/// way to notice it is repeating itself, and one told "you already knew this"
-/// can stop.
+/// A repeat touches the existing record, and the result says so.
 pub(crate) fn write(
     store: &MemoryStore,
     agent_id: &str,

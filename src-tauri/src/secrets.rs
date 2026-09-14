@@ -1,26 +1,12 @@
 //! The API key: where it is kept, and what may be said about it.
 //!
-//! Three rules shape this module, all of them from `AGENTS.md`, and it exists
-//! to hold them in one place rather than to wrap `keyring`:
+//! * **The OS stores the key**; no Aegis document contains it.
+//! * **The WebView never gets it**: only a [`KeySource`] and a [`key_hint`].
+//! * **No credential store is supported** (headless Linux, rebuilt macOS dev
+//!   binaries; PLAN 5.2, 5.3): [`ENV_API_KEY`] is a first-class source.
 //!
-//! * **The operating system stores the key, not Aegis.** No document this
-//!   process writes ever contains it — `settings.json` holds a base URL and a
-//!   model name and nothing else.
-//! * **The key never reaches the WebView.** What crosses the IPC boundary is a
-//!   [`KeySource`] and the four characters [`key_hint`] leaves visible. There
-//!   is deliberately no command that reads a key back out.
-//! * **A machine with no usable credential store is a supported machine.**
-//!   Headless Linux has no Secret Service at all, and a macOS dev binary loses
-//!   its keychain ACL on every rebuild (PLAN 5.2, 5.3). The environment
-//!   variable is therefore a first-class source, not an emergency hatch, and
-//!   [`KeySource`] reports honestly which one answered.
-//!
-//! Only [`ENV_API_KEY`] is read from the environment. Picking up a generic
-//! `OPENAI_API_KEY` would be convenient and wrong: that key was exported for
-//! whatever tool the user set it up for, and Aegis sends its key to whichever
-//! base URL is configured here — which may be a different company's server.
-//! Using someone's credential against an endpoint they did not choose is not a
-//! convenience, so the variable carries this application's name.
+//! Only [`ENV_API_KEY`] is read — never `OPENAI_API_KEY`, which would send a
+//! key to an endpoint its owner did not choose.
 
 use std::fmt;
 
@@ -31,16 +17,12 @@ use crate::error::{AppError, AppResult};
 
 /// Service name the key is filed under in the OS credential store.
 ///
-/// Windows shows it in Credential Manager and macOS in Keychain Access, so it
-/// is the application's name rather than a slug: a user auditing what is
-/// stored on their machine should recognize the entry without decoding it.
+/// The application's name, as shown in Credential Manager or Keychain Access.
 pub const KEYRING_SERVICE: &str = "Aegis";
 
 /// Account name within [`KEYRING_SERVICE`].
 ///
-/// Named after the role rather than after a provider, because the roster of
-/// providers is a post-MVP seam (PLAN 7.1): a second key later becomes a
-/// second account under the same service, not a second service.
+/// Named after the role; a later provider roster adds accounts (PLAN 7.1).
 pub const KEYRING_ACCOUNT: &str = "provider-api-key";
 
 /// The environment variable consulted when the credential store holds nothing.
@@ -77,27 +59,16 @@ pub enum KeySource {
 
 /// An API key, in memory.
 ///
-/// The newtype buys one thing, and it is worth a type: the key cannot be
-/// printed by accident. [`fmt::Debug`] is written by hand and reveals nothing,
-/// there is no `Display` and no `Serialize`, so a key can only leave through
-/// [`ApiKey::expose`] — which is greppable, and which every caller has to
-/// name.
-///
-/// The bytes are not zeroed on drop. Doing that honestly would require the key
-/// never to have been copied on its way here, which is not true of a value
-/// that came out of `keyring` or out of the process environment; a `Drop` impl
-/// clearing one of several copies would buy the appearance of the guarantee
-/// rather than the guarantee.
+/// Cannot be printed by accident: redacting `Debug`, no `Display` or
+/// `Serialize`; it leaves only through [`ApiKey::expose`]. Not zeroed on drop,
+/// since copies already exist upstream.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ApiKey(String);
 
 impl ApiKey {
     /// Wraps a key, rejecting one that is only whitespace.
     ///
-    /// An empty environment variable is how a shell says "unset" at least as
-    /// often as it means an empty value, and an all-whitespace key is a paste
-    /// accident. Both are `None` here rather than a key that produces a 401
-    /// somewhere further along.
+    /// Empty or blank means unset.
     pub fn new(raw: impl Into<String>) -> Option<Self> {
         let raw = raw.into();
         let trimmed = raw.trim();
@@ -124,10 +95,7 @@ impl fmt::Debug for ApiKey {
 
 /// What may be shown of a key: a few characters, never enough to use.
 ///
-/// `sk-…4f2a` when the key is long enough that both ends can be shown without
-/// showing the middle, `…4f2a` when it is shorter. The purpose is recognition
-/// — telling *which* of your keys is installed — rather than verification, so
-/// the length is not revealed either.
+/// `sk-…4f2a`, or `…4f2a` for short keys; the length is not revealed.
 pub fn key_hint(key: &str) -> String {
     let chars: Vec<char> = key.chars().collect();
     let tail: String = chars
@@ -149,10 +117,7 @@ pub fn key_hint(key: &str) -> String {
 
 /// What the credential store and the environment hold right now.
 ///
-/// One value rather than three calls, because on macOS every read of the
-/// keychain is a potential consent prompt: asking once and answering all three
-/// questions from that one answer is the difference between a settings panel
-/// that opens and one that interrogates the user.
+/// One read answers everything, since each macOS keychain read may prompt.
 #[derive(Debug)]
 pub struct Held {
     /// The key, if either store had one.
@@ -161,20 +126,15 @@ pub struct Held {
     pub source: KeySource,
     /// Whether the platform's credential store answered at all.
     ///
-    /// `false` on headless Linux and on a locked keychain. A store that is
-    /// merely empty is available; the UI uses this to decide whether to offer
-    /// to save a key or to explain [`ENV_API_KEY`] instead.
+    /// `false` on headless Linux or a locked keychain; an empty store is
+    /// available.
     pub keyring_available: bool,
 }
 
 /// The credential store, plus the environment behind it.
 ///
-/// Holds no state and caches nothing. Every call asks the platform again,
-/// which is the only honest answer to "is there a key right now": a keychain
-/// can be unlocked and a Secret Service can be started while Aegis is running,
-/// and a cached "no" would outlive both. The calls happen when the settings
-/// panel is opened or a turn begins — rare enough that a platform round trip
-/// costs less than remembering the wrong answer.
+/// Stateless: every call asks the platform again, since a keychain can unlock
+/// while Aegis runs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SecretStore;
 
@@ -186,14 +146,8 @@ impl SecretStore {
 
     /// Reads the key, and everything that can be said about where it is.
     ///
-    /// The credential store is consulted first: a key the user typed into
-    /// Aegis wins over one their shell happens to export, because the first
-    /// was chosen for this application and the second was not.
-    ///
-    /// Every credential-store failure means the same thing here — "not from
-    /// here" — and is logged rather than propagated, because the environment
-    /// is still to be tried and a locked keychain must not stop a working
-    /// `AEGIS_API_KEY` from being found.
+    /// The credential store wins over the environment. Store failures are
+    /// logged and fall through to [`ENV_API_KEY`].
     pub fn inspect(&self) -> Held {
         let (stored, keyring_available) =
             match Self::entry().as_ref().map(keyring::Entry::get_password) {
@@ -233,10 +187,7 @@ impl SecretStore {
 
     /// Files a key in the credential store, replacing whatever is there.
     ///
-    /// Fails with `E_KEYRING_UNAVAILABLE` rather than falling back to a file:
-    /// writing a key somewhere Aegis controls would break the first rule of
-    /// this module, and a user told plainly that their machine has no
-    /// credential store can set [`ENV_API_KEY`] instead.
+    /// Fails with `E_KEYRING_UNAVAILABLE`; never falls back to a file.
     pub fn store(&self, key: &ApiKey) -> AppResult<()> {
         let entry = Self::entry().map_err(Self::unavailable)?;
 
@@ -249,13 +200,7 @@ impl SecretStore {
 
     /// Removes the stored key. Removing one that is not there succeeds.
     ///
-    /// Idempotent because the user's intent — "there should be no key here" —
-    /// is satisfied either way, and because a panel whose button fails on the
-    /// second press is a panel that looks broken.
-    ///
-    /// A key in [`ENV_API_KEY`] is untouched and keeps working: Aegis does not
-    /// edit the environment it was started in. The panel says so rather than
-    /// leaving the user to wonder why the key came back.
+    /// A key in [`ENV_API_KEY`] is untouched.
     pub fn clear(&self) -> AppResult<()> {
         let entry = Self::entry().map_err(Self::unavailable)?;
 

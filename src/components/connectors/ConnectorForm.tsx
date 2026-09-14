@@ -1,23 +1,9 @@
 /**
  * Creating or editing one connector (PLAN 7.3, Phase 18).
  *
- * Five fields, and four of them are shaped by what the runtime will accept: an
- * id that is a namespace rather than a label, a program rather than a command
- * line, its arguments one per line, and the names of the environment variables
- * it needs.
- *
- * Two of those are worth explaining on the form itself, because they are where
- * a person's habits from every other MCP host point the wrong way.
- *
- * **Arguments, not a command line.** There is no shell here — the program is
- * spawned with this vector — so `npx -y @scope/pkg /some/dir` is four
- * arguments, not one string. That is the same rule `shell_exec` follows, and
- * for the same reason: an argument vector is a thing a person can read, and a
- * quoted line is a thing they have to parse.
- *
- * **Variable names, not values.** Aegis reads the value out of its own
- * environment when it starts the connector. Nothing typed here is ever written
- * to disk, and there is nowhere in this form to put a token.
+ * Id (a tool namespace), program, one argument per line (no shell), and
+ * environment variable *names* — values come from Aegis's environment and are
+ * never stored.
  */
 
 import { useState } from "react";

@@ -1,24 +1,8 @@
 /**
  * Which model answers this session.
  *
- * Derived, never stored. A session has no model of its own: the provider is
- * chosen per turn from settings (`AppState::provider`), so a badge reading
- * from a persisted field would be describing whatever was configured the day
- * the session was created. Keeping it derived is also what leaves the
- * post-MVP seam open — a session that later belongs to an *agent* with its own
- * provider binding changes where this reads from, not what it means
- * (`PLAN.md` § 7.1).
- *
- * Two sources, and the distinction is the point:
- *
- * - While a turn is running, the model the runtime reported on `turn:started`.
- *   That is a fact about the reply arriving on screen.
- * - Otherwise, what settings say will answer the next message. That is a
- *   prediction, and it is the honest thing to show when nothing is in flight.
- *
- * When the two would differ — settings changed mid-session — the running turn
- * wins, because the question a user has while text is streaming is "what is
- * writing this", not "what would I get if I asked again".
+ * Derived, never stored (the provider is chosen per turn): the model reported
+ * on `turn:started` while a turn runs, otherwise what settings predict.
  */
 
 import { useSessions } from "../../state/sessions";

@@ -578,10 +578,8 @@ args: Array<string>,
 /**
  * Environment variables the server needs, by name.
  *
- * The values are read from Aegis' own environment when the child is
- * spawned. A name that is not set there is reported on the row rather
- * than passed as an empty string, because a server that reads an empty
- * token usually fails in a way that is much harder to read.
+ * Values come from Aegis's environment at spawn; unset names are reported,
+ * not passed empty.
  */
 env: Array<string>, 
 /**
@@ -2015,10 +2013,7 @@ tool: string, };
 /**
  * Payload of [`EVENT_TRAY_ACTIVATE`].
  *
- * `action` is `"show"` today. PLAN 2.2 also lists `"new_session"`, for a tray
- * item that starts a session directly; the menu has no such item yet, so the
- * variant is not invented here — a payload the runtime never sends is a
- * branch the UI would carry for nothing.
+ * `action` is `"show"`; PLAN 2.2's `"new_session"` has no menu item yet.
  */
 export type TrayActivate = { 
 /**

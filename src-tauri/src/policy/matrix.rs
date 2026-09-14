@@ -1050,11 +1050,7 @@ fn is_self(ctx: &PolicyCtx<'_>, program: &str) -> bool {
 
 /// Whether the target is inside the workspace's constitution.
 ///
-/// The first segment only, unlike `.git/` beside it: `world/` is a convention
-/// at the root of a workspace, and a repository with a `src/world/` module in
-/// it has not thereby written one. The predicate itself is
-/// [`world::in_world`], so the gate and the module that reads the constitution
-/// agree on what one is.
+/// First segment only ([`world::in_world`]), so `src/world/` does not count.
 fn in_world_dir(workspace: &Path, target: &Resolved) -> bool {
     target
         .relative_to(workspace)
@@ -1070,16 +1066,9 @@ fn in_git_dir(workspace: &Path, target: &Resolved) -> bool {
 
 /// Whether any segment below the workspace root looks like a credential.
 ///
-/// Tested against the path *relative to the workspace* rather than the whole
-/// thing, which is a deliberate narrowing of PLAN 3's wording. The workspace
-/// root is a folder the user chose and already approved; letting one of its
-/// own ancestors — a checkout under `~/.ssh/`, a directory called
-/// `credentials/` — tag every read inside it as sensitive would train the user
-/// to click through the prompt that is supposed to mean something. Everything
-/// below the root is still tested, segment by segment, as written.
-///
-/// Outside the workspace there is no relative path and this returns `false`;
-/// those rows already ask every time, at `high`, with no grant on offer.
+/// Only segments below the workspace root are tested, so a workspace under a
+/// sensitive-looking ancestor does not flag every read. Outside the workspace
+/// this is `false`; those rows already ask at `high`.
 fn is_sensitive(workspace: &Path, target: &Resolved) -> bool {
     target.relative_to(workspace).is_some_and(|relative| {
         segments(&relative).any(|name| {
@@ -1186,15 +1175,9 @@ fn human_bytes(bytes: u64) -> String {
 
 /// A display-only rendering of a command.
 ///
-/// Never executed and never parsed back: `shell_exec` spawns the program with
-/// its argument vector directly, with no shell in between (PLAN 5.1). Quoting
-/// here is for legibility, not for safety, and must never be described as the
-/// latter.
-///
-/// Shared with [`tools::shell`](crate::tools::shell) so the line a user reads
-/// in the approval dialog and the line the transcript reports afterwards are
-/// produced by the same function, and cannot come to disagree about what was
-/// run.
+/// Never executed or parsed (PLAN 5.1): quoting is for legibility, not safety.
+/// Shared with [`tools::shell`](crate::tools::shell) so dialog and transcript
+/// agree.
 pub(crate) fn shell_line(program: &str, args: &[String]) -> String {
     std::iter::once(program)
         .chain(args.iter().map(String::as_str))

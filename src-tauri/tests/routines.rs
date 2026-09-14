@@ -1,35 +1,13 @@
 //! Routines, through the crate's public surface.
 //!
-//! The unit tests inside `schedule/` cover the arithmetic — when a routine is
-//! due, what a missed window does, when a watched folder counts as changed.
-//! This file covers the Phase 16 exit condition of `PLAN.md` § 7.3, which is a
-//! claim about the *whole* runtime:
+//! Phase 16's exit condition (PLAN 7.3), with no window:
 //!
-//! > a watch routine runs while the window is hidden, writes `/status`, and
-//! > does not ping unless the skill says to.
+//! 1. The door holds (PLAN 7.13).
+//! 2. A signed run writes its status file without a dialog and returns `done`.
+//! 3. An unsigned write is refused, not asked, and the run returns `blocked`.
+//! 4. Budget, pause-after-two-silences and `routine` audit tags hold.
 //!
-//! There is no window in a test binary, which is the point: everything here
-//! runs with nothing watching, exactly as it does at four in the morning. Four
-//! claims, in the order they matter:
-//!
-//! 1. **The door holds.** A routine names a live skill, already granted, and
-//!    already carried to a `skill_return` by that identity — evidence that
-//!    lives in the audit log and nowhere else (PLAN 7.13, *Phase 16's door*).
-//! 2. **A run happens, and it reaches the disk.** The runbook is loaded, the
-//!    status file is written, and the run closes with a `done` — all of it
-//!    without a dialog, because the person signed the routine for the write
-//!    when they saved it.
-//! 3. **What was not signed for is refused, not queued.** The same run with no
-//!    standing approval never raises an approval — it is refused outright and
-//!    returns `blocked`, which is a routine saying what it needed rather than a
-//!    turn parked on a prompt nobody can see.
-//! 4. **The ledger is honest.** The budget is spent under the store's own lock,
-//!    two silences in a row pause the routine, and every audit line the run
-//!    wrote names the routine that caused it.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is, against real files in
-//! a temporary directory.
+//! Commands need a Tauri app; everything below them runs here on temp files.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -219,10 +197,8 @@ impl App {
 
     /// Puts a `skill_return` for this identity on the audit log.
     ///
-    /// What the door reads as "it has been run under watch at least once". It
-    /// is written here as a record rather than by running a turn, because these
-    /// tests are about the door — the run that writes one for real is
-    /// [`a_scheduled_run_writes_its_status_without_asking_anyone`].
+    /// The evidence the door reads, written directly (a real run is tested in
+    /// [`a_scheduled_run_writes_its_status_without_asking_anyone`]).
     fn witness(&self, agent: &Agent, skill: &str) {
         self.audit.append(&AuditRecord {
             session_id: "earlier",
@@ -247,10 +223,7 @@ impl App {
 
     /// Fires one routine the way the scheduler fires it.
     ///
-    /// Through [`runner::fire`] itself rather than a copy of it: the budget
-    /// charge, the session, the seeded approvals, the deadline and the row that
-    /// is written afterwards are the phase, and a test that re-implemented them
-    /// would be proving that the test agrees with itself.
+    /// Through [`runner::fire`] itself, not a copy.
     async fn fire(&self, routine_id: &str, sink: &Recorder) {
         let provider = |_: &Agent| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
         let host = runner::Host {

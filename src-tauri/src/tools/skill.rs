@@ -1,38 +1,11 @@
 //! `skill_run` and `skill_return` (PLAN 7.3, Phase 13).
 //!
-//! A skill is not a tool — `COS.md` is explicit that a tool is a verb on the
-//! machine and a skill *sequences* tools toward a done criterion. These two
-//! are the verbs: **load this runbook** and **record what came of it**. Asking
-//! for a runbook is a file read; recording a result is a validation. Neither
-//! is the skill.
+//! Load a runbook, record what came of it — ordinary gated, audited tool calls.
 //!
-//! They are ordinary registry entries for that reason, and because the model
-//! has exactly one channel — a tool call — for saying "I am going to follow
-//! this procedure now". Putting them anywhere else would mean a second
-//! dispatch path beside the one every other call takes, and with it a second
-//! place to remember to write an audit line. What it buys, by being here, is
-//! that a skill run is gated, audited and cancelled by the machinery that
-//! already exists.
-//!
-//! Three properties are worth reading the code for.
-//!
-//! **The body arrives here and nowhere else.** Nothing in a system message
-//! ever carries a runbook (PLAN 7.6, *catalog in, body on demand*). [`run`]
-//! reads the file at the moment it is invoked — so a runbook edited between
-//! two turns is the one that runs — and hands it back as the tool's content,
-//! for that turn.
-//!
-//! **A run fails closed rather than halfway.** A runbook declares the tools
-//! its steps will call. If the identity does not hold one of them, the run is
-//! refused *before* the first step, naming the tool. The alternative is a
-//! model four rounds into a procedure discovering it cannot finish, which
-//! wastes the rounds and produces a half-done workspace.
-//!
-//! **A return is checked against the shape, not against taste.** [`ret`]
-//! applies `COS.md`'s handoff rules ([`handoff::check`]) — including going and
-//! looking at the artefacts a `done` names, which is the one check that
-//! catches the commonest failure there is: a model describing a file it never
-//! wrote.
+//! * [`run`] reads the body now and returns it for this turn only (PLAN 7.6).
+//! * A run whose declared tools the identity lacks fails before the first step.
+//! * [`ret`] applies [`handoff::check`], including that a `done`'s artefacts
+//!   exist.
 
 use serde_json::{json, Value};
 
@@ -60,21 +33,16 @@ pub fn run_schema() -> Value {
 
 /// JSON Schema for `skill_return` arguments (`COS.md` *Handoff*).
 ///
-/// The handoff module's, not a copy of it. A skill run and a delegated run
-/// close with the same object, so two schemas would be two places for the same
-/// six fields to drift apart — and the model would be told slightly different
-/// things about the same rule depending on which one it was closing.
+/// Shared with `handoff_return`: both close with the same report.
 pub fn return_schema() -> Value {
     super::handoff::report_schema()
 }
 
 /// Loads a runbook into this turn.
 ///
-/// The name has already been checked against the identity's skill allow-list
-/// by [`policy::decide_call`](crate::policy::decide_call), so everything that
-/// can fail here is about the file rather than about rights — except the
-/// fail-closed tool check, which is about rights but needs the file to be read
-/// before it can be made.
+/// The skill allow-list was checked by
+/// [`policy::decide_call`](crate::policy::decide_call); the declared-tools check
+/// needs the file, so it is here.
 pub(crate) fn run(name: &str, ctx: SkillCtx<'_>) -> Produced {
     let catalog = skills::catalog(ctx.library, ctx.workspace);
 
@@ -184,15 +152,8 @@ pub(crate) fn run(name: &str, ctx: SkillCtx<'_>) -> Produced {
 
 /// Records the result of the runbook that was loaded.
 ///
-/// Refused when nothing is running: a return with no run behind it is a status
-/// object about nothing, and accepting it would put a `done` on the audit log
-/// for work no skill ever framed.
-///
-/// "Nothing is running" no longer means "not opened in this turn": a run
-/// carries across the turn boundaries the round cap creates, so a procedure
-/// interrupted half-way still has something to close when it resumes. What is
-/// refused here is a return with no run at all — never opened, already
-/// returned, cancelled, or old enough to have been dropped.
+/// Refused when no run is open (never opened, returned, cancelled or dropped);
+/// a run opened in an earlier turn still counts.
 pub(crate) fn ret(report: &handoff::Report, ctx: SkillCtx<'_>) -> Produced {
     let Some(active) = ctx.active else {
         return Produced::failed(

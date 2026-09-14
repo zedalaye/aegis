@@ -1,13 +1,7 @@
 //! The filesystem tools, driven the way the turn loop will drive them.
 //!
-//! Nothing here calls a tool directly. Every test goes
-//! `policy::decide` → `tools::run`, because that pipeline *is* what Phase 4
-//! delivers: a tool that could be reached without a decision would be a tool
-//! outside the gate, and a test that skipped the decision would not notice.
-//!
-//! The exit criterion of the phase is at the bottom: one test drives
-//! `fs_list`, `fs_read` and `fs_write` through policy and then finds the
-//! expected lines on disk in the audit log.
+//! Every test goes `policy::decide` → `tools::run`. Phase 4's exit criterion is
+//! last: all three tools through policy, with the expected audit lines.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -89,10 +83,7 @@ impl Fixture {
     /// Runs one call end to end: policy decides, and whatever it decided is
     /// carried out and audited.
     ///
-    /// An ask is treated as the user having answered `allow_once`, which is
-    /// what Phase 6 will do with the same decision; a hard denial is refused
-    /// without running anything. This is the whole of the turn loop's tool
-    /// step, minus the events.
+    /// An ask counts as `allow_once`; a hard denial runs nothing.
     fn call(&self, tool_name: &str, args: Value) -> ToolOutcome {
         self.call_after(tool_name, args, || {})
     }
@@ -679,10 +670,7 @@ fn a_session_grant_shows_up_in_the_log_as_the_reason_a_write_ran() {
 
 /// Policy resolves a path once; the tool operates on what policy resolved.
 ///
-/// The check is indirect on purpose — there is no way to hand a tool a
-/// different path than the one that was judged, which is the property being
-/// asserted. What is observable is that the file that changed is the resolved
-/// one.
+/// Observed indirectly: the file that changed is the resolved one.
 #[test]
 fn a_tool_touches_the_path_policy_resolved_and_no_other() {
     let fixture = Fixture::new();

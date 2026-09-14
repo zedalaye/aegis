@@ -1,20 +1,10 @@
 //! System tray icon and menu.
 //!
-//! The tray is a convenience, never a requirement (PLAN 5.3): GNOME shows
-//! nothing without the AppIndicator extension, and a headless or minimal WM
-//! may have no status area at all. [`init`] therefore returns a `Result` that
-//! the caller logs and moves past — the window stays the primary surface.
+//! Optional (PLAN 5.3): [`init`] returns a `Result` the caller logs.
 //!
-//! Platform conventions differ and are honoured rather than averaged:
-//!
-//! * **macOS** — an `NSStatusItem` opens its menu on click; the window toggle
-//!   is the first menu item. The icon is flagged as a template so the system
-//!   tints it for the light and dark menu bar.
-//! * **Windows** — left click toggles the window directly, right click opens
-//!   the menu.
-//! * **Linux** — AppIndicator reports menu activations and nothing else, so
-//!   the menu is the entire interface and `show_menu_on_left_click` is inert.
-//!   The toggle item carries the interaction there.
+//! * **macOS**: click opens the menu (toggle first); template icon.
+//! * **Windows**: left click toggles the window, right click opens the menu.
+//! * **Linux**: AppIndicator only reports menu items, so the menu is everything.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -40,10 +30,7 @@ const EVENT_TRAY_ACTIVATE: &str = "tray:activate";
 
 /// Payload of [`EVENT_TRAY_ACTIVATE`].
 ///
-/// `action` is `"show"` today. PLAN 2.2 also lists `"new_session"`, for a tray
-/// item that starts a session directly; the menu has no such item yet, so the
-/// variant is not invented here — a payload the runtime never sends is a
-/// branch the UI would carry for nothing.
+/// `action` is `"show"`; PLAN 2.2's `"new_session"` has no menu item yet.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct TrayActivate {
@@ -53,15 +40,9 @@ pub struct TrayActivate {
 
 /// Installs the tray icon.
 ///
-/// Returns an error instead of panicking when the platform has no usable
-/// status area — losing the tray degrades the app, it must not stop it.
-///
-/// On Linux the AppIndicator bindings `dlopen` `libayatana-appindicator3`
-/// (or `libappindicator3`) and **panic** if neither `.so` is there, rather
-/// than returning an error Tauri can propagate. That is the WSL2 / minimal-WM
-/// case PLAN 5.3 names. [`catch_unwind`] turns it back into the `Result`
-/// this function already advertised, so a missing library is a log line, not
-/// a process that dies after printing the data directory.
+/// Errors instead of panicking without a status area. The Linux AppIndicator
+/// bindings panic when the library is missing (PLAN 5.3), so
+/// [`catch_unwind`] turns that into an `Err`.
 pub fn init<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     match catch_unwind(AssertUnwindSafe(|| install(app))) {
         Ok(result) => result,

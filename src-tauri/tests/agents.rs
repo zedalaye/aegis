@@ -1,34 +1,14 @@
 //! The agent registry, through the crate's public surface.
 //!
-//! The unit tests inside `store/agents.rs` cover the document — validation,
-//! the built-in identity, the migration. This file covers the Phase 12 exit
-//! condition of `PLAN.md` § 7.3, which is a claim about the *whole* runtime
-//! rather than about that module:
+//! Phase 12's exit condition (PLAN 7.3): a "reviewer" identity cannot see or
+//! use tools it was not granted.
 //!
-//! > you can create a "reviewer" identity and open a session as that identity;
-//! > it cannot see tools it was not granted.
+//! 1. Ungranted schemas are not sent.
+//! 2. Ungranted calls are refused by policy, with no dialog.
+//! 3. The audit line names the identity.
 //!
-//! "Cannot see" and "cannot use" are two different claims, and both have to
-//! hold, because an identity is only as narrow as its weakest enforcement:
-//!
-//! 1. **It is not shown them.** The `tools` array of the request carries only
-//!    the granted schemas, so a reviewer never spends a round asking for a
-//!    write it would be refused.
-//! 2. **It cannot use them anyway.** A call for an ungranted tool — replayed
-//!    out of a transcript written under a wider grant, or invented — is refused
-//!    by policy before anything touches the machine, with no approval offered:
-//!    a dialog asking whether to let an identity exceed its own allow-list is
-//!    a dialog that should not exist.
-//! 3. **The refusal is on the record, as that identity.** The audit line names
-//!    the agent, so "who ran this" is answerable afterwards.
-//!
-//! And one claim in the other direction, which is what keeps this phase a
-//! no-op for everything that came before it: a session that named no identity
-//! runs exactly as it did in Phase 11.
-//!
-//! The command layer above this needs a running Tauri application and is not
-//! reachable from a test binary. Everything below it is, against real files in
-//! a temporary directory.
+//! And a session naming no identity behaves as in Phase 11. Commands need a
+//! Tauri app; everything below them runs here on temp files.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -138,12 +118,8 @@ impl App {
             .id
     }
 
-    /// The request the *next* turn of `session_id` would send, assembled the
-    /// way the turn loop assembles it.
-    ///
-    /// Built here rather than asserted on a captured request because the claim
-    /// is about what the loop sends, and the loop is what calls these two
-    /// functions in this order.
+    /// The request the next turn of `session_id` would send, built as the turn
+    /// loop builds it.
     fn next_request(&self, session_id: &str, agent: &Agent) -> (String, Vec<String>) {
         let history = self.sessions.messages(session_id).expect("messages");
         let request = transcript::build(
@@ -427,9 +403,7 @@ async fn a_granted_tool_is_gated_by_the_ordinary_matrix() {
 /// written before identities existed opens, resolves, and behaves exactly as it
 /// did in Phase 11.
 ///
-/// The document is hand-written rather than produced by the store, because the
-/// store cannot produce one any more — a session created today always names an
-/// identity. What is on disk from before is the thing under test.
+/// The document is hand-written: the store can no longer produce one.
 #[test]
 fn a_session_written_before_identities_is_the_assistant_it_always_was() {
     let dir = TempDir::new().expect("temp dir");
@@ -584,10 +558,7 @@ fn the_builtin_identity_is_refused_even_with_nothing_bound_to_it() {
 /// An identity, and a session's binding to it, survive a restart of the whole
 /// runtime — not just of the store it lives in.
 ///
-/// The store's own round-trip is covered in `store/agents.rs`. This is the
-/// level above it: `AppState` builds four documents over one directory, and
-/// "the identity was there and then it was not" is a failure that would show
-/// up here and nowhere else.
+/// At the `AppState` level, above the store's own round-trip test.
 #[test]
 fn an_identity_and_its_sessions_survive_a_restart_of_the_runtime() {
     let dir = TempDir::new().expect("temp dir");

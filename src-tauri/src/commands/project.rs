@@ -1,15 +1,7 @@
 //! Project commands (PLAN 2.1, "Projects").
 //!
-//! A project is a workspace folder plus a name; from Phase 3 it is also the
-//! root every path check is measured against, which is why the path is
-//! canonicalized here, once, on the way in. Everything downstream compares
-//! against a resolved path rather than against whatever string the UI happened
-//! to hold.
-//!
-//! The folder picker runs in Rust. `capabilities/main.json` grants the WebView
-//! no `dialog:` permission, so the only way to open one is this command — the
-//! same shape as the window commands, and for the same reason: the privileged
-//! operation stays on the runtime side of the boundary.
+//! Workspace paths are canonicalized once, on the way in. The folder picker
+//! runs in Rust: the WebView has no `dialog:` permission.
 
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
@@ -21,16 +13,8 @@ use crate::store::{self, Project, ProjectDetail};
 
 /// Opens the native folder picker and returns the chosen workspace.
 ///
-/// Returns `None` when the user cancels — a cancelled dialog is an ordinary
-/// outcome, not a failure, and the UI should do nothing rather than show an
-/// error. The path comes back canonicalized, so the string the UI then hands
-/// to [`project_create`] is already the one that will be stored.
-///
-/// The picker's callback fires on whichever thread the platform's dialog runs
-/// on, so the result is handed back over a oneshot channel rather than by
-/// blocking: `blocking_pick_folder` deadlocks when it lands on the main
-/// thread, and which thread a command runs on is not something this code
-/// should have to depend on.
+/// `None` when cancelled; otherwise canonical. Uses a oneshot channel because
+/// `blocking_pick_folder` deadlocks on the main thread.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn project_pick_workspace(app: AppHandle) -> AppResult<Option<String>> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -94,9 +78,7 @@ pub fn project_list(state: State<'_, AppState>) -> AppResult<Vec<Project>> {
 
 /// Opens a project and marks it as the most recent one.
 ///
-/// A project whose folder has since been moved or unmounted still opens; the
-/// detail carries `workspace_exists: false` so the UI can say so instead of
-/// pretending the project is gone.
+/// A missing folder still opens, with `workspace_exists: false`.
 #[tauri::command(rename_all = "snake_case")]
 pub fn project_open(state: State<'_, AppState>, project_id: String) -> AppResult<ProjectDetail> {
     let mut detail = state.store().open(&project_id)?;
@@ -109,11 +91,7 @@ pub fn project_open(state: State<'_, AppState>, project_id: String) -> AppResult
 
 /// Every execution host this machine can offer right now (PLAN 7.12).
 ///
-/// This computer first, then whatever `wsl.exe -l -q` can see — asked on each
-/// call rather than cached, because distributions are installed and removed in
-/// a terminal and a list that is confidently out of date is worse than one that
-/// takes a moment. A machine without WSL, and every build that is not Windows,
-/// gets the one row: there is nowhere else for a command to go.
+/// This computer, then `wsl.exe -l -q`'s distributions, queried each call.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn project_list_exec_hosts() -> AppResult<Vec<ExecHostOption>> {
     Ok(exec_host::options().await)
@@ -121,22 +99,9 @@ pub async fn project_list_exec_hosts() -> AppResult<Vec<ExecHostOption>> {
 
 /// Says where this project's commands run, or puts them back on this computer.
 ///
-/// Explicit, never inferred. A workspace under `\\wsl$\` is not consent —
-/// picking a folder is picking a folder — so a project has no host until
-/// somebody chooses one here, and `shell_exec` stays the spawn it has always
-/// been until they do.
-///
-/// Three refusals, and all three are the same promise: a project that says it
-/// runs its commands in Ubuntu has to actually be able to.
-///
-/// * A build that is not Windows has no WSL, and takes the host rather than
-///   quietly ignoring it.
-/// * A distribution nobody has installed is named against the ones that are,
-///   so a typo reads as a typo.
-/// * A workspace the distribution has no path for would fail on every command
-///   afterwards, with nothing on screen to say why — so it is caught at the
-///   moment the two are put together. A project whose folder has gone is
-///   exempt: there is nothing to translate, and the badge already says so.
+/// Explicit, never inferred from the path. Refused when the build is not
+/// Windows, the distribution is not installed (installed ones are listed), or
+/// the workspace has no path in it (unless the folder is gone).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn project_set_exec_host(
     state: State<'_, AppState>,
@@ -177,21 +142,9 @@ pub async fn project_set_exec_host(
 
 /// Forgets a project, and its sessions and routines with it.
 ///
-/// The workspace folder on disk is never touched. The sessions are, because a
-/// transcript belonging to a project that no longer exists is unreachable —
-/// nothing can open it, and leaving it behind grows the session document
-/// forever. Any turn still running in one is cancelled first.
-///
-/// So are its routines (PLAN 7.3, Phase 16), and this one is a cascade rather
-/// than the refusal an identity gets: an identity is a thing a routine *names*
-/// and can be pointed at another, while the workspace is where its runs happen.
-/// A clock with nowhere to run cannot be repaired, only re-made. It stops
-/// firing either way — the folder is measured on every tick — so what the
-/// cascade buys is a panel that does not list work that can never happen again.
-///
-/// The project is deleted before the rest: if a later step fails, the user gets
-/// the outcome they asked for and some orphaned rows, rather than a project
-/// whose sessions are gone but which is still in the sidebar.
+/// The folder is never touched. Sessions (turns cancelled first) and routines
+/// cascade, since neither can outlive the project. The project goes first, so a
+/// later failure leaves orphans rather than a half-deleted project.
 #[tauri::command(rename_all = "snake_case")]
 pub fn project_delete(state: State<'_, AppState>, project_id: String) -> AppResult<()> {
     for session in state.session_list(&project_id) {

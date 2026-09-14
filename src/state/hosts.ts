@@ -1,25 +1,9 @@
 /**
  * Execution-host state (PLAN 7.12).
  *
- * Two facts, with different lifetimes, which is why this is its own store and
- * not a corner of {@link useProjects}.
- *
- * The *options* are a fact about the machine — which WSL distributions are
- * installed — and they change when somebody installs one in a terminal, not
- * when a project is opened. They are asked for once on mount and re-asked only
- * when a person opens the picker, because a list that is confidently out of
- * date is worse than one that takes a moment.
- *
- * The *choice* is a fact about the project, and it lives on the project record
- * where it belongs. Setting it here therefore ends by refetching the projects:
- * the runtime is the only thing that knows whether the host it was handed can
- * actually be used, and a store that patched its own copy optimistically would
- * be drawing a distribution the runtime had just refused.
- *
- * Errors are held rather than thrown, like every other store. `E_EXEC_HOST` is
- * the one worth reading — it is the runtime saying which distributions this
- * machine really has, or that this folder is not one the chosen distribution
- * can reach.
+ * The machine's host options (fetched on mount and when the picker opens) and
+ * setting a project's host, which refetches projects rather than patching.
+ * Errors, notably `E_EXEC_HOST`, are held, not thrown.
  */
 
 import { create } from "zustand";
@@ -33,11 +17,8 @@ import { useProjects } from "./projects";
 
 export type HostsState = {
   /**
-   * Everywhere a command could run, this computer first.
-   *
-   * Empty until the first load, which is not the same as "only this computer":
-   * a panel that drew a picker before it had asked would offer one row and then
-   * grow, which reads as the list having changed.
+   * Where a command could run, this computer first; empty until loaded (not
+   * "only this computer").
    */
   readonly options: readonly ExecHostOption[];
   /** Whether the options have been asked for yet. */

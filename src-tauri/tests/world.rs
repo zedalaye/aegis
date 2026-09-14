@@ -1,24 +1,13 @@
 //! The world — a workspace's constitution — through the crate's public
 //! surface (`PLAN.md` § 7.2; `COS.md` *Work*).
 //!
-//! The unit tests inside `world.rs` cover the reader, the `sources.yml` parser
-//! and the drift measurement; the ones inside `policy/mod.rs` cover the rows the
-//! gate gained. This file covers what neither of those can: that the runtime
-//! *as a whole* behaves the way the missed half of Phase 11 says it must, with
-//! no new tool, no new write path and no new agent type.
+//! Unit tests cover the reader and the policy rows; this checks the runtime as a
+//! whole:
 //!
-//! Four claims, in the order they matter:
-//!
-//! 1. It is opt-in. A workspace nobody founded a world in is judged, prompted
-//!    and read exactly as it was before this slice.
-//! 2. The frame reaches the model, and the essence does not. What is injected is
-//!    a constraint and a status — a few lines — never the constitution itself.
-//! 3. A specialist cannot amend the world. Not an approval it could talk its way
-//!    through: a refusal, delivered as an ordinary `E_DENIED` result, with no
-//!    dialog raised and nothing written.
-//! 4. A source that has already been perceived cannot be reopened, and a source
-//!    that has moved can. That pair is the whole economics of the thing: the
-//!    round-trip is paid once, and the delta is the one legitimate re-read.
+//! 1. Opt-in: a workspace without a world behaves as before.
+//! 2. The frame reaches the model; `essence.md` does not.
+//! 3. A specialist's write to `world/` is `E_DENIED`, with no dialog.
+//! 4. An in-step source cannot be re-read; a moved one can.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -137,12 +126,8 @@ impl App {
         dump
     }
 
-    /// The system message the *next* request would carry, assembled the way the
-    /// turn loop assembles it.
-    ///
-    /// `delegated` is the fact the frame turns on: the same world says different
-    /// things to a brief and to a session somebody is sitting in, because the
-    /// gate does different things to their writes.
+    /// The next request's system message, as the turn loop builds it;
+    /// `delegated` selects the frame.
     fn next_system_message(&self, delegated: bool) -> String {
         let history = self.sessions.messages(&self.session_id).expect("messages");
         let shared = aegis_lib::workspace::digest(&self.workspace);
@@ -266,10 +251,7 @@ fn sha256(path: &Path) -> String {
 
 /// A workspace nobody founded a world in is exactly the workspace it was.
 ///
-/// This is the claim PLAN 7.2 makes about theatre: five empty templates in a
-/// watch folder or a wish list are worse than nothing, so nothing here creates
-/// them, nothing nags about them, and no read is refused on the strength of a
-/// constitution that does not exist.
+/// Nothing is created, prompted or refused without a world (PLAN 7.2).
 #[tokio::test]
 async fn a_workspace_without_a_world_is_untouched_by_one() {
     let app = App::new();
@@ -314,10 +296,7 @@ async fn a_workspace_without_a_world_is_untouched_by_one() {
 /// What is injected is a *constraint plus a status*, and it is a harness
 /// injection rather than a skill because a skill can be skipped.
 ///
-/// The negative half is the one that costs: `essence.md` stays on disk. The
-/// system message is a policy summary plus what is true right now (PLAN 7.1),
-/// and a constitution pasted into it would be paid for on every turn of every
-/// session for as long as the world lives.
+/// And `essence.md` itself stays out of the prompt (PLAN 7.1).
 #[test]
 fn the_frame_is_injected_and_the_constitution_stays_on_disk() {
     let app = App::new();
@@ -351,11 +330,8 @@ fn the_frame_is_injected_and_the_constitution_stays_on_disk() {
 /// gate *does* different things to their writes — and a prompt that refused
 /// what the gate would have asked about is the worse of the two errors.
 ///
-/// This is a regression: the first version of the frame told every session "you
-/// do not write `world/`", so a person asking for help founding one got a model
-/// that declined and never reached the dialog that would have said yes. The
-/// audit log for that failure has no `fs_write` in it at all, which is the shape
-/// of a prompt refusing rather than a gate refusing.
+/// Regression: the first frame told every session not to write `world/`, so
+/// attended sessions refused instead of reaching the dialog.
 #[test]
 fn the_frame_forbids_a_brief_and_invites_a_session() {
     let app = App::new();
@@ -414,10 +390,7 @@ fn a_source_that_moved_is_an_attention_item_in_the_next_prompt() {
 
 /// `COS.md` *Work*: not an ask with a session grant — a refusal.
 ///
-/// Three things are asserted, and the second and third are the ones that make
-/// it a policy rather than a warning: no dialog was raised, so there was nothing
-/// for anybody to click through; and the file on disk is byte for byte what it
-/// was.
+/// Asserts the refusal, no dialog, and an unchanged file.
 #[tokio::test]
 async fn a_brief_cannot_amend_the_world_and_is_told_what_to_do_instead() {
     let app = App::new();
@@ -455,12 +428,8 @@ async fn a_brief_cannot_amend_the_world_and_is_told_what_to_do_instead() {
 
 /// The same call outside a brief is a cabinet act: it stops and asks.
 ///
-/// Amending the world is a human decision (`COS.md` *Work*), which in this
-/// harness means the one thing a dialog is for — and the dialog offers a
-/// standing approval of its own, because founding a world is six files and six
-/// identical High-risk prompts in a row is how somebody is taught to stop
-/// reading them. What that approval covers is the constitution and nothing
-/// else; `policy` has the tests for the two directions of that.
+/// It offers a `world/`-only session grant (founding is several files);
+/// `policy` tests its scope.
 #[tokio::test]
 async fn amending_the_world_from_the_cabinet_stops_and_asks() {
     let app = App::new();
@@ -515,11 +484,7 @@ async fn amending_the_world_from_the_cabinet_stops_and_asks() {
 
 /// The economics of the whole slice, as two calls.
 ///
-/// A declared source that still hashes to what the world recorded is *refused*,
-/// not asked about: what it said is in `world/`, and re-reading it is the
-/// round-trip the world exists to have paid once. The moment the operator drops
-/// a new one it is an ordinary contained read again, because perceiving that
-/// delta is the only legitimate re-perception there is.
+/// An in-step source is refused; once it changes it is an ordinary read.
 #[tokio::test]
 async fn a_perceived_source_is_refused_and_the_delta_reads() {
     let app = App::new();
@@ -571,9 +536,7 @@ async fn a_perceived_source_is_refused_and_the_delta_reads() {
 /// Drift stops a brief before it launches — except the one that is about the
 /// delta, which names it in its inputs.
 ///
-/// `PLAN.md` § 7.2: route a bounded perceive-delta *or* the work, never both.
-/// Compiling on top of a source nobody has re-read is an instance built from a
-/// schema that is already known to be wrong.
+/// PLAN 7.2: the perceive-delta or the work, never both.
 #[test]
 fn drift_holds_the_briefs_that_are_not_about_it() {
     let app = App::new();
