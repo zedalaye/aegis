@@ -323,9 +323,9 @@ impl Client {
 
     /// Calls one tool and returns the server's `result` object.
     ///
-    /// The envelope the model sees is built by [`super::call`], which is also
-    /// where `isError` becomes a failed [`ToolResult`](crate::tools::ToolResult).
-    /// This function's only job is the round trip.
+    /// Only the round trip: [`Connectors::call`](super::Connectors::call) builds
+    /// the envelope and maps `isError` to a failed
+    /// [`ToolResult`](crate::tools::ToolResult).
     pub async fn call_tool(&self, tool: &str, arguments: &Value) -> Result<Value, String> {
         self.request(
             "tools/call",

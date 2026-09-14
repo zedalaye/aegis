@@ -1,16 +1,8 @@
 //! Application-wide runtime state, managed by Tauri.
 //!
-//! Anything a command needs and cannot derive from its arguments lives here,
-//! behind `&self` so commands never take a lock they do not need. Each concern
-//! owns its own synchronization rather than sharing one coarse mutex: the
-//! project store, the session store, per-session grants, the pending
-//! approvals, the audit log and the turn registry are six independent locks,
-//! and no command holds two.
-//!
-//! This is also the composition point for the one fact no single store can
-//! answer on its own. A [`SessionSummary`] needs both the transcript (from the
-//! session document) and whether a turn is running (from the registry), so the
-//! methods that produce one live here rather than in either.
+//! Each concern owns its own lock, and no command holds two. This is also where
+//! facts that span stores are composed — a [`SessionSummary`] needs both the
+//! session document and the turn registry.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,14 +30,9 @@ use crate::store::{
     SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
-/// How many audit lines a board is folded from (PLAN 7.3, Phase 17).
-///
-/// The ceiling [`AuditLog::tail`](crate::audit::AuditLog::tail) will honour, and
-/// the board asks for all of it: unlike the drawer, which is a tail somebody
-/// scrolls, this is an aggregate, and a run whose first half fell outside the
-/// window would be reported as a smaller run rather than as a partial one.
-/// Bounded all the same — the log outlives any window over it, which is why
-/// the panel says how far back it reaches.
+/// How many audit lines a board is folded from (Phase 17): the most
+/// [`AuditLog::tail`](crate::audit::AuditLog::tail) allows, so fewer runs are
+/// cut in half. The panel says how far back it reaches.
 const AUDIT_WINDOW: usize = 1000;
 
 /// Shared state, registered with `Manager::manage` and read from commands via
@@ -63,22 +50,14 @@ pub struct AppState {
     agents: AgentStore,
     memories: MemoryStore,
     routines: RoutineStore,
-    /// Which routines are running right now, so nothing fires twice
-    /// (PLAN 7.3, Phase 16). In memory only: a routine is not running after a
-    /// crash, and a persisted flag saying it was is what would stop a clock
-    /// forever.
+    /// Which routines are running now, so nothing fires twice (Phase 16). In
+    /// memory only: nothing is running after a crash.
     scheduler: Scheduler,
     settings: SettingsStore,
-    /// The connectors somebody configured (PLAN 7.3, Phase 18).
+    /// The connectors somebody configured (Phase 18).
     connector_store: ConnectorStore,
-    /// The connectors that are actually running.
-    ///
-    /// Two fields rather than one because they answer different questions and
-    /// change at different rates. The document is what a person typed and it
-    /// survives a restart; the roster is processes, and a process that was up
-    /// when this one died is not up now. The Settings panel joins them
-    /// ([`AppState::connector_views`]), which is the composition this module
-    /// exists for.
+    /// The connectors actually running. Processes, unlike the document above;
+    /// [`AppState::connector_views`] joins the two.
     connectors: Connectors,
     secrets: SecretStore,
     turns: TurnRegistry,
@@ -98,12 +77,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Builds the state for a fresh process, loading persisted data from
-    /// `data_dir` (the OS application-data directory).
-    ///
-    /// Infallible on purpose. A store that cannot be read yields an empty one
-    /// and a log line; the app still boots, and the failure is reported to the
-    /// user on the first save rather than as a window that never appears.
+    /// Builds the state for a fresh process from `data_dir`. Infallible: an
+    /// unreadable store starts empty, and the failure surfaces on the first save.
     pub fn new(data_dir: &Path) -> Self {
         Self {
             started_at: Instant::now(),
@@ -117,47 +92,33 @@ impl AppState {
             scheduler: Scheduler::new(),
             settings: SettingsStore::load(data_dir),
             connector_store: ConnectorStore::load(data_dir),
-            // Empty at construction, on purpose: starting a program is async
-            // and `new` is not, and a window that waited on four `npx` runs
-            // before it appeared would be a worse first minute than four rows
-            // that fill in. `commands::connector::spawn` starts them.
+            // Empty here: connectors start asynchronously
+            // (`commands::connector::spawn`), so the window does not wait.
             connectors: Connectors::new(),
             secrets: SecretStore::new(),
             turns: TurnRegistry::new(),
             grants: GrantStore::new(),
             approvals: ApprovalRegistry::new(),
             audit: AuditLog::new(data_dir),
-            // Built once and shared. Nothing here reads the credential store:
-            // startup must not prompt for a keychain the user may never use in
-            // this session.
+            // Built once. No credential read at startup: it could prompt.
             http: openai::client(),
-            // Only used to refuse `shell_exec` on Aegis itself. A platform
-            // that will not name its own executable loses that one check and
-            // nothing else, so the failure is logged rather than propagated.
+            // Only used to refuse `shell_exec` on Aegis itself.
             self_exe: std::env::current_exe()
                 .inspect_err(|err| {
                     tracing::warn!(%err, "could not resolve this executable's path");
                 })
                 .ok(),
-            // Beside the stores, not inside the workspace (PLAN 5.4). Created
-            // here rather than on first capture so that `lib.rs` has an
-            // existing directory to scope the asset protocol to, and so a
-            // user can find the folder before there is anything in it.
+            // Beside the stores (PLAN 5.4), created now so `lib.rs` can scope
+            // the asset protocol to it.
             captures: prepare_captures(data_dir),
-            // Seeded on a first run only, and never argued about afterwards:
-            // see `skills::seed`. Ordinary files in an ordinary directory,
-            // which is what lets a user write, edit and delete a runbook with
-            // their own editor.
+            // Seeded once per name (`skills::seed`); ordinary files after that.
             skills: prepare_skills(data_dir),
             drops: crate::intake::Drops::new(),
         }
     }
 
-    /// The drop being held for the window (PLAN 7.15).
-    ///
-    /// Filled by the window-event handler in `lib.rs` with paths the OS handed
-    /// this process, and emptied by `workspace_import_brief`. The WebView names
-    /// a drop by id and never supplies a path.
+    /// The drop held for the window (PLAN 7.15): paths the OS handed over,
+    /// which the WebView names only by id.
     pub fn drops(&self) -> &crate::intake::Drops {
         &self.drops
     }
@@ -172,25 +133,14 @@ impl AppState {
         &self.turns
     }
 
-    /// Who answers a turn, decided fresh for each one.
+    /// Who answers a turn, decided per turn so a settings change applies to the
+    /// next message.
     ///
-    /// Per turn rather than once per process, and that is the point: settings
-    /// can change between two messages in the same session, a key can be added
-    /// or cleared, and a provider captured at startup would keep answering
-    /// from a configuration the user has already moved on from.
-    ///
-    /// Unconfigured settings mean the scripted provider — a fresh install
-    /// still streams a reply and still walks the approval gate, which is the
-    /// documented Phase 5 behaviour rather than a fault. Configured settings
-    /// mean the real one *even with no key*: the user asked for a model, and
-    /// answering them with the fake instead of `E_NO_API_KEY` would be a lie
-    /// they could not see through (see
-    /// [`ProviderSettings::is_configured`](crate::store::ProviderSettings::is_configured)).
-    ///
-    /// A `Box` because the choice is made here and the value has to outlive
-    /// the call; the turn loop still takes `&dyn Provider` and still cannot
-    /// tell which one it was handed. A roster of providers later is a
-    /// different decision inside this one function (PLAN 7.1).
+    /// Unconfigured settings get the scripted provider. Configured settings get
+    /// the real one even with no key, so the user sees `E_NO_API_KEY` rather than
+    /// a silent fake
+    /// ([`ProviderSettings::is_configured`](crate::store::ProviderSettings::is_configured)).
+    /// A provider roster would be decided here (PLAN 7.1).
     pub fn provider(&self) -> Box<dyn Provider> {
         let settings = self.settings.get();
 
@@ -198,16 +148,10 @@ impl AppState {
             return Box::new(FakeProvider::new());
         }
 
-        // Everything motosan speaks goes to motosan: the three CLI logins,
-        // Gemini, and an API key aimed at Anthropic's own host. That last one
-        // used to fall through to the OpenAI-compatible path, which reaches
-        // the vendor's compatibility shim — a shim that drops prompt caching,
-        // so every round of every turn re-sent the whole transcript at full
-        // price.
+        // motosan handles the CLI logins, Gemini, and an API key for
+        // Anthropic's own host, whose compatibility layer drops prompt caching.
         if catalog::uses_motosan(settings.auth_kind, &settings.base_url) {
-            // A CLI login's credential is on disk; only the key path needs the
-            // secret store, and reading it for the others would be a keyring
-            // prompt bought for nothing. Gemini is a key, not a login.
+            // Only a key needs the secret store; a CLI login reads its own file.
             let key = if settings.auth_kind.is_cli() {
                 None
             } else {
@@ -224,19 +168,9 @@ impl AppState {
         ))
     }
 
-    /// Who answers for one identity (PLAN 7.3, Phase 12).
-    ///
-    /// This build resolves exactly one binding — [`DEFAULT_PROVIDER_ID`], the
-    /// provider named in Settings — and the store refuses to save an identity
-    /// bound to anything else, so the fallback below is reachable only by hand
-    /// editing `agents.json`. It falls back rather than failing because a
-    /// session that cannot be talked to at all is a worse answer than one
-    /// answered by the provider the user configured, and the warning says which
-    /// happened.
-    ///
-    /// This function is the roster's seam. A second provider later is a second
-    /// arm here plus a settings row — not a change to the turn loop, which
-    /// still takes a `&dyn Provider` and still cannot tell which it was handed.
+    /// Who answers for one identity (Phase 12). Only [`DEFAULT_PROVIDER_ID`]
+    /// exists; any other binding (a hand-edited `agents.json`) falls back with a
+    /// warning. A provider roster is a second arm here, not a turn-loop change.
     pub fn provider_for(&self, agent: &Agent) -> Box<dyn Provider> {
         if agent.provider_id != DEFAULT_PROVIDER_ID {
             tracing::warn!(
@@ -249,13 +183,9 @@ impl AppState {
         self.provider()
     }
 
-    /// The provider settings, and everything that may be said about the key.
-    ///
-    /// The second composition this module exists for on the settings side: the
-    /// base URL and the model come off disk, the key facts come from the
-    /// platform, and neither store can answer for the other. One credential
-    /// read serves all three key fields (see
-    /// [`SecretStore::inspect`](crate::secrets::SecretStore::inspect)).
+    /// The provider settings and what may be shown about the key: settings from
+    /// disk, key facts from one read of the platform store
+    /// ([`SecretStore::inspect`](crate::secrets::SecretStore::inspect)).
     pub fn masked_settings(&self) -> MaskedSettings {
         let provider = self.settings.get();
         let held = self.secrets.inspect();
@@ -290,15 +220,10 @@ impl AppState {
     }
 
     /// Asks the configured server whether it is reachable and the key works.
-    ///
-    /// Lives here rather than in the command because it needs three things no
-    /// one of them owns: the settings, the key, and the shared HTTP client.
     pub async fn probe_provider(&self) -> ProviderProbe {
         let settings = self.settings.get();
 
-        // The same fork as `provider`, and for the reason the probe exists: a
-        // test that reaches a different endpoint than a turn does is a test
-        // that can pass on a configuration that cannot answer.
+        // The same fork as `provider`: the probe must reach what a turn would.
         if catalog::uses_motosan(settings.auth_kind, &settings.base_url) {
             let key = if settings.auth_kind.is_cli() {
                 None
@@ -320,12 +245,8 @@ impl AppState {
         openai::probe(self.http.as_ref(), &settings, key.as_ref()).await
     }
 
-    /// The largest reply the named model will produce, from the provider's own
-    /// catalog.
-    ///
-    /// `pending_key` is the key from the form, which may not be the one in the
-    /// credential store yet. It wins when it is there, so the save that first
-    /// configures a provider can still read its catalog.
+    /// The named model's largest reply, from the provider's catalog.
+    /// `pending_key`, from a form not saved yet, wins over the stored key.
     pub async fn model_output_cap(
         &self,
         kind: AuthKind,
@@ -340,10 +261,7 @@ impl AppState {
         catalog::output_cap(kind, base_url, model, self.http.as_ref(), key.as_ref()).await
     }
 
-    /// Asks the current authentication kind which models it will accept.
-    ///
-    /// `base_url` is the one in the form, which may not have been saved yet —
-    /// changing the URL and refreshing the list should describe that URL.
+    /// The models an authentication kind accepts, for the base URL in the form.
     pub async fn list_models(&self, kind: AuthKind, base_url: &str) -> ModelCatalog {
         catalog::list(
             kind,
@@ -359,12 +277,8 @@ impl AppState {
         &self.settings
     }
 
-    /// The API key, wherever this machine keeps it.
-    ///
-    /// Deliberately not part of [`Store`]: the key is the one piece of
-    /// configuration Aegis does not persist itself, and routing it through the
-    /// same type as the project list is how it would end up in a JSON file
-    /// next to them.
+    /// The API key, wherever this machine keeps it — never in a document Aegis
+    /// writes.
     pub fn secrets(&self) -> &SecretStore {
         &self.secrets
     }
@@ -379,17 +293,10 @@ impl AppState {
         self.agents.list()
     }
 
-    /// The identity a session runs as.
-    ///
-    /// The third composition this module exists for: which identity a session
-    /// named is in the session document, and what that identity *is* is in the
-    /// agent document. Infallible for the reason
-    /// [`AgentStore::resolve`](crate::store::AgentStore::resolve) is — this is
-    /// called on the way into a turn, and a turn that would not start because
-    /// a lookup failed is a session that can no longer be talked to. A session
-    /// that has itself gone resolves to the built-in identity, and the turn
-    /// fails a moment later on the transcript it cannot read, which is the
-    /// failure worth reporting.
+    /// The identity a session runs as. Infallible
+    /// ([`AgentStore::resolve`](crate::store::AgentStore::resolve)): a missing
+    /// session resolves to the built-in identity, and the turn then fails on the
+    /// transcript instead.
     pub fn agent_of(&self, session_id: &str) -> Agent {
         let named = self.sessions.agent_of(session_id).unwrap_or_else(|err| {
             tracing::warn!(%err, session_id, "no session to resolve an identity for");
@@ -399,12 +306,8 @@ impl AppState {
         self.agents.resolve(named.as_deref())
     }
 
-    /// Creates a session bound to an identity.
-    ///
-    /// The identity is checked here rather than in the session store, which
-    /// cannot see the agent document. Checked at all because a session bound to
-    /// an identity that does not exist is one that can talk and never act, and
-    /// finding that out on the first tool call is finding it out too late.
+    /// Creates a session bound to an identity, checked here because the session
+    /// store cannot see the agent document.
     pub fn create_session(
         &self,
         project_id: &str,
@@ -417,31 +320,18 @@ impl AppState {
         self.sessions.create(project_id, title, &agent.id)
     }
 
-    /// Deletes an identity, unless sessions still run as it.
-    ///
-    /// The check is here for the same reason the one above is: the agent store
-    /// cannot see the session document. Refused rather than cascaded — see
-    /// [`AppError::AgentInUse`](crate::AppError::AgentInUse).
-    ///
-    /// Its memories go with it, and that direction is deliberate: a memory is
-    /// only ever reachable through the identity that holds it, so memories of a
-    /// deleted identity are unreachable records that would grow the document
-    /// forever. Cascading here is not the same decision as refusing above —
-    /// what is refused there is orphaning a *transcript*, which is a record of
-    /// what happened and belongs to the user.
-    ///
-    /// The identity goes first. If forgetting then failed, the result would be
-    /// records nobody can read; the other order would leave an identity that
-    /// has already lost what it knew.
+    /// Deletes an identity, unless sessions or routines still use it
+    /// ([`AppError::AgentInUse`](crate::AppError::AgentInUse)). Its memories go
+    /// with it, since nothing else can reach them; the identity is deleted
+    /// first, so a failure leaves unreadable records, not an identity without
+    /// its memories.
     pub fn delete_agent(&self, agent_id: &str) -> AppResult<()> {
         let bound = self.sessions.count_for_agent(agent_id);
         if bound > 0 {
             return Err(AppError::AgentInUse { count: bound });
         }
-        // A clock pointing at nobody is worse than a refusal: it would keep a
-        // routine on the panel that can never run again, and the person who
-        // deleted the identity is the one who knows whether the routine should
-        // move or go (PLAN 7.3, Phase 16).
+        // Refused: the person deleting knows whether the routine should move or
+        // go (Phase 16).
         let fired_by = self.routines.count_for_agent(agent_id);
         if fired_by > 0 {
             return Err(AppError::AgentHasRoutines { count: fired_by });
@@ -475,13 +365,7 @@ impl AppState {
         &self.connectors
     }
 
-    /// Every connector's row: the record, joined to what is measured about it.
-    ///
-    /// The composition this module exists for, on the connector side. The store
-    /// cannot say whether a process is up and the roster cannot say what
-    /// somebody typed, and a row that showed only one of the two would be
-    /// either a list of settings nobody can act on or a list of processes
-    /// nobody configured.
+    /// Every connector's row: the configured record joined to its process.
     pub fn connector_views(&self) -> Vec<ConnectorView> {
         self.connectors.views(&self.connector_store.list())
     }
@@ -496,11 +380,7 @@ impl AppState {
         &self.scheduler
     }
 
-    /// Every routine, each carrying whatever is wrong with it right now.
-    ///
-    /// The measuring is here because it is the composition no single store can
-    /// do: the identity is in one document, the folder in another, the runbook
-    /// on disk, and the answer changes without the routine being touched.
+    /// Every routine, with whatever currently stops it from firing.
     pub fn routine_list(&self) -> Vec<Routine> {
         self.routines
             .list()
@@ -512,18 +392,9 @@ impl AppState {
             .collect()
     }
 
-    /// Records where a watching routine's folder stands right now.
-    ///
-    /// Called when a routine is saved, so that "save it, then drop a file in"
-    /// fires on the next tick rather than the one after — the first look is
-    /// what a routine compares against, and doing it here means the routine
-    /// starts from the moment somebody set it up rather than from whenever the
-    /// clock next came round.
-    ///
-    /// Best effort, and silent: a folder that is not there yet is a routine
-    /// with nothing to compare against, which the tick handles by learning
-    /// ([`schedule::learning`](crate::schedule::learning)). Nothing about a
-    /// clock schedule is touched.
+    /// Records where a watched folder stands when its routine is saved, so a
+    /// file dropped right after fires on the next tick. Best effort: a missing
+    /// folder is learned later ([`schedule::learning`](crate::schedule::learning)).
     pub fn arm_watch(&self, routine: &Routine) {
         let crate::store::Schedule::OnChange { dir } = &routine.schedule else {
             return;
@@ -549,10 +420,8 @@ impl AppState {
         routine
     }
 
-    /// Why this routine cannot fire as it stands, or `None` when it can.
-    ///
-    /// Read by the panel on every list and by the scheduler on every tick, so
-    /// a routine that is drawn as runnable is one that would actually run.
+    /// Why this routine cannot fire, or `None`. The panel and the scheduler read
+    /// the same answer.
     pub fn routine_problem(&self, routine: &Routine) -> Option<String> {
         let agent = self.agents.get(&routine.agent_id).ok();
         let workspace = self.workspace_for_project(&routine.project_id);
@@ -568,18 +437,8 @@ impl AppState {
         )
     }
 
-    /// The project's status board (PLAN 7.3, Phase 17).
-    ///
-    /// The largest composition in this module, and it is here for the reason
-    /// the others are: no store can answer it. The file half is in the user's
-    /// folder, the live half is spread over the session document, the turn
-    /// registry, the approval registry and the routine document, and the runs
-    /// are folded out of a log none of them can see.
-    ///
-    /// Everything is measured on the way through — a routine's problem, a
-    /// session's state, a workspace that may have been unplugged since the last
-    /// read — so a board is what is true when it is asked for, not what was
-    /// true when something last changed.
+    /// The project's board (Phase 17), composed from `STATUS.md`, the session,
+    /// turn, approval and routine stores and the audit log — all measured now.
     pub fn board(&self, project_id: &str) -> board::Board {
         let sessions = self.session_list(project_id);
         let routines: Vec<Routine> = self
@@ -588,9 +447,7 @@ impl AppState {
             .filter(|routine| routine.project_id == project_id)
             .collect();
 
-        // Only this project's questions. The registry is global — a dialog is
-        // raised by a turn, and a turn belongs to a session — so the filter is
-        // the session list that was just measured.
+        // Only this project's dialogs, by its sessions.
         let approvals: Vec<ApprovalRequest> = self
             .pending_approvals(None)
             .into_iter()
@@ -620,12 +477,8 @@ impl AppState {
         })
     }
 
-    /// One run, and the lines it is replayed from (PLAN 7.2, row 10).
-    ///
-    /// The same fold as the board, narrowed to one reference, plus the entries
-    /// themselves in the order they happened. Re-folded rather than remembered:
-    /// a board this window read a minute ago is not a thing to serve a detail
-    /// out of, and the log is cheap to read again.
+    /// One run and the audit lines it replays from, oldest first (PLAN 7.2,
+    /// row 10). Folded again rather than cached.
     pub fn run_trace(&self, project_id: &str, run: &trace::RunRef) -> AppResult<RunTrace> {
         let sessions = self.session_list(project_id);
         let ledger = self.ledger(&sessions);
@@ -655,11 +508,8 @@ impl AppState {
         })
     }
 
-    /// The window of the audit log a board is folded from.
-    ///
-    /// A failure to read is an empty window rather than an error: a board whose
-    /// file half is fine should still draw, and the drawer is where a log that
-    /// will not read is reported.
+    /// The audit window a board is folded from. A read failure is an empty
+    /// window; the drawer reports it.
     fn audit_window(&self) -> Vec<AuditEntry> {
         self.audit.tail(AUDIT_WINDOW, None).unwrap_or_else(|err| {
             tracing::warn!(%err, "the board could not read the audit log");
@@ -693,11 +543,7 @@ impl AppState {
             .collect()
     }
 
-    /// A project's workspace folder, when it is there right now.
-    ///
-    /// The project-shaped half of [`AppState::workspace_of`], which answers the
-    /// same question for a session. A routine names a project rather than a
-    /// session — its runs each open one — so it needs this one.
+    /// A project's workspace folder, when it exists right now.
     pub fn workspace_for_project(&self, project_id: &str) -> Option<PathBuf> {
         self.store
             .list()
@@ -707,12 +553,8 @@ impl AppState {
             .map(|project| PathBuf::from(project.workspace_path))
     }
 
-    /// Where a project's commands run (PLAN 7.12).
-    ///
-    /// `None` is this process, which is a project with no host and also a
-    /// project id nothing answers to — the second because there is nothing
-    /// useful to do with the distinction here: a turn with no project has no
-    /// workspace either, and every tool call is already a hard denial.
+    /// Where a project's commands run (PLAN 7.12). `None` for this process, and
+    /// for an unknown project, which has no workspace anyway.
     pub fn exec_host_for_project(&self, project_id: &str) -> Option<ExecHost> {
         self.store
             .list()
@@ -721,35 +563,21 @@ impl AppState {
             .and_then(|project| project.exec_host)
     }
 
-    /// Where a session's commands run (PLAN 7.12).
-    ///
-    /// The session-shaped half of [`AppState::exec_host_for_project`]. Sessions
-    /// inherit the host and cannot override it: which operating system the
-    /// toolchain lives in is a fact about the folder, not about a conversation
-    /// held over it.
+    /// Where a session's commands run: its project's host, never overridden.
     pub fn exec_host_of(&self, session_id: &str) -> Option<ExecHost> {
         let project_id = self.sessions.project_of(session_id).ok()?;
         self.exec_host_for_project(&project_id)
     }
 
     /// One identity's memories, most recently touched first.
-    ///
-    /// Takes an identity rather than defaulting to one: "whose memory" is the
-    /// whole question, and a panel that guessed would be showing somebody
-    /// else's.
     pub fn memory_list(&self, agent_id: &str) -> AppResult<Vec<Memory>> {
-        // Checked so that a stale picker says "no such identity" rather than
-        // drawing an empty list that looks like an identity which has learned
-        // nothing.
+        // A stale picker gets "no such identity", not an empty list.
         let agent = self.agents.get(agent_id)?;
         Ok(self.memories.list_for(&agent.id))
     }
 
-    /// Records or corrects a memory, on the user's own account.
-    ///
-    /// The other half of `COS.md`'s *forget*: what the model may do is write
-    /// and read, under the approval gate; correcting what it got wrong is the
-    /// human's, and this is where that lands.
+    /// Records or corrects a memory on the user's behalf: correcting memory is
+    /// the human's (`COS.md` *Memory*).
     pub fn memory_save(
         &self,
         agent_id: &str,
@@ -766,20 +594,9 @@ impl AppState {
         self.memories.forget(&agent.id, memory_id)
     }
 
-    /// Folds a session's older turns into state, and hands back the session as
-    /// it now reads (PLAN 7.3, Phase 14).
-    ///
-    /// Refused while a turn is running, with the same `E_TURN_BUSY` a second
-    /// send gets. The turn loop folds once, before its first request, precisely
-    /// so that a turn's rounds all reason against the same context; a fold
-    /// landing between two of them would show the model one history and then
-    /// judge its next move against another. The window hides the button while a
-    /// reply streams, but that is how the interface tells the truth, not how
-    /// the rule holds — this is where it holds.
-    ///
-    /// Otherwise it always returns the detail, whether or not anything moved. A
-    /// session with too few turns to fold is not a failure; it is an answer,
-    /// and one the panel draws by finding the fold still absent.
+    /// Folds a session's older turns (Phase 14) and returns the detail, whether
+    /// or not anything folded. Refused with `E_TURN_BUSY` while a turn runs, so
+    /// a turn's rounds share one context.
     pub fn compact_session(&self, session_id: &str) -> AppResult<SessionDetail> {
         if let Some(turn_id) = self.turns.active_turn(session_id) {
             return Err(AppError::TurnBusy { turn_id });
@@ -789,21 +606,13 @@ impl AppState {
         self.session_detail(session_id)
     }
 
-    /// The user's skill library (PLAN 7.3, Phase 13).
-    ///
-    /// Beside the stores rather than inside a workspace, because a runbook
-    /// like "never send without review" is a fact about how this person works,
-    /// not about one project. The other scope — runbooks that *are* about one
-    /// project — lives in that project's folder and travels with it.
+    /// The user's skill library (Phase 13): how this person works, across
+    /// projects.
     pub fn skills(&self) -> &Path {
         &self.skills
     }
 
-    /// The skills one identity may run, in one workspace, right now.
-    ///
-    /// The composition this module exists for, on the skill side: the library
-    /// is Aegis', the `skills/` directory is the project's, and the allow-list
-    /// is the identity's. No single one of the three can answer on its own.
+    /// The runbooks in the library and the workspace, right now.
     pub fn skill_catalog(&self, workspace: Option<&Path>) -> Vec<crate::skills::Skill> {
         crate::skills::catalog(&self.skills, workspace)
     }
@@ -813,20 +622,14 @@ impl AppState {
         self.self_exe.as_deref()
     }
 
-    /// Where `screen_capture` writes its PNGs.
-    ///
-    /// The one directory the WebView is allowed to read files from, and only
-    /// through the asset protocol (see `lib.rs`). Never inside a workspace: a
-    /// capture is an artefact of the harness, and one written into a project
-    /// folder would end up in someone's next commit.
+    /// Where `screen_capture` writes: the only directory the WebView may read,
+    /// through the asset protocol (`lib.rs`), and never a workspace.
     pub fn captures(&self) -> &Path {
         &self.captures
     }
 
-    /// A project's sessions, most recently active first, at their live states.
-    ///
-    /// The composition this module exists for: the rows come from the session
-    /// document, the `state` on each comes from the turn registry.
+    /// A project's sessions, most recently active first, with live states from
+    /// the turn registry.
     pub fn session_list(&self, project_id: &str) -> Vec<SessionSummary> {
         self.sessions.list(project_id, &self.turns.lookup())
     }
@@ -837,14 +640,8 @@ impl AppState {
             .summary(session_id, self.turns.state_of(session_id))
     }
 
-    /// One session with its transcript, at its live state, plus whatever it
-    /// is blocked on.
-    ///
-    /// The second composition this module exists for. The transcript comes off
-    /// disk, the state comes from the turn registry, and the pending approvals
-    /// come from the approval registry — which is what lets a window reopened
-    /// mid-turn redraw a dialog it never saw raised, instead of leaving a turn
-    /// waiting on a prompt nobody can answer.
+    /// One session with its transcript, live state and pending approvals, so a
+    /// window reopened mid-turn redraws a dialog it missed.
     pub fn session_detail(&self, session_id: &str) -> AppResult<SessionDetail> {
         let mut detail = self
             .sessions
@@ -863,26 +660,17 @@ impl AppState {
         self.approvals.resolve(request_id, decision, &self.grants)
     }
 
-    /// Forgets a session entirely: its turn, its grants and its approvals.
-    ///
-    /// Ordered deliberately. The turn is cancelled first so it stops making
-    /// new calls; then its approvals go, which releases it if it was parked on
-    /// one; then its grants, which nothing can consult once there is no turn.
-    /// Doing it the other way round leaves a window in which a running turn
-    /// re-creates what was just cleared.
+    /// Forgets a session, in order: cancel its turn, withdraw its approvals
+    /// (releasing a parked turn), then clear its grants — so a running turn
+    /// cannot re-create what was cleared.
     pub fn close_session(&self, session_id: &str) {
         self.turns.forget(session_id);
         self.approvals.withdraw_session(session_id);
         self.grants.clear(session_id);
     }
 
-    /// The workspace a session's tools may touch.
-    ///
-    /// `Ok(None)` is a real answer, not a failure: the project exists but its
-    /// folder is gone — unmounted, moved, renamed. Policy turns that into a
-    /// hard `E_NO_WORKSPACE` denial for every call (PLAN 3.2), and the system
-    /// message tells the model plainly rather than letting it discover the
-    /// state one refusal at a time.
+    /// The workspace a session's tools may touch. `Ok(None)` means the folder is
+    /// gone, and every call is then refused (PLAN 3.2).
     pub fn workspace_of(&self, session_id: &str) -> AppResult<Option<PathBuf>> {
         let project_id = self.sessions.project_of(session_id)?;
 
@@ -905,34 +693,19 @@ impl AppState {
         &self.store
     }
 
-    /// The live `allow_session` grants, keyed by session.
-    ///
-    /// Deliberately not part of [`Store`]: a grant is a decision about the
-    /// session a user is currently looking at, and it expires with the
-    /// process. Persisting one would quietly turn "allow for this session"
-    /// into "allow forever", which the MVP does not offer (PLAN 3.1).
+    /// The live session grants. Never persisted: "allow for this session" must
+    /// not become "allow forever" (PLAN 3.1).
     pub fn grants(&self) -> &GrantStore {
         &self.grants
     }
 
-    /// The approvals open right now, keyed by request id.
-    ///
-    /// Not persisted, for the same reason grants are not, and one step
-    /// stronger: a pending approval is a turn parked on a channel. Nothing
-    /// survives the process that could be released by answering it after a
-    /// restart, so offering the answer would be offering to approve a call
-    /// that will never run.
+    /// Pending approvals. Not persisted: each is a turn parked on a channel
+    /// that does not survive the process.
     pub fn approvals(&self) -> &ApprovalRegistry {
         &self.approvals
     }
 
-    /// The audit log every tool call writes to.
-    ///
-    /// One log for the whole process rather than one per session: the file is
-    /// append-only and every line carries its `session_id`, so filtering is a
-    /// read-time concern, and a single file is what a user can open, tail or
-    /// ship to someone without first working out which of twenty files holds
-    /// the call they are looking for.
+    /// The process's single audit log; every line names its session.
     pub fn audit(&self) -> &AuditLog {
         &self.audit
     }
@@ -943,22 +716,14 @@ impl AppState {
         self.started_at.elapsed()
     }
 
-    /// Whether a real shutdown is in progress.
-    ///
-    /// This is the difference between the two ways the main window can be
-    /// asked to close. A window-manager close is a *hide* — Aegis is a tray
-    /// app and stays resident. An explicit quit has to be allowed through, so
-    /// the close handler consults this flag instead of trapping every close
-    /// and stranding the process alive.
+    /// Whether a real shutdown is in progress: a window close is a hide unless
+    /// the user quit.
     pub fn is_quitting(&self) -> bool {
         self.quitting.load(Ordering::SeqCst)
     }
 
-    /// Whether the tray icon is actually up.
-    ///
-    /// False until setup installs it, and stays false when the platform has
-    /// no AppIndicator library — in which case the window is the only
-    /// surface and closing it must end the process.
+    /// Whether the tray icon is up. Without one, closing the window must end the
+    /// process.
     pub fn has_tray(&self) -> bool {
         self.tray.load(Ordering::SeqCst)
     }
@@ -968,13 +733,9 @@ impl AppState {
         self.tray.store(true, Ordering::SeqCst);
     }
 
-    /// Marks shutdown as started; returns `true` if this call is the one that
-    /// started it, so a double-quit does not run teardown twice.
-    ///
-    /// Running turns are cancelled on the way out. A task killed mid-write
-    /// would leave a transcript with an assistant message whose tool calls are
-    /// never answered; cancelling gives the loop the chance to answer them
-    /// itself (see [`agent::turn`](crate::agent::turn)).
+    /// Marks shutdown as started, returning `true` only the first time. Running
+    /// turns are cancelled so they answer their open calls
+    /// ([`agent::turn`](crate::agent::turn)).
     pub fn begin_quit(&self) -> bool {
         let first = !self.quitting.swap(true, Ordering::SeqCst);
         if first {
@@ -984,29 +745,17 @@ impl AppState {
     }
 }
 
-/// Creates the skill library and puts the one example runbook in it.
-///
-/// Not canonicalized, unlike the capture directory: nothing matches this path
-/// against a scope, it is only read from, and a canonical form would only
-/// change what a tracing line prints. A directory that cannot be created
-/// leaves a library with nothing in it, which reads as a catalog with nothing
-/// in it — the honest answer, and one the panel can render.
+/// Creates and seeds the skill library. A directory that cannot be created
+/// leaves an empty catalog.
 fn prepare_skills(data_dir: &Path) -> PathBuf {
     let library = data_dir.join(crate::skills::LIBRARY_DIR);
     crate::skills::seed(&library);
     library
 }
 
-/// Creates the capture directory and resolves it to its canonical form.
-///
-/// Canonical because Tauri's asset-protocol scope canonicalizes the path the
-/// WebView asks for before matching it against what was allowed; a scope
-/// registered under a path with a symlink or a Windows short name in it would
-/// match nothing, and every thumbnail would silently 403.
-///
-/// A directory that cannot be created is not a reason to refuse to start: the
-/// failure surfaces on the first capture, which is where a user can do
-/// something about it, rather than as a window that never appears.
+/// Creates the capture directory, canonicalized because Tauri matches the asset
+/// scope against canonical paths. A failure surfaces on the first capture, not
+/// at startup.
 fn prepare_captures(data_dir: &Path) -> PathBuf {
     let captures = data_dir.join("captures");
 
@@ -1118,10 +867,7 @@ mod tests {
         assert!(state.is_quitting());
     }
 
-    /// The audit log is only useful if the one the runtime hands out is the
-    /// one on disk. Everything else about auditing is tested against a log
-    /// built directly; this is the seam where a wrong directory would send
-    /// every line somewhere nobody looks.
+    /// The audit log the runtime hands out writes into the data directory.
     #[test]
     fn the_audit_log_writes_into_the_data_directory() {
         let dir = TempDir::new().expect("temp dir");
@@ -1154,14 +900,8 @@ mod tests {
         assert!(log.path().is_file(), "the line reached the data directory");
     }
 
-    /// Which provider answers is decided from settings, per turn. A fresh
-    /// install streams from the scripted provider — the documented Phase 5
-    /// behaviour — and naming a base URL and a model is what switches it.
-    ///
-    /// Both halves are asserted through `model()`, which is the one thing the
-    /// two providers cannot agree on. The configured half reads the
-    /// credential store once; that is a lookup of an entry these tests never
-    /// write, and nothing here can leave a key behind on the machine.
+    /// The provider follows the settings: scripted when unconfigured, the real
+    /// one once a URL and model are set. Nothing here writes a key.
     #[test]
     fn the_provider_follows_the_settings() {
         let dir = TempDir::new().expect("temp dir");

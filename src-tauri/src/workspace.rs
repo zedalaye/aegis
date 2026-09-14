@@ -1,72 +1,19 @@
-//! The shared-workspace convention (PLAN 7.3, Phases 11 and 13; `COS.md`
-//! *Memory*).
+//! The shared-workspace convention, the **cabinet** (Phases 11 and 13;
+//! PLAN 7.2; `COS.md` *Memory*; `docs/guide/workspace.md`).
 //!
-//! Four directories inside [`CABINET_DIR`] — `briefs/`, `status/`,
-//! `artefacts/`, `decisions/` — and two files that carry state rather than
-//! documentation: [`STATUS_FILE`] and [`DECISIONS_FILE`]. Phase 13
-//! adds a fifth, `skills/`, for the runbooks that are about *this* project
-//! rather than about the machine; it is here rather than in
-//! [`skills`](crate::skills) because it is one more directory of the same
-//! convention, laid down by the same button, and a second scaffolder would be
-//! a second thing to keep in step. It reaches the model as the skill catalog
-//! rather than through [`digest`], which is the one difference and is written
-//! on the slot.
+//! `briefs/`, `status/`, `artefacts/`, `decisions/` and `skills/` under one
+//! [`CABINET_DIR`]. They are ordinary files reached through the same path
+//! resolution, gate and audit log as any other, so no hidden store (PLAN 7.1).
+//! The dot hides them from Finder and `rg` by default. The constitution lives
+//! beside it at the root in [`world`](crate::world).
 //!
-//! ## Why they are under one directory, and why that directory is `.aegis`
-//!
-//! Five directories appearing at the root of somebody's repository, beside
-//! `src/` and `docs/`, is five things they did not ask for. They go under one.
-//!
-//! The name is the tool's because the layer is: this is the **cabinet**
-//! (PLAN 7.2, *Cabinet and constitution*) — in-flight work, rewritten every
-//! turn, the harness's working surface over a project. What the project *is*
-//! lives beside it in [`world`](crate::world), at the root, unprefixed and
-//! first-class, because that half is not the tool's at all.
-//!
-//! The leading dot is not a hiding place, and it is worth being exact about
-//! what PLAN 7.1 forbids: *a second hidden agent-memory filesystem that
-//! **bypasses the workspace and the policy matrix***. Nothing here does. These
-//! are ordinary files under the workspace root, contained by the same
-//! [`path`](crate::policy::path) resolution, reached by the same `fs_read` /
-//! `fs_write` under the same approval gate, on the same audit log, and
-//! committed with the repository like any other directory. There is no store
-//! behind them and no privileged writer: `.aegis/skills/inbox.triage/SKILL.md`
-//! is a file in someone's repository that a person can edit, `git log`, and
-//! delete.
-//!
-//! What the dot does cost is worth writing down rather than discovering: a
-//! macOS Finder opened by [`reveal`](crate::reveal) hides it until
-//! ⌘⇧. is pressed, and `rg` skips it without `--hidden`. That is the trade the
-//! single root entry was worth.
-//!
-//! Three operations, and they are deliberately three of the `COS.md` names:
-//!
-//! * **scaffold** — [`scaffold`] creates what is missing and never touches what
-//!   is there. It is opt-in: a workspace is a folder someone already owns, and
-//!   writing four directories into it because an app was pointed at it would be
-//!   the wrong default. It is also where the folder becomes a git work tree
-//!   (PLAN 7.11), because the same press is the same consent: a board rewritten
-//!   in place with no history is a transcript again, which is the thing this
-//!   convention exists to stop being. See [`git`](crate::git) — the repository
-//!   is created and never committed to.
-//! * **read** — [`digest`] is retrieved at the start of every model request, so
-//!   the current state reaches the model as *state* rather than as a chat
-//!   history to be re-read.
-//! * **write** — there is no tool here at all. A decision is filed by writing
-//!   [`DECISIONS_FILE`] with `fs_write`, under the gate, on the audit log. The
-//!   convention is the schema; [`PREAMBLE`] is the instruction.
-//!
-//! ## Why the digest is small on purpose
-//!
-//! The system prompt must stay a policy summary plus the facts of this session
-//! (PLAN 7.1, *System prompt*): a digest that grew into runbooks would be
-//! procedure paid for on every turn, which is exactly what the skill catalog
-//! and its load-on-demand body exist to avoid. So the digest carries *state*,
-//! capped, and never procedure. The two state files are excerpted to
-//! [`EXCERPT_MAX_BYTES`] each; `.aegis/briefs/` and `.aegis/artefacts/` contribute their file
-//! **names** only. Nothing here pastes a brief or an artefact into the
-//! conversation — `COS.md` is explicit that inputs are paths, never paste, and
-//! the model already has `fs_read` for the rest.
+//! * **scaffold** — [`scaffold`] creates what is missing, never overwrites, and
+//!   makes the folder a git work tree without committing (PLAN 7.11).
+//! * **read** — [`digest`] is rebuilt for every model request: capped excerpts of
+//!   the two state files and file *names* of briefs and artefacts, never
+//!   procedure or content. `skills/` reaches the model as the skill catalog.
+//! * **write** — no tool here: files are written with `fs_write` under the gate;
+//!   [`PREAMBLE`] says where things go.
 
 use std::fs;
 use std::io::{self, Read as _, Seek as _, SeekFrom};
@@ -80,30 +27,19 @@ use crate::git::{self, Versioning};
 use crate::policy::path;
 use crate::skills;
 
-/// The one directory the whole cabinet lives under, at the workspace root.
+/// The directory the cabinet lives under, at the workspace root.
 ///
-/// See the module header for why it is one directory and why it carries the
-/// tool's name. The paths below are written out in full rather than composed at
-/// runtime — they are `&'static str`, they are matched and joined all over the
-/// tree, and `concat!` cannot see through a `const`. What keeps them honest is
-/// [`every_convention_path_is_under_the_cabinet`], which is the one test that
-/// fails if this constant and the literals below ever disagree.
+/// The paths below spell it out (`concat!` cannot use a `const`);
+/// [`every_convention_path_is_under_the_cabinet`] keeps them in step.
 ///
 /// [`every_convention_path_is_under_the_cabinet`]: self#tests
 pub const CABINET_DIR: &str = ".aegis";
 
-/// Where a delegated brief is filed (`COS.md` *Handoff*; PLAN 7.3, Phase 15).
-///
-/// Named rather than spelled inline because two things now depend on it: the
-/// scaffolder below, and the handoff bus, which writes one file here per brief
-/// it hands out and refuses to invent the directory if it is not already there.
+/// Where a delegated brief is filed (Phase 15). The handoff bus never creates
+/// it.
 pub const BRIEFS_DIR: &str = ".aegis/briefs";
 
-/// Where produced work is kept: work coming *out*, written under the gate.
-///
-/// Named for the explorer (PLAN 7.15), which has to tell it apart from
-/// [`BRIEFS_DIR`]: a file dropped onto the project is a brief, and a drop
-/// aimed at this directory is refused rather than quietly redirected.
+/// Where produced work goes. The explorer refuses drops aimed here (PLAN 7.15).
 pub const ARTEFACTS_DIR: &str = ".aegis/artefacts";
 
 /// The state file a session reads first: what is true now.
@@ -112,13 +48,8 @@ pub const STATUS_FILE: &str = ".aegis/status/STATUS.md";
 /// The ledger a decision is filed in, instead of in the transcript.
 pub const DECISIONS_FILE: &str = ".aegis/decisions/DECISIONS.md";
 
-/// Most bytes of one state file that reach the system message.
-///
-/// A cap on the excerpt, not a limit on the file: `STATUS.md` and
-/// `DECISIONS.md` are read on every request, and a workspace that has been
-/// running for a year must not silently start costing a context window per
-/// turn. What is elided is named in the digest, with the path, so the model can
-/// go and read the rest.
+/// Most bytes of one state file that reach the system message; the digest says
+/// what was elided.
 pub const EXCERPT_MAX_BYTES: u64 = 2 * 1024;
 
 /// Most file names listed for `.aegis/briefs/` and `.aegis/artefacts/`.
@@ -138,30 +69,17 @@ enum Digest {
 }
 
 /// One directory of the convention, its seed file, and how it is read back.
-///
-/// The table below is the one place the convention is written down in Rust:
-/// [`layout`], [`scaffold`] and [`digest`] all walk it, so adding a directory
-/// is one entry rather than three edits that can disagree.
+/// [`layout`], [`scaffold`] and [`digest`] all walk the table.
 struct Slot {
-    /// The directory's own name, inside [`CABINET_DIR`]: `briefs`, `status`, …
-    ///
-    /// The bare name rather than the path from the root, because it is both
-    /// halves of what this type is asked: [`Slot::rel_dir`] puts the cabinet in
-    /// front of it, and [`strays`] looks for exactly this name at the *root*,
-    /// where an earlier version of the convention left it.
+    /// The bare name inside [`CABINET_DIR`]; [`strays`] also looks for it at
+    /// the root, where an older layout put it.
     name: &'static str,
     /// The file [`scaffold`] seeds inside it.
     file: &'static str,
     /// What that file starts as. Written once, never rewritten.
     seed: &'static str,
-    /// What the slot contributes to [`digest`], or `None` when it contributes
-    /// nothing.
-    ///
-    /// `skills/` is the one that contributes nothing, and deliberately: its
-    /// contents already reach the model as the skill *catalog*
-    /// ([`skills::prompt_block`](crate::skills::prompt_block)), which says
-    /// what each runbook is for rather than only what it is called. Listing
-    /// the filenames a second time would be paying twice for less.
+    /// What the slot contributes to [`digest`]. `None` for `skills/`, which
+    /// reaches the model as the catalog.
     digest: Option<Digest>,
 }
 
@@ -179,10 +97,7 @@ impl Slot {
     }
 }
 
-/// The convention, in the order it is shown and created.
-///
-/// Brief in, work, artefact out, decision recorded: the order a piece of work
-/// actually moves through, which is also the order that reads best in a panel.
+/// The convention, in the order work moves through it.
 const CONVENTION: [Slot; 5] = [
     Slot {
         name: "briefs",
@@ -208,12 +123,8 @@ const CONVENTION: [Slot; 5] = [
         seed: DECISIONS_SEED,
         digest: Some(Digest::Tail),
     },
-    // Phase 13. A workspace's own runbooks travel with the folder, which is
-    // the whole reason the scope exists: "how *this* project is deployed" is
-    // not a fact about the machine Aegis is installed on. Seeded with the
-    // `inbox.triage` stub PLAN 7.3 asks for — file in, status and artefact
-    // out — so the format has an example in the place people will look for
-    // one.
+    // Phase 13: the project's own runbooks, seeded with the `inbox.triage`
+    // example.
     Slot {
         name: skills::LIBRARY_DIR,
         file: TRIAGE_FILE,
@@ -222,19 +133,12 @@ const CONVENTION: [Slot; 5] = [
     },
 ];
 
-/// The stub runbook seeded into a workspace, relative to `skills/`.
-///
-/// A skill is a directory holding a `SKILL.md`, so this slot's "file" is two
-/// levels deep — which is why [`scaffold`] creates the seed's parent rather
-/// than only the slot's directory.
+/// The stub runbook seeded into a workspace, relative to `skills/` — two levels
+/// deep, so [`scaffold`] creates its parent.
 const TRIAGE_FILE: &str = "inbox.triage/SKILL.md";
 
-/// What the model is told once the convention is present.
-///
-/// Where each kind of thing lives, and the one rule that makes the convention
-/// worth having — the decision goes in the file, not in the thread.
-/// Deliberately not a runbook: how to triage an inbox or review a patch is a
-/// skill ([`skills`](crate::skills)), loaded into the one turn that runs it.
+/// What the model is told once the convention is present: where things live,
+/// and that decisions go in files. No procedure.
 const PREAMBLE: &str = "\
 This workspace keeps its shared memory in files, under `.aegis/`. Delegated \
 work is briefed in `.aegis/briefs/`, what is true right now is in \
@@ -310,11 +214,7 @@ decided or merely discussed.
 // IPC payloads
 // ---------------------------------------------------------------------------
 
-/// One directory of the convention, as the UI sees it.
-///
-/// Both flags are measured on every read and never stored: a user can create
-/// `decisions/` in a terminal, or delete it, and the panel has to be right
-/// about a folder it does not own.
+/// One directory of the convention, as the UI sees it, measured on every read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct WorkspaceEntry {
@@ -338,39 +238,16 @@ pub struct WorkspaceLayout {
     /// Every directory of the convention, present or not.
     pub entries: Vec<WorkspaceEntry>,
     /// Whether every directory and seed file is there.
-    ///
-    /// Derived here rather than in the UI, so that "set up" means the same
-    /// thing to the panel, to a test, and to whatever later phase asks.
     pub complete: bool,
-    /// Convention directories found at the workspace *root*, from the layout
-    /// this build no longer uses. Bare names: `briefs`, `decisions`, …
-    ///
-    /// The cabinet moved under [`CABINET_DIR`], and a folder set up before that
-    /// still has its `.aegis/status/STATUS.md` where it always was — full of work the
-    /// runtime has just stopped being able to see. So they are named, and that
-    /// is all: nothing here moves a directory in somebody's repository. Picking
-    /// a folder was never consent to rearrange it, and the same rule that keeps
-    /// [`scaffold`] from overwriting a file keeps this from relocating one.
-    ///
-    /// Empty for every workspace that never had the old layout, which is the
-    /// ordinary case and draws nothing.
+    /// Convention directories still at the workspace *root* from the pre-`.aegis`
+    /// layout (bare names). Reported, never moved.
     pub strays: Vec<String>,
     /// Whether the folder is in a git work tree, and whose (PLAN 7.11).
-    ///
-    /// A fact about the convention, like the four ticks, and reported for the
-    /// same reason: these files are a shared memory, and a shared memory with
-    /// no history is a board nobody can read backwards. It is not the start of
-    /// a git client — there is no log here, no stage and no push, and the only
-    /// thing that ever changes it is the button beside it.
     pub versioning: Versioning,
 }
 
-/// What one scaffolding run did.
-///
-/// Two lists rather than a count: the point of the report is that the user can
-/// see nothing of theirs was overwritten, and only naming what was kept says
-/// that. Paths are relative to the workspace root, in the form the convention
-/// is written in.
+/// What one scaffolding run did: files created and files kept untouched,
+/// relative to the root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ScaffoldReport {
@@ -382,28 +259,16 @@ pub struct ScaffoldReport {
     pub kept: Vec<String>,
     /// Where the history of these files is kept, measured after the run.
     pub versioning: Versioning,
-    /// Whether this run is what made the folder a work tree.
-    ///
-    /// Separate from `versioning` because they answer different questions and a
-    /// person needs both: *is it versioned* is about the folder, *did you just
-    /// do that to my folder* is about this press. A repository that was already
-    /// there reports `versioning` and `initialized: false`.
+    /// Whether this run created the work tree (vs. one already there).
     pub initialized: bool,
-    /// Why the folder is still not versioned, when it is not.
-    ///
-    /// `git` missing from PATH is the ordinary reason and it is not a failure:
-    /// the directories were the job, they were created, and this is the line
-    /// that says the other half did not happen.
+    /// Why the folder is still not versioned — usually `git` missing, which is
+    /// not a failure of the scaffold.
     pub problem: Option<String>,
 }
 
 impl ScaffoldReport {
-    /// Folds the versioning half of the press into the report.
-    ///
-    /// The two halves are measured in different places on purpose — the files
-    /// are a fact about a path, and whose `git` may write there is a fact about
-    /// the project (PLAN 7.12) — and this is the one named seam where they
-    /// meet, so a report can never be half-assembled by a caller that forgot.
+    /// Folds the git half into the report; it runs on the project's execution
+    /// host (PLAN 7.12).
     #[must_use]
     pub fn versioned(mut self, ensured: git::Ensured) -> Self {
         self.versioning = ensured.versioning;
@@ -417,12 +282,8 @@ impl ScaffoldReport {
 // Read
 // ---------------------------------------------------------------------------
 
-/// Which parts of the convention exist in `root` right now.
-///
-/// Never fails: a workspace that has been unmounted, or one the app cannot
-/// read, reports everything absent, which is the truthful answer and the one
-/// the panel can render. The failure that matters is the one [`scaffold`]
-/// returns, where a user is waiting on an outcome.
+/// Which parts of the convention exist in `root` right now. Never fails: an
+/// unreadable workspace reports everything absent.
 pub fn layout(root: &Path) -> WorkspaceLayout {
     let entries: Vec<WorkspaceEntry> = CONVENTION
         .iter()
@@ -444,22 +305,15 @@ pub fn layout(root: &Path) -> WorkspaceLayout {
             .iter()
             .all(|entry| entry.dir_exists && entry.file_exists),
         strays: strays(root),
-        // A walk for a `.git`, not a `git rev-parse`: this runs on every render
-        // of the rail and after every turn, and it has to answer on a machine
-        // that has no git at all (PLAN 7.11).
+        // A `.git` walk, not `git rev-parse`: cheap, and works without git.
         versioning: git::measure(root),
         entries,
     }
 }
 
-/// Convention directories still sitting at the workspace root.
-///
-/// Keyed on the *seed file* rather than the directory, and that is the whole
-/// care in it: `skills/` at the root of a repository is somebody's own folder
-/// far more often than it is this convention, and a panel that told a Rust
-/// project its `status/` was in the wrong place would be a panel people learn
-/// to ignore. A root `.aegis/status/STATUS.md` or `.aegis/decisions/DECISIONS.md` is a much
-/// narrower claim, and it is the one that is worth making.
+/// Convention directories still at the workspace root, detected by their seed
+/// file (`status/STATUS.md`), not the directory name, which is often the
+/// project's own.
 fn strays(root: &Path) -> Vec<String> {
     CONVENTION
         .iter()
@@ -470,17 +324,8 @@ fn strays(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The shared state, as a block for the system message — the *read* path.
-///
-/// `None` when the workspace has none of the convention in it. A folder that
-/// was never scaffolded is a plain workspace, and its sessions get exactly the
-/// prompt they got before this phase: nothing is appended to nag the user into
-/// a convention they did not ask for.
-///
-/// Rebuilt per request rather than once per session. That is a superset of
-/// "retrieve at session start" and it is what makes the loop honest: when a
-/// turn writes `DECISIONS.md`, the next round of that same turn already sees
-/// it. The cost is two capped reads and two directory listings.
+/// The shared state as a system-message block, or `None` without the
+/// convention. Rebuilt per request, so a write is visible on the next round.
 pub fn digest(root: &Path) -> Option<String> {
     let sections: Vec<String> = CONVENTION
         .iter()
@@ -545,9 +390,7 @@ fn excerpt(root: &Path, slot: &Slot) -> Option<String> {
         }
     };
 
-    // Named, not silently truncated: the model is told how much it is not
-    // seeing and where the rest is, which is the difference between an excerpt
-    // and a file that quietly lies about its own length.
+    // Say what was cut and where the rest is.
     let header = if total > EXCERPT_MAX_BYTES {
         let end = match digest {
             Digest::Tail => "last",
@@ -563,27 +406,12 @@ fn excerpt(root: &Path, slot: &Slot) -> Option<String> {
     Some(format!("{header}\n{}", text.trim_end()))
 }
 
-/// How much of `.aegis/status/STATUS.md` the board reads (PLAN 7.3, Phase 17).
-///
-/// Larger than [`EXCERPT_MAX_BYTES`] and for a different reason. The excerpt is
-/// paid for on every model request, so it is small; the board is read when
-/// somebody opens it, and what they are opening it for is the whole of what is
-/// true right now. It is still bounded, because the file belongs to the user
-/// and nothing stops them pointing Aegis at a folder whose `STATUS.md` is a
-/// log somebody has been appending to for a year.
+/// How much of `STATUS.md` the board reads (Phase 17): more than the per-request
+/// excerpt, still bounded.
 pub const BOARD_MAX_BYTES: u64 = 64 * 1024;
 
-/// The board file and its text, for the structured read of `/status`
-/// (PLAN 7.2, row 3).
-///
-/// `None` when the convention has not been laid down, when the file was
-/// deleted, or when it cannot be read — three states the board draws the same
-/// way, because the answer to all of them is the same: there is no board in
-/// this folder yet, and the button that makes one is in the sidebar.
-///
-/// The path comes back beside the text so the panel can name the file it is
-/// showing. It is the absolute one: the board is the one place a person is
-/// invited to go and edit the file by hand.
+/// The board file's absolute path and text (PLAN 7.2, row 3), or `None` when it
+/// is missing or unreadable.
 pub fn status(root: &Path) -> Option<(PathBuf, String)> {
     let path = inside(root, STATUS_FILE)?;
 
@@ -605,17 +433,9 @@ pub fn status(root: &Path) -> Option<(PathBuf, String)> {
     Some((path, String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-/// Reads at most [`EXCERPT_MAX_BYTES`] from one end of a file.
-///
-/// Seeking rather than reading the file and slicing it: these are read on every
-/// request, and a workspace whose ledger has grown to megabytes must not pay
-/// for all of it to produce two kilobytes. The returned length is the file's
-/// real one, so the caller can say what it is not showing.
-///
-/// Bytes are decoded lossily, and a partial first line is dropped from a tail:
-/// a window into a text file lands wherever the cap lands — mid-rune and
-/// mid-sentence — and a mangled leading line reads as corruption to whoever
-/// sees the prompt.
+/// Reads at most [`EXCERPT_MAX_BYTES`] from one end of a file by seeking, and
+/// returns the file's real length. Decoded lossily; a tail drops its partial
+/// first line.
 fn window(path: &Path, digest: Digest) -> io::Result<(String, u64)> {
     let mut file = fs::File::open(path)?;
     let total = file.metadata()?.len();
@@ -634,8 +454,6 @@ fn window(path: &Path, digest: Digest) -> io::Result<(String, u64)> {
 
     let text = String::from_utf8_lossy(&bytes);
     let trimmed = match digest {
-        // A tail starts mid-line; drop the fragment rather than show half a
-        // decision as though it were a whole one.
         Digest::Tail => match text.find('\n') {
             Some(at) => text[at + 1..].to_owned(),
             None => text.into_owned(),
@@ -649,24 +467,12 @@ fn window(path: &Path, digest: Digest) -> io::Result<(String, u64)> {
 // Write
 // ---------------------------------------------------------------------------
 
-/// Creates whatever part of the convention is missing in `root`.
+/// Creates whatever part of the convention is missing in `root`. Never
+/// overwrites or deletes (existing files are reported as `kept`), and stops at
+/// the first failure.
 ///
-/// Never overwrites and never deletes. A file that is already there is left
-/// byte for byte as it was and reported under `kept` — the seeds are a starting
-/// point, and a `STATUS.md` somebody has been maintaining for a month is worth
-/// more than the template it grew out of. Re-running this on a complete
-/// workspace is therefore a no-op that returns the same report every time.
-///
-/// Stops at the first failure rather than pressing on. A workspace where three
-/// of four directories appeared is a state the user then has to reason about; a
-/// clear error naming the one that failed is not.
-///
-/// The files only. Making the folder a git work tree is the other half of the
-/// same press (PLAN 7.11) and it is [`git::ensure`], called by the command:
-/// which `git` may write here depends on the project's execution host
-/// (PLAN 7.12), and a project is not something this function has. The report
-/// leaves here carrying what the folder already is, for the command to
-/// complete.
+/// Files only: the command runs [`git::ensure`] on the project's execution host
+/// (PLAN 7.11, 7.12) and folds it in with [`ScaffoldReport::versioned`].
 pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
     let mut created = Vec::new();
     let mut kept = Vec::new();
@@ -685,9 +491,7 @@ pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
             continue;
         }
 
-        // A slot's seed may sit a level below its directory — a skill is a
-        // folder holding a `SKILL.md` — so the file's own parent is created
-        // rather than only the slot's own directory.
+        // A seed may sit a level down (`inbox.triage/SKILL.md`).
         if let Some(parent) = file.parent() {
             if !parent.is_dir() {
                 fs::create_dir_all(parent).map_err(|err| failed(&rel_file, &err))?;
@@ -708,11 +512,7 @@ pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
         root: root.display().to_string(),
         created,
         kept,
-        // Measured, not acted on. This function has a path and no project, and
-        // *whose* `git` may write here is a fact about the project (PLAN 7.12).
-        // So the report leaves here saying truthfully what the folder is and
-        // that this run did nothing about it, and the command that does hold
-        // the project folds its answer in with [`ScaffoldReport::versioned`].
+        // Measured only; the command completes it (see above).
         versioning: git::measure(root),
         initialized: false,
         problem: None,
@@ -723,14 +523,8 @@ pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
 // Paths
 // ---------------------------------------------------------------------------
 
-/// Resolves a convention path against the workspace, or explains why not.
-///
-/// Goes through [`path::resolve`] rather than joining, for the reason that
-/// module exists: `briefs` may already be a symlink someone pointed at another
-/// disk, and neither reading a file into a model request nor writing a seed
-/// into it should happen outside the folder the user chose. Nothing in
-/// [`CONVENTION`] is user input, so a refusal here is a fact about the
-/// workspace rather than about an argument.
+/// Resolves a convention path through [`path::resolve`], refusing one that a
+/// symlink points outside the workspace.
 fn contained(root: &Path, rel: &str) -> AppResult<PathBuf> {
     let resolved = path::resolve(root, rel).map_err(|err| AppError::WorkspaceScaffold {
         path: rel.to_owned(),
@@ -746,11 +540,8 @@ fn contained(root: &Path, rel: &str) -> AppResult<PathBuf> {
     Ok(resolved.path)
 }
 
-/// [`contained`] for the read paths, where a refusal is not worth an error.
-///
-/// [`layout`] and [`digest`] run on every panel render and every model request;
-/// the honest answer for a slot that cannot be resolved is "it is not there",
-/// and the log carries the reason for whoever is debugging it.
+/// [`contained`] for reads: an unresolvable slot is simply absent (reason
+/// logged at debug).
 fn inside(root: &Path, rel: &str) -> Option<PathBuf> {
     match contained(root, rel) {
         Ok(path) => Some(path),

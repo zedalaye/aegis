@@ -1,33 +1,18 @@
-//! Path resolution and workspace containment.
+//! Path resolution and workspace containment (PLAN 3).
 //!
-//! This is the single place that answers "where does this argument actually
-//! point, and is that inside the workspace?". Nothing else in the runtime is
-//! allowed to reason about a path the model supplied — the tools take
-//! already-resolved [`PathBuf`]s from a [`Decision`](crate::policy::Decision),
-//! so a containment check cannot be forgotten in one tool and remembered in
-//! another. PLAN 5.1 calls this the likeliest place for a containment bug in
-//! the whole project, which is why it lands a phase ahead of the tools.
+//! The only place a model-supplied path is interpreted; tools receive the
+//! resolved [`PathBuf`] from a [`Decision`](crate::policy::Decision).
 //!
-//! Three properties are what the rest of the policy layer relies on:
+//! * **Links are resolved before containment is judged**, component by
+//!   component, so `..` pops the resolved path the way the OS does.
+//! * **A missing tail still resolves**, kept as written, so `fs_write` can be
+//!   judged before its file exists.
+//! * **The lexical answer is kept beside the real one**: looking contained and
+//!   resolving outside is a link escape, a hard denial (PLAN 3.2).
 //!
-//! * **Symlinks are resolved before containment is judged.** A path is walked
-//!   component by component, and every component that turns out to be a link
-//!   is canonicalized on the spot. `..` then pops a *resolved* path, which is
-//!   what the operating system would do — popping a lexical path instead is
-//!   the classic way to walk out of a jail through a link.
-//! * **A path that does not exist yet still resolves.** `fs_write` creates
-//!   files, so refusing to reason about a missing target would make writes
-//!   unjudgeable. Components that exist are resolved; the remaining tail is
-//!   kept literally, and containment is decided on the whole.
-//! * **The lexical answer is kept alongside the real one.** When an argument
-//!   *looks* contained but resolves outside, that is a symlink escape, and
-//!   PLAN 3.2 makes it a hard denial rather than a prompt: there is no honest
-//!   way to describe it to a user in an approval dialog.
-//!
-//! Windows carries most of the sharp edges (PLAN 5.1). Verbatim `\\?\` paths
-//! are simplified before anything compares them, UNC roots (`\\server\share`)
-//! are ordinary prefixes here, and comparison is case-insensitive because the
-//! filesystem is.
+//! On Windows (PLAN 5.1) verbatim and UNC prefixes compare by meaning, case
+//! folds, existing folders are respelled as the disk spells them, and segments
+//! Win32 would silently rewrite are refused.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -41,22 +26,15 @@ use std::path::{Component, Path, PathBuf};
 pub enum PathError {
     /// The argument was empty, or only whitespace.
     Empty,
-    /// A relative argument carried a root or a drive prefix (`\tmp`, `C:tmp`).
-    ///
-    /// Joining one of these onto the workspace does not do what it reads like:
-    /// on Windows `C:\ws` joined with `\tmp` is `C:\tmp`, silently outside.
-    /// Refusing is the only safe reading.
+    /// A relative argument carried a root or a drive prefix (`\tmp`, `C:tmp`),
+    /// which joined onto the workspace would leave it.
     RootedRelative,
     /// A link on the way could not be followed — dangling, looping, or
     /// unreadable.
     Unresolvable,
-    /// A segment Windows would silently respell: a trailing dot or space, which
-    /// Win32 strips before it opens anything, or a `:`, which names an
-    /// alternate data stream.
-    ///
-    /// `.git.\hooks` opens `.git\hooks`. A predicate reading the segment as
-    /// text would be judging a folder other than the one written to, so the
-    /// only safe reading is none.
+    /// A segment Win32 would respell: a trailing dot or space, stripped before
+    /// opening (`.git.\hooks` opens `.git\hooks`), or a `:`, which names a data
+    /// stream.
     WindowsName,
 }
 
@@ -82,12 +60,8 @@ pub struct Resolved {
     pub path: PathBuf,
     /// Whether [`Resolved::path`] is the workspace root or below it.
     pub inside: bool,
-    /// Whether the argument was contained when read *lexically*, before any
-    /// link was followed.
-    ///
-    /// `looked_inside && !inside` is a symlink escape. It is deliberately not
-    /// folded into `inside`: the two differ exactly where the interesting
-    /// attack is, and the caller treats that difference as a hard denial.
+    /// Whether the argument was contained read lexically, before links were
+    /// followed. `looked_inside && !inside` is a link escape.
     pub looked_inside: bool,
 }
 
@@ -97,11 +71,8 @@ impl Resolved {
         self.looked_inside && !self.inside
     }
 
-    /// The path relative to `workspace`, when it is contained.
-    ///
-    /// Used by the parts of policy that must not read the user's own choice of
-    /// workspace location — the sensitive-name predicate, and `.git/`
-    /// detection.
+    /// The path relative to `workspace`, when contained. The name predicates
+    /// read this, so the workspace's own location never matches them.
     pub fn relative_to(&self, workspace: &Path) -> Option<PathBuf> {
         if !self.inside {
             return None;
@@ -114,12 +85,8 @@ impl Resolved {
     }
 }
 
-/// Resolves `raw` against `workspace`.
-///
-/// `workspace` must already be canonical and absolute — it comes from
-/// `store::canonical_workspace`, which is the only way a workspace enters the
-/// runtime. A relative `raw` is taken as relative to the workspace root, which
-/// is the convention the model is told about in the system prompt.
+/// Resolves `raw` against `workspace`, which must be canonical
+/// (`store::canonical_workspace`). A relative `raw` is relative to the root.
 pub fn resolve(workspace: &Path, raw: &str) -> Result<Resolved, PathError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -157,13 +124,9 @@ pub fn resolve(workspace: &Path, raw: &str) -> Result<Resolved, PathError> {
 
 /// Whether an already-resolved path still resolves to itself.
 ///
-/// Policy resolves a path when it decides, and a person may take minutes to
-/// answer the dialog. In between, a folder that did not exist can appear as a
-/// link, or one that did can be swapped for one, and the tool would then act
-/// through it on somewhere it was never approved for. Walking the path again
-/// immediately before the tool touches it shrinks that window from minutes to
-/// the gap between two system calls. It is not a handle-based guarantee —
-/// nothing short of opening each component relative to its parent is.
+/// Checked right before a tool acts (PLAN 3.2): a folder turned into a link
+/// while the dialog was open would redirect the call. This narrows the race to
+/// two system calls; it is not handle-based.
 pub fn unchanged(resolved: &Path) -> bool {
     walk(resolved)
         .and_then(on_disk)
@@ -180,11 +143,9 @@ fn same_path(a: &Path, b: &Path) -> bool {
             .all(|(one, two)| segments_eq(one, two))
 }
 
-/// Whether every segment of an argument means what it says to Win32.
-///
-/// See [`PathError::WindowsName`]. Checked on the argument rather than on the
-/// resolved path, because the respelling is exactly what resolution would
-/// hide.
+/// Whether every segment means what it says to Win32
+/// ([`PathError::WindowsName`]). Checked on the argument: resolution would
+/// hide the respelling.
 #[cfg(windows)]
 fn spelled_literally(path: &Path) -> bool {
     path.components().all(|component| match component {
@@ -201,14 +162,9 @@ const fn spelled_literally(_path: &Path) -> bool {
     true
 }
 
-/// Respells the part of a path that exists the way the filesystem spells it.
-///
-/// Windows answers to more than one name for a folder: `GIT~1` is `.git`
-/// wherever short names are generated, and `SRC` is `src`. The predicates
-/// downstream — `.git/`, `world/`, the sensitive names — read segments as
-/// text, so the text has to be the one on disk. The deepest ancestor that
-/// exists is canonicalized once; the tail that does not exist yet is kept as
-/// written, since it cannot be an alias of anything.
+/// Respells the existing part of a path as the disk does (`GIT~1` → `.git`,
+/// `SRC` → `src`), so the name predicates read real names. The missing tail is
+/// kept as written.
 #[cfg(windows)]
 fn on_disk(path: PathBuf) -> Result<PathBuf, PathError> {
     let mut missing = Vec::new();
@@ -236,12 +192,8 @@ fn on_disk(path: PathBuf) -> Result<PathBuf, PathError> {
     Ok(path)
 }
 
-/// Whether `candidate` is `root` itself or below it.
-///
-/// Compared component by component rather than as strings, so `C:\ws2` is not
-/// "inside" `C:\ws` — a prefix test on the text would say it is. Both sides
-/// are simplified first, which is what makes a verbatim `\\?\C:\ws\a` and a
-/// plain `C:\ws` agree.
+/// Whether `candidate` is `root` or below it, compared component by component
+/// (`C:\ws2` is not inside `C:\ws`) after simplifying verbatim prefixes.
 pub fn is_contained(root: &Path, candidate: &Path) -> bool {
     let root = dunce::simplified(root);
     let candidate = dunce::simplified(candidate);
@@ -257,16 +209,9 @@ pub fn is_contained(root: &Path, candidate: &Path) -> bool {
         .all(|expected| actual.next().is_some_and(|got| segments_eq(expected, got)))
 }
 
-/// Resolves a path against the filesystem, one component at a time.
-///
-/// The invariant is that `out` is always fully resolved: every component
-/// pushed so far either exists and is not a link, or was replaced by the
-/// canonical path of the link's target. That is what makes the `ParentDir`
-/// arm correct — popping a resolved path follows the real tree, while popping
-/// a lexical one would undo a link traversal the OS would not have undone.
-///
-/// A component that does not exist is kept as written: nothing below a missing
-/// directory can be a link either, so there is nothing left to resolve.
+/// Resolves a path one component at a time. `out` stays fully resolved — each
+/// component exists and is not a link, or was replaced by its link's canonical
+/// target — so `..` pops the real tree. Missing components are kept as written.
 fn walk(path: &Path) -> Result<PathBuf, PathError> {
     let mut out = PathBuf::new();
     let mut depth = 0usize;
@@ -343,14 +288,9 @@ fn segments_eq(a: Component<'_>, b: Component<'_>) -> bool {
     os_eq(a.as_os_str(), b.as_os_str())
 }
 
-/// Compares two path components, with roots compared by what they mean.
-///
-/// `dunce::simplified` unwraps a verbatim *disk* path but leaves a verbatim
-/// UNC one alone, because `\\?\UNC\server\share` cannot always be rewritten as
-/// `\\server\share` safely. Comparing the two as text would then say a share
-/// does not contain itself. Comparing the parsed prefix instead sidesteps the
-/// question: `Disk` and `VerbatimDisk` are the same drive, `UNC` and
-/// `VerbatimUNC` are the same share, and neither spelling has to win.
+/// Compares two path components, prefixes by meaning: `Disk` and
+/// `VerbatimDisk` are one drive, `UNC` and `VerbatimUNC` one share (`dunce`
+/// leaves verbatim UNC paths alone).
 #[cfg(windows)]
 fn segments_eq(a: Component<'_>, b: Component<'_>) -> bool {
     use std::path::Prefix::{Disk, VerbatimDisk, VerbatimUNC, UNC};
@@ -371,14 +311,7 @@ fn segments_eq(a: Component<'_>, b: Component<'_>) -> bool {
     }
 }
 
-/// Case-insensitive on Windows, exact everywhere else.
-///
-/// Windows filesystems fold case, so `C:\WS` and `c:\ws` name one directory
-/// and a case-sensitive comparison would report a contained path as an escape.
-/// Folding is done on the whole string rather than ASCII-only, because
-/// non-ASCII directory names are ordinary. A path that is not valid Unicode
-/// falls back to an exact comparison — it cannot be folded, and both sides of
-/// a real comparison come from the same filesystem anyway.
+/// Case-insensitive, beyond ASCII; exact for names that are not valid Unicode.
 #[cfg(windows)]
 fn os_eq(a: &OsStr, b: &OsStr) -> bool {
     match (a.to_str(), b.to_str()) {
@@ -387,13 +320,8 @@ fn os_eq(a: &OsStr, b: &OsStr) -> bool {
     }
 }
 
-/// Exact comparison: these filesystems distinguish case.
-///
-/// macOS is the awkward middle — HFS+ and the default APFS volume fold case, a
-/// case-sensitive APFS volume does not, and there is no way to know which one a
-/// path is on without asking the volume. Comparing exactly is the conservative
-/// direction: the failure mode is an extra approval prompt, never a
-/// containment hole.
+/// Exact. On a case-folding macOS volume that can only cost an extra prompt,
+/// never a containment hole.
 #[cfg(not(windows))]
 fn os_eq(a: &OsStr, b: &OsStr) -> bool {
     a == b

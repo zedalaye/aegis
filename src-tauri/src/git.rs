@@ -1,69 +1,22 @@
 //! Workspace versioning (PLAN 7.11).
 //!
-//! The missed half of Phase 11. Shared memory is files, and `.aegis/status/STATUS.md`
-//! is a board rewritten in place: without history, yesterday is gone and the
-//! transcript is once again the only log — the one thing the convention exists
-//! to stop being. Phase 11 laid down the directories and never created the
-//! repository.
+//! A scaffolded workspace is a git work tree, so the rewritten-in-place board
+//! has history — for any folder, not just code (PLAN 7.1).
 //!
-//! So a workspace whose convention is laid down is a git work tree. That is a
-//! fact about *versioning the files*, not about being a software project
-//! (PLAN 7.1, *Project*): a finance folder and a watch folder get a repository
-//! on the same terms as a repo full of Rust.
+//! * [`measure`] walks up for a `.git` without running a program: cheap enough
+//!   for every render, and correct without `git` installed.
+//! * [`ensure`] runs `git init` only from
+//!   [`workspace_scaffold`](crate::commands::workspace::workspace_scaffold) —
+//!   the button is the consent — and never inside an existing work tree (no
+//!   nested repositories).
 //!
-//! Two operations, and the asymmetry between them is the whole design.
+//! **Whose `git`**: the project's execution host (PLAN 7.12). For WSL,
+//! `git init` goes through `wsl.exe --exec` after a `test -d` probe, since
+//! `wsl.exe --cd` silently falls back to the home directory.
 //!
-//! * [`measure`] is a read, and it never runs a program. It walks for a `.git`
-//!   from the workspace root upwards, which is what makes it cheap enough to
-//!   sit in [`workspace::layout`](crate::workspace::layout) — measured on every
-//!   panel render and after every turn — and what makes it truthful on a
-//!   machine with no `git` at all.
-//! * [`ensure`] is a write, it runs exactly once, and only from
-//!   [`workspace_scaffold`](crate::commands::workspace::workspace_scaffold):
-//!   the button is the consent. Picking a folder is not consent to mutate it,
-//!   so `project_create` never comes here.
-//!
-//! ## Whose `git`
-//!
-//! The project's, not this computer's (PLAN 7.11, 7.12). A Windows operator
-//! whose repository lives in a WSL distribution has two `git`s on the machine,
-//! and the Windows one on a `\\wsl$\` tree is the wrong one: it writes a
-//! `.git` the distribution's toolchain then reads across the 9p boundary, with
-//! that distro's `core.autocrlf`, `safe.directory` and hooks all absent from
-//! the reckoning. So when the project names an execution host, `git init` goes
-//! through `wsl.exe` exactly as `shell_exec` does — same `--exec`, same
-//! `--cd`, same `test -d` probe first, because `wsl.exe --cd` answers a folder
-//! it cannot find by starting in the user's home and saying nothing. A
-//! repository created in somebody's Linux home instead of their project is the
-//! one failure here that looks like success.
-//!
-//! [`measure`] needs none of that: `fs_*` already sees a distribution's files
-//! over the UNC path, and so does a walk for `.git`.
-//!
-//! ## What this is not
-//!
-//! Not a git client. There is no log, no stage, no push, no diff, and no
-//! Commit button anywhere in the WebView — a privileged commit from the runtime
-//! would be a second write path around the dialog the agent already has. A
-//! commit is `shell_exec` of `git`, under the gate, asked for by a person:
-//! either in their own terminal, or in the session, where `allow_session` keys
-//! on the basename `git` and still shows the exact line of every later
-//! `git push` or `git reset`.
-//!
-//! And nothing here writes a remote, a `.gitignore`, a `user.name`, a
-//! `user.email` or a commit. An `fs_write` approved by a human is approval to
-//! write a file; it is not approval to put it on a branch. The first
-//! `git commit` in a folder needs a git identity, and if the machine has none
-//! the error belongs in the approval dialog where the person can fix it — not
-//! in an email this runtime invented for them.
-//!
-//! ## Never a nested repository
-//!
-//! An inner `.git` splits a history and hides the outer one, and it is the easy
-//! mistake here: `git init` in a subdirectory of a repository succeeds without
-//! complaint. [`ensure`] therefore measures before it acts, and a workspace
-//! that is a folder *inside* somebody's monorepo is reported as versioned by
-//! that ancestor and left exactly as it is.
+//! **Not a git client**: no commit, remote, `.gitignore` or identity is ever
+//! written. Commits are `shell_exec` of `git` under the gate (grant rules:
+//! PLAN 3.1).
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -76,34 +29,23 @@ use ts_rs::TS;
 use crate::exec_host::{self, ExecHost};
 use crate::tools::shell;
 
-/// The entry that marks the top of a work tree.
-///
-/// A directory in an ordinary clone and a *file* in a linked worktree or a
-/// submodule, which is why everything here asks whether it exists rather than
-/// whether it is a directory.
+/// The entry that marks a work tree — a file in worktrees and submodules, so
+/// only existence is checked.
 const GIT_ENTRY: &str = ".git";
 
 /// The program, by the name PATH knows it under.
 const GIT: &str = "git";
 
-/// How long a distribution has to answer before the folder is left unversioned.
-///
-/// The same budget `shell_exec`'s probe allows, and for the same reason: a WSL
-/// virtual machine that is not running yet takes seconds to come up the first
-/// time, and a distribution that will never answer must not hold the button
-/// down forever.
+/// How long a distribution has to answer (same as `shell_exec`'s probe; a cold
+/// WSL VM takes seconds).
 const HOST_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // IPC payloads
 // ---------------------------------------------------------------------------
 
-/// Whether the folder is in a work tree, and whose.
-///
-/// Three answers rather than a boolean because the middle one changes what the
-/// panel should say and what [`ensure`] must not do: a workspace inside a
-/// larger repository is already versioned, and initialising it would split the
-/// history it is already part of.
+/// Whether the folder is in a work tree, and whose. An ancestor's counts:
+/// [`ensure`] must not split its history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -129,11 +71,7 @@ impl WorkTree {
 pub struct Versioning {
     /// Whether the workspace is in a work tree, and whose.
     pub tree: WorkTree,
-    /// The folder holding the `.git`, absolute — `None` when there is none.
-    ///
-    /// Named rather than left implicit because the answer a person needs from
-    /// [`WorkTree::Ancestor`] is *which* folder: "this is inside a repository"
-    /// is only useful once you can see whether it is the one you meant.
+    /// The folder holding the `.git`, absolute, or `None`.
     pub at: Option<String>,
 }
 
@@ -151,21 +89,9 @@ impl Versioning {
 // Read
 // ---------------------------------------------------------------------------
 
-/// Where the `.git` for this folder is, if anywhere.
-///
-/// A filesystem walk rather than `git rev-parse`, deliberately. This runs
-/// wherever [`workspace::layout`](crate::workspace::layout) runs — every render
-/// of the rail, after every turn — and spawning a process on that path would be
-/// paying for a subprocess to answer a question a `stat` answers. It also gives
-/// the honest answer on a machine where `git` is not installed, which is the
-/// one case where an answer from `git` is unavailable and the question is still
-/// worth asking.
-///
-/// The one thing the walk does not copy from git is `GIT_CEILING_DIRECTORIES`
-/// and the refusal to cross a filesystem boundary. A workspace whose ancestor
-/// repository is across a mount point is reported here as versioned by it; git
-/// would disagree, [`ensure`] would decline to init, and the report names the
-/// ancestor — so the miss is visible rather than silent.
+/// Where the `.git` for this folder is, by a filesystem walk rather than
+/// `git rev-parse`. Unlike git it ignores `GIT_CEILING_DIRECTORIES` and mount
+/// boundaries; the report names the ancestor, so that case is visible.
 pub fn measure(root: &Path) -> Versioning {
     for (up, dir) in root.ancestors().enumerate() {
         if !dir.join(GIT_ENTRY).exists() {
@@ -187,12 +113,8 @@ pub fn measure(root: &Path) -> Versioning {
 // Write
 // ---------------------------------------------------------------------------
 
-/// What one scaffolding run did about versioning.
-///
-/// Not an IPC payload of its own: the three fields are spread onto
-/// [`ScaffoldReport`](crate::workspace::ScaffoldReport), because what the panel
-/// has to say is one sentence and a nested object would only make the UI walk
-/// further to write it.
+/// What one scaffolding run did about versioning, spread onto
+/// [`ScaffoldReport`](crate::workspace::ScaffoldReport).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ensured {
     /// Where the history is, measured *after* the run.
@@ -205,22 +127,9 @@ pub struct Ensured {
 
 /// Makes the workspace a work tree if it is not already one.
 ///
-/// Three outcomes, and only the middle one touches the disk:
-///
-/// * already a work tree, here or above — left exactly as it is;
-/// * not one — `git init` here, and nothing else. No commit, no remote, no
-///   `.gitignore`, no identity;
-/// * `git` unreachable — the folder stays unversioned and the reason is
-///   carried back for the report.
-///
-/// `host` is the project's, and it decides *whose* `git` runs: `None` is this
-/// computer, `Some` is the distribution the operator named, reached exactly the
-/// way `shell_exec` reaches it. It is never inferred from the path — a folder
-/// under `\\wsl$\` is not consent, the same rule PLAN 7.12 sets for commands.
-///
-/// Never fails. A scaffolding run that laid down five directories and could not
-/// reach a `git` has done the thing it was pressed for; turning that into an
-/// error would throw away the part that worked to report the part that did not.
+/// Already a work tree (here or above): untouched. Otherwise a bare `git init`
+/// on `host` (never inferred from the path, PLAN 7.12). If `git` is
+/// unreachable, the reason goes in the report. Never fails.
 pub async fn ensure(root: &Path, host: Option<&ExecHost>) -> Ensured {
     let found = measure(root);
     if found.tree.is_versioned() {
@@ -265,17 +174,8 @@ pub async fn ensure(root: &Path, host: Option<&ExecHost>) -> Ensured {
 
 /// Runs `git init` in `root`, or says in one line why it could not.
 ///
-/// Spawned by the runtime rather than reached through the agent's `shell_exec`:
-/// the person pressed a button, and routing their own button through the
-/// approval dialog would be asking them to confirm what they just asked for.
-/// The reverse — a *commit* from the runtime — is the one this never becomes,
-/// for the symmetrical reason (see the module header).
-///
-/// Bare `git init`, with no arguments at all. `--initial-branch` would be this
-/// runtime picking a branch name for somebody's repository, and a template or
-/// a `.gitignore` would be it picking their content; whatever their
-/// `init.defaultBranch` and `init.templateDir` say is what they get, because
-/// that is what they would have got in a terminal.
+/// Spawned directly: the button press is the approval. No arguments, so the
+/// user's `init.defaultBranch` and `init.templateDir` apply.
 async fn init(root: &Path, host: Option<&ExecHost>) -> Result<(), String> {
     let mut command = match host {
         None => here(root)?,
@@ -313,15 +213,8 @@ fn here(root: &Path) -> Result<Command, String> {
 
 /// `git init`, run by a WSL distribution's `git` (PLAN 7.12).
 ///
-/// `--exec` rather than a command line, so there is no login shell between
-/// `wsl.exe` and `git` and no metacharacter layer — the same shape `shell_exec`
-/// uses, for the same reason.
-///
-/// The probe before it is not optional and is why this is `async`. `wsl.exe
-/// --cd` answers a directory it cannot find by starting in the user's home and
-/// saying nothing, so without `test -d` a folder the distribution has no path
-/// for would be answered with a repository in somebody's `~`. That is the one
-/// failure here that would look like success.
+/// `--exec` like `shell_exec` (no login shell), after a `test -d` probe:
+/// `wsl.exe --cd` silently starts in `~` for a missing folder.
 #[cfg(windows)]
 async fn inside(distro: &str, root: &Path) -> Result<Command, String> {
     let wsl = exec_host::wsl_exe().ok_or_else(|| {
@@ -381,10 +274,8 @@ async fn inside(distro: &str, root: &Path) -> Result<Command, String> {
 
 /// `git init` in a WSL distribution. Never, off Windows.
 ///
-/// Not unreachable: a `projects.json` written on Windows and opened on another
-/// machine carries the host with it. Refusing is the point — the alternative is
-/// initialising with this computer's `git` instead, which is the wrong
-/// toolchain and would look exactly like success.
+/// Reachable via a `projects.json` from Windows; refused rather than using the
+/// local `git`.
 #[cfg(not(windows))]
 async fn inside(distro: &str, _root: &Path) -> Result<Command, String> {
     Err(format!(
@@ -392,11 +283,7 @@ async fn inside(distro: &str, _root: &Path) -> Result<Command, String> {
     ))
 }
 
-/// Waits for a child, or says what stopped answering.
-///
-/// A distribution that will never come up must not hold the button down for
-/// ever, and the folder it could not version is a line in the report like any
-/// other reason.
+/// Waits for a child with a timeout, or says what stopped answering.
 async fn answered<T>(work: impl std::future::Future<Output = T>, what: &str) -> Result<T, String> {
     tokio::time::timeout(HOST_TIMEOUT, work).await.map_err(|_| {
         format!(
@@ -443,12 +330,8 @@ fn failure(status: &ExitStatus, stderr: &[u8]) -> String {
 
 /// Where `git` is on this machine.
 ///
-/// PATH first, through the resolver `shell_exec` and the MCP client already
-/// share, so "which git" cannot mean two things in one process. Then the
-/// handful of places it is installed, because a GUI-launched app does not
-/// inherit the PATH a login shell builds — the same class of problem PLAN 7.7
-/// records for `keybase.exe` — and "git is not installed" is the wrong thing to
-/// tell somebody who has been using it in that folder all morning.
+/// PATH first (the resolver `shell_exec` uses), then common install locations,
+/// since a GUI-launched app may lack the login shell's PATH.
 fn program(root: &Path) -> Result<PathBuf, String> {
     if let Ok(found) = shell::resolve(GIT, root) {
         return Ok(found);
@@ -515,15 +398,8 @@ mod tests {
         (dir, root)
     }
 
-    /// Whether this machine can run the half of these tests that needs git.
-    ///
-    /// Written as a skip rather than as an assertion, for the reason the
-    /// screen-capture tests are written the way they are: a developer's machine
-    /// has `git` and a minimal container may not, and what is worth testing is
-    /// what happens in each case — not that the suite only passes on one of
-    /// them. Both branches are covered: the tests below that need git return
-    /// early without it, and [`a_missing_git_is_a_reported_problem`] is the one
-    /// that only runs when it is absent.
+    /// Whether git is available. Tests needing it skip without it;
+    /// [`a_missing_git_is_a_reported_problem`] runs only when it is absent.
     fn has_git(root: &Path) -> bool {
         program(root).is_ok()
     }
@@ -640,10 +516,8 @@ mod tests {
 
     /// The third row of PLAN 7.11's table, on a machine that can show it: the
     /// folder stays unversioned and the report says why.
-    /// PLAN 7.12: a host the project names is never silently swapped for this
-    /// computer. Off Windows there is no WSL to reach, and initialising with
-    /// the local `git` instead would be the wrong toolchain looking exactly
-    /// like success.
+    /// PLAN 7.12: off Windows, a named WSL host is refused, never swapped for
+    /// the local `git`.
     #[tokio::test]
     #[cfg(not(windows))]
     async fn a_wsl_host_off_windows_refuses_rather_than_falling_back() {

@@ -1,45 +1,19 @@
 //! Cabinet founding: a roster proposal, then apply (PLAN 7.14).
 //!
-//! The analog of PLAN 7.13 for a *team*. A session running `cabinet.found`
-//! writes one file, [`ROSTER_FILE`], through the ordinary approval dialog. A
-//! person applies it in Settings, and applying creates the identities it names
-//! with the allow-lists it names. That is the difference from a skill proposal,
-//! and it is load-bearing: a `SKILL.md` is not a grant, an identity row *is*
-//! one. So the preview this module builds is the allow-lists, identity by
-//! identity, and confirming apply is signing them.
+//! A session running `cabinet.found` writes [`ROSTER_FILE`]; a person applies it
+//! in Settings, creating the identities it names. Unlike a skill proposal, this
+//! *is* a grant, so the preview shows each allow-list and apply signs them.
 //!
-//! What it will and will not do is narrow on purpose.
+//! * **Parsed, no model** ([`parse`]): `## Name` plus `role`, `tools`, `skills`,
+//!   `runs_per_day`, validated as [`AgentDraft`]s.
+//! * **No tool**: [`apply`] is reachable only from a command.
+//! * **What was shown is what is created**: apply checks the preview's digest.
+//! * **All or nothing** ([`AgentStore::create_all`]).
+//! * **Existing names are skipped, never widened.**
+//! * **Only identities**: no routines, connectors or `world/`.
+//! * **Connector tools must be live** to be newly granted.
 //!
-//! * **Apply does not need a model.** The roster is parseable ([`parse`]): each
-//!   identity is a `## Name` heading with `role`, `tools`, `skills` and
-//!   `runs_per_day` under it — the fields [`AgentDraft`] already validates. A
-//!   file that will not parse is listed with the reason and never applied.
-//! * **There is no tool for it.** Nothing in the registry reads or applies a
-//!   roster. [`apply`] is reachable from one command, which the window calls
-//!   when a person presses it, and a session cannot call a command.
-//! * **What is created is what was shown.** The preview carries a digest of the
-//!   file it was built from, and apply refuses a file that has changed since. A
-//!   session that rewrote the proposal between the preview and the press would
-//!   otherwise be granting what nobody read.
-//! * **All or nothing.** One identity that would be refused refuses the whole
-//!   apply, before anything is written ([`AgentStore::create_all`]).
-//! * **Existing names are skipped, never widened.** A name already on file —
-//!   the built-in Assistant's included — is listed as present and left exactly
-//!   as it is. Silent widening is how a watch folder would hand `shell_exec` to
-//!   a Reviewer somebody made narrow.
-//! * **Only identities.** Apply writes no routine, starts no connector and
-//!   scaffolds no `world/`. Intended clocks and missing connectors are listed
-//!   from the file as prose, for a person to act on elsewhere.
-//! * **A connector tool has to be live.** A `<connector>__<tool>` nothing
-//!   answers to is refused, the way the identity form does not offer one. The
-//!   form keeps a grant like that when a connector goes down; a roster is a
-//!   *new* grant, and a new grant for a program that is not running is a grant
-//!   nobody could have watched work.
-//!
-//! The proposal is the project's — who is needed *here* — and travels with the
-//! folder. The identities are application data: a Reviewer is a Reviewer in the
-//! next project too. This module writes the second from the first and never
-//! puts a settings document under `.aegis/`.
+//! The proposal travels with the project; the identities are application data.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,29 +36,19 @@ pub const ROSTER_DIR: &str = ".aegis/roster";
 
 /// The roster proposal itself.
 ///
-/// `PROPOSAL.md` for the reason a skill's is: the name says it is not in force.
-/// There is no `ROSTER.md` it is applied *to* — applying writes identity rows in
-/// application data, and the proposal stays where it is.
+/// Named `PROPOSAL.md` because it is never in force; apply writes identity rows
+/// and leaves it in place.
 pub const ROSTER_FILE: &str = ".aegis/roster/PROPOSAL.md";
 
 /// The name an apply's lines carry in the audit log's `tool` column.
 ///
-/// Not a tool — no model can call it. It is the command a person's press ends
-/// in, once per identity created, and the name somebody scanning the log for
-/// "where did this Reviewer come from" is looking for.
+/// Not a callable tool: one line per identity a person's apply created.
 pub const AGENT_CREATE: &str = "agent_create";
 
-/// Largest roster the parser reads.
-///
-/// The skill runbook's cap. A roster is a handful of identities with four
-/// fields each; one past this is a document, not a team.
+/// Largest roster the parser reads (the runbook cap).
 pub const ROSTER_MAX_BYTES: usize = 16 * 1024;
 
 /// Most identities one roster may propose.
-///
-/// `COS.md` has three roles, and a cabinet is a Chief, a Reviewer and a
-/// specialist per domain. Six packs ship. Sixteen leaves room for a project
-/// that splits one and no room for a roster that proposes an org chart.
 pub const ROSTER_MAX: usize = 16;
 
 /// The fields every identity names, in the order a roster writes them.
@@ -128,20 +92,13 @@ pub struct Proposed {
 
 /// Parses and judges a roster proposal.
 ///
-/// Strict in the way a runbook's headings are, and for the reason: apply reads
-/// this without a model, so a field it cannot find is a grant it would have to
-/// invent. Every refusal names the identity and the line.
+/// Strict, since no model fills gaps; refusals name the identity and line.
 ///
-/// What it accepts:
-///
-/// * a `# ` title and any prose before the first `## `, ignored;
-/// * `## Name` for each identity, then `- key: value` lines for the four
-///   [`KEYS`], each exactly once. Lists are comma-separated, and `none` is an
-///   empty one. A line without a leading dash is prose for the reader and
-///   grants nothing — which is what keeps "tools: shell_exec" in a sentence from
-///   being a grant;
-/// * `## Intended routines` and `## Open questions`, whose dash lines are
-///   listed as written.
+/// * A `# ` title and prose before the first `## ` are ignored.
+/// * `## Name`, then `- key: value` for each of the [`KEYS`] exactly once
+///   (comma lists, `none` for empty). Lines without a dash are prose and grant
+///   nothing.
+/// * `## Intended routines` and `## Open questions` are listed as written.
 pub fn parse(text: &str) -> Result<RosterDoc, String> {
     if text.len() > ROSTER_MAX_BYTES {
         return Err(format!(
@@ -422,11 +379,8 @@ pub struct RosterApplied {
 }
 
 impl RosterEntry {
-    /// The draft apply creates this entry from.
-    ///
-    /// No instructions: a roster says what an identity is for in `role` and
-    /// what it does in its runbooks. Instructions are a person's to write on
-    /// the identity, where they are capped for the reason they are.
+    /// The draft apply creates this entry from, with no instructions (those are
+    /// a person's to write).
     fn draft(&self) -> AgentDraft {
         AgentDraft {
             name: self.name.clone(),
@@ -442,13 +396,8 @@ impl RosterEntry {
 
 /// This workspace's roster proposal, or `None` when it has none.
 ///
-/// `live` is every connector tool callable right now; `catalog` is the runbooks
-/// the library and this workspace hold, for the notes. Both are measured by the
-/// caller, so this reads one file and nothing else on the machine.
-///
-/// Never fails, for the reason the skill listing does not: a file that cannot be
-/// read or parsed is a proposal carrying its problem, in front of the person who
-/// can fix it.
+/// `live` is the callable connector tools; `catalog` the runbooks, for notes.
+/// Never fails: an unreadable file is a proposal carrying its problem.
 pub fn read(
     root: &Path,
     agents: &AgentStore,
@@ -485,9 +434,7 @@ pub fn read(
 
 /// The proposal's path, or `None` when there is no file there.
 ///
-/// Resolved rather than joined, so a `.aegis/roster` that has become a link to
-/// another folder refuses: a roster read from somewhere else is not this
-/// project's, and apply turns what it says into grants.
+/// Resolved with containment, so a linked-away `.aegis/roster` is refused.
 fn locate(root: &Path) -> Result<Option<PathBuf>, String> {
     let resolved = path::resolve(root, ROSTER_FILE).map_err(|err| err.reason().to_owned())?;
     if !resolved.inside || resolved.escaped() {
@@ -557,12 +504,8 @@ fn evaluate(
         })
         .collect();
 
-    // The identity form's own validator, over the new entries as one batch: a
-    // tool this build does not have, a skill that is not a name, a role that is
-    // two paragraphs. An accepted entry takes the lists back the way they will
-    // be stored, so what is drawn is what is signed and what is created. A
-    // refusal is kept only where nothing above already refused the entry — one
-    // reason per identity is the one to fix first.
+    // The identity form's validator over the batch; accepted entries take the
+    // normalized lists. One reason per identity.
     let fresh: Vec<usize> = (0..entries.len())
         .filter(|&index| entries[index].state == RosterEntryState::New)
         .collect();
@@ -616,9 +559,7 @@ fn dead_connector(granted: &[String], live: &[String]) -> Option<String> {
 
 /// What is true of a proposed identity's runbooks and does not block apply.
 ///
-/// A runbook that declares a tool the identity would not hold is a grant that
-/// fails closed at `skill_run`, on every run. That is allowed on the form too —
-/// a runbook is a file that changes — so it is said here rather than refused.
+/// E.g. a runbook declaring a tool the identity lacks: warned, not refused.
 fn notes(proposed: &Proposed, catalog: &[Skill]) -> Vec<String> {
     proposed
         .skills
@@ -665,13 +606,9 @@ fn digest(bytes: &[u8]) -> String {
 
 /// Applies this workspace's roster proposal: the grant (PLAN 7.14).
 ///
-/// `digest` is the one the preview carried. Re-reads and re-judges the file
-/// rather than trusting the preview, because a connector may have stopped and a
-/// name may have been taken since — and refuses when the file itself changed.
-///
-/// Creates every `new` identity or none, then writes one audit line per identity
-/// created, as the operator's act. Returns the lines so the command can announce
-/// them the way a dropped brief's are.
+/// Re-reads and re-judges the file, refusing if it no longer matches `digest`.
+/// Creates every `new` identity or none, with one operator audit line each
+/// (returned for announcement).
 pub fn apply(
     root: &Path,
     agents: &AgentStore,

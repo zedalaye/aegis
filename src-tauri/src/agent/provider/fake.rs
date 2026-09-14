@@ -1,47 +1,19 @@
 //! A provider with no model behind it.
 //!
-//! It exists so everything above it can be finished and exercised before there
-//! is an API key anywhere near the project: the turn loop, the transcript, the
-//! event plumbing, the session list, cancellation, and — from Phase 6 — the
-//! approval gate. All of that is provider-shaped work, and none of it should
-//! wait on a network client.
+//! Lets the whole app — turn loop, events, approvals — run without an API key.
 //!
-//! Two modes:
+//! * **Improvised** ([`FakeProvider::new`]): the reply is derived from the
+//!   request (quotes the user, names the workspace, counts tools), so it also
+//!   shows what [`transcript::build`](crate::agent::transcript::build) sent.
+//! * **Scripted** ([`FakeProvider::scripted`]): exact event sequences per turn,
+//!   for tests.
 //!
-//! * **Improvised** ([`FakeProvider::new`]) — the reply is derived from the
-//!   request. It quotes the user, names the workspace it was given and counts
-//!   the tools it was offered, so a reply that streams into the window is
-//!   evidence that [`transcript::build`](crate::agent::transcript::build)
-//!   really did carry those things.
-//! * **Scripted** ([`FakeProvider::scripted`]) — exact event sequences, one
-//!   per turn, consumed in order. This is how a test drives a tool call, a
-//!   truncated arguments string or a provider error through the loop.
-//!
-//! The improvised mode has six deliberate exceptions to "never touch the
-//! machine", and they are what make the approval gate — and, from Phase 13,
-//! the skill runner — usable before there is a model: a message containing
-//! [`WRITE_TRIGGER`] makes it ask for an `fs_write` (PLAN 6, Phase 6 — "the
-//! fake provider is scripted to request an `fs_write`"), one containing
-//! [`RUN_TRIGGER`] makes it ask for a `shell_exec` (Phase 7), one containing
-//! [`CAPTURE_TRIGGER`] makes it ask for a `screen_capture` (Phase 9), and one
-//! containing [`SKILL_TRIGGER`] makes it load and close a skill run (Phase
-//! 13), one containing [`REMEMBER_TRIGGER`] makes it ask to remember something
-//! (Phase 14), and one containing [`DELEGATE_TRIGGER`] makes it hand two briefs
-//! to another identity and wait for the board (Phase 15). All six are words the
-//! user has to type, not heuristics over what they said: a fake model that
-//! decided on its own when to reach for the disk, for a process, for the
-//! screen, for its own memory or for somebody else's turn would be exactly the
-//! behaviour the gate exists to catch.
-//!
-//! There is one exception, and it is not a decision the provider makes: a
-//! request that offers `handoff_return` is a run a brief opened, and it is
-//! answered with that call. The only thing the identity that briefed it will
-//! ever see is the report, so a fake that replied with prose would be
-//! demonstrating a failure rather than the loop.
-//!
-//! Tokens are emitted with a small delay so streaming is visibly streaming and
-//! a cancel has something to interrupt. Tests use [`FakeProvider::instant`],
-//! which sets the delay to zero.
+//! Improvised mode only calls tools on explicit trigger words
+//! ([`WRITE_TRIGGER`], [`RUN_TRIGGER`], [`CAPTURE_TRIGGER`], [`SKILL_TRIGGER`],
+//! [`REMEMBER_TRIGGER`], [`DELEGATE_TRIGGER`]) — never on its own initiative.
+//! A delegated run (offered `handoff_return`) and a scheduled run follow their
+//! script. Tokens stream with a small delay; [`FakeProvider::instant`] removes
+//! it for tests.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -56,84 +28,38 @@ use super::{Provider, STREAM_BUFFER};
 /// The model id this provider reports.
 pub const FAKE_MODEL: &str = "aegis-fake-1";
 
-/// The word that makes the improvising provider ask for a file write.
-///
-/// Typing it is the Phase 6 walkthrough: the model asks, the approval dialog
-/// opens, and allow-once / allow-session / deny can each be seen to do what
-/// they say. Matched case-insensitively anywhere in the user's message.
+/// Asks for an `fs_write` (Phase 6 walkthrough). Trigger words match
+/// case-insensitively anywhere in the message.
 pub const WRITE_TRIGGER: &str = "/write";
 
-/// The word that makes the improvising provider ask to run a command.
-///
-/// Typing it is the Phase 7 walkthrough: the dialog names the exact program,
-/// arguments and working directory, and once allowed the output streams into
-/// the transcript as the command produces it. Matched case-insensitively
-/// anywhere in the user's message.
+/// Asks for a `shell_exec` whose output streams (Phase 7 walkthrough).
 pub const RUN_TRIGGER: &str = "/run";
 
-/// The word that makes the improvising provider ask to capture the screen.
-///
-/// Typing it is the Phase 9 walkthrough: the dialog names the display and both
-/// of its sizes, and once allowed the capture appears in the transcript as a
-/// thumbnail while the model is told only where the file is. Matched
-/// case-insensitively anywhere in the user's message.
+/// Asks for a `screen_capture` (Phase 9 walkthrough).
 pub const CAPTURE_TRIGGER: &str = "/capture";
 
-/// The word that makes the improvising provider run a skill.
-///
-/// Typing it is the Phase 13 walkthrough, and it is the one trigger that takes
-/// two rounds: the provider calls `skill_run` on the first runbook the catalog
-/// offers, reads the steps back, and then closes the run with a `skill_return`
-/// — so the catalog, the loaded body, the validated return and the skill name
-/// on the audit lines can all be seen without a model. It stops there rather
-/// than carrying the steps out, because a scripted provider following a
-/// runbook would be pretending to be the thing this trigger exists to make
-/// visible. Matched case-insensitively anywhere in the user's message.
+/// Runs the first catalog skill: `skill_run`, then `skill_return`, without
+/// carrying out the steps (Phase 13 walkthrough).
 pub const SKILL_TRIGGER: &str = "/skill";
 
-/// The word that makes the improvising provider ask to remember something.
-///
-/// Typing it is the Phase 14 walkthrough: the dialog shows the exact sentence
-/// that would be remembered, and once allowed it appears under Memory in
-/// Settings and at the top of the *next* reply this identity gives. Matched
-/// case-insensitively anywhere in the user's message.
+/// Asks for a `memory_write` (Phase 14 walkthrough).
 pub const REMEMBER_TRIGGER: &str = "/remember";
 
-/// The word that makes the improvising provider hand work to other identities.
-///
-/// Typing it is the Phase 15 walkthrough, and it is the only trigger that
-/// starts *other agents*: the dialog names the owners, two sessions open under
-/// those identities and run at the same time, and what comes back into this
-/// transcript is a board of statuses rather than either of their conversations.
-/// The word may be followed by an identity's name — `/delegate Scribe` — and
-/// with nothing after it the briefs go to the built-in assistant, which is the
-/// one identity that certainly exists. Matched case-insensitively anywhere in
-/// the user's message.
+/// Delegates two briefs in parallel and reads the board back (Phase 15
+/// walkthrough). `/delegate Scribe` picks the owner; the default is the
+/// built-in identity.
 pub const DELEGATE_TRIGGER: &str = "/delegate";
 
-/// What the triggered memory says.
-///
-/// Fixed, and about the demo rather than about the user's work. A scripted
-/// provider that improvised a preference about someone it has never met would
-/// be writing words they never said into the one store that outlives every
-/// session — and unlike the demo file, a memory is not something you notice by
-/// looking at your workspace.
+/// What the triggered memory says: fixed, and about the demo, never invented
+/// about the user.
 pub const REMEMBER_TEXT: &str =
     "the scripted provider was asked to demonstrate how a memory is recorded";
 
 /// The file the triggered write targets, relative to the workspace.
-///
-/// Inside the workspace and named after what it is, so the prompt a user reads
-/// is about a file they would not mind existing. The write is still a write:
-/// it goes through the same policy row, the same dialog and the same audit
-/// line as any other.
 pub const WRITE_TARGET: &str = "aegis-approval-demo.txt";
 
-/// Delay between tokens in the improvised reply.
-///
-/// Fast enough not to be a wait, slow enough that a person can see text
-/// arriving rather than appearing — and long enough that a cancel sent by a
-/// human lands mid-stream, which is the thing being exercised.
+/// Delay between tokens in the improvised reply: visible streaming, and time
+/// for a human cancel to land mid-stream.
 const TOKEN_DELAY: Duration = Duration::from_millis(18);
 
 /// A provider that answers without a model.
@@ -169,11 +95,8 @@ impl FakeProvider {
         }
     }
 
-    /// A provider that replays `turns`, one sequence per request.
-    ///
-    /// Once the script runs out it improvises, so a test that scripts a tool
-    /// call does not also have to script the reply that follows the tool
-    /// result.
+    /// A provider that replays `turns`, one sequence per request, then
+    /// improvises.
     pub fn scripted(turns: Vec<Vec<ModelEvent>>) -> Self {
         Self {
             delay: Duration::ZERO,
@@ -225,28 +148,19 @@ impl Provider for FakeProvider {
     }
 }
 
-/// Builds a reply out of the request itself.
-///
-/// Everything it says is measured from the request, so the text doubles as a
-/// report on what the transcript actually sent: if the workspace line is wrong
-/// or the tool count is zero, that is a real bug, visible in the window without
-/// a debugger.
+/// Builds a reply out of the request itself, so it reports what was actually
+/// sent.
 fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
     let said = last_user_text(request);
     let asked = said.to_lowercase();
 
-    // Before `already_answered`, because this is the one trigger that spans
-    // two rounds: its second round is exactly the round in which a tool
-    // message exists. It decides what to do from what came back, which is why
-    // it can be re-entered without asking for the same thing again.
+    // Before `already_answered`: this trigger spans rounds and decides from
+    // the tool results.
     if asked.contains(SKILL_TRIGGER) {
         return skill_turn(request);
     }
 
-    // A run a routine fired follows its runbook and returns, whatever is in
-    // the message: it is the only kind of turn here that nobody typed into,
-    // and the opening it was given is the whole of what it was asked for
-    // (PLAN 7.3, Phase 16).
+    // A scheduled run follows its runbook, whatever the message (Phase 16).
     if said.contains(crate::schedule::OPENING_MARKER) {
         return routine_turn(request, &said);
     }
@@ -332,12 +246,8 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
     events
 }
 
-/// A turn that asks to write a file, and nothing else.
-///
-/// The arguments are streamed as one fragment rather than assembled from
-/// several, because what is being exercised downstream is the approval gate,
-/// not the tool-call assembler — [`wire`](crate::agent::wire) has its own
-/// tests for the fragmented case.
+/// A turn that asks to write a file, arguments in one fragment
+/// ([`wire`](crate::agent::wire) tests fragmentation).
 fn ask_to_write(said: &str) -> Vec<ModelEvent> {
     let content = format!(
         "Written by the fake provider in `agent/provider/fake.rs`, because a \
@@ -368,21 +278,9 @@ fn ask_to_write(said: &str) -> Vec<ModelEvent> {
     ]
 }
 
-/// A turn that asks to list the workspace, and nothing else.
-///
-/// The command is chosen for three properties and no others: it exists on
-/// every platform the MVP targets, it prints enough to watch arriving, and on
-/// Windows it prints it in colour — which is the interesting case, because
-/// ANSI escape sequences are the other thing a pipe carries besides text, and
-/// the point of a demo is to make what the runtime does with them visible
-/// rather than to arrange for it never to come up.
-///
-/// `powershell` rather than `cmd`: it is what a Windows user actually works
-/// in, and Windows PowerShell 5.1 does not colour a redirected `Get-ChildItem`
-/// on its own, so the escapes are written explicitly. Note that the script is
-/// one argument, which PowerShell then parses itself — that is PowerShell's
-/// doing and it is visible in the approval dialog. `shell_exec` still passes
-/// an argument vector and still puts no shell of its own in the way.
+/// A turn that asks to list the workspace. On Windows it uses `powershell`
+/// with explicit ANSI colours, so the demo shows how escapes are handled; the
+/// script is one argument PowerShell parses itself.
 fn ask_to_run() -> Vec<ModelEvent> {
     let (program, args, what): (&str, Vec<&str>, &str) = if cfg!(windows) {
         (
@@ -426,13 +324,7 @@ fn ask_to_run() -> Vec<ModelEvent> {
     ]
 }
 
-/// A turn that asks to capture the screen, and nothing else.
-///
-/// No arguments at all: `display` defaults to the primary one, which is the
-/// only display this build captures, and a demo that spelled it out would be
-/// demonstrating a field rather than the gate. What is worth watching here is
-/// the asymmetry the tool is built around — the person sees the picture in the
-/// transcript, and the model is told only that a file exists and how big it is.
+/// A turn that asks to capture the primary display, with no arguments.
 fn ask_to_capture() -> Vec<ModelEvent> {
     vec![
         ModelEvent::TextDelta {
@@ -454,13 +346,8 @@ fn ask_to_capture() -> Vec<ModelEvent> {
     ]
 }
 
-/// A turn that asks to remember one thing, and nothing else.
-///
-/// The one trigger whose call touches nothing on the machine and is still put
-/// to the user. That is the point of it: a memory reaches the top of every
-/// later reply this identity gives, which makes it closer to an instruction
-/// than to a note, and the dialog shows the whole sentence because a memory is
-/// one sentence.
+/// A turn that asks to remember one thing — still approved, since a memory
+/// shapes every later reply.
 fn ask_to_remember() -> Vec<ModelEvent> {
     let arguments = serde_json::json!({
         "kind": "convention",
@@ -490,17 +377,8 @@ fn ask_to_remember() -> Vec<ModelEvent> {
     ]
 }
 
-/// A turn that runs a skill: `skill_run`, then `skill_return`, then a word.
-///
-/// Which of the three depends only on what came back, so the same function
-/// answers every round of the demo. That is also what makes it honest about
-/// the phase: a run is a span inside one turn, and the provider can see where
-/// in the span it is by reading the tool messages of that turn.
-///
-/// It deliberately does not carry the runbook's steps out. A scripted provider
-/// following a procedure would be imitating the model, and what this trigger
-/// exists to show is the runner — the catalog, the body arriving on demand,
-/// the return being validated, and the skill's name on the audit lines.
+/// A turn that runs a skill: `skill_run`, then `skill_return`, then a word,
+/// chosen from this turn's tool results. The steps are not carried out.
 fn skill_turn(request: &ModelRequest) -> Vec<ModelEvent> {
     let answers = answers_this_turn(request);
 
@@ -544,20 +422,15 @@ fn skill_turn(request: &ModelRequest) -> Vec<ModelEvent> {
     }
 }
 
-/// The three rounds a scheduled run takes without a model behind it.
-///
-/// Load the runbook the routine named, write a line into `.aegis/status/`, close with
-/// a return. It is the one script here that carries a job *out* rather than
-/// stopping at the gate, and that is deliberate: what the Phase 16 walkthrough
-/// has to show is a run happening with the window shut — the write going
-/// through because a person signed the routine for it, or being refused because
-/// they did not, with nobody asked either way.
+/// A scheduled run in three rounds: load the named runbook, write into
+/// `.aegis/status/` (allowed only if the routine was signed for it), return.
 fn routine_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
     let answers = answers_this_turn(request);
 
     let Some(name) = skill_named(said) else {
         return say(
-            "The opening message named no runbook, which is a bug in the scheduler rather than              in this reply.",
+            "The opening message named no runbook, which is a bug in the scheduler rather than \
+             in this reply.",
         );
     };
 
@@ -627,7 +500,8 @@ fn close_the_run(name: &str, wrote: bool) -> Vec<ModelEvent> {
         serde_json::json!({
             "status": "blocked",
             "summary": format!(
-                "Ran {name} on its schedule. The status file could not be written — nobody is                  watching this run, so the write was refused rather than put to anyone."
+                "Ran {name} on its schedule. The status file could not be written — nobody is \
+                 watching this run, so the write was refused rather than put to anyone."
             ),
             "open_questions": ["Should this routine be signed for writes inside the workspace?"],
         })
@@ -650,10 +524,6 @@ fn close_the_run(name: &str, wrote: bool) -> Vec<ModelEvent> {
 }
 
 /// The runbook a scheduled run's opening message names.
-///
-/// Read out of the message rather than guessed from the catalog, because the
-/// routine named one: a scheduled run that ran whatever happened to be first in
-/// the list would be demonstrating the wrong thing entirely.
 fn skill_named(said: &str) -> Option<String> {
     let at = said.find("skill:")? + "skill:".len();
     let rest = &said[at..];
@@ -725,18 +595,9 @@ fn ask_to_return(name: &str) -> Vec<ModelEvent> {
     ]
 }
 
-/// A turn that hands two briefs out, waits, and reads the board back.
-///
-/// The Phase 15 walkthrough, and the one trigger that starts other agents: the
-/// dialog names the owners, two sessions open under those identities, each runs
-/// its own turn through the same gate, and what comes back here is a board of
-/// statuses rather than either of their conversations.
-///
-/// Two briefs rather than one, because the claim being demonstrated is that
-/// they run *at the same time* — one brief would prove a call, not a fan-out.
-/// Both go to the identity the user named after the trigger, or to the built-in
-/// one, since this provider cannot see the registry and inventing an owner
-/// would be a delegation that fails before it starts.
+/// A turn that hands out two briefs (to show fan-out), waits, and reads the
+/// board back. The owner is the one named after the trigger, or the built-in
+/// identity.
 fn delegate_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
     let answers = answers_this_turn(request);
 
@@ -805,17 +666,11 @@ fn delegate_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
     ]
 }
 
-/// The identity named after the trigger, or the built-in one.
-///
-/// `/delegate Scribe` hands the briefs to Scribe. With nothing after it they go
-/// to the assistant, which is the one identity that certainly exists.
+/// The identity named after the trigger (`/delegate Scribe`), or the built-in
+/// one.
 fn owner_named(said: &str) -> String {
-    // The lowered copy is both searched *and* sliced. Lowering can change a
-    // string's length — `İ` is one character and two lower-case ones — so an
-    // index found in the copy is not necessarily a character boundary in the
-    // original, and slicing the original with it would panic on a message that
-    // happens to contain one. What comes back is lower case, which costs
-    // nothing: the runner matches an owner's name case-insensitively.
+    // Search and slice the lowered copy: lowering can change byte offsets
+    // (`İ`), and owner names match case-insensitively anyway.
     let lower = said.to_lowercase();
     let Some(at) = lower.find(DELEGATE_TRIGGER) else {
         return crate::store::Agent::builtin().name;
@@ -830,12 +685,7 @@ fn owner_named(said: &str) -> String {
     }
 }
 
-/// The answer a delegated run gives: a `handoff_return`, and nothing else.
-///
-/// A specialist that ended its turn with prose would have said nothing anybody
-/// is listening for — which is exactly the failure the bus turns into a second
-/// attempt and then an escalation, so this provider does the thing a real model
-/// is supposed to do rather than demonstrating the failure.
+/// The answer a delegated run gives: a `handoff_return`, never prose.
 fn return_the_brief(request: &ModelRequest) -> Vec<ModelEvent> {
     let goal = last_user_text(request)
         .lines()
@@ -889,17 +739,8 @@ fn return_the_brief(request: &ModelRequest) -> Vec<ModelEvent> {
     ]
 }
 
-/// Whether this request is a delegated run's.
-///
-/// Read off the tools rather than off the text, because there it is a fact
-/// rather than a guess about a message. `Turn::held` offers `handoff_return`
-/// to a run a brief opened and takes `handoff_delegate` away from it, and does
-/// the mirror of that everywhere else — so the two are never on one list, and
-/// "return without delegate" is the state itself.
-///
-/// Both halves are checked rather than only the first, so a caller that hands
-/// this provider the whole registry (which no turn does) reads as the ordinary
-/// session it is rather than as a run with a brief behind it.
+/// Whether this request is a delegated run's: offered `handoff_return` and not
+/// `handoff_delegate` (`Turn::held` never offers both).
 fn is_delegated(request: &ModelRequest) -> bool {
     offers(request, crate::policy::tool::HANDOFF_RETURN)
         && !offers(request, crate::policy::tool::HANDOFF_DELEGATE)
@@ -929,11 +770,7 @@ fn say(text: &str) -> Vec<ModelEvent> {
     events
 }
 
-/// The `tool` messages that belong to this turn, oldest first.
-///
-/// Scoped after the most recent user message, for the reason
-/// [`already_answered`] is: "this turn" and "this conversation" are different
-/// questions, and only the first one says where in a skill run we are.
+/// The `tool` messages after the most recent user message, oldest first.
 fn answers_this_turn(request: &ModelRequest) -> Vec<&str> {
     let from = request
         .messages
@@ -950,11 +787,7 @@ fn answers_this_turn(request: &ModelRequest) -> Vec<&str> {
         .collect()
 }
 
-/// The skill an envelope's `meta` names.
-///
-/// Read out of the JSON as text rather than parsed: this provider has no
-/// business owning a copy of the envelope's shape, and the one field it needs
-/// is the one the runner documents as the run's name
+/// The skill an envelope's `meta` names
 /// ([`META_SKILL`](crate::skills::META_SKILL)).
 fn meta_skill(envelope: &str) -> Option<String> {
     let key = format!("\"{}\":\"", crate::skills::META_SKILL);
@@ -965,11 +798,7 @@ fn meta_skill(envelope: &str) -> Option<String> {
     Some(rest[..end].to_owned())
 }
 
-/// The first skill the catalog in the system message offers.
-///
-/// Read back out of the built request, like [`workspace_line`], so what this
-/// picks is what the runtime actually told the model it could run — including
-/// nothing, when the identity was granted none.
+/// The first skill the system message's catalog offers, if any.
 fn first_catalog_skill(request: &ModelRequest) -> Option<String> {
     let system = request.messages.iter().find_map(|message| match message {
         WireMessage::System { content } => Some(content.as_str()),
@@ -983,13 +812,8 @@ fn first_catalog_skill(request: &ModelRequest) -> Option<String> {
     })
 }
 
-/// Whether the call this turn asked for has already been answered.
-///
-/// Scoped to the messages after the most recent user message, which is what
-/// makes it "this turn" rather than "this conversation". Without the scope the
-/// second round of a turn would ask again and burn all eight rounds on one
-/// file; with the wrong scope — anywhere in the transcript — a session that
-/// ever ran a tool could never trigger a write again.
+/// Whether this turn's call (after the most recent user message) was already
+/// answered.
 fn already_answered(request: &ModelRequest) -> bool {
     let Some(latest) = request
         .messages
@@ -1017,10 +841,7 @@ fn last_user_text(request: &ModelRequest) -> String {
         .unwrap_or_else(|| "(nothing)".to_owned())
 }
 
-/// One line reporting the workspace the system message named.
-///
-/// Read back out of the built request rather than passed in separately, so it
-/// reflects what was actually sent.
+/// One line reporting the workspace the built system message named.
 fn workspace_line(request: &ModelRequest) -> String {
     let system = request.messages.iter().find_map(|message| match message {
         WireMessage::System { content } => Some(content.as_str()),
@@ -1039,11 +860,7 @@ fn workspace_line(request: &ModelRequest) -> String {
     }
 }
 
-/// Splits text into streaming tokens.
-///
-/// Whitespace stays attached to the word before it, so concatenating every
-/// token reproduces the input exactly — the property the transcript depends on
-/// when it replaces the streamed buffer with the finalized message.
+/// Splits text into streaming tokens that concatenate back to the input.
 fn tokens(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut current = String::new();
@@ -1387,11 +1204,8 @@ mod tests {
         assert_eq!(args["source"], "agent/provider/fake.rs");
     }
 
-    /// PLAN 7.3, Phase 13: the skill trigger walks a whole run — load, then
-    /// return, then stop — so the runner can be seen working without a model.
-    /// The three rounds are asserted together because what the trigger is
-    /// demonstrating is the *sequence*, and each round is decided from what the
-    /// last one came back with.
+    /// Phase 13: the skill trigger walks load, return, stop; each round is
+    /// decided from the last result.
     #[tokio::test]
     async fn the_skill_trigger_loads_a_runbook_and_then_closes_the_run() {
         /// The one call a round made, if it made one.

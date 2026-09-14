@@ -7,47 +7,20 @@
 //!                  └── brief ──▶ owner B ──┘
 //! ```
 //!
-//! Everything in this module is the *policy* of a delegation — how many run at
-//! once, how long one gets, what a second failure means — and none of it is the
-//! machinery of running one. That is [`Runner`], which is implemented once
-//! against the application ([`runner`](super::runner)) and once against a
-//! script in the tests. The split is what lets "two failures go to the human"
-//! be proved in milliseconds without a model, a window or a provider.
+//! The policy of a delegation; [`Runner`] is the machinery (the app's
+//! [`runner`](super::runner), or a script in tests).
 //!
-//! Four rules, and each is `COS.md` written as code.
+//! * **Parallel**: one task and one session per brief; results keep brief
+//!   order.
+//! * **Bounded**: each attempt runs under [`ATTEMPT_TIMEOUT`], cancelled
+//!   through its Stop token.
+//! * **[`ATTEMPTS`] attempts, then the human**: the retry continues the same
+//!   session.
+//! * **Failure is an answer**: an escalation is a `needs_you` line, not an
+//!   error.
 //!
-//! **Parallel, because the point of a fan-out is that it is one wait.** Each
-//! brief is its own task. They are also each their own *session*, under their
-//! own identity, so two specialists working at once are not two writers on one
-//! transcript — the thing [`TurnRegistry`](crate::agent::TurnRegistry) exists
-//! to prevent. What comes back is joined in the order the briefs were written,
-//! not the order they finished, because a board that reordered itself run to
-//! run would be unreadable.
-//!
-//! **Bounded, because an agent that does not answer must not be able to hold
-//! the one that asked.** Every attempt runs under [`ATTEMPT_TIMEOUT`]. On
-//! expiry the run is cancelled through its own token — the same token a Stop
-//! button uses, so a timed-out specialist stops the way a stopped one does,
-//! mid-tool-call if that is where it is.
-//!
-//! **[`ATTEMPTS`] attempts, then the human.** `COS.md` is explicit: escalate
-//! after two failures, not twelve creative attempts. The second attempt is the
-//! same session continued rather than a fresh one, so whatever the first
-//! attempt did get done is still there to build on; what it is told is that it
-//! ran out of time and must return something, even a `blocked`.
-//!
-//! **A failure is still an answer.** An escalation is not an error the CoS has
-//! to handle — it is a line on the board saying this one needs a person, which
-//! is exactly what the CoS's own runbook then puts on the attention list. The
-//! delegation as a whole does not fail because one owner did not return.
-//!
-//! ## What the CoS reads back
-//!
-//! [`Board::render`], and nothing else. It is statuses, artefact paths and open
-//! questions — never a transcript, never a specialist's reasoning. `COS.md`:
-//! *the CoS aggregates status, not histories*. That is not a convention here,
-//! it is a consequence of the types: a [`Report`] is the only thing a run can
-//! produce, and there is no field on it that could hold a conversation.
+//! The CoS reads back only [`Board::render`] — statuses, paths, questions —
+//! since a [`Report`] has no field that could hold a transcript.
 
 use std::fmt::Write as _;
 use std::future::Future;
@@ -59,20 +32,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Brief, Report, Status};
 
-/// How many briefs one delegation may carry.
-///
-/// Not a resource limit — it is what a person can read in an approval dialog
-/// and reconcile on a status board afterwards. A CoS that wanted ten parallel
-/// specialists is a CoS that has stopped prioritizing, which is the one job
-/// `COS.md` gives it.
+/// How many briefs one delegation may carry: what a person can review in one
+/// dialog.
 pub const FAN_OUT_MAX: usize = 4;
 
-/// How long one attempt at a brief may take.
-///
-/// Long enough for a specialist to read some files, run something and write an
-/// artefact; short enough that a CoS turn cannot be parked for an afternoon by
-/// an owner that is looping. An attempt that expires is cancelled, not
-/// abandoned: the token is the turn's own.
+/// How long one attempt at a brief may take before it is cancelled.
 pub const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// How many attempts a brief gets before the human is asked (`COS.md` *Loop*).
@@ -80,10 +44,8 @@ pub const ATTEMPTS: u32 = 2;
 
 /// Why one attempt produced no report.
 ///
-/// `retryable` is the difference between "it ran out of time" and "there is no
-/// such identity": the first is worth the second attempt this module allows,
-/// the second would fail identically and the retry would only cost the user
-/// another wait before the same escalation.
+/// `retryable` is false when a retry would fail identically (e.g. no such
+/// identity).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
     /// What went wrong, in a line, written to be read on the board.
@@ -115,10 +77,8 @@ pub type Running<'a> = Pin<Box<dyn Future<Output = Result<Report, Failure>> + Se
 
 /// Which brief of which delegation, and which try at it.
 ///
-/// The three together are what a runner needs in order to find the session it
-/// opened last time: a retry is the *same* run continued, so it has to be able
-/// to name it. `seq` is the brief's position in the fan-out, and the reviewer's
-/// is one past the last of them.
+/// Lets a retry find its session. `seq` is the brief's position; the reviewer's
+/// is one past the last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot<'a> {
     /// The delegation. One id over the CoS and everyone under it.
@@ -131,29 +91,18 @@ pub struct Slot<'a> {
 
 /// What the bus needs from the runtime in order to carry a brief.
 ///
-/// Two operations, and they are deliberately the two `COS.md` names: a brief is
-/// **filed** where the team can read it, and then it is **run** by its owner.
-/// Nothing else about how a run happens reaches this module — not sessions, not
-/// providers, not the approval gate — which is what keeps the retry-and-escalate
-/// policy above testable against a script.
+/// File the brief, then run it — nothing else reaches this module.
 pub trait Runner: Send + Sync {
     /// Writes the brief where the team can read it, and says where it went.
     ///
-    /// Called once per brief, before any attempt at it, so `slot.attempt` is
-    /// zero here.
-    ///
-    /// `None` when there is nowhere to put it: a workspace that never took the
-    /// convention has no `.aegis/briefs/`, and inventing one because an agent
-    /// delegated would be the harness writing directories into somebody's
-    /// folder uninvited (PLAN 7.3, Phase 11 — scaffolding is opt-in). The
-    /// delegation still runs; the brief travels in the session that opens
-    /// rather than on disk.
+    /// Called once per brief before any attempt (`slot.attempt` is zero).
+    /// `None` without `.aegis/briefs/`, which is never created; the brief then
+    /// travels in the session.
     fn file(&self, slot: Slot<'_>, brief: &Brief, rendered: &str) -> Option<String>;
 
     /// Runs one brief as its owner, and reports what came back.
     ///
-    /// `attempt` is 1-based and is passed rather than counted inside, because
-    /// what the owner is told differs: the second attempt is told it is one.
+    /// `attempt` is 1-based; the second attempt is told it is one.
     fn run<'a>(
         &'a self,
         slot: Slot<'a>,
@@ -168,10 +117,7 @@ pub trait Runner: Send + Sync {
 pub enum Outcome {
     /// The owner returned, and the return passed [`check`](super::check).
     Returned(Report),
-    /// Nobody returned, and the human is the next owner.
-    ///
-    /// Not an error: it is a status the CoS routes, which is what
-    /// [`Board::render`] writes it as.
+    /// Nobody returned; the human is the next owner. A status, not an error.
     Escalated {
         /// What the last attempt said went wrong.
         reason: String,
@@ -179,11 +125,7 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    /// The status word this outcome reads as on the board.
-    ///
-    /// An escalation is `needs_you` rather than a fourth word. `COS.md` gives
-    /// three, and a run that could not answer needs exactly what a run that
-    /// answered `needs_you` needs: a person.
+    /// The status word on the board; an escalation reads `needs_you`.
     pub const fn status(&self) -> Status {
         match self {
             Self::Returned(report) => report.status,
@@ -205,20 +147,12 @@ pub struct Assignment {
     pub outcome: Outcome,
 }
 
-/// Everything one delegation produced.
-///
-/// The reviewer is held apart from the specialists rather than appended to
-/// them, because it is not one of them: it read their returns and nothing else,
-/// and a board that flattened the two would lose the one fact that makes a
-/// review worth having (`COS.md` *Loop*, fan-in).
+/// Everything one delegation produced, with the reviewer kept apart from the
+/// specialists (`COS.md` *Loop*).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Board {
-    /// This delegation, unique across the process.
-    ///
-    /// One id over the CoS's call and every run it started (PLAN 7.2, row 10).
-    /// It reaches the audit line of every tool call any of those specialists
-    /// makes, which is what makes "who ran, what did it cost, why did it fail"
-    /// answerable without opening a chat.
+    /// This delegation's id, on every audit line of the CoS call and its runs
+    /// (PLAN 7.2, row 10).
     pub id: String,
     /// One per brief, in the order they were written.
     pub assignments: Vec<Assignment>,
@@ -275,11 +209,8 @@ impl Board {
         line
     }
 
-    /// What goes back to the CoS as the tool's content.
-    ///
-    /// Statuses, paths and questions. No transcripts, and nothing that could
-    /// carry one: every line here comes out of a [`Report`], which has no field
-    /// wide enough for a conversation.
+    /// What goes back to the CoS: statuses, paths and questions from each
+    /// [`Report`].
     pub fn render(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "{}\n", self.headline());
@@ -348,10 +279,8 @@ impl Assignment {
 
 /// Carries one delegation from end to end.
 ///
-/// Files every brief, runs them together, then — if one was asked for — runs
-/// the review over what came back. Never fails: every way a brief can go wrong
-/// is a line on the board, because the CoS has to be able to route the ones
-/// that worked whatever happened to the ones that did not.
+/// Files every brief, runs them together, then any review. Never fails: each
+/// problem is a board line.
 pub async fn deliver(
     runner: &Arc<dyn Runner>,
     plan: super::Plan,
@@ -378,10 +307,7 @@ pub async fn deliver(
         })
         .collect();
 
-    // One task each. Spawned rather than joined in place so they genuinely
-    // overlap — a fan-out that ran its briefs one after another would be a loop
-    // with extra words — and so that an owner that panics is a failed
-    // assignment rather than a CoS turn that dies with it.
+    // Spawned, so briefs overlap and a panic fails one assignment, not the CoS.
     let count = briefs.len();
     let mut running = Vec::with_capacity(count);
     for (seq, (brief, filed)) in briefs.into_iter().zip(filed).enumerate() {
@@ -436,11 +362,8 @@ pub async fn deliver(
 
 /// Points the reviewer at what came back, and at nothing else.
 ///
-/// This is the fan-in, and it is three lines because that is all it is allowed
-/// to be: the reviewer's inputs become the artefacts the specialists named plus
-/// the briefs they worked from. It never receives their sessions. A verifier
-/// that had to read the work being verified *and* the arguing that produced it
-/// is not a verifier, it is a second author (`COS.md` *Loop*).
+/// The fan-in: the reviewer's inputs are the named artefacts and the briefs,
+/// never the sessions (`COS.md` *Loop*).
 fn fan_in(brief: &mut Brief, assignments: &[Assignment]) {
     for assignment in assignments {
         if let Outcome::Returned(report) = &assignment.outcome {
@@ -452,10 +375,7 @@ fn fan_in(brief: &mut Brief, assignments: &[Assignment]) {
         }
     }
 
-    // The cap is the brief's own, and it is applied here rather than left to
-    // `check_brief` to refuse: a fan-in that produced an invalid brief would
-    // turn a successful delegation into a failed review for a reason the model
-    // did not cause and cannot fix.
+    // Capped here, so the fan-in never builds a brief `check_brief` refuses.
     brief.inputs.truncate(super::BRIEF_LIST_MAX);
 }
 
@@ -550,10 +470,7 @@ mod tests {
     use super::*;
     use crate::handoff::{Priority, ReturnFormat};
 
-    /// A runner driven by a script rather than by a model.
-    ///
-    /// One entry per attempt it should make, consumed in order, so a test says
-    /// "fail, then return" and reads what the bus did with that.
+    /// A runner driven by a script: one entry per attempt, in order.
     struct Script {
         answers: Mutex<Vec<Result<Report, Failure>>>,
         seen: Mutex<Vec<(String, u32)>>,

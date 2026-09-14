@@ -1,43 +1,15 @@
 //! The agent document: `agents.json` (PLAN 7.3, Phase 12).
 //!
-//! An agent is an *identity*: a name, what it is for, the instructions it
-//! carries into every request, which provider answers for it, and the two
-//! allow-lists that bound it — the tools it may call and the skills it may run.
-//! Sessions bind to one at creation. Nothing here runs anything; this module is
-//! only the data, which is the whole point of the phase. A "reviewer" that
-//! cannot write files is a record in this file, not a branch in the turn loop.
+//! An identity: name, role, instructions, provider, and two allow-lists (tools
+//! and skills). Sessions bind to one at creation; this module is data only.
 //!
-//! Three decisions shape it.
-//!
-//! **The default identity is built in, not stored.** [`Agent::builtin`] is a
-//! constant, so every session resolves to an identity even on a fresh install
-//! and even for the sessions written before this phase existed — those carry no
-//! `agent_id`, and [`AgentStore::resolve`] answers `None` with the built-in
-//! one. Seeding it as a row instead would make it deletable, and deleting it
-//! would strand every session that never chose anything else. It is
-//! deliberately not editable either: it *is* the pre-Phase-12 behaviour, named.
-//! An identity you want to shape is one you create.
-//!
-//! **The tool allow-list is a list of names, validated against the registry.**
-//! The same strings the policy table keys on and the audit log records
-//! ([`tools::registry`](crate::tools::registry)), so an identity cannot be
-//! granted a tool that does not exist, and one grant cannot mean two things.
-//! The list is stored in registry order rather than the order it was typed, so
-//! the schemas the model sees stay in the order the registry chose.
-//!
-//! **Instructions are capped, and the cap is the point.** The system prompt
-//! stays a policy summary plus what is true right now (PLAN 7.1, *System
-//! prompt*). An identity may say what it is for; it may not carry a runbook.
-//! Recurring procedure is a skill — a versioned `SKILL.md` the runner loads
-//! only when it is invoked ([`skills`](crate::skills)) — and an identity whose
-//! instructions had grown into one would be procedure paid for on every turn,
-//! whether it was needed or not.
-//!
-//! From Phase 13 the skill list is the second allow-list rather than a
-//! recorded intention: it selects, per identity, from the runbooks the library
-//! and the workspace hold. It grants no tool. What it does require is
-//! `skill_run` and `skill_return` in the tool list, because an identity that
-//! may run a runbook and cannot load one holds a grant that does nothing.
+//! * **The default is built in** ([`Agent::builtin`]): a constant, so it cannot
+//!   be deleted or edited, and pre-Phase-12 sessions resolve to it.
+//! * **Tools are registry names** ([`tools::registry`](crate::tools::registry)),
+//!   stored in registry order.
+//! * **Instructions are capped**: procedure belongs in a skill (PLAN 7.1, 7.6).
+//! * **Skills are a second allow-list** that grants no tool, and require
+//!   `skill_run` and `skill_return` in the tool list.
 
 use std::fs;
 use std::io;
@@ -58,56 +30,31 @@ use crate::tools;
 /// Name of the document under the application-data directory.
 const AGENTS_FILE: &str = "agents.json";
 
-/// Schema version of [`AgentsFile`].
-///
-/// Its own version, independent of the project and session documents: the three
-/// change at very different rates, and a migration to one has no business
-/// quarantining the others.
+/// Schema version of [`AgentsFile`], independent of the other documents.
 const SCHEMA_VERSION: u32 = 1;
 
-/// The identity a session runs as when it named none.
-///
-/// Reserved: no stored agent carries it, so resolving this id is unambiguous
-/// whatever is in the document.
+/// The identity a session runs as when it named none. Reserved: no stored
+/// agent carries it.
 pub const DEFAULT_AGENT_ID: &str = "default";
 
-/// The only provider binding this build can resolve.
-///
-/// The MVP has one OpenAI-compatible provider, configured in Settings
-/// (`AGENTS.md`). An identity still *names* the provider it wants rather than
-/// inheriting a global, because that is the seam a roster lands in later
-/// (PLAN 7.1, *Provider*): adding providers then means adding ids and settings
-/// rows, not teaching the turn loop about agents.
+/// The only provider binding this build resolves: the one in Settings. Named
+/// per identity so a provider roster can land later (PLAN 7.1).
 pub const DEFAULT_PROVIDER_ID: &str = "default";
 
 /// Longest identity name.
 const NAME_MAX_CHARS: usize = 48;
 
-/// Longest role line.
-///
-/// One line, because a role is what a picker shows beside the name. Anything
-/// that needs a paragraph is instructions.
+/// Longest role line, shown beside the name in pickers.
 const ROLE_MAX_CHARS: usize = 160;
 
-/// Longest instruction block.
-///
-/// See the module note: a ceiling on identity, not a budget for procedure.
-/// Everything above it is a skill (PLAN 7.6).
+/// Longest instruction block; procedure beyond it is a skill (PLAN 7.6).
 const INSTRUCTIONS_MAX_CHARS: usize = 2000;
 
 /// Most skills one identity may be granted.
 const SKILLS_MAX: usize = 64;
 
-/// Most scheduled runs one identity may make in a day.
-///
-/// The per-agent half of "budget per agent and per routine" (`COS.md`), and the
-/// reason it lives on the identity rather than on the routines: a rotten role
-/// is a role, not one clock. Three routines that each behave within their own
-/// budget can still add up to an identity spending the night writing, and the
-/// ceiling that catches that is the one a person set on *who* is doing it.
-///
-/// It counts scheduled runs only. A person typing is not budgeted — the person
-/// is the budget.
+/// Most scheduled runs one identity may make in a day, across all its routines
+/// (`COS.md`). Interactive turns are not counted.
 pub const AGENT_RUNS_PER_DAY_MAX: u32 = 200;
 
 /// What a new identity's daily ceiling starts at.
@@ -127,36 +74,18 @@ pub struct Agent {
     pub name: String,
     /// What this identity is for, in one line.
     pub role: String,
-    /// What it carries into the system message of every request it makes.
-    ///
-    /// Empty for the built-in identity, which is what keeps a default session's
-    /// prompt exactly what it was before identities existed.
+    /// What it carries into every system message; empty for the built-in one.
     pub instructions: String,
     /// Which provider answers for it. [`DEFAULT_PROVIDER_ID`] today.
     pub provider_id: String,
-    /// The tools it may call, in registry order.
-    ///
-    /// The allow-list in both directions: the model is shown only these
-    /// schemas, and policy refuses anything outside the list even when the
-    /// model asks for it anyway.
+    /// The tools it may call, in registry order: the only schemas shown, and
+    /// policy refuses the rest.
     pub tools: Vec<String>,
-    /// The skills it may run (PLAN 7.3, Phase 13).
-    ///
-    /// The per-agent scope of `COS.md` *Skills*: not a directory, but a
-    /// selection from the runbooks the library and the workspace hold. It
-    /// never widens [`Agent::tools`] — a skill sequences tools, it does not
-    /// grant them, and a run whose runbook calls a tool this identity lacks is
-    /// refused before its first step.
-    ///
-    /// Empty for the built-in identity, which is what it was before this phase
-    /// and stays: a skill is always something someone granted.
+    /// The skills it may run (Phase 13). Never widens [`Agent::tools`]; empty
+    /// for the built-in identity.
     pub skills: Vec<String>,
-    /// Most scheduled runs it may make in a day (PLAN 7.3, Phase 16).
-    ///
-    /// Counted across every routine that fires as this identity, and spent
-    /// before a run opens a session. Zero is an identity nothing may schedule,
-    /// which is a real thing to want: a Chief of Staff you talk to and never
-    /// put on a clock.
+    /// Most scheduled runs it may make in a day (Phase 16); zero means never
+    /// scheduled.
     pub runs_per_day: u32,
     /// Whether this is the built-in identity, which cannot be edited or
     /// deleted. Derived, never stored.
@@ -164,12 +93,8 @@ pub struct Agent {
 }
 
 impl Agent {
-    /// The identity every session resolves to when it named none.
-    ///
-    /// Every registered tool, no instructions, no skills: the single implicit
-    /// assistant of Phases 5–11, written down. A session created before this
-    /// phase behaves identically under it, which is what makes the migration a
-    /// no-op rather than a change of behaviour nobody asked for.
+    /// The identity a session resolves to when it named none: every registered
+    /// tool, no instructions, no skills — the pre-Phase-12 assistant.
     pub fn builtin() -> Self {
         Self {
             id: DEFAULT_AGENT_ID.to_owned(),
@@ -190,14 +115,8 @@ impl Agent {
         }
     }
 
-    /// The identity a session names that the document no longer holds.
-    ///
-    /// Only reachable by hand-editing `agents.json`, since deleting an identity
-    /// that sessions are bound to is refused. The answer still matters, and it
-    /// is deliberately the *narrow* one: no tools at all. Falling back to the
-    /// built-in identity would widen a session's privileges because a file was
-    /// damaged, which is the wrong direction for a gate to fail in. The session
-    /// still opens and still talks; it simply cannot act.
+    /// The identity for a session whose agent is missing (hand-edited file):
+    /// no tools at all, so damage never widens privileges.
     pub fn stranded(id: &str) -> Self {
         Self {
             id: id.to_owned(),
@@ -217,24 +136,13 @@ impl Agent {
         self.tools.iter().any(|granted| granted == tool)
     }
 
-    /// Whether this identity may run `skill`.
-    ///
-    /// Deliberately not "the built-in identity may run everything", which is
-    /// how the tool list behaves for it. The built-in identity *is* the
-    /// assistant of Phases 5–11 written down, and that assistant had no skills
-    /// because there were none; handing it every runbook the moment one
-    /// appears would change what the default identity means under the sessions
-    /// already using it. An identity you want to run skills is one you make.
+    /// Whether this identity may run `skill`. The built-in identity runs none.
     pub fn allows_skill(&self, skill: &str) -> bool {
         self.skills.iter().any(|granted| granted == skill)
     }
 }
 
 /// What a create or an update carries.
-///
-/// One struct rather than six command arguments: the fields are all strings and
-/// lists of strings, and a call site that transposed `name` and `role` would
-/// still compile.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct AgentDraft {
@@ -252,11 +160,8 @@ pub struct AgentDraft {
     /// The runbooks it may run. Requires `skill_run` and `skill_return` in
     /// [`AgentDraft::tools`] when it is not empty.
     pub skills: Vec<String>,
-    /// Most scheduled runs a day, capped at [`AGENT_RUNS_PER_DAY_MAX`].
-    ///
-    /// `#[serde(default)]` so a caller written before Phase 16 — and the
-    /// tests that were — still send a valid draft; the default is the same
-    /// ceiling a new identity gets.
+    /// Most scheduled runs a day, capped at [`AGENT_RUNS_PER_DAY_MAX`];
+    /// defaulted for older callers.
     #[serde(default = "default_runs_per_day")]
     pub runs_per_day: u32,
 }
@@ -277,10 +182,7 @@ struct AgentsFile {
     agents: Vec<StoredAgent>,
 }
 
-/// An identity as persisted.
-///
-/// Deliberately not [`Agent`]: `builtin` is derived, and keeping the two types
-/// apart makes it impossible to persist a row claiming to be the built-in one.
+/// An identity as persisted: not [`Agent`], so no row can claim `builtin`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredAgent {
     id: String,
@@ -321,12 +223,8 @@ impl StoredAgent {
 // Store
 // ---------------------------------------------------------------------------
 
-/// The agent store: the identities on disk, plus the built-in one that is not.
-///
-/// Same shape as the project and session stores — one mutex over the whole
-/// list, written out on every mutation — and for the same reason: at this size
-/// "what is on disk" always equals "what is in memory" once a call returns,
-/// with no flush to forget.
+/// The agent store: stored identities plus the built-in constant. One mutex,
+/// written out on every mutation.
 #[derive(Debug)]
 pub struct AgentStore {
     path: PathBuf,
@@ -334,12 +232,8 @@ pub struct AgentStore {
 }
 
 impl AgentStore {
-    /// Loads the store from `data_dir`.
-    ///
-    /// Never fails, for the reason the other stores do not: a tray app that
-    /// will not boot cannot explain why it did not. A damaged document costs
-    /// the identities in it, not the app — the built-in one is a constant, so
-    /// every session still resolves to something.
+    /// Loads the store from `data_dir`. Never fails: a damaged document starts
+    /// empty, and the built-in identity remains.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(AGENTS_FILE);
 
@@ -380,22 +274,14 @@ impl AgentStore {
         }
     }
 
-    /// Locks the list, recovering from a poisoned mutex.
-    ///
-    /// Same reasoning as the other stores: the guarded value is a `Vec` only
-    /// ever replaced wholesale, so it cannot be torn, and propagating a panic
-    /// through every later command is strictly worse.
+    /// Locks the list, recovering from poison: it cannot be left torn.
     fn agents(&self) -> MutexGuard<'_, Vec<StoredAgent>> {
         self.agents
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Every identity: the built-in one first, then the rest by name.
-    ///
-    /// The built-in one leads because it is what a new session gets by default,
-    /// and a picker whose first row is not the default is one that makes people
-    /// choose something they did not mean to.
+    /// Every identity: the built-in default first, then the rest by name.
     pub fn list(&self) -> Vec<Agent> {
         let agents = self.agents();
 
@@ -417,13 +303,8 @@ impl AgentStore {
         Ok(Self::find(&agents, id)?.to_agent())
     }
 
-    /// The identity a session runs as, whatever state the document is in.
-    ///
-    /// Infallible on purpose: this is called on the way into a turn, and a turn
-    /// that would not start because an identity is missing is a session that
-    /// can no longer be talked to at all. `None` — every session written before
-    /// this phase — is the built-in identity; an id nothing answers is
-    /// [`Agent::stranded`], which can talk and cannot act.
+    /// The identity a session runs as. Infallible: `None` is the built-in
+    /// identity, an unknown id is [`Agent::stranded`] (talks, cannot act).
     pub fn resolve(&self, agent_id: Option<&str>) -> Agent {
         match agent_id {
             None | Some(DEFAULT_AGENT_ID) => Agent::builtin(),
@@ -452,12 +333,8 @@ impl AgentStore {
         Ok(created)
     }
 
-    /// Whether an identity already answers to `name`, the built-in one included.
-    ///
-    /// The comparison [`Valid::check`] refuses a duplicate on — trimmed and
-    /// case-insensitive — so a roster that asks this first and a create that
-    /// would collide can never disagree about what "already exists" means
-    /// (PLAN 7.14, *Existing names are skipped, never widened*).
+    /// Whether an identity already answers to `name` (trimmed,
+    /// case-insensitive, as [`Valid::check`] compares; PLAN 7.14).
     pub fn name_taken(&self, name: &str) -> bool {
         let name = name.trim();
         Agent::builtin().name.eq_ignore_ascii_case(name)
@@ -469,14 +346,8 @@ impl AgentStore {
 
     /// Whether each draft would be accepted, as if they were created in order.
     ///
-    /// One answer per draft, and every draft is judged: a roster preview has to
-    /// say what is wrong with the third identity even when the first is fine.
-    /// Earlier drafts count against later ones, so two rows with one name in a
-    /// batch are caught here rather than on the second write.
-    ///
-    /// An accepted draft comes back the way it would be stored — trimmed, tools
-    /// in registry order, skills deduplicated — so a preview drawn from it shows
-    /// the allow-lists the row will actually hold, not the order they were typed.
+    /// One answer per draft; earlier drafts count against later ones. Accepted
+    /// drafts come back normalized as they would be stored.
     pub fn check_all(&self, drafts: &[AgentDraft]) -> Vec<AppResult<AgentDraft>> {
         let mut scratch = self.agents().clone();
         let stamp = now();
@@ -492,12 +363,8 @@ impl AgentStore {
             .collect()
     }
 
-    /// Creates every draft, or none of them (PLAN 7.14).
-    ///
-    /// Validated as a batch under one lock and written once. A roster applied
-    /// halfway — a Chief with nobody to route to because the Reviewer after it
-    /// was refused — is a cabinet nobody signed, so the first refusal leaves the
-    /// document exactly as it was.
+    /// Creates every draft or none (PLAN 7.14), validated under one lock and
+    /// written once.
     pub fn create_all(&self, drafts: &[AgentDraft]) -> AppResult<Vec<Agent>> {
         let mut agents = self.agents();
         let mut next = agents.clone();
@@ -520,12 +387,8 @@ impl AgentStore {
         Ok(created)
     }
 
-    /// Replaces an identity's fields.
-    ///
-    /// The id is kept, so the sessions bound to it stay bound: editing what a
-    /// "reviewer" is must not silently give its sessions a different identity.
-    /// The built-in one is refused — it is the pre-Phase-12 behaviour written
-    /// down, and an editable default is one whose meaning drifts.
+    /// Replaces an identity's fields, keeping its id. Refused for the built-in
+    /// identity.
     pub fn update(&self, id: &str, draft: &AgentDraft) -> AppResult<Agent> {
         if id == DEFAULT_AGENT_ID {
             return Err(AppError::AgentBuiltin { action: "edited" });
@@ -550,11 +413,8 @@ impl AgentStore {
         Ok(updated)
     }
 
-    /// Deletes an identity.
-    ///
-    /// Whether anything still runs as it is not this store's question — it
-    /// cannot see the session document — so that check lives in
-    /// [`AppState::delete_agent`](crate::AppState::delete_agent), which can.
+    /// Deletes an identity. Usage checks live in
+    /// [`AppState::delete_agent`](crate::AppState::delete_agent).
     pub fn delete(&self, id: &str) -> AppResult<()> {
         if id == DEFAULT_AGENT_ID {
             return Err(AppError::AgentBuiltin { action: "deleted" });
@@ -589,9 +449,6 @@ impl AgentStore {
     }
 
     /// Serializes the list and replaces the document atomically.
-    ///
-    /// Takes the guard, so the only way to reach it is to already hold the
-    /// lock: a caller cannot mutate the list and forget to persist it.
     fn save(&self, agents: &[StoredAgent]) -> AppResult<()> {
         let file = AgentsFile {
             version: SCHEMA_VERSION,
@@ -621,11 +478,7 @@ impl AgentStore {
 // Validation
 // ---------------------------------------------------------------------------
 
-/// A draft that has been checked, with every field in the form it is stored in.
-///
-/// A separate type rather than validating in place, so that at the point of
-/// writing there is no way to confuse a field that was checked with one that
-/// was merely trimmed: everything in here has passed.
+/// A checked draft, every field in stored form.
 struct Valid {
     name: String,
     role: String,
@@ -666,14 +519,8 @@ impl Valid {
         }
     }
 
-    /// Checks a draft against the identities already on file.
-    ///
-    /// `editing` is the id being updated, excluded from the name-collision
-    /// check: saving a form without renaming it must not collide with itself.
-    ///
-    /// Every message is written for someone correcting what they just typed —
-    /// it says what is wrong *and* what a working value looks like, because a
-    /// validator that only says "invalid" leaves the user guessing.
+    /// Checks a draft against the identities on file; `editing` is excluded
+    /// from the name check. Messages say what a working value looks like.
     fn check(draft: &AgentDraft, agents: &[StoredAgent], editing: Option<&str>) -> AppResult<Self> {
         let name = draft.name.trim();
         if name.is_empty() {
@@ -757,16 +604,9 @@ impl Valid {
                 tools.push((*name).to_owned());
             }
         }
-        // Then the connectors' tools, in the order the form sent them
-        // (PLAN 7.3, Phase 18). Checked for *shape* and not for existence, the
-        // way a skill name is: a connector can be stopped, reconnected or
-        // installed on another machine, and an allow-list that dropped a grant
-        // because a process was down would silently narrow what somebody wrote
-        // — and silently widen it again when the file was next saved with the
-        // connector up. What holds is the other half: the model is only ever
-        // offered tools that are connected
-        // ([`Catalog::schemas_for`](crate::mcp::Catalog::schemas_for)), and
-        // policy refuses a name nothing answers to.
+        // Then connector tools (Phase 18), checked for shape, not existence: a
+        // connector may be down. Only connected tools are offered
+        // ([`Catalog::schemas_for`](crate::mcp::Catalog::schemas_for)).
         for granted in &draft.tools {
             if tools.iter().any(|known| known == granted) {
                 continue;
@@ -814,12 +654,8 @@ impl Valid {
             });
         }
 
-        // Granting a runbook to an identity that cannot load one is a grant
-        // that does nothing, and a form that saved it would be a form that
-        // lies. Refused rather than quietly widened: an allow-list that grows
-        // on its own is the one thing an allow-list must not do. The panel
-        // ticks both boxes when a skill is typed, so this is the enforcement
-        // behind an affordance rather than a wall in front of the user.
+        // Skills without `skill_run`/`skill_return` are refused, never
+        // auto-added; the panel ticks both for the user.
         if !skills.is_empty() {
             if let Some(missing) = [tool::SKILL_RUN, tool::SKILL_RETURN]
                 .iter()

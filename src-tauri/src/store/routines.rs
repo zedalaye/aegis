@@ -1,42 +1,16 @@
 //! The routine document: `routines.json` (PLAN 7.3, Phase 16).
 //!
-//! A routine is a clock — or a folder being touched — bound to one skill, one
-//! identity and one project. Nothing here runs anything: this module is the
-//! data, the way [`agents`](super::agents) is the data behind an identity. What
-//! fires it is [`schedule`](crate::schedule), and what it fires is an ordinary
-//! session under the ordinary turn loop.
+//! A routine binds a schedule (or a watched folder) to one skill, identity and
+//! project. This is data only; [`schedule`](crate::schedule) fires it.
 //!
-//! Four decisions shape it.
-//!
-//! **A routine names a skill, and carries no prompt.** There is deliberately no
-//! text field a person could type an instruction into. "Never automate a
-//! still-fuzzy workflow" (`COS.md` *Skills*) is not a warning label here, it is
-//! the absence of a place to put one: a routine is a runbook's name, and a
-//! runbook is seven headings somebody wrote down and ran under watch. Putting a
-//! chat on a clock is not something this document can express.
-//!
-//! **The standing approvals are part of the record.** A run nobody is watching
-//! cannot raise a dialog, so what it may do beyond reading is exactly the list
-//! of [`Grant`]s a person signed when they saved the routine — the same grants
-//! the approval dialog creates when somebody answers *allow for this session*,
-//! stored rather than remembered, and scoped to this routine's runs alone.
-//! Whether that list is allowed to hold a given grant is not this module's
-//! question: [`schedule::check`](crate::schedule::check) answers it against the
-//! runbook's declared tools and the identity's allow-list.
-//!
-//! **The budget is spend, so it is persisted.** How many runs a routine has
-//! left today survives a restart, because a scheduler that forgot its ledger
-//! when the process died would be a scheduler with no ceiling at all. It is
-//! kept as a date plus a count rather than a list of stamps: the question is
-//! "how many today", and a log that answered it would be a second audit log.
-//!
-//! **Everything derived is derived.** Whether the skill is still granted,
-//! whether the project's folder is still there, whether the identity still
-//! exists — all of that is measured when somebody asks
-//! ([`Routine::problem`]), never stored. It is the property [`store`](super)
-//! holds all of its documents to, and routines are where it matters most: a
-//! stored "this is fine" is what would let a clock keep firing at a runbook
-//! nobody may run any more.
+//! * **No prompt field**: a routine names a runbook, so a fuzzy workflow has
+//!   nowhere to hide (`COS.md` *Skills*).
+//! * **Standing approvals are stored**: the [`Grant`]s a person signed are all
+//!   an unattended run may do beyond reading;
+//!   [`schedule::check`](crate::schedule::check) bounds them.
+//! * **The daily budget is persisted** as a date plus a count, so a restart
+//!   does not reset it.
+//! * **Problems are derived** ([`Routine::problem`]), never stored.
 
 use std::fs;
 use std::io;
@@ -60,77 +34,46 @@ const SCHEMA_VERSION: u32 = 1;
 /// Longest routine name.
 const NAME_MAX_CHARS: usize = 48;
 
-/// Shortest interval a routine may fire on.
-///
-/// Not a performance ceiling — a routine costs nothing while it is not running
-/// — but a floor under *unattended* work. A routine firing every minute is a
-/// runaway nobody is watching, and the shortest thing worth putting on this
-/// harness's clock is measured in hours.
+/// Shortest interval a routine may fire on: a floor against unattended
+/// runaways.
 pub const EVERY_MIN_MINUTES: u32 = 5;
 
-/// Longest interval, in minutes: a day.
-///
-/// Anything longer is a date rather than an interval, and [`Schedule::DailyAt`]
-/// says a time of day without drifting by the length of each run.
+/// Longest interval, in minutes: a day. Use [`Schedule::DailyAt`] beyond that.
 pub const EVERY_MAX_MINUTES: u32 = 24 * 60;
 
 /// Most runs one routine may make in a day, whatever its schedule says.
 pub const RUNS_PER_DAY_MAX: u32 = 96;
 
-/// Consecutive failures after which a routine pauses itself.
-///
-/// Two, the same as the handoff bus allows attempts (PLAN 7.3, Phase 15), and
-/// for the same reason: escalate after two failures, not twelve creative
-/// attempts. A routine that has failed twice running is failing for a reason a
-/// person has to look at, and a clock that kept firing would bury that reason
-/// under a hundred identical rows.
+/// Consecutive silent runs after which a routine pauses itself — two, like the
+/// handoff bus's attempts (Phase 15).
 pub const FAILURES_BEFORE_PAUSE: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // IPC payloads
 // ---------------------------------------------------------------------------
 
-/// When a routine fires.
-///
-/// Three shapes, and the third is the "or a trigger" of PLAN 7.3, Phase 16. It
-/// is deliberately the *only* trigger: the sources of truth a routine would
-/// really like to watch — mail, a ticket queue, a pull request — arrive as MCP
-/// connectors in Phase 18, and a trigger invented here for one of them would be
-/// a domain inside the runtime (PLAN 7.5). A folder in the workspace is the one
-/// thing this process can already see change.
+/// When a routine fires. A watched folder is the only trigger; anything
+/// domain-specific belongs in connectors (PLAN 7.5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
 pub enum Schedule {
-    /// Every so many minutes, counted from the last run.
-    ///
-    /// From the last run rather than from a fixed grid: a run that takes four
-    /// minutes should not be followed immediately by the next one, and a
-    /// machine that was asleep should not wake up owing eleven of them.
+    /// Every so many minutes, counted from the last run (no backlog after
+    /// sleep).
     Every {
         /// Minutes between runs, from [`EVERY_MIN_MINUTES`] to
         /// [`EVERY_MAX_MINUTES`].
         minutes: u32,
     },
-    /// Once a day, at a time of day.
-    ///
-    /// Local time, because a person who writes `07:00` means the seven o'clock
-    /// they will be awake for. The wall clock is what is stored, so the routine
-    /// keeps its meaning across a daylight-saving change instead of sliding by
-    /// an hour.
+    /// Once a day at a local wall-clock time, stable across daylight saving.
     DailyAt {
         /// Hour of the local day, 0–23.
         hour: u32,
         /// Minute, 0–59.
         minute: u32,
     },
-    /// When anything under a directory in the workspace changes.
-    ///
-    /// Polled, not watched: the scheduler already wakes on a timer, and a
-    /// filesystem watcher would be a dependency and a thread for a question one
-    /// bounded directory walk answers. What it compares is the newest
-    /// modification time under the directory against the newest it last saw —
-    /// so a file added or rewritten fires it, and a file merely read does not.
+    /// When anything under a workspace directory changes. Polled on the
+    /// scheduler tick by comparing the newest modification time.
     OnChange {
         /// The directory, relative to the workspace root: `briefs`, `inbox`.
         dir: String,
@@ -152,13 +95,7 @@ impl Schedule {
     }
 }
 
-/// How a run ended, as the routine list draws it.
-///
-/// The first three are the statuses a `skill_return` carries (`COS.md`
-/// *Handoff*), which is the whole vocabulary a finished run has. The fourth is
-/// what the runtime saw when there was no return at all — a separate value
-/// rather than a fourth status, because a `blocked` is an answer and a silence
-/// is not (PLAN 7.3, Phase 15, *When nobody answers*).
+/// How a run ended: the three `skill_return` statuses, or no return at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -174,13 +111,8 @@ pub enum RunOutcome {
 }
 
 impl RunOutcome {
-    /// Whether this counts against [`FAILURES_BEFORE_PAUSE`].
-    ///
-    /// Only a silence does. A runbook that reports it is blocked has done its
-    /// job — the source was missing and it said so rather than inventing one
-    /// (`COS.md` *Skills*, heading seven) — and pausing a watch routine because
-    /// the thing it watches has not moved would be the harness arguing with the
-    /// world.
+    /// Whether this counts against [`FAILURES_BEFORE_PAUSE`]: only silence;
+    /// `blocked` is a valid answer.
     pub const fn is_failure(self) -> bool {
         matches!(self, Self::Failed)
     }
@@ -200,11 +132,7 @@ impl RunOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct LastRun {
-    /// When it started, RFC3339, UTC.
-    ///
-    /// The start rather than the end, because it is also what the next fire is
-    /// counted from: a run that took ten minutes must not be followed by one
-    /// starting the moment it finishes.
+    /// When it started, RFC3339 UTC; intervals count from here.
     pub at: String,
     /// The session it ran in, so the transcript is one click away.
     pub session_id: String,
@@ -241,23 +169,13 @@ pub struct Routine {
     pub paused: bool,
     /// Why it was stopped, when the scheduler stopped it rather than a person.
     pub paused_reason: String,
-    /// When it started counting.
-    ///
-    /// Set when the routine is created, and again whenever its schedule changes
-    /// or somebody un-pauses it. Windows before it do not fire: a routine saved
-    /// at three in the afternoon and set to run at seven does not immediately
-    /// decide it is late (see [`crate::schedule::due`]).
+    /// When it started counting: set on create, schedule change and un-pause.
+    /// Earlier windows never fire ([`crate::schedule::due`]).
     pub armed_at: String,
     /// What became of the last run, if it has run.
     pub last: Option<LastRun>,
-    /// Why this routine cannot fire as it stands.
-    ///
-    /// Derived, never stored — the property [`store`](super) holds every
-    /// document to, and the one that matters most here. A skill that was
-    /// un-granted, a folder that was unplugged, an identity that was deleted:
-    /// all facts about *right now*, and a stored copy of any of them is exactly
-    /// what would let a clock keep firing at a runbook nobody may run. Filled
-    /// by [`crate::schedule::inspect`].
+    /// Why this routine cannot fire now; derived by
+    /// [`crate::schedule::inspect`], never stored.
     pub problem: Option<String>,
     /// RFC3339, UTC.
     pub created_at: String,
@@ -297,11 +215,7 @@ struct RoutinesFile {
     routines: Vec<StoredRoutine>,
 }
 
-/// A routine as persisted.
-///
-/// Deliberately not [`Routine`]: `problem` is derived, and keeping the two
-/// types apart makes it impossible to write down an answer to a question that
-/// has to be asked again every time.
+/// A routine as persisted: not [`Routine`], so `problem` cannot be stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredRoutine {
     id: String,
@@ -327,12 +241,7 @@ struct StoredRoutine {
     failures: u32,
     armed_at: String,
     /// The newest modification time seen under a [`Schedule::OnChange`]
-    /// directory, RFC3339, UTC.
-    ///
-    /// Empty until the first look, which is also why a routine watching a
-    /// folder full of old files does not fire the moment it is saved: the first
-    /// tick records the watermark, and only something newer than it is a
-    /// change.
+    /// directory, RFC3339 UTC. Empty until the first look, which only records.
     #[serde(default)]
     seen: String,
     #[serde(default)]
@@ -353,10 +262,7 @@ impl StoredRoutine {
             schedule: self.schedule.clone(),
             grants: self.grants.clone(),
             runs_per_day: self.runs_per_day,
-            // A count from yesterday is not this routine's count today. The
-            // reset happens on read as well as on write, so a routine that has
-            // not fired since last week reads zero rather than whatever it last
-            // spent.
+            // Reset on read too: yesterday's count is not today's.
             runs_today: if self.day == today {
                 self.runs_today
             } else {
@@ -377,13 +283,7 @@ impl StoredRoutine {
 // Store
 // ---------------------------------------------------------------------------
 
-/// The routine store.
-///
-/// Same shape as the other documents — one mutex over the whole list, written
-/// out on every mutation — and for the same reason: at this size "what is on
-/// disk" always equals "what is in memory" once a call returns, with no flush
-/// to forget. It matters more here than elsewhere, because the process holding
-/// the ledger is the one that would otherwise spend the same budget twice.
+/// The routine store: one mutex over the list, written out on every mutation.
 #[derive(Debug)]
 pub struct RoutineStore {
     path: PathBuf,
@@ -391,12 +291,8 @@ pub struct RoutineStore {
 }
 
 impl RoutineStore {
-    /// Loads the store from `data_dir`.
-    ///
-    /// Never fails, for the reason the other stores do not: a tray app that
-    /// will not boot cannot explain why it did not. A damaged document costs
-    /// the routines in it — nothing fires, and the panel is empty — rather than
-    /// the app.
+    /// Loads the store from `data_dir`. Never fails: a damaged document starts
+    /// empty.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(ROUTINES_FILE);
 
@@ -464,12 +360,8 @@ impl RoutineStore {
         Ok(Self::find(&routines, id)?.to_routine(&today))
     }
 
-    /// How many routines name this identity.
-    ///
-    /// Read by [`AppState::delete_agent`](crate::AppState::delete_agent): an
-    /// identity a clock still fires as is one whose deletion would leave a
-    /// routine pointing at nothing, and a refusal somebody can act on is a
-    /// better answer than a routine that silently stops.
+    /// How many routines name this identity, for
+    /// [`AppState::delete_agent`](crate::AppState::delete_agent).
     pub fn count_for_agent(&self, agent_id: &str) -> usize {
         self.routines()
             .iter()
@@ -477,12 +369,8 @@ impl RoutineStore {
             .count()
     }
 
-    /// Creates a routine.
-    ///
-    /// Shape only: whether the skill is live, granted and already run under
-    /// watch is [`schedule::check`](crate::schedule::check)'s question, because
-    /// answering it needs the catalog, the identity and the audit log, none of
-    /// which this document can see.
+    /// Creates a routine, checking shape only; the door is
+    /// [`schedule::check`](crate::schedule::check).
     pub fn create(&self, draft: &RoutineDraft) -> AppResult<Routine> {
         let mut routines = self.routines();
         let valid = Valid::check(draft, &routines, None)?;
@@ -518,12 +406,8 @@ impl RoutineStore {
         Ok(created)
     }
 
-    /// Replaces a routine's fields.
-    ///
-    /// Re-arms it when the schedule changed, and only then: editing a name must
-    /// not move the next fire, and moving a routine from seven o'clock to eight
-    /// must not leave it thinking it is an hour late. Today's spend is kept for
-    /// the same reason — an edit is not a new day.
+    /// Replaces a routine's fields, re-arming only if the schedule changed and
+    /// keeping today's spend.
     pub fn update(&self, id: &str, draft: &RoutineDraft) -> AppResult<Routine> {
         let mut routines = self.routines();
         let valid = Valid::check(draft, &routines, Some(id))?;
@@ -552,12 +436,8 @@ impl RoutineStore {
         Ok(updated)
     }
 
-    /// Stops or restarts the clock.
-    ///
-    /// Un-pausing re-arms. A routine stopped for a fortnight is not owed a
-    /// fortnight of runs, and the missed-window rule ([`crate::schedule::due`])
-    /// would otherwise fire it once immediately for a window nobody was there
-    /// for.
+    /// Pauses or resumes; resuming re-arms, so no missed window fires
+    /// ([`crate::schedule::due`]).
     pub fn set_paused(&self, id: &str, paused: bool) -> AppResult<Routine> {
         let today = today();
         let mut routines = self.routines();
@@ -592,11 +472,7 @@ impl RoutineStore {
         Ok(())
     }
 
-    /// Deletes every routine of a project, and says how many went.
-    ///
-    /// Called when the project goes, the way its sessions do: a routine whose
-    /// workspace no longer exists is a clock with nowhere to run, and leaving
-    /// it on file would leave the panel listing work that can never happen.
+    /// Deletes every routine of a forgotten project, returning how many went.
     pub fn delete_for_project(&self, project_id: &str) -> AppResult<usize> {
         let mut routines = self.routines();
 
@@ -612,17 +488,9 @@ impl RoutineStore {
         Ok(removed)
     }
 
-    /// Charges one run against the budget and stamps the routine as running.
-    ///
-    /// Fails when the budget is spent, and *that check is here* on purpose: the
-    /// count and the decision to spend it have to happen under one lock, or two
-    /// ticks could each read "one left" and both fire. It is also why the
-    /// charge happens before a session is opened rather than after — a budget
-    /// checked and then spent is a budget two runs can pass.
-    ///
-    /// The session is not known yet, so the stamp carries none;
-    /// [`RoutineStore::end_run`] fills it in. A row that reads *running* with
-    /// no session for a second or two is honest — there is no session yet.
+    /// Charges one run and stamps the routine as running, failing when the
+    /// budget is spent. Check and spend share one lock, before any session
+    /// opens; [`RoutineStore::end_run`] adds the session.
     pub fn begin_run(&self, id: &str) -> AppResult<Routine> {
         let today = today();
         let mut routines = self.routines();
@@ -657,13 +525,8 @@ impl RoutineStore {
         Ok(updated)
     }
 
-    /// Records how a run ended, pausing the routine if that was the second
-    /// silence running.
-    ///
-    /// `session_id` is empty for a run that failed before it had one — a folder
-    /// that was unplugged, an identity that was deleted between the tick and
-    /// the fire. The row then says what happened with nothing to click through
-    /// to, which is the truth about it.
+    /// Records how a run ended, pausing after the second silence in a row.
+    /// `session_id` is empty for a run that failed before opening one.
     pub fn end_run(
         &self,
         id: &str,
@@ -722,10 +585,8 @@ impl RoutineStore {
             .map(|routine| routine.seen.clone())
     }
 
-    /// Records a new watermark for a [`Schedule::OnChange`] routine.
-    ///
-    /// Best effort: one that could not be written costs a second look on the
-    /// next tick, not a wrong decision.
+    /// Records a new watermark for a [`Schedule::OnChange`] routine. Best
+    /// effort.
     pub fn mark_seen(&self, id: &str, stamp: &str) {
         let mut routines = self.routines();
         let Ok(stored) = Self::find_mut(&mut routines, id) else {
@@ -740,12 +601,8 @@ impl RoutineStore {
         }
     }
 
-    /// How many runs this identity's routines have made today, all told.
-    ///
-    /// The per-agent half of "budget per agent and per routine" (`COS.md`).
-    /// Summed rather than counted separately, because the number that matters
-    /// is what the ledgers add up to, and a second counter beside them would be
-    /// a second thing to keep in step.
+    /// Runs this identity's routines made today, summed from their ledgers
+    /// (the per-agent budget, `COS.md`).
     pub fn runs_today_for_agent(&self, agent_id: &str) -> u32 {
         let today = today();
         self.routines()
@@ -775,9 +632,6 @@ impl RoutineStore {
     }
 
     /// Serializes the list and replaces the document atomically.
-    ///
-    /// Takes the guard, so the only way to reach it is to already hold the
-    /// lock: a caller cannot mutate the list and forget to persist it.
     fn save(&self, routines: &[StoredRoutine]) -> AppResult<()> {
         let file = RoutinesFile {
             version: SCHEMA_VERSION,
@@ -803,13 +657,8 @@ impl RoutineStore {
     }
 }
 
-/// Today, UTC, as `2026-09-01`.
-///
-/// UTC rather than local, because it is what the timestamps beside it are, and
-/// a ledger whose day rolled over at a different moment from the stamps it
-/// records would be one nobody could reconcile. The cost is a budget that
-/// resets mid-evening in some time zones, which is the right thing to be wrong
-/// about: a daily cap is a ceiling, not an appointment.
+/// Today, UTC, as `2026-09-01` — matching the stamps, even if the budget then
+/// resets mid-evening locally.
 fn today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
@@ -830,12 +679,8 @@ struct Valid {
 }
 
 impl Valid {
-    /// Checks a draft's shape against the routines already on file.
-    ///
-    /// Everything here is about the *record*: a name somebody can find in a
-    /// list, an interval that is not a runaway, a budget with a ceiling. What
-    /// the routine is allowed to fire, and what its runs may do, is checked a
-    /// layer up where the catalog and the identity are in scope.
+    /// Checks a draft's shape (name, interval, budget) against the routines on
+    /// file; permissions are checked a layer up.
     fn check(
         draft: &RoutineDraft,
         routines: &[StoredRoutine],
@@ -966,11 +811,7 @@ fn check_schedule(schedule: &Schedule) -> AppResult<Schedule> {
                         .to_owned(),
                 });
             }
-            // Containment is judged when the routine fires, against the
-            // workspace it fires in, by the resolver every tool call already
-            // goes through. What is refused here is only the shape nobody could
-            // have meant: a parent hop reads like an escape whether or not it
-            // resolves to one.
+            // Containment is checked at fire time; here only `..` is refused.
             if dir.split(['/', '\\']).any(|part| part == "..") {
                 return Err(AppError::Routine {
                     field: "schedule",

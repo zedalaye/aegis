@@ -1,34 +1,16 @@
 //! The execution host: which operating system `shell_exec` lands in
 //! (PLAN 7.12).
 //!
-//! The UI host and the tool host are not the same OS on a Windows operator
-//! whose software projects live in a WSL distribution. Opening the code folder
-//! is already the workspace — `fs_*` sees those files over UNC (`\\wsl$\…`), or
-//! under `C:\` mounted at `/mnt/c` — but `shell_exec` spawns through
-//! `CreateProcess`, which is the *Windows* toolchain. It is not the `git`, the
-//! `docker` or the test runner the repository is actually built with.
+//! On Windows, a project may name a WSL distribution so `shell_exec` runs its
+//! commands there (the repository's real toolchain) instead of through
+//! `CreateProcess`. Only commands move; the runtime does the `wsl.exe`
+//! wrapping.
 //!
-//! So a project may name an execution host, and exactly one thing changes: a
-//! command is run inside that distribution instead of on Windows. Not a second
-//! Aegis, not a second agent loop, not a Linux VM this process manages, and not
-//! a tool the model calls — `wsl.exe` is never a `program` anybody asks for.
-//! Wrapping is the runtime's, the same way launching a `.cmd` shim through
-//! `cmd.exe` is the runtime's.
-//!
-//! Three rules hold the shape:
-//!
-//! * **A project has no host by default.** Picking a folder is not consent, and
-//!   auto-detecting WSL from a `\\wsl$\` path would make it one. A finance or
-//!   watch workspace never gets a distribution.
-//! * **The filesystem tools do not move.** Containment is still the
-//!   Windows-canonical workspace, `fs_read` of a file in that folder still goes
-//!   through Windows, and a capture is still *this* display. There is no second
-//!   filesystem here — only a second way to spell the same one.
-//! * **Silence is forbidden.** A missing distribution, a `wsl.exe` that is not
-//!   there, a working directory the distribution cannot see: each fails before
-//!   anything is spawned, with [`ErrorCode::ExecHost`]. Quietly running the
-//!   command on Windows instead would be running it on the wrong operating
-//!   system, which is the one outcome worse than not running it at all.
+//! * **No host by default**, and never inferred from a `\\wsl$\` path.
+//! * **Filesystem tools do not move**: containment stays the Windows-canonical
+//!   workspace.
+//! * **Never silent**: a missing distribution, `wsl.exe` or path fails before
+//!   spawning with [`ErrorCode::ExecHost`], never falling back to Windows.
 //!
 //! [`ErrorCode::ExecHost`]: crate::error::ErrorCode::ExecHost
 
@@ -37,11 +19,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Where a project's commands run.
-///
-/// `Option<ExecHost>` is the whole type: `None` — an absent field on disk — is
-/// this process, which is what every project had before this slice and what
-/// every project still has until somebody says otherwise.
+/// Where a project's commands run; stored as `Option<ExecHost>`, `None` being
+/// this computer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -53,11 +32,7 @@ pub enum ExecHost {
     },
 }
 
-/// One choice on the picker.
-///
-/// Deliberately not `Option<ExecHost>`: a list of hosts has to be able to say
-/// "this computer" as a row like any other, and a `null` in an array is not a
-/// row somebody can click.
+/// One choice on the picker, where "this computer" is a row of its own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -73,10 +48,8 @@ pub enum ExecHostOption {
 
 /// Where one command will actually land, once policy has resolved it.
 ///
-/// Built by the decision table, carried on the resolved call, drawn by the
-/// approval dialog and read by the tool — one value, so the distribution and
-/// the working directory the user *read* are the ones that are *run*, with no
-/// second translation anywhere to disagree with the first.
+/// Built by policy and used by both the dialog and the tool, so what the user
+/// reads is what runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ExecTarget {
@@ -88,9 +61,7 @@ pub struct ExecTarget {
 
 /// Whether this build can offer a WSL host at all.
 ///
-/// A Linux or macOS build refuses one rather than ignoring it: a project record
-/// carrying a host that silently does nothing is a project whose commands run
-/// somewhere other than where it says they do.
+/// Non-Windows builds refuse a host rather than ignore it.
 pub const fn supported() -> bool {
     cfg!(windows)
 }
@@ -101,9 +72,7 @@ pub const fn supported() -> bool {
 
 /// The distributions `wsl.exe -l -q` can see, plus this computer.
 ///
-/// Asked rather than remembered. Distributions are installed and removed by the
-/// operator in a terminal, and a picker confidently listing one that was
-/// uninstalled last week is worse than a picker that takes 150 ms.
+/// Queried each time, never cached.
 pub async fn options() -> Vec<ExecHostOption> {
     let mut out = vec![ExecHostOption::Host];
     for distro in installed().await {
@@ -114,9 +83,7 @@ pub async fn options() -> Vec<ExecHostOption> {
 
 /// The names `wsl.exe -l -q` prints, in its own order.
 ///
-/// Empty on any platform without WSL, and empty when `wsl.exe` is absent or
-/// answers with nothing — in each case the picker offers this computer alone,
-/// which is the truth.
+/// Empty without WSL or when `wsl.exe` answers nothing.
 #[cfg(windows)]
 pub async fn installed() -> Vec<String> {
     let Some(wsl) = wsl_exe() else {
@@ -153,14 +120,8 @@ pub async fn installed() -> Vec<String> {
 
 /// One line of whatever `wsl.exe` said about itself.
 ///
-/// `wsl.exe` writes its own diagnostics as UTF-16LE — "There is no distribution
-/// with the supplied name", and the error code beside it — while the program it
-/// runs writes ordinary bytes. Which of the two a pipe holds is worth deciding
-/// rather than assuming, because reading UTF-16 as UTF-8 gives a string with a
-/// NUL between every letter and reading the reverse gives mojibake.
-///
-/// The test is the NULs: text from a Western locale in UTF-16LE has one in
-/// every second byte, and UTF-8 never contains one at all.
+/// `wsl.exe`'s own messages are UTF-16LE, the program's output is not; NUL
+/// bytes (never valid UTF-8 text) tell them apart.
 pub(crate) fn message(bytes: &[u8]) -> String {
     let nuls = bytes.iter().skip(1).step_by(2).filter(|b| **b == 0).count();
     let looks_wide = bytes.len() >= 4 && bytes.len() % 2 == 0 && nuls * 2 > bytes.len() / 2;
@@ -196,10 +157,7 @@ fn utf16_lines(bytes: &[u8]) -> Vec<String> {
 
 /// Where `wsl.exe` is, when it is anywhere.
 ///
-/// PATH first, then `%SystemRoot%\System32` — because a GUI-launched
-/// application can inherit a PATH that a shell would not recognise, and the
-/// System32 copy is the one Windows itself installs. The `WindowsApps` alias
-/// beside it is a reparse point that resolves to the same binary.
+/// PATH first, then `%SystemRoot%\System32`, since a GUI app's PATH may differ.
 #[cfg(windows)]
 pub fn wsl_exe() -> Option<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -223,33 +181,8 @@ pub fn wsl_exe() -> Option<PathBuf> {
 // Paths
 // ---------------------------------------------------------------------------
 
-/// The same folder, spelled the way the distribution spells it.
-///
-/// Two rules, which between them cover every path a Windows workspace can
-/// actually have:
-///
-/// * `\\wsl$\Ubuntu\home\p\proj` and `\\wsl.localhost\Ubuntu\home\p\proj` are
-///   the distribution's own filesystem seen from Windows, so the answer is what
-///   is left after the share name: `/home/p/proj`. A UNC naming *another*
-///   distribution is refused rather than translated — `\\wsl$\Debian\…` is not
-///   a path Ubuntu has.
-/// * `C:\work\proj` is a Windows volume, which WSL automounts at
-///   `/mnt/c/work/proj`.
-///
-/// This is `wslpath -a -u`'s answer without the round trip, and the comparison
-/// is deliberate: the automount root is `/mnt` unless somebody has set
-/// `automount.root` in `/etc/wsl.conf`, and a translation that is wrong for
-/// that reason does not go unnoticed — the caller probes the directory inside
-/// the distribution before it spawns anything, so a path that is not there is a
-/// refusal rather than a command that quietly ran somewhere else.
-///
-/// `Err` carries a sentence for the person reading the approval dialog, not a
-/// parser's complaint.
-/// A path in its ordinary Windows spelling, verbatim prefixes removed.
-///
-/// Verbatim prefixes should never reach here — every workspace is canonicalized
-/// through `dunce` — but a path that arrived another way (a `canonicalize` on a
-/// UNC share hands back `\\?\UNC\…`) is better understood than refused.
+/// A path in its ordinary Windows spelling: verbatim prefixes (`\\?\UNC\…`)
+/// removed, separators normalized.
 fn plain(text: &str) -> String {
     text.strip_prefix(r"\\?\UNC\")
         .map(|rest| format!(r"\\{rest}"))
@@ -262,23 +195,8 @@ fn plain(text: &str) -> String {
 
 /// The distribution whose filesystem this path is in, when it is in one.
 ///
-/// The inverse of [`linux_path`], and it exists for one purpose: making the
-/// right row of the picker *findable*. A folder opened at
-/// `\\wsl$\Ubuntu\home\…` is unambiguously inside `Ubuntu`, and a picker that
-/// knows it can say so.
-///
-/// What it must never become is the host itself. PLAN 7.12 is explicit —
-/// *auto-detecting WSL from a `\\wsl$\` path and flipping the host (picking a
-/// folder is not consent)* — and the reasoning survives contact with this
-/// function: the inference only catches one of the two spellings, since
-/// `C:\work\proj` is just as reachable from the distribution at
-/// `/mnt/c/work/proj` and just as likely to be built with its toolchain. A
-/// picker that fired by itself for one and not the other would be harder to
-/// understand than one that never does. So this returns a *fact about the
-/// path*, and what is done with it is a click.
-///
-/// `None` for every ordinary path, which is nearly all of them: a drive letter,
-/// a share that is not WSL's, or anything that is not a UNC path at all.
+/// The inverse of [`linux_path`], used only to point the picker at the right
+/// row — never to set the host (PLAN 7.12). `None` for non-WSL paths.
 pub fn distro_of(path: &Path) -> Option<String> {
     let rest = plain(path.to_str()?);
     let rest = rest.strip_prefix(r"\\")?;
@@ -295,6 +213,14 @@ pub fn distro_of(path: &Path) -> Option<String> {
     (!named.is_empty()).then(|| named.to_owned())
 }
 
+/// The same folder as the distribution spells it, like `wslpath -a -u`:
+///
+/// * `\\wsl$\Ubuntu\home\p\proj` (or `\\wsl.localhost\…`) → `/home/p/proj`;
+///   another distribution's share is refused;
+/// * `C:\work\proj` → `/mnt/c/work/proj` (assumes the default automount root;
+///   the caller probes the directory before spawning).
+///
+/// `Err` is a sentence for the approval dialog.
 pub fn linux_path(distro: &str, path: &Path) -> Result<String, String> {
     let Some(text) = path.to_str() else {
         return Err(format!(
@@ -362,10 +288,7 @@ fn joined(rest: &str) -> String {
 
 /// The paragraph the system message carries when a project has a host.
 ///
-/// Said rather than discovered. A model that has not been told will reach for
-/// `pnpm.cmd`, pass a `C:\` path as an argument, and spend a round working out
-/// why `git` cannot see the repository — and the answer to each is one sentence
-/// that costs nothing to include.
+/// Saves the model rounds spent on `pnpm.cmd` or `C:\` arguments.
 pub fn prompt_block(host: &ExecHost, workspace: Option<&Path>) -> String {
     let ExecHost::Wsl { distro } = host;
 
@@ -412,10 +335,7 @@ mod tests {
         }
     }
 
-    /// An ordinary folder is in no distribution, and that includes the one a
-    /// distribution can still reach: `C:\work` is mounted at `/mnt/c/work`, and
-    /// calling it "inside Ubuntu" would make the picker fire for one spelling
-    /// of the same situation and not the other.
+    /// A drive path is in no distribution, even though WSL can reach it.
     #[test]
     fn an_ordinary_path_names_none() {
         for spelling in [

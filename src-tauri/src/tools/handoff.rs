@@ -183,7 +183,10 @@ pub fn report_schema() -> Value {
             "evidence": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "What backs the claim — a test that passed, a diff, a capture, or                                 simply the file you read. Required for a `done` that names no                                 artefacts: a done pointing at nothing is refused, because nobody                                 can check it afterwards.",
+                "description": "What backs the claim — a test that passed, a diff, a capture, or \
+                                simply the file you read. Required for a `done` that names no \
+                                artefacts: a done pointing at nothing is refused, because nobody \
+                                can check it afterwards.",
             },
             "open_questions": {
                 "type": "array",

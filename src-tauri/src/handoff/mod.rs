@@ -12,48 +12,16 @@
 //! return_format:
 //! ```
 //!
-//! Phase 13 needed only the right-hand column, because a skill declares "what
-//! to return (strict format — a handoff result)" and the runner validates
-//! against that declaration. Phase 15 adds the left: [`Brief`] is what a Chief
-//! of Staff hands a specialist instead of a conversation to read, and [`bus`]
-//! is what carries it. The report was written to the shape above rather than
-//! to what one skill happened to need, which is why nothing in it had to
-//! change when the other half arrived.
+//! [`Brief`] (left, Phase 15) goes out through [`bus`]; [`Report`] (right,
+//! Phase 13) comes back from a skill or a delegated run. One module, because a
+//! brief's `return_format` and a report's `next_owner` are one contract.
 //!
-//! Both halves live in one module because they are one contract: a brief's
-//! `return_format` is a promise about the report, and a report's `next_owner`
-//! is the beginning of the next brief. Split, the two would drift, and the
-//! drift would be silent.
+//! Validation is structural, not a quality judgement (PLAN 7.6):
 //!
-//! ## What "validate" can honestly mean here
-//!
-//! Nothing here judges whether work was done well; that is the human's job, or
-//! a verifier's (PLAN 7.6, *Verifier is a skill*). What it can do is refuse the
-//! objects that are structurally not what they claim to be.
-//!
-//! On the way **out** ([`check_brief`]) there is one rule with real value, and
-//! it is `COS.md`'s own: *inputs are paths and links, never a copy-pasted
-//! thread*. A brief whose inputs carry pasted prose is the failure the whole
-//! shape exists to prevent — it is how a CoS's context ends up inside a
-//! specialist's, and then inside the next one's. It is also cheap to detect,
-//! because a path has no line breaks in it and is not four hundred characters
-//! long. The rest are caps and required fields: a brief with no definition of
-//! done is not a brief, it is a topic.
-//!
-//! On the way **back** ([`check`]) there are three:
-//!
-//! * **`done` pointing at an artefact that is not on disk.** The commonest
-//!   failure of a model asked to produce a file is to describe having produced
-//!   one. Checking the path costs a `metadata` call and turns that from a
-//!   plausible paragraph into a refusal the model can act on.
-//! * **`done` pointing at nothing at all.** Fan-in is cheap because every
-//!   return names what came of it; a `done` with neither an artefact nor a
-//!   piece of evidence is a claim, and Phase 17 could not replay it.
-//! * **`blocked` or `needs_you` with no question.** Escalation with nothing to
-//!   answer is a dead end for whoever it lands on.
-//!
-//! Everything else is a cap, and the caps are `COS.md`'s own — a summary is
-//! five lines, not a transcript.
+//! * **Out** ([`check_brief`]): inputs must be paths or links, never pasted
+//!   prose; required fields and caps.
+//! * **Back** ([`check`]): a `done` must name an existing artefact or some
+//!   evidence; `blocked` / `needs_you` must carry a question; `COS.md`'s caps.
 
 pub mod bus;
 pub mod runner;
@@ -69,11 +37,7 @@ use ts_rs::TS;
 // Out: the brief
 // ---------------------------------------------------------------------------
 
-/// How soon a brief wants attention.
-///
-/// Three words and no number. A scale of ten is a scale nobody calibrates, and
-/// what the field is for is the order a board is read in — which of these is
-/// waiting on a person, and which can sit.
+/// How soon a brief wants attention: three words, not an uncalibrated number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -99,10 +63,8 @@ impl Priority {
 
 /// What the brief asks to come back (`COS.md`: `status | artefact | question`).
 ///
-/// It does not change the shape of the [`Report`] — every return is a report,
-/// which is what makes fan-in cheap. What it changes is what a *complete* one
-/// looks like, and the owner is told which was asked for so it can tell the
-/// difference between "say what you found" and "produce the file".
+/// Every return is still a [`Report`]; this changes what a complete one must
+/// contain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -125,14 +87,8 @@ impl ReturnFormat {
         }
     }
 
-    /// What this asks of the owner, said to the owner.
-    ///
-    /// Each of the three ends by naming what a `done` has to point at, because
-    /// that is the rule an owner most often discovers by being refused: a
-    /// `done` with neither an artefact nor a piece of evidence does not pass
-    /// [`check`], and being told so afterwards costs a whole round. It is
-    /// spelled out hardest for `Status`, which is where it is least obvious —
-    /// nothing is expected on disk, so `evidence` is the only thing left.
+    /// What this asks of the owner, ending with what a `done` must point at so
+    /// [`check`] does not cost a round.
     pub const fn expectation(self) -> &'static str {
         match self {
             Self::Status => {
@@ -162,26 +118,13 @@ pub const GOAL_MAX_CHARS: usize = 400;
 /// Most entries in `inputs` or in `constraints`.
 pub const BRIEF_LIST_MAX: usize = 12;
 
-/// Longest one input or one constraint.
-///
-/// An input is a path or a URL. This is generous for both and far short of a
-/// paragraph, which is the point: it is the cap that makes "inputs are paths,
-/// not paste" enforceable rather than advisory.
+/// Longest one input or constraint: room for a path or URL, not a paragraph.
 pub const BRIEF_ENTRY_MAX_CHARS: usize = 240;
 
 /// A delegation, as it goes out (`COS.md` *Handoff*).
 ///
-/// Everything the owner is given, and deliberately nothing else. There is no
-/// field here for the conversation the CoS has been having, and that absence is
-/// the design: an owner that could be handed a transcript would be handed one
-/// every time, and by the third delegation the whole team would be paying for
-/// one agent's context window.
-///
-/// `owner` is an identity — a name or an id from the agent registry — because
-/// the perimeter a piece of work runs under is the point of there being
-/// identities at all (`COS.md` *Roles*: one agent, one perimeter). It is
-/// resolved by [`bus`], not here: this module knows the shape of a brief and
-/// nothing about who exists.
+/// Everything the owner is given — deliberately no transcript. `owner` is an
+/// identity name or id, resolved by [`bus`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Brief {
     /// What is to be achieved, in a line or two.
@@ -196,30 +139,15 @@ pub struct Brief {
     pub constraints: Vec<String>,
     /// How the owner can tell it is finished.
     pub definition_of_done: String,
-    /// What in this is expected to stop and ask a human.
-    ///
-    /// It grants nothing and it withholds nothing: every step is gated by the
-    /// policy matrix whatever this says (`COS.md` *Skills*: a skill cannot
-    /// auto-grant, and neither can a brief). What it does is tell the owner
-    /// which parts of the job will stop, so it plans for the stop rather than
-    /// discovering it four steps in.
+    /// What is expected to stop for a human. Informational: it grants nothing.
     pub approval_needed: String,
     /// What kind of return is expected.
     pub return_format: ReturnFormat,
 }
 
-/// The delegated run a turn *is*, and where its return lands.
-///
-/// A cell, not a state machine, and local to one turn: the runner creates it,
-/// the turn loop lends it to every tool call, `handoff_return` fills it, and
-/// the runner reads it once the turn is over. Nothing here survives the turn,
-/// which is the same scope a skill run has and for the same reason — a run that
-/// is still "open" after the turn that opened it would put a delegation's name
-/// on work nobody delegated.
-///
-/// The mutex is not contention: a turn runs its tool calls one at a time
-/// (`Turn::execute`). It is there because the cell is reached through a shared
-/// reference from inside a tool, which is where the answer arrives.
+/// The delegated run a turn *is*, and where its return lands: a per-turn cell
+/// the runner creates, `handoff_return` fills, and the runner reads after. The
+/// mutex only gives interior mutability.
 #[derive(Debug)]
 pub struct Open {
     /// The delegation this run belongs to. Reaches every audit line it writes.
@@ -242,20 +170,12 @@ impl Open {
         &self.id
     }
 
-    /// Records the return. The last accepted one wins.
-    ///
-    /// A second `handoff_return` in the same turn is a model correcting itself,
-    /// which is exactly what it should do when the first was refused — and by
-    /// the time one gets here it has already passed [`check`].
+    /// Records an accepted return; the last one wins.
     pub fn close(&self, report: Report) {
         *self.lock() = Some(report);
     }
 
-    /// Whether this run has answered.
-    ///
-    /// Read by the turn loop after every round: a brief that has been returned
-    /// is a turn with nothing left to do, and letting it run on would spend
-    /// rounds after the answer.
+    /// Whether this run has answered; the turn loop stops once it has.
     pub fn closed(&self) -> bool {
         self.lock().is_some()
     }
@@ -265,11 +185,7 @@ impl Open {
         self.lock().take()
     }
 
-    /// Locks the cell, recovering from a poisoned mutex.
-    ///
-    /// The guarded value is one `Option` replaced whole, so it cannot be torn,
-    /// and losing a delegation because a tool call panicked elsewhere would be
-    /// a worse answer than carrying on with it.
+    /// Locks the cell, recovering from poison: it cannot be left torn.
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Report>> {
         self.returned
             .lock()
@@ -277,13 +193,8 @@ impl Open {
     }
 }
 
-/// One delegation, as it was asked for: who gets what, and who checks it.
-///
-/// A type rather than two arguments, because they travel together everywhere —
-/// through the parser, the approval dialog, the tool and the bus — and because
-/// the review is not a fifth brief. It is the fan-in (`COS.md` *Loop*), it runs
-/// after the others and only if something came back, and a `Vec` that happened
-/// to have the reviewer last would lose that.
+/// One delegation: the briefs, and the separate review that fans in after them
+/// if anything came back (`COS.md` *Loop*).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     /// The briefs that go out together.
@@ -294,10 +205,8 @@ pub struct Plan {
 
 /// Judges a brief, and renders the one the owner will be handed.
 ///
-/// `Ok` carries the brief as text in `COS.md`'s shape: that is what is written
-/// into `.aegis/briefs/` and what opens the owner's session, so a delegation always
-/// reads the same way however it was typed. `Err` is written for the model that
-/// produced it, because that is who has to produce the next one.
+/// `Ok` is the brief rendered in `COS.md`'s shape (filed and used to open the
+/// owner's session); `Err` is written for the model to fix it.
 pub fn check_brief(brief: &Brief) -> Result<String, String> {
     let goal = brief.goal.trim();
     if goal.is_empty() {
@@ -343,11 +252,8 @@ pub fn check_brief(brief: &Brief) -> Result<String, String> {
     Ok(render_brief(brief, goal, done))
 }
 
-/// Checks `inputs`, which is the field the whole shape turns on.
-///
-/// The two rules are one rule: an input is a path or a link. Anything with a
-/// line break in it, or longer than a long path, is prose — and prose in
-/// `inputs` is the pasted thread `COS.md` forbids by name.
+/// Checks `inputs` are paths or links: a line break or excessive length means
+/// pasted prose.
 fn check_inputs(values: &[String]) -> Result<(), String> {
     for value in values {
         if value.contains('\n') {
@@ -388,11 +294,7 @@ fn brief_entries(field: &str, values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The brief, in the shape `COS.md` writes it.
-///
-/// Rendered rather than serialized as JSON, for the reason a report is: this
-/// text opens the owner's session and is written into `.aegis/briefs/` for a person to
-/// read, and the `COS.md` block is the form both of them already know.
+/// The brief rendered in `COS.md`'s shape, readable by the owner and a person.
 fn render_brief(brief: &Brief, goal: &str, done: &str) -> String {
     let mut out = String::new();
 
@@ -422,11 +324,8 @@ fn render_brief(brief: &Brief, goal: &str, done: &str) -> String {
 // Back: the report
 // ---------------------------------------------------------------------------
 
-/// How a delegated run — or a skill run — ended (`COS.md` *Handoff*).
-///
-/// Three states and no fourth. "Partly done" is `needs_you` with the rest in
-/// `open_questions`; a runner that offered a fourth would be offering a place
-/// to put work nobody then picks up.
+/// How a delegated or skill run ended (`COS.md` *Handoff*). "Partly done" is
+/// `needs_you` with open questions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -453,10 +352,7 @@ impl Status {
 /// Most lines a summary may have (`COS.md`: "five lines max").
 pub const SUMMARY_MAX_LINES: usize = 5;
 
-/// Most characters a summary may have.
-///
-/// The line cap alone would let one line be a novel. This is the other half of
-/// the same rule: the CoS aggregates status, not histories.
+/// Most characters a summary may have, alongside the line cap.
 pub const SUMMARY_MAX_CHARS: usize = 800;
 
 /// Most entries in any one of the lists.
@@ -468,13 +364,8 @@ pub const ENTRY_MAX_CHARS: usize = 240;
 /// Longest `next_owner`.
 const OWNER_MAX_CHARS: usize = 64;
 
-/// One artefact the run produced.
-///
-/// Two forms of the same path: the one the model wrote, which is what a
-/// message quotes back, and the resolved one, which is what gets checked. They
-/// are kept together because reporting the resolved absolute path in a refusal
-/// would answer a question the model did not ask — it named a relative path,
-/// and the refusal should be about that.
+/// One artefact the run produced: the path as written (quoted in messages) and
+/// as resolved (checked).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artefact {
     /// The path as the model wrote it.
@@ -485,10 +376,7 @@ pub struct Artefact {
 
 /// A return as the model wrote it, before policy has resolved anything.
 ///
-/// The un-contained half of [`Report`]: `artefacts` are still the strings that
-/// arrived. It exists because the resolution belongs to policy — a tool never
-/// sees the path the model sent (see [`policy`](crate::policy)) — and a single
-/// type carrying both forms would let a caller read whichever one suited it.
+/// `artefacts` are still raw strings; [`policy`](crate::policy) resolves them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draft {
     /// How the run ended.
@@ -524,12 +412,8 @@ pub struct Report {
 
 /// Judges a return, and renders the one the runtime will record.
 ///
-/// `Ok` carries the normalized report as text: that is what goes back to the
-/// model as the tool's content and what a later fan-in reads, so a returned
-/// object always looks the same however it was typed. `Err` is a message
-/// written for the model — it says which rule was broken and what a return
-/// that passes looks like, because the model is the one that has to produce
-/// the next attempt.
+/// `Ok` is the normalized report text (tool content, read at fan-in); `Err`
+/// names the broken rule and what would pass.
 pub fn check(report: &Report) -> Result<String, String> {
     let summary = report.summary.trim();
     if summary.is_empty() {
@@ -640,10 +524,7 @@ fn entries<'a>(field: &str, values: impl Iterator<Item = &'a str>) -> Result<(),
 
 /// The accepted return, in the shape `COS.md` writes it.
 ///
-/// Rendered rather than echoed as JSON: this text is read by the model on the
-/// next round, and by a person in the transcript, and the `COS.md` block is
-/// the form both of them already know. Empty lists are printed as `—` rather
-/// than dropped, so a reader can tell "nothing" from "not part of this shape".
+/// Empty lists print as `—`, so "nothing" differs from "missing".
 pub(crate) fn render(report: &Report, summary: &str) -> String {
     let mut out = String::new();
 
@@ -817,10 +698,8 @@ mod tests {
         assert!(rendered.contains("approval_needed: —"), "{rendered}");
     }
 
-    /// Every format names the rule an owner otherwise learns by being refused:
-    /// a `done` has to point at an artefact or at a piece of evidence. Found
-    /// the hard way — two live specialists returned `{status: done, summary}`
-    /// with neither, spent a round on the refusal, and corrected.
+    /// Every format states that a `done` needs an artefact or evidence (live
+    /// specialists kept missing it).
     #[test]
     fn every_return_format_says_what_a_done_has_to_point_at() {
         for format in [

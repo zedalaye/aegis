@@ -1,69 +1,24 @@
 //! The tool registry: declaration, schema export, dispatch and the envelope.
 //!
-//! A tool is declared exactly once, as a [`ToolSpec`]. Its name is the same
-//! constant the policy table keys on and the audit log records, so a tool's
-//! schema, its dispatch and its permission row cannot drift apart — the thing
-//! that would otherwise let a tool exist that nothing gates (PLAN 4.1).
-//!
-//! The shape of the pipeline is:
-//!
 //! ```text
 //! model args ──▶ policy::decide ──▶ ResolvedCall ──▶ tools::run ──▶ ToolResult
 //!                      │                                  │
-//!                      └── AskRequest (Phase 6)           └── one audit line
+//!                      └── AskRequest                     └── one audit line
 //! ```
 //!
-//! Two things follow from where the arrow starts. A tool never sees the
-//! strings the model sent: it takes a [`ResolvedCall`], whose paths policy
-//! already resolved and judged, so "policy checked one path and the tool
-//! opened another" is not a state this code can reach. And every exit from
-//! [`run`] writes exactly one audit line, because the audit call is here, in
-//! the one function every tool goes through, rather than in each tool.
+//! A tool is declared once, as a [`ToolSpec`] whose name is the constant the
+//! policy table and the audit log key on (PLAN 4.1), so nothing can exist that
+//! nothing gates. Tools take a [`ResolvedCall`], never the model's strings, and
+//! every exit from [`run`] writes exactly one audit line. The envelope is one
+//! shape for success and failure (PLAN 4.3); a denial is an ordinary result.
 //!
-//! The envelope is PLAN 4.3: one shape for success and failure alike, so the
-//! model never has to guess which it got. A denial is an ordinary envelope
-//! with `ok: false` and `E_DENIED`, not an exception — the model reads it,
-//! explains itself and tries something else, and the turn keeps going.
+//! Connector tools (Phase 18) are not declared here but join the same `tools`
+//! array ([`schemas_for`]), the same policy and the same audit line: there is no
+//! built-in-versus-MCP branch (PLAN 7.1).
 //!
-//! Since Phase 18 the registry has a second half it does not declare. An
-//! external connector's tools are named by the server that offers them, so
-//! they cannot be a `ToolSpec` in this file — but they are in the same `tools`
-//! array the model reads ([`schemas_for`]), they go through the same
-//! [`policy::decide`](crate::policy::decide), and they leave the same audit
-//! line. There is no "built-in versus MCP" branch anywhere below, which is
-//! PLAN 7.1's constraint on this module, stated as the absence of code.
-//!
-//! Every tool the MVP names is here: `fs_list`, `fs_read`, `fs_write`,
-//! `shell_exec` and, since Phase 9, `screen_capture`; since Phase 13,
-//! `skill_run` and `skill_return` beside them; since Phase 14, `memory_write`
-//! and `memory_search`; since Phase 15, `handoff_delegate` and
-//! `handoff_return`. The registry and the decision table are the same list,
-//! which is what makes "a tool nothing gates" a thing this code cannot express
-//! — and it is why the skill, memory and handoff tools are entries here rather
-//! than channels of their own. A skill is not a tool, a memory is not a tool
-//! and a delegation is not a tool, but *asking for a runbook*, *remembering
-//! something* and *handing work to someone* are verbs like any other, and
-//! putting any of them anywhere else would mean a second dispatch path with a
-//! second place to remember the audit line.
-//!
-//! Not everything registered here reaches outside this process. `skill_run`
-//! reads a runbook, `skill_return` and `handoff_return` validate a report,
-//! `memory_search` scans a small document, and `memory_write` appends to one.
-//! Two of those six ask the user, and in neither case is the reason where the
-//! call reaches. A memory is in the system message of every later turn, which
-//! makes it durable and invisible at the time. A delegation starts other
-//! identities working, which is the one decision `COS.md` reserves for the
-//! human — who does what — even though every step any of them then takes comes
-//! back through this same table.
-//!
-//! [`run`] is `async` because of the two tools that reach outside this process.
-//! The filesystem tools are short, local and synchronous, and are called
-//! inline. A child process is none of those, and it has to be awaited inside
-//! the same cancellation as the turn or a two-minute command would be a
-//! two-minute stall with a Stop button that does nothing. A capture is quick
-//! but it is a round trip to the window server — and on a compositor that
-//! shows its own consent prompt, a round trip through a person — so it goes to
-//! a blocking thread rather than parking a runtime worker on it.
+//! [`run`] is `async` for the calls that leave the process or wait: a command
+//! (awaited inside the turn's cancellation), a capture (on a blocking thread),
+//! a delegation and a connector call.
 
 pub mod connector;
 pub mod fs;
@@ -115,27 +70,14 @@ pub enum Stream {
     Stderr,
 }
 
-/// Where a running tool's output goes while it is still running.
-///
-/// Only `shell_exec` produces any: a file is read in one call, but a command
-/// can take two minutes, and a progress pane that only fills in at the end is
-/// indistinguishable from a hang.
-///
-/// The tool hands over text; the runtime numbers it. That split is deliberate
-/// — `seq` is a property of the event stream, not of the child process, and a
-/// tool that assigned its own would have to know what else the turn had
-/// already emitted.
+/// Where a running tool's output goes while it runs. Only `shell_exec` produces
+/// any. The tool hands over text; the event stream numbers it.
 pub trait ProgressSink: Send + Sync {
-    /// Delivers one frame of output. Never fails, for the same reason
-    /// [`EventSink`](crate::agent::EventSink) never does: a UI that missed a
-    /// frame is cosmetic, and a command killed because a window closed is not.
+    /// Delivers one frame of output. Never fails: a missed frame is cosmetic.
     fn chunk(&self, stream: Stream, text: &str);
 }
 
-/// A [`ProgressSink`] that drops everything.
-///
-/// For a tool call with nobody watching — a test, or a future background run
-/// with no window open.
+/// A [`ProgressSink`] that drops everything, for calls nobody watches.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NullProgress;
 
@@ -147,13 +89,8 @@ impl ProgressSink for NullProgress {
 // The envelope
 // ---------------------------------------------------------------------------
 
-/// What the model sees for a tool call — every tool, every outcome (PLAN 4.3).
-///
-/// One shape rather than a success type and an error type, because the model
-/// reads this as text in a `tool` message and branching on a shape it has to
-/// recognize first is exactly the ambiguity that makes a model hallucinate a
-/// result. `ok` says which it is; `error` is present precisely when `ok` is
-/// false.
+/// What the model sees for every tool call and outcome (PLAN 4.3): one shape,
+/// with `error` present exactly when `ok` is false.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ToolResult {
     /// Whether the tool did what was asked.
@@ -164,11 +101,7 @@ pub struct ToolResult {
     pub content: String,
     /// Whether [`ToolResult::content`] is shorter than what was available.
     pub truncated: bool,
-    /// The size of the thing before truncation.
-    ///
-    /// What it counts is the tool's own: the file's size for `fs_read`, the
-    /// bytes written for `fs_write`, the rendered length of the listing for
-    /// `fs_list`. Each tool documents it.
+    /// The size before truncation, as each tool defines it.
     pub bytes: u64,
     /// Per-tool detail — an exit code, a duration, the path that was touched.
     pub meta: Value,
@@ -206,12 +139,8 @@ impl ToolResult {
         }
     }
 
-    /// A failure. `content` stays empty: there is nothing to report but the
-    /// error, and a model given both tends to read the content and ignore the
-    /// code.
-    ///
-    /// [`ToolResult::refusal`] is the same thing, reachable from outside this
-    /// module.
+    /// A failure, with empty `content` so the model reads the error.
+    /// [`ToolResult::refusal`] is the public name.
     fn failure(tool: &str, code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             ok: false,
@@ -227,20 +156,13 @@ impl ToolResult {
         }
     }
 
-    /// An envelope for a call that never ran.
-    ///
-    /// The turn loop needs this for the refusals it makes on its own account —
-    /// arguments that never parsed, a call abandoned by a cancel — which are
-    /// answered without ever reaching [`run`] and so have no audit line of
-    /// their own to carry the message.
+    /// An envelope for a call that never reached [`run`]: arguments that did
+    /// not parse, a call abandoned by a cancel.
     pub fn refusal(tool: &str, code: ErrorCode, message: impl Into<String>) -> Self {
         Self::failure(tool, code, message)
     }
 
     /// An envelope built directly, for tests of the runtime around tools.
-    ///
-    /// Only the three fields the turn loop branches on. Everything else that
-    /// wants an envelope gets one by running a tool, which is the point.
     #[cfg(test)]
     pub(crate) fn for_test(ok: bool, tool: &str, meta: Value) -> Self {
         Self {
@@ -257,43 +179,29 @@ impl ToolResult {
     /// The envelope as the JSON string that goes into a `tool` message.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| {
-            // Unreachable for this shape — every field is a plain string,
-            // number, bool or `serde_json::Value`. A model still has to
-            // receive *something* parseable if it ever happens.
+            // Unreachable for this shape; the model still gets valid JSON.
             r#"{"ok":false,"error":{"code":"E_TOOL_FAILED","message":"the result could not be rendered"}}"#
                 .to_owned()
         })
     }
 }
 
-/// What one tool call produced: the envelope, plus what the runtime around it
-/// needs.
-///
-/// The extra fields are not part of what the model sees. `summary` is the
-/// one-line result the transcript and the `tool:finished` event carry, and the
-/// byte counts are the audit log's.
+/// What one tool call produced: the envelope for the model, plus the summary
+/// and audit line the runtime needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutcome {
     /// The envelope for the model.
     pub result: ToolResult,
     /// One human line: `read src/main.rs (2.4 KB)`. Never a raw blob.
     pub summary: String,
-    /// A local image this call produced, for the transcript to show.
-    ///
-    /// Only `screen_capture` fills it. It is a path and not bytes on purpose
-    /// (PLAN 5.4): the WebView loads the file through the asset protocol,
-    /// which is scoped to the capture directory, rather than having a
-    /// megabyte of base64 pushed through the event channel.
+    /// A capture's path, for the transcript. A path, not bytes: the WebView
+    /// loads it through the scoped asset protocol (PLAN 5.4).
     pub image_path: Option<String>,
     /// The audit line that was written for this call.
     pub audit: AuditEntry,
 }
 
-/// What a tool produced before the runtime wrapped it.
-///
-/// Internal to this module and to [`fs`]: it is [`ToolOutcome`] minus
-/// everything a tool has no business knowing about — the session, the audit
-/// log, how long the call took.
+/// What a tool produced, before the runtime adds the session, audit and timing.
 pub(crate) struct Produced {
     /// The envelope.
     result: ToolResult,
@@ -303,33 +211,15 @@ pub(crate) struct Produced {
     bytes_in: u64,
     /// Bytes the call produced.
     bytes_out: u64,
-    /// What the audit line should say, when `ok` alone does not say it.
-    ///
-    /// `None` means the ordinary reading: a successful envelope is
-    /// [`Outcome::Ok`] and a failed one is [`Outcome::Error`]. The one tool
-    /// that needs more is `shell_exec`, whose command can be killed by a
-    /// cancel — that is neither a tool that failed nor one that was refused,
-    /// and the log has a word for it.
+    /// The audit outcome when `ok` does not say it: a cancelled command.
     outcome: Option<Outcome>,
-    /// The file the call left on disk, when it left one.
-    ///
-    /// Set by `screen_capture` and by nothing else so far. It reaches the
-    /// audit line and the transcript from here, which is why the tool does not
-    /// have to know about either.
+    /// The file the call left on disk (a capture).
     artifact: Option<AuditArtifact>,
-    /// The skill this call belongs to, when the call itself says which.
-    ///
-    /// Only `skill_run` sets it, and only because it is the call that *opens*
-    /// a run: nothing was running when it was made, so [`ToolCtx::skills`]
-    /// would put no name on its line and the opening of a run would be the one
-    /// event of a run that is not on the record. Every later call in the span
-    /// gets the name from the context instead.
+    /// The skill run this call opened. Set by `skill_run`, whose own line would
+    /// otherwise carry no name; later calls take it from [`ToolCtx::skills`].
     skill: Option<String>,
-    /// The delegation this call opened, when it is the call that opened one.
-    ///
-    /// Only `handoff_delegate` sets it, and for the reason `skill` is set by
-    /// `skill_run`: nothing was open when the call was made, so the id would
-    /// otherwise be missing from the one line of a delegation that starts it.
+    /// The delegation this call opened, set by `handoff_delegate` for the same
+    /// reason.
     handoff: Option<String>,
 }
 
@@ -409,14 +299,9 @@ impl Produced {
 // The registry
 // ---------------------------------------------------------------------------
 
-/// One tool, declared once.
-///
-/// `parameters` is the JSON Schema the model is given. It is deliberately
-/// stricter than what [`ToolCall::parse`](crate::policy::ToolCall::parse)
-/// accepts: the schema forbids unknown keys so a model has a clear contract to
-/// follow, while the parser ignores them so a model that adds a stray one is
-/// answered rather than stalled. Strict in the description, forgiving at the
-/// door.
+/// One tool, declared once. The schema forbids unknown keys, while
+/// [`ToolCall::parse`](crate::policy::ToolCall::parse) ignores them: strict in
+/// the contract, forgiving at the door.
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
     /// The name, shared with the policy table and the audit log.
@@ -442,10 +327,8 @@ impl ToolSpec {
     }
 }
 
-/// Every tool this build can actually run.
-///
-/// The order is the order the model sees them in, which is the order they are
-/// most likely to be needed: look, read, then change something.
+/// Every tool this build can run, in the order the model sees them: look,
+/// read, then change something.
 pub fn registry() -> &'static [ToolSpec] {
     &[
         ToolSpec {
@@ -480,7 +363,12 @@ pub fn registry() -> &'static [ToolSpec] {
         },
         ToolSpec {
             name: tool::SCREEN_CAPTURE,
-            description: "Capture the primary display and write it to a PNG outside the                           workspace. Returns the file's path, its pixel size and a SHA-256 —                           never the image, which this build cannot read back, so do not expect                           to see what was on the screen. Every capture is approved by the user                           first and holds whatever was on that display, so ask for one only                           when the user has asked to be looked at.",
+            description: "Capture the primary display and write it to a PNG outside the \
+                          workspace. Returns the file's path, its pixel size and a SHA-256 — \
+                          never the image, which this build cannot read back, so do not expect \
+                          to see what was on the screen. Every capture is approved by the user \
+                          first and holds whatever was on that display, so ask for one only \
+                          when the user has asked to be looked at.",
             parameters: screenshot::capture_schema,
         },
         ToolSpec {
@@ -553,25 +441,10 @@ pub fn schemas() -> Vec<Value> {
     registry().iter().map(ToolSpec::to_schema).collect()
 }
 
-/// The `tools` array for a model request, narrowed to one identity's
-/// allow-list (PLAN 7.3, Phase 12).
-///
-/// Filtering the *schemas* is half of what a tool ACL is. A model cannot ask
-/// for a function it was never shown, so an identity that was not granted
-/// `shell_exec` does not spend a turn discovering that it may not run one — it
-/// simply has no such tool. The other half is policy refusing the call anyway
-/// ([`decide_call`](crate::policy::decide_call)), because a transcript carries
-/// the tools of the turn that wrote it and an identity's grants can be edited
-/// between two turns.
-///
-/// Registry order is preserved rather than the allow-list's, so the order the
-/// model reads them in is the registry's regardless of how the list was typed.
-/// The connectors' tools follow, in connector order, for the same reason and
-/// because "look, read, then change something" is a claim about this build's
-/// own tools that nobody can make about somebody else's.
-///
-/// One array, not two: the model is not told which of its tools run in this
-/// process (PLAN 7.1, Tools).
+/// The `tools` array narrowed to one identity's allow-list (PLAN 7.3,
+/// Phase 12): registry order, then the connectors' tools, in one array. The
+/// model is never shown a tool it may not call, and policy still refuses one
+/// ([`decide_call`](crate::policy::decide_call)).
 pub fn schemas_for(allowed: &[String], catalog: &mcp::Catalog) -> Vec<Value> {
     let mut schemas: Vec<Value> = registry()
         .iter()
@@ -582,11 +455,8 @@ pub fn schemas_for(allowed: &[String], catalog: &mcp::Catalog) -> Vec<Value> {
     schemas
 }
 
-/// Every tool name this build can run, in registry order.
-///
-/// The vocabulary an identity's allow-list is validated against
-/// ([`store::agents`](crate::store::agents)), so a grant of a tool that does
-/// not exist is not a thing that can be stored.
+/// Every tool name this build can run: the vocabulary allow-lists are validated
+/// against ([`store::agents`](crate::store::agents)).
 pub fn names() -> Vec<&'static str> {
     registry().iter().map(|spec| spec.name).collect()
 }
@@ -600,21 +470,14 @@ pub fn spec(name: &str) -> Option<&'static ToolSpec> {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-/// Everything a tool call needs from the runtime around it.
-///
-/// The ids are the model's and the turn loop's; `args` is what the model
-/// actually sent, kept for the audit line so the log records the call as it
-/// was made rather than as policy rewrote it.
+/// Everything a tool call needs from the runtime. `args` is what the model
+/// sent, kept so the audit line records the call as it was made.
 #[derive(Clone, Copy)]
 pub struct ToolCtx<'a> {
     /// Which session made the call. Every audit line carries it.
     pub session_id: &'a str,
-    /// Which identity it was made as (PLAN 7.3, Phase 12).
-    ///
-    /// Carried for the log rather than for the call: whether the identity may
-    /// use this tool was settled by policy before anything got here, and a tool
-    /// that re-checked would be a second copy of a rule that can then disagree
-    /// with the first.
+    /// Which identity it was made as, for the log; policy already checked the
+    /// allow-list.
     pub agent_id: &'a str,
     /// Which turn within the session.
     pub turn_id: &'a str,
@@ -622,76 +485,35 @@ pub struct ToolCtx<'a> {
     pub call_id: &'a str,
     /// Where the audit line goes.
     pub audit: &'a AuditLog,
-    /// The directory captures are written to.
-    ///
-    /// Passed in rather than derived, and deliberately not part of the
-    /// resolved call: where Aegis keeps its own artefacts is a fact about the
-    /// installation, not about what the model asked for, and policy has no
-    /// opinion about a path the model never named.
+    /// Where captures are written: a fact about the installation, not the call.
     pub captures: &'a Path,
     /// The arguments as the model sent them, for the digest and the redacted
     /// copy.
     pub args: &'a Value,
     /// Where a running tool's output goes while it is still running.
     pub progress: &'a dyn ProgressSink,
-    /// The turn's cancellation token.
-    ///
-    /// A tool that can outlive a click on Stop has to hold this, or Stop
-    /// becomes a button with no effect the user can see. Only `shell_exec`
-    /// reads it today; everything else finishes faster than a person can ask
-    /// it not to.
+    /// The turn's cancellation token, so Stop ends a running command.
     pub cancel: &'a CancellationToken,
-    /// Where the skill library is, and which run is open (PLAN 7.3, Phase 13).
-    ///
-    /// Held here for the reason `captures` is: where Aegis keeps runbooks and
-    /// which identity is running are facts about the installation and the
-    /// session, not about what the model asked for. `active` is also what puts
-    /// the skill's name on *every* audit line of a run, not only the two the
-    /// skill tools make — which is what makes a run budgetable and replayable
-    /// afterwards (PLAN 7.6, *Audit names the skill*).
+    /// The skill library and the open run (Phase 13). `active` puts the
+    /// skill's name on every audit line of a run (PLAN 7.6, *Audit names the
+    /// skill*).
     pub skills: SkillCtx<'a>,
-    /// Where this identity's memories are kept (PLAN 7.3, Phase 14).
-    ///
-    /// Held here for the reason the capture directory and the skill library
-    /// are: which store the memories live in is a fact about the installation,
-    /// not about what the model asked for. Which *identity* is remembering
-    /// comes from [`ToolCtx::agent_id`], and only from there — neither memory
-    /// tool takes an identity as an argument, so an identity reading or
-    /// writing another's memories is not a call that can be made.
+    /// The memory store (Phase 14). Which identity remembers comes only from
+    /// [`ToolCtx::agent_id`].
     pub memories: &'a MemoryStore,
-    /// Who can carry a brief, and which brief this turn is answering
-    /// (PLAN 7.3, Phase 15).
-    ///
-    /// Held here for the reason the skill library is: whether this session may
-    /// route work, and whether it is itself routed work, are facts about the
-    /// application and the turn rather than about what the model asked for.
-    /// `open` is also what puts the delegation's id on *every* audit line a
-    /// specialist writes — not only the two the handoff tools make — which is
-    /// what makes one run replayable across the CoS and everyone under it
-    /// (PLAN 7.2, row 10).
+    /// The handoff bus and the brief this turn answers (Phase 15). `open` puts
+    /// the delegation id on every audit line a specialist writes (PLAN 7.2,
+    /// row 10).
     pub handoffs: HandoffCtx<'a>,
-    /// The connectors this installation is running (PLAN 7.3, Phase 18).
-    ///
-    /// Held here for the reason the capture directory and the skill library
-    /// are: which programs the operator installed is a fact about the
-    /// installation, not about what the model asked for. The catalog policy
-    /// judged against is a *snapshot* of this same roster, taken once at the
-    /// top of the turn — which is why a tool call reaches the roster and a
-    /// decision reaches the snapshot, and not the other way round.
+    /// The running connectors (Phase 18). Calls reach this roster; policy
+    /// judged a snapshot taken at the top of the turn.
     pub connectors: &'a Connectors,
-    /// The routine whose run this is, or empty (PLAN 7.3, Phase 16).
-    ///
-    /// Held here for the reason the delegation's id is: which clock started
-    /// this run is a fact about the turn, not about what the model asked for,
-    /// and it belongs on *every* audit line the run writes rather than only on
-    /// the ones a skill tool makes. It is what makes "what did the machine do
-    /// last night, and what did it cost" a question the log answers.
+    /// The routine whose run this is, or empty (Phase 16), put on every audit
+    /// line of the run.
     pub routine: &'a str,
 }
 
-// Written out rather than derived: `&dyn ProgressSink` has no `Debug`, and
-// demanding one of every sink would be a constraint on implementors for the
-// sake of one line of diagnostics.
+// By hand: `&dyn ProgressSink` has no `Debug`.
 impl fmt::Debug for ToolCtx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ToolCtx")
@@ -708,12 +530,9 @@ impl fmt::Debug for ToolCtx<'_> {
     }
 }
 
-/// A refusal, when a path policy resolved no longer resolves to itself.
-///
-/// The decision was taken when the call arrived, and the dialog may have been
-/// open for minutes since. A folder swapped for a link in between would take
-/// the call somewhere nobody approved, so the path is walked again here,
-/// immediately before the tool touches it.
+/// A refusal when a resolved path no longer resolves to itself
+/// ([`path::unchanged`](crate::policy::path::unchanged)), checked right before
+/// the tool acts.
 fn moved(tool_name: &str, path: &Path) -> Option<Produced> {
     if crate::policy::path::unchanged(path) {
         return None;
@@ -733,16 +552,9 @@ fn moved(tool_name: &str, path: &Path) -> Option<Produced> {
     ))
 }
 
-/// Runs a call that policy — or the user — has cleared, and audits it.
-///
-/// This is the only way a tool runs. `decision` and `reason` are what the
-/// audit line records about *why* it ran: `Auto` with policy's own reason for
-/// an auto-allowed call, `AllowOnce` or `AllowSession` with the reason the
-/// user was shown when they approved it.
-///
-/// Never returns an `Err`: a tool that fails produces an envelope saying so
-/// (PLAN 4.3), because the turn continues either way and the model is the one
-/// that has to react.
+/// Runs a call that policy or the user cleared, and audits it — the only way a
+/// tool runs. `decision` and `reason` record why it ran. A failure is an
+/// envelope, never an `Err` (PLAN 4.3).
 pub async fn run(
     ctx: &ToolCtx<'_>,
     decision: AuditDecision,
@@ -787,11 +599,8 @@ pub async fn run(
                 .await
             }
         },
-        // On a blocking thread, not inline: a capture is a round trip to the
-        // window server, and on a compositor that raises its own consent
-        // prompt it is a round trip through a person. Neither belongs on a
-        // runtime worker. Nothing is passed by reference, because the work
-        // outlives this stack frame.
+        // On a blocking thread: a round trip to the window server, possibly
+        // through a consent prompt.
         ResolvedCall::ScreenCapture { display } => {
             let display = display.clone();
             let dir = ctx.captures.to_path_buf();
@@ -810,29 +619,18 @@ pub async fn run(
                 }
             }
         }
-        // Neither of these reaches outside the process: one reads a runbook,
-        // the other checks a report against `COS.md`'s shape. They run inline
-        // like the filesystem tools, and for the same reason.
+        // Inside the process, inline.
         ResolvedCall::SkillRun { name } => skill::run(name, ctx.skills),
         ResolvedCall::SkillReturn { report } => skill::ret(report, ctx.skills),
-        // Also inline, and also inside this process: one appends a record to a
-        // small JSON document, the other scans it.
         ResolvedCall::MemoryWrite { kind, text, source } => {
             memory::write(ctx.memories, ctx.agent_id, *kind, text, source.as_deref())
         }
         ResolvedCall::MemorySearch { query } => memory::search(ctx.memories, ctx.agent_id, query),
-        // The one call in this table that waits on other agents. It is awaited
-        // here rather than spawned and forgotten, because the model asked a
-        // question and a tool that answered before the answer existed would be
-        // lying to it. The wait is bounded by the bus, not by this line.
+        // Awaited: the model asked a question. The bus bounds the wait.
         ResolvedCall::HandoffDelegate { plan } => {
             handoff::delegate(plan, ctx.handoffs, ctx.cancel).await
         }
         ResolvedCall::HandoffReturn { report } => handoff::ret(report, ctx.handoffs),
-        // The one call in this table that leaves the process without being a
-        // child of it. Awaited here like the handoff, and for the same reason:
-        // the model asked a question, and a tool that answered before the
-        // answer existed would be lying to it.
         ResolvedCall::Connector { name, args } => {
             connector::call(ctx.connectors, name, args, ctx.cancel).await
         }
@@ -849,18 +647,13 @@ pub async fn run(
         turn_id: ctx.turn_id,
         call_id: ctx.call_id,
         tool: name,
-        // The call's own claim first, then the run it is inside. Only
-        // `skill_run` makes one, and only for its own line: it opens the run,
-        // so nothing was active when it was judged (see `Produced::skill`).
+        // The call's own claim first (see `Produced::skill`), then the open run.
         skill: produced
             .skill
             .as_deref()
             .or(ctx.skills.active)
             .unwrap_or(""),
-        // The same reading, for the same reason: `handoff_delegate` opens a
-        // delegation, so nothing was open when its own line was written, while
-        // every call a specialist makes is inside one and takes the id from
-        // its context.
+        // Likewise for a delegation.
         handoff: produced
             .handoff
             .as_deref()
@@ -896,16 +689,9 @@ pub async fn run(
     }
 }
 
-/// Records a call that never ran, and produces the envelope the model sees.
-///
-/// Used for both kinds of refusal: policy's hard denials (PLAN 3.2), which
-/// never reach a user, and a user's `deny` on an approval. They are one code
-/// path because they are one thing to the model and one line in the log — the
-/// difference between them is `decision`, which is exactly what the log is
-/// there to record.
-///
-/// `code` is usually [`ErrorCode::Denied`]; a hard denial carries the more
-/// specific code policy chose, such as `E_PATH_OUTSIDE_WORKSPACE`.
+/// Records a call that never ran and returns its envelope: a policy hard denial
+/// (PLAN 3.2, with policy's code) or a user's `deny`. One path, told apart in
+/// the log by `decision`.
 pub fn refuse(
     ctx: &ToolCtx<'_>,
     tool_name: &str,
@@ -919,9 +705,7 @@ pub fn refuse(
         turn_id: ctx.turn_id,
         call_id: ctx.call_id,
         tool: tool_name,
-        // A refusal inside a run belongs to that run: "what did this skill try
-        // and get told no about" is exactly what a replay has to answer. The
-        // same holds for a brief.
+        // A refusal inside a run or a brief belongs to it.
         skill: ctx.skills.active.unwrap_or(""),
         handoff: ctx.handoffs.id(),
         routine: ctx.routine,
@@ -933,9 +717,7 @@ pub fn refuse(
         bytes_in: 0,
         bytes_out: 0,
         error_code: Some(code),
-        // A call that never ran wrote nothing. This is the one place that is
-        // worth stating rather than defaulting: a refusal that still carried
-        // an artefact would mean a file on disk nobody approved.
+        // A call that never ran wrote nothing.
         artifact: None,
     });
 

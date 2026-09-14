@@ -1,50 +1,17 @@
 //! Running a brief: the [`Runner`](bus::Runner) the application supplies
 //! (PLAN 7.3, Phase 15).
 //!
-//! This is the adapter between the bus's policy — parallel, bounded, two
-//! attempts, then the human — and the machinery that actually answers a brief.
-//! The machinery is the one that was already there. A delegated run is an
-//! ordinary session, bound to the owner's identity, driven by the ordinary
-//! [`Turn`] loop, judged by the ordinary policy matrix, written to the ordinary
-//! audit log.
+//! Adapts the bus's policy to the existing machinery: a delegated run is an
+//! ordinary session under the owner's own identity, [`Turn`] loop, matrix and
+//! audit log — no second loop, no borrowed grants (`COS.md` *Roles*).
 //!
-//! That is the whole design of the phase, and it is worth being explicit about
-//! what it rules out. There is no second agent loop, no worker pool and no
-//! privileged path for delegated work. A specialist writing a file raises the
-//! same dialog, under its own identity's allow-list, that the same call would
-//! raise in a session you typed into — `COS.md` *Roles*: the CoS may see state,
-//! and it may not act through somebody else's grants. Nothing here can widen an
-//! identity, because nothing here constructs one: it looks the owner up in the
-//! registry and runs as whatever is on file.
+//! [`Delegating`] does the work through [`Host`] (testable with plain stores);
+//! [`AppRunner`] builds a `Host` from the [`AppHandle`].
 //!
-//! ## Two types, and why
-//!
-//! [`Delegating`] is the work: file a brief, open a session, drive a turn, read
-//! the report out of the cell. It borrows what it needs through [`Host`], a
-//! struct of references, for the reason [`Turn`] takes one — the caller
-//! assembles it once, and it can be assembled from a running application or
-//! from a directory of stores in a test. [`AppRunner`] is the second, and it is
-//! four lines of adapter: look the state up on the [`AppHandle`] and build a
-//! `Host` from it.
-//!
-//! ## Three things worth reading the code for
-//!
-//! **The brief is a file first.** [`Delegating::file`] writes it into `.aegis/briefs/`
-//! when the workspace has one, and the run then starts from a path rather than
-//! from a paragraph (`COS.md`: inputs are paths, never paste). A workspace with
-//! no convention still works — the brief travels as the run's first message —
-//! because scaffolding is the user's choice, not the harness's (PLAN 7.3,
-//! Phase 11).
-//!
-//! **A retry is the same session continued.** [`bus`] allows two attempts; the
-//! second reuses the session the first opened, so whatever the first attempt
-//! did get written is still there. What the owner is told is that it ran out of
-//! time and that a `blocked` is a better answer than another silence.
-//!
-//! **A run that never returns is not a run that succeeded quietly.** The only
-//! way out with a report is `handoff_return`, which lands in [`handoff::Open`].
-//! A turn that ends without one is a failed attempt, and two of those are a
-//! line on the board asking the human.
+//! * The brief is filed in `.aegis/briefs/` when that exists
+//!   ([`Delegating::file`]); otherwise it travels as the first message.
+//! * A retry continues the same session.
+//! * Only `handoff_return` (landing in [`handoff::Open`]) counts as an answer.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -79,11 +46,7 @@ const SLUG_MAX_CHARS: usize = 32;
 
 /// Everything a delegated run borrows from the runtime around it.
 ///
-/// The same shape, and the same reasoning, as [`Turn`]: the fields are almost
-/// all references to stores that live for the process, and a function taking
-/// eleven of them positionally is a call site nobody can read. Assembling it is
-/// also the only thing [`AppRunner`] does, which is what lets everything below
-/// be exercised without an application.
+/// References to process-lifetime stores; [`AppRunner`] only assembles it.
 pub struct Host<'a> {
     /// Where an owner's name is resolved to an identity.
     pub agents: &'a AgentStore,
@@ -107,27 +70,16 @@ pub struct Host<'a> {
     pub skills: &'a Path,
     /// Where memories live; the run reads and writes the owner's own.
     pub memories: &'a MemoryStore,
-    /// The connectors this installation is running (PLAN 7.3, Phase 18).
-    ///
-    /// The same roster the delegating session sees. A specialist is offered the
-    /// connector tools *its own* identity holds, and every call it makes stops
-    /// and asks in its own session — none of the CoS's grants travel with the
-    /// brief, and a connector's tool is no exception.
+    /// The running connectors (Phase 18); a specialist gets only its own
+    /// identity's tools and grants.
     pub connectors: &'a Connectors,
-    /// Which provider answers for an identity.
-    ///
-    /// A function rather than a provider, because the binding is per identity
-    /// (PLAN 7.1, *Provider*): the CoS and the specialist it briefs may be on
-    /// different models, and resolving one provider for the delegation would
-    /// quietly decide otherwise.
+    /// Which provider answers for an identity (per identity, PLAN 7.1).
     pub provider: &'a (dyn Fn(&Agent) -> Box<dyn Provider> + Send + Sync),
 }
 
 /// One session's delegations, and the runs they have opened.
 ///
-/// Built per turn: it remembers the session opened for each brief, so the
-/// second attempt the bus allows continues that run rather than starting a
-/// third one beside it.
+/// Built per turn; remembers each brief's session so a retry continues it.
 pub struct Delegating {
     /// The project the delegating session belongs to. Specialists work in it
     /// too — one workspace, one team (`COS.md` *Memory*: shared files).
@@ -136,12 +88,7 @@ pub struct Delegating {
     from_session_id: String,
     /// That session's workspace root, or `None` when the folder is gone.
     workspace: Option<PathBuf>,
-    /// Where the project's commands run (PLAN 7.12).
-    ///
-    /// Carried with the workspace, because a specialist works in the same
-    /// folder on the same machine: one workspace, one team, one toolchain. A
-    /// delegated run that spawned on Windows while the session that briefed it
-    /// ran in a distribution would be two different projects.
+    /// Where the project's commands run (PLAN 7.12), same as the delegator's.
     exec_host: Option<ExecHost>,
     /// The session opened for each brief, keyed on its place in the fan-out.
     sessions: Mutex<HashMap<usize, String>>,
@@ -166,15 +113,8 @@ impl Delegating {
 
     /// Writes the brief into `.aegis/briefs/`, when the workspace has one.
     ///
-    /// Directly rather than through `fs_write`, and that is worth being clear
-    /// about: this is the *runtime* recording a delegation the user has already
-    /// approved, into the one directory the convention reserves for exactly
-    /// this, under a name it chooses. It is not the model reaching the disk —
-    /// nothing it writes can go anywhere but a brief file — and the approval
-    /// dialog named the directory it would land in.
-    ///
-    /// Best effort. A brief that could not be filed costs the file and nothing
-    /// else: the run still starts, from the same text, in its first message.
+    /// Written by the runtime, not `fs_write`: the delegation was already
+    /// approved and the dialog named this directory. Best effort.
     pub fn file(&self, slot: bus::Slot<'_>, brief: &Brief, rendered: &str) -> Option<String> {
         let root = self.workspace.as_ref()?;
         let dir = root.join(workspace::BRIEFS_DIR);
@@ -225,13 +165,8 @@ impl Delegating {
             )));
         };
 
-        // Before the session is opened, because this is a fact about the
-        // *world* and not about the run: if the artefacts this world was
-        // perceived from have moved, no brief goes out on top of them except
-        // the one that is about the delta (PLAN 7.2, *What is still hashed*).
-        // Fatal rather than retryable — a second attempt would hash the same
-        // files and find the same answer — so what the Chief of Staff gets back
-        // is the attention item rather than two wasted turns.
+        // Drifted world sources block the brief (PLAN 7.2), before any session
+        // opens; not retryable, since a retry would hash the same files.
         if let Some(reason) = self
             .workspace
             .as_deref()
@@ -370,9 +305,8 @@ impl Delegating {
 
 /// [`Delegating`], wired to a running application.
 ///
-/// The state is looked up from the handle on each use rather than captured, for
-/// the reason the turn task does it: a `State<'_, AppState>` borrows an
-/// invocation that this outlives.
+/// State is looked up from the handle on each use, since a `State` borrow
+/// cannot outlive the invocation.
 pub struct AppRunner<R: Runtime> {
     app: AppHandle<R>,
     inner: Delegating,
@@ -436,9 +370,7 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
 
 /// The identity a brief names, by id or by name.
 ///
-/// Case-insensitively by name, because a CoS writes `Reviewer` the way a person
-/// would, and the registry already refuses two identities whose names differ
-/// only in case.
+/// Names match case-insensitively (the registry forbids case-only duplicates).
 fn owner(agents: &AgentStore, named: &str) -> Option<Agent> {
     let named = named.trim();
     agents
@@ -449,10 +381,8 @@ fn owner(agents: &AgentStore, named: &str) -> Option<Agent> {
 
 /// What opens the owner's session, or nudges it on a second attempt.
 ///
-/// The brief itself, plus the two facts the owner cannot read off it: that this
-/// is delegated work, and that the only way to finish is `handoff_return`. A
-/// specialist that ends a turn with prose has said nothing anybody is listening
-/// for — the CoS reads reports, not transcripts.
+/// The brief, plus that this is delegated work and must end with
+/// `handoff_return`.
 fn opening(brief: &Brief, filed: Option<&str>, attempt: u32) -> String {
     if attempt > 1 {
         return format!(
@@ -487,10 +417,8 @@ fn opening(brief: &Brief, filed: Option<&str>, attempt: u32) -> String {
 
 /// The brief as text, in `COS.md`'s shape.
 ///
-/// It has already passed [`handoff::check_brief`] by the time a run starts, so
-/// the error arm is unreachable; it is written rather than unwrapped because an
-/// owner staring at an empty message would be a worse failure than one staring
-/// at a goal.
+/// Already checked by [`handoff::check_brief`]; the error arm falls back to the
+/// goal rather than unwrapping.
 fn rendered(brief: &Brief) -> String {
     handoff::check_brief(brief).unwrap_or_else(|reason| format!("goal: {}\n({reason})", brief.goal))
 }

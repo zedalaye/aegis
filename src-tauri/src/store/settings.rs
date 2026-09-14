@@ -1,23 +1,12 @@
 //! The settings document: `settings.json`.
 //!
-//! Three fields, and what is *not* here is the point: the base URL, the model
-//! name and how to authenticate are stored, the API key is not. The key lives
-//! in the OS credential store, in the environment, or in a CLI login already
-//! on this machine ([`secrets`](crate::secrets), [`oauth`](crate::oauth));
-//! nothing this module writes to disk is a secret, which is what makes the
-//! document safe to open, hand-edit and copy between machines like the other
-//! two.
+//! Base URL, model and auth kind — never the key, which lives in the OS
+//! credential store, the environment or a CLI login ([`secrets`](crate::secrets),
+//! [`oauth`](crate::oauth)).
 //!
-//! Both fields start empty, and empty means something: until the user has
-//! named a base URL and a model, turns are answered by the scripted provider
-//! of Phase 5 rather than by a network client with nowhere to connect
-//! ([`ProviderSettings::is_configured`]). A missing *key* is a different
-//! state — that is a configured provider that cannot authenticate, and it is
-//! reported as `E_NO_API_KEY` rather than silently answered by the fake.
-//!
-//! The atomic write, the quarantine and the timestamp format live in the
-//! parent module, shared with [`projects`](super::projects) and
-//! [`sessions`](super::sessions).
+//! Unconfigured settings mean the scripted provider
+//! ([`ProviderSettings::is_configured`]); a configured provider without a key
+//! is `E_NO_API_KEY`.
 
 use std::fs;
 use std::io;
@@ -35,18 +24,12 @@ use crate::secrets::KeySource;
 /// Name of the document under the application-data directory.
 const SETTINGS_FILE: &str = "settings.json";
 
-/// Schema version of [`SettingsFile`].
-///
-/// A document carrying anything else is treated exactly like a damaged one:
-/// quarantined, not guessed at.
+/// Schema version of [`SettingsFile`]; any other version is quarantined.
 const SCHEMA_VERSION: u32 = 1;
 
 /// The path a base URL must *not* already include.
 ///
-/// The commonest way to get this setting wrong is to paste the endpoint rather
-/// than the base, which produces a request to `…/chat/completions/chat/
-/// completions` and a 404 that reads like the server is down. Naming the
-/// mistake is worth more than tolerating it silently.
+/// Pasting the endpoint instead of the base is refused with a clear message.
 const ENDPOINT_SUFFIX: &str = "/chat/completions";
 
 // ---------------------------------------------------------------------------
@@ -55,11 +38,9 @@ const ENDPOINT_SUFFIX: &str = "/chat/completions";
 
 /// How a configured provider authenticates.
 ///
-/// Persisted, not a secret: it names a *source*, never a token. `api_key` is
-/// the original path (keyring / `AEGIS_API_KEY`), aimed at an OpenAI-compatible
-/// host. [`AuthKind::Gemini`] is the same store, a different dialect: Google's
-/// Generative Language API, not `/chat/completions`. The CLI variants reuse a
-/// login the official agent already wrote on this machine.
+/// Names a credential source, never a token. `api_key`: keyring or
+/// `AEGIS_API_KEY` for an OpenAI-compatible host; [`AuthKind::Gemini`]: same
+/// store, Google's API; CLI variants reuse an existing login.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -128,8 +109,7 @@ impl AuthKind {
 
 /// The URL and model Settings prefills for one [`AuthKind`].
 ///
-/// Not a secret. The form uses this when the user switches authentication so
-/// the fields show the CLI's own endpoint instead of a leftover OpenAI URL.
+/// Used when the user switches authentication.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct AuthPreset {
@@ -144,8 +124,7 @@ pub struct AuthPreset {
 
 /// Everything the WebView is allowed to know about the provider settings.
 ///
-/// The name is the contract. There is no unmasked counterpart and no command
-/// that returns one: a key can be written and cleared, never read back.
+/// No unmasked counterpart exists: a key is written or cleared, never read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct MaskedSettings {
@@ -158,11 +137,7 @@ pub struct MaskedSettings {
     /// The output ceiling the provider's catalog reported for that model, or
     /// `None` for an endpoint that does not publish one.
     ///
-    /// Shown rather than kept internal because its absence is invisible
-    /// otherwise: a lookup that failed leaves the provider's own conservative
-    /// default in place, which is the behaviour that made large `fs_write`
-    /// calls fail silently in the first place. A number here is the panel
-    /// saying the catalog was actually read.
+    /// Shown so a failed lookup (and a low default cap) is visible.
     #[ts(type = "number | null")]
     pub max_output_tokens: Option<u32>,
     /// Which store answered when the key was last looked for.
@@ -172,8 +147,7 @@ pub struct MaskedSettings {
     pub key_hint: Option<String>,
     /// Whether this machine has a credential store that answered.
     ///
-    /// `false` on headless Linux and on a locked keychain; the panel then
-    /// explains the environment variable instead of offering to save a key.
+    /// `false` on headless Linux or a locked keychain.
     pub keyring_available: bool,
     /// Prefill values for every authentication kind, so switching in the form
     /// can fill the matching URL and model without a second round trip.
@@ -193,9 +167,7 @@ struct SettingsFile {
 
 /// The provider settings, as persisted and as the runtime reads them.
 ///
-/// One provider, and deliberately not a singleton on the way to disk: the
-/// document nests it under a `provider` key, so a later roster becomes a list
-/// beside it rather than a migration of every field (PLAN 7.1).
+/// Nested under a `provider` key so a roster can be added later (PLAN 7.1).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSettings {
     /// How to authenticate. Missing in documents written before this field
@@ -215,13 +187,7 @@ pub struct ProviderSettings {
     /// catalog when it was asked (see
     /// [`catalog::output_cap`](crate::agent::provider::catalog::output_cap)).
     ///
-    /// Persisted rather than looked up per turn: it changes when the model
-    /// does, which is when the settings are saved, and an HTTP round trip in
-    /// front of every request would be a latency and a failure the turn does
-    /// not need. `None` is the honest answer for an endpoint that does not
-    /// publish the number, for a lookup that failed, and for a document
-    /// written before the field existed — all three mean the same thing to the
-    /// provider, which is to leave the ceiling unset.
+    /// Looked up on save, not per turn. `None` leaves the ceiling unset.
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
 }
@@ -229,12 +195,8 @@ pub struct ProviderSettings {
 impl ProviderSettings {
     /// Whether these settings name somewhere to send a request.
     ///
-    /// The key is not part of the question. A configured provider with no key
-    /// must fail loudly — the user asked for a real model and did not get one
-    /// — whereas an unconfigured one is a fresh install, where the scripted
-    /// provider answering is the documented behaviour rather than a fault.
-    ///
-    /// A CLI login and Gemini imply their own endpoint, so a model id is enough.
+    /// The key is not considered, so a keyless configured provider fails loudly.
+    /// CLI logins and Gemini need only a model id.
     pub fn is_configured(&self) -> bool {
         if self.model.is_empty() {
             return false;
@@ -249,15 +211,8 @@ impl ProviderSettings {
 
 /// Accepts a base URL, or says exactly what is wrong with it.
 ///
-/// Returns the normalized form: trimmed, and without the trailing slash that
-/// would otherwise produce a double slash in every request. An empty input is
-/// an accepted answer meaning "unset", not a failure — that is how the user
-/// goes back to the scripted provider.
-///
-/// The checks are the three that otherwise turn into an unreadable failure
-/// much later: a URL that will not parse — which is also how a missing host is
-/// caught, since `http:` and `https:` require one — a scheme that is not HTTP,
-/// and a base that already carries the endpoint path.
+/// Trimmed, without a trailing slash; empty means unset. Refuses unparseable
+/// URLs, non-HTTP schemes, and a base that includes the endpoint path.
 pub fn normalize_base_url(raw: &str) -> AppResult<String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
@@ -305,8 +260,7 @@ pub fn normalize_base_url(raw: &str) -> AppResult<String> {
 
 /// Accepts a model id, or says what is wrong with it.
 ///
-/// Only shape is checked. Whether the model exists is the server's answer to
-/// give, and guessing at a list here would go stale the week after it shipped.
+/// Only shape is checked; the server says whether the model exists.
 pub fn normalize_model(raw: &str) -> AppResult<String> {
     let trimmed = raw.trim();
 
@@ -325,9 +279,7 @@ pub fn normalize_model(raw: &str) -> AppResult<String> {
 
 /// The settings store: the values in memory plus the document backing them.
 ///
-/// Same shape as the project store, for the same reason: two fields changed by
-/// a human a few times a year are written out whole on every change, so what
-/// is on disk always equals what is in memory once a command has returned.
+/// Written out whole on every change.
 #[derive(Debug)]
 pub struct SettingsStore {
     path: PathBuf,
@@ -337,9 +289,7 @@ pub struct SettingsStore {
 impl SettingsStore {
     /// Loads the settings from `data_dir`.
     ///
-    /// Never fails. Unreadable settings start empty and say so in the log,
-    /// which means the app boots and answers with the scripted provider rather
-    /// than refusing to start over a file the user can delete.
+    /// Never fails: unreadable settings start empty.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(SETTINGS_FILE);
 
@@ -383,11 +333,7 @@ impl SettingsStore {
         }
     }
 
-    /// Locks the values.
-    ///
-    /// A poisoned mutex means another command panicked mid-write. The value
-    /// behind it is two strings replaced wholesale and cannot be torn, so
-    /// recovering it beats propagating a panic into every later command.
+    /// Locks the values, recovering from poison: they cannot be left torn.
     fn provider(&self) -> MutexGuard<'_, ProviderSettings> {
         self.provider
             .lock()
@@ -401,9 +347,7 @@ impl SettingsStore {
 
     /// Replaces the provider settings, after normalizing both fields.
     ///
-    /// Validation happens before the lock is taken and before anything is
-    /// written, so a rejected base URL leaves the previous settings exactly as
-    /// they were — a user correcting a typo does not lose their model name.
+    /// Validated first, so a rejection changes nothing.
     pub fn set(
         &self,
         base_url: &str,

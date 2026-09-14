@@ -1,48 +1,21 @@
 //! Folding the audit log into runs (PLAN 7.3, Phase 17; PLAN 7.2, row 10).
 //!
-//! The log is one line per tool call. A person's question is never about a
-//! line — it is *who ran, what did it cost, why did it fail* — and the unit
-//! that answers it is a **run**: everything one piece of work did, wherever it
-//! did it. This module is the fold from the first shape to the second, and it
-//! is deliberately a pure function over entries and a ledger, so a replay can
-//! be tested with no application, no clock and no model behind it.
+//! A pure fold from one-line-per-call audit entries to **runs**: who ran, what
+//! it cost, why it failed.
 //!
-//! ## What ties lines into a run
+//! [`RunRef::of`] groups each line by the widest id it carries (containment
+//! order):
 //!
-//! Nothing new is recorded to make this work. Every id it groups on was
-//! already put on the line by the phase that introduced it — `agent_id` in 12,
-//! `skill` in 13, `handoff` in 15, `routine` in 16 — which is what those
-//! phases meant by *this cannot be reconstructed later*. [`RunRef::of`] reads
-//! them in one order, widest first, so every line belongs to exactly one run:
+//! * **`handoff`** — a delegation, spanning the CoS's and specialists' sessions
+//!   (PLAN 7.2, row 10);
+//! * **`routine`** + session — one firing;
+//! * **`skill`** + session — one runbook run;
+//! * otherwise the conversation itself.
 //!
-//! * **`handoff`** — a delegation. The only id that spans sessions: the Chief
-//!   of Staff's own `handoff_delegate` line and every call every specialist
-//!   then made carry it, under their own identities, in their own sessions.
-//!   This is PLAN 7.2's "one run id covering CoS + specialists".
-//! * **`routine`** — one firing of a clock, in the session it opened. The
-//!   routine's id alone would collect a month of mornings into one row, so the
-//!   session is part of the key: a routine has many runs, and each is one.
-//! * **`skill`** — a runbook, in the session that ran it.
-//! * neither — the conversation itself.
-//!
-//! The order is the containment order. A specialist running a runbook under a
-//! brief is one delegation, not a delegation and a skill run; a scheduled run
-//! always names the runbook it fired, and what a person wants to see is the
-//! seven-o'clock run rather than the runbook's whole history.
-//!
-//! ## Why the cost comes from somewhere else
-//!
-//! Tokens are not a property of a tool call — a turn that called no tool spent
-//! them too — so they are recorded on the session, per turn
-//! ([`TurnCost`](crate::store::TurnCost)). The join is the `turn_id` that has
-//! been on every audit line since Phase 4. [`fold`] takes the ledger beside the
-//! entries and does the join once, which is also what scopes a board to one
-//! project: a line whose session is not in the ledger is not this project's.
-//!
-//! One property is worth the arithmetic it costs, and there is a test for it:
-//! **the runs of a session add up to the session.** A turn no run's lines
-//! named — an ordinary reply that called nothing — still belongs to the
-//! conversation, so it lands on that session's own run rather than nowhere.
+//! Cost joins from the session ledger on `turn_id`
+//! ([`TurnCost`](crate::store::TurnCost)); the ledger also scopes the fold to
+//! one project. A turn with no tool calls lands on its conversation's run, so a
+//! session's runs add up to the session.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -54,16 +27,9 @@ use crate::policy::tool;
 use crate::store::{Cost, TurnCost};
 
 /// Most runs [`fold`] returns.
-///
-/// The board is read top to bottom by a person; a list longer than this is one
-/// nobody scrolls, and the window the log is read through is bounded anyway.
 const RUNS_MAX: usize = 60;
 
 /// Most artefact paths kept on one run.
-///
-/// A run that wrote two hundred files is a run whose *tools* tally is the
-/// interesting number. The paths are here so a person can open what was
-/// produced, which is a short list by nature.
 const ARTEFACTS_MAX: usize = 24;
 
 /// Longest reason kept from a line.
@@ -102,10 +68,8 @@ impl RunKind {
 
 /// What ties a set of audit lines into one run.
 ///
-/// A kind and an id rather than an enum with four payloads, because this is
-/// also a map key and a value the UI hands back to ask for one run again.
-/// `session_id` is part of the key for everything except a delegation, which
-/// is the one kind that spans sessions on purpose.
+/// Also a map key and the value the UI sends back. `session_id` is part of the
+/// key except for a delegation, which spans sessions.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct RunRef {
@@ -119,10 +83,7 @@ pub struct RunRef {
 }
 
 impl RunRef {
-    /// The run one audit line belongs to.
-    ///
-    /// Total: every line belongs somewhere, and a line carrying none of the
-    /// three ids belongs to its conversation.
+    /// The run one audit line belongs to; without any run id, its conversation.
     pub fn of(entry: &AuditEntry) -> Self {
         if !entry.handoff.is_empty() {
             return Self {
@@ -160,11 +121,8 @@ impl RunRef {
 
 /// How a run ended, in the vocabulary `COS.md` already uses.
 ///
-/// Four words plus one. The first four are a report's own — a run that
-/// returned says how it went, and nothing here second-guesses it.
-/// [`Ran`](RunStatus::Ran) is the fifth, and it is not a failure: it is work
-/// that made calls and never filed a report, which is what an ordinary
-/// conversation is.
+/// A report's own statuses, plus [`Ran`](RunStatus::Ran): calls made with no
+/// report, like an ordinary conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
@@ -193,11 +151,8 @@ impl RunStatus {
         }
     }
 
-    /// Whether this is a run that stopped short.
-    ///
-    /// What puts a line in the board's *Blocked* column. `needs_you` is not
-    /// here: it is not blocked, it is waiting on a person, which is the
-    /// *Attention* column.
+    /// Whether this run stopped short (the *Blocked* column; `needs_you` is
+    /// *Attention*).
     pub const fn is_stuck(self) -> bool {
         matches!(self, Self::Blocked | Self::Failed)
     }
@@ -236,10 +191,7 @@ pub struct Run {
     pub started_at: String,
     /// The last, RFC3339 UTC.
     pub ended_at: String,
-    /// The identities that ran under it, in the order they first appear.
-    ///
-    /// More than one only for a delegation, which is the point of that kind:
-    /// "who ran" is a list when a Chief of Staff hands work to two specialists.
+    /// The identities that ran under it, in first-appearance order.
     pub agents: Vec<String>,
     /// The sessions it touched, likewise. One click each.
     pub sessions: Vec<String>,
@@ -263,12 +215,8 @@ pub struct Run {
     /// Why, in the words the record already used. Empty when there is nothing
     /// to explain.
     pub reason: String,
-    /// Tool execution time, summed over the calls.
-    ///
-    /// Not the wall clock: a run parked for five minutes on an approval dialog
-    /// did not spend five minutes working, and the two numbers differing is
-    /// usually the interesting part. The wall clock is `ended_at` less
-    /// `started_at`, which the UI has both halves of.
+    /// Tool execution time summed over calls — not wall clock, which excludes
+    /// waiting on approvals.
     #[ts(type = "number")]
     pub tool_ms: u64,
     /// What it spent.
@@ -303,11 +251,7 @@ impl Run {
 
 /// One run, and the lines it is replayed from.
 ///
-/// The replay of PLAN 7.2 row 10, and it is deliberately not a rendering: the
-/// entries are the audit lines themselves, in the order they happened, so what
-/// the pane shows is what is on disk rather than a story assembled about it.
-/// A person reading this is checking the record against the transcript, and a
-/// record that had been prettied up first would be worth less than the file.
+/// The replay of PLAN 7.2 row 10: the raw audit entries, in order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct RunTrace {
@@ -323,12 +267,7 @@ pub struct RunTrace {
 
 /// One session, as a fold needs to see it.
 ///
-/// Three jobs in one argument, which is why it is not three arguments. It
-/// **scopes** the fold — a line whose session is not here belongs to another
-/// project, or to a conversation that has since been deleted, and either way it
-/// is not on this board. It carries the **cost**, which is the join the log
-/// cannot make on its own. And it carries the **names**, so a fold can label a
-/// run without reaching into three stores.
+/// It scopes the fold, carries the per-turn cost, and names runs.
 #[derive(Debug, Clone, Default)]
 pub struct SessionLedger {
     /// The session.
@@ -339,13 +278,8 @@ pub struct SessionLedger {
     pub routine: String,
     /// The delegation that opened it, when a brief did.
     pub handoff: String,
-    /// Whether a turn is in flight in it right now.
-    ///
-    /// Only [`settle`] reads it, and only to keep from calling work that has
-    /// not finished a failure: a runbook between its `skill_run` and its
-    /// `skill_return` looks exactly like one that stopped without reporting,
-    /// and the difference is a fact about this process rather than about the
-    /// log.
+    /// Whether a turn is in flight, so [`settle`] does not call unfinished work
+    /// a failure.
     pub running: bool,
     /// What each of its turns spent, in any order.
     pub turns: Vec<TurnCost>,
@@ -355,11 +289,7 @@ pub struct SessionLedger {
 // The fold
 // ---------------------------------------------------------------------------
 
-/// What a run needs while it is being folded, and does not carry afterwards.
-///
-/// Beside the run rather than on it: a tally is a map until it is ordered at
-/// the end, the turns are a set until they are charged, and "the latest report"
-/// is a comparison rather than a field a half-built row should expose.
+/// Scratch state for a run while it is being folded.
 #[derive(Debug, Default)]
 struct Working {
     /// Which tools, and how often.
@@ -374,17 +304,8 @@ struct Working {
 
 /// Folds audit lines and a ledger into runs, newest first.
 ///
-/// Entries may arrive in any order — [`AuditLog::tail`](crate::audit::AuditLog::tail)
-/// hands them back newest first, a file read hands them back oldest first — so
-/// nothing here depends on it: every span is a minimum and a maximum over
-/// timestamps, and the report a run's status comes from is the latest one, not
-/// the last one seen.
-///
-/// A line whose session is not in `ledger` is dropped. That is the scoping
-/// rule, and it is also why a deleted session's calls leave a board while
-/// staying in the log: the log is the record of what was done, the board is a
-/// view of one project's work, and the second cannot invent a project for a
-/// session that no longer names one.
+/// Order-independent: spans are min/max timestamps, and status comes from the
+/// latest report. Lines whose session is not in `ledger` are dropped.
 pub fn fold(entries: &[AuditEntry], ledger: &[SessionLedger]) -> Vec<Run> {
     let known: HashMap<&str, &SessionLedger> = ledger
         .iter()
@@ -424,10 +345,8 @@ pub fn fold(entries: &[AuditEntry], ledger: &[SessionLedger]) -> Vec<Run> {
         .flat_map(|(_, working)| working.turns.iter().cloned())
         .collect();
 
-    // A turn that called no tool is invisible to the log and still cost
-    // something. It belongs to its conversation, so it lands on that session's
-    // own run — opened here when the session made no unclaimed calls at all,
-    // which is what a chat that only talked looks like.
+    // Turns absent from the log still cost: charge them to the session's
+    // conversation run, opening it if needed.
     for session in ledger {
         let unclaimed: Vec<&TurnCost> = session
             .turns
@@ -554,11 +473,7 @@ fn span(run: &mut Run, ts: &str) {
 
 /// The files one line says were produced.
 ///
-/// Three places, because three things leave one. `screen_capture` records its
-/// file on the line itself; `fs_write` names the path it replaced in its
-/// arguments, which the log keeps whole for exactly this kind of reading; and
-/// a report names what the work produced, which is the only one of the three
-/// that says a file *mattered* rather than that it changed.
+/// From a capture's artifact, an `fs_write` path, or a report's `artefacts`.
 fn produced(entry: &AuditEntry) -> Vec<String> {
     if entry.outcome != Outcome::Ok {
         return Vec::new();
@@ -609,24 +524,9 @@ fn later(held: Option<&AuditEntry>, entry: &AuditEntry) -> bool {
 
 /// Decides how a run ended, and why.
 ///
-/// Three rules, in order.
-///
-/// **A report wins over trouble, always.** A runbook that was refused a write,
-/// coped, and returned `done` is done — the refusal is on its record as a
-/// number, and re-reading it as a failure would be the harness overruling the
-/// only thing in the loop that knew what the work needed.
-///
-/// **A conversation cannot fail.** Failure needs a promise, and only three of
-/// the four kinds make one. A denial in a chat is the person's own answer and
-/// the turn carries on by design (PLAN 3.1); a board that read it as a failed
-/// conversation would be calling the approval gate working as intended a
-/// problem. What went wrong inside one is on the row as counts, and in the
-/// replay line by line.
-///
-/// **Work that has not finished has not failed.** A runbook between its
-/// `skill_run` and its `skill_return` is indistinguishable in the log from one
-/// that stopped without reporting; the session's live state is what tells them
-/// apart, and it is the one thing here that does not come from the record.
+/// In order: a report always wins over refusals or errors; a conversation
+/// never fails (denials are answers, PLAN 3.1); and work still running has not
+/// failed.
 fn settle(run: &mut Run, running: bool, report: Option<&AuditEntry>, trouble: Option<&AuditEntry>) {
     if let Some(report) = report {
         let args = serde_json::from_str::<serde_json::Value>(&report.args_redacted).ok();
@@ -658,10 +558,7 @@ fn settle(run: &mut Run, running: bool, report: Option<&AuditEntry>, trouble: Op
         return;
     }
 
-    // A brief, a runbook or a firing that never reported. That is a silence,
-    // and `COS.md` is clear that a silence is not an answer — so it is a
-    // failure whether or not anything visible went wrong, and the last thing
-    // that did is the best explanation there is.
+    // A brief, runbook or firing that never reported: silence is a failure.
     run.status = RunStatus::Failed;
     run.reason = match trouble {
         Some(trouble) => shorten(&match trouble.outcome {
@@ -678,10 +575,8 @@ fn settle(run: &mut Run, running: bool, report: Option<&AuditEntry>, trouble: Op
 /// Names a run from the sessions it touched.
 fn label(run: &mut Run, ledger: &[SessionLedger]) {
     let named = match run.run.kind {
-        // A specialist's session is titled from the brief's goal, which is the
-        // best name a delegation has. The Chief of Staff's own session is in
-        // `sessions` too, so the delegated one is picked deliberately rather
-        // than by taking the first.
+        // Named after the delegated session (titled from the goal), not the
+        // CoS's own.
         RunKind::Handoff => ledger
             .iter()
             .find(|session| session.handoff == run.run.id)
