@@ -17,7 +17,9 @@
 //! program to start and is therefore the one with no tool behind it. And
 //! `explorer` (PLAN 7.15): the read-only tree and preview of the open
 //! project's folder, and the one write the operator makes from it — a dropped
-//! file, copied in as a brief.
+//! file, copied in as a brief. And `roster` (PLAN 7.14): the preview of a
+//! project's roster proposal, and the apply that creates the identities it
+//! names — the grant, pressed by a person, with no tool behind it.
 //!
 //! Argument names are `snake_case` on the wire (PLAN 2). Tauri would otherwise
 //! accept `camelCase` from JavaScript and rename it, so every command taking
@@ -32,6 +34,7 @@ pub mod connector;
 pub mod explorer;
 pub mod memory;
 pub mod project;
+pub mod roster;
 pub mod routine;
 pub mod session;
 pub mod settings;

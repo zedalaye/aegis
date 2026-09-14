@@ -16,6 +16,7 @@ import type { Agent } from "../../ipc/bindings";
 import { useAgents } from "../../state/agents";
 
 import AgentForm from "./AgentForm";
+import RosterPanel from "./RosterPanel";
 
 /** What an identity may touch, in the words the row can afford. */
 function Tools({ agent }: { readonly agent: Agent }) {
@@ -153,6 +154,21 @@ export default function AgentList() {
         ))}
       </ul>
 
+      {/*
+        The empty state names the two acts founding starts with and performs
+        neither (PLAN 7.14). The built-in row is a constant and gets no skill,
+        so the founder is a copy of it — a row somebody made.
+      */}
+      {agents.length > 1 || editing !== null ? null : (
+        <p className="settings__note">
+          Only the built-in Assistant so far. To found a cabinet,{" "}
+          <strong>Duplicate</strong> it, tick <code>cabinet.found</code> under
+          Skills on the copy, and ask a session opened as the copy for one. It
+          writes a roster proposal into the open project, and nobody exists
+          until you apply that here.
+        </p>
+      )}
+
       {editing === null ? (
         <button
           type="button"
@@ -165,6 +181,8 @@ export default function AgentList() {
       ) : (
         <AgentForm key={editing} editing={open} />
       )}
+
+      <RosterPanel />
     </>
   );
 }

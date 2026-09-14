@@ -44,7 +44,9 @@
 //! every one of them asks. PLAN 7.15 is not a phase, and it is the one change
 //! here to the window's own event handling: a file dropped on the window is
 //! held by the runtime until the window names it, then copied into
-//! `.aegis/briefs/` — beside the explorer's read-only tree and preview.
+//! `.aegis/briefs/` — beside the explorer's read-only tree and preview. PLAN
+//! 7.14 is not a phase either: `roster` turns a workspace's roster proposal
+//! into identity rows when a person applies it, and no tool reaches it.
 
 pub mod agent;
 pub mod approval;
@@ -63,6 +65,7 @@ pub mod mcp;
 pub mod oauth;
 pub mod policy;
 pub mod reveal;
+pub mod roster;
 pub mod schedule;
 pub mod secrets;
 pub mod skills;
@@ -301,6 +304,8 @@ pub fn run() {
             commands::explorer::workspace_import_brief,
             commands::skill::skill_list,
             commands::skill::skill_proposals,
+            commands::roster::roster_proposal,
+            commands::roster::roster_apply,
             commands::memory::memory_list,
             commands::memory::memory_save,
             commands::memory::memory_forget,

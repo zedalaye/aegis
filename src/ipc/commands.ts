@@ -54,6 +54,8 @@ import type {
   Project,
   ProjectDetail,
   ProviderProbe,
+  RosterApplied,
+  RosterProposal,
   Routine,
   RoutineDraft,
   RunRef,
@@ -708,6 +710,40 @@ export function skillProposals(
   projectId: string | null,
 ): Promise<SkillProposal[]> {
   return call<SkillProposal[]>("skill_proposals", { project_id: projectId });
+}
+
+/**
+ * The open project's roster proposal, judged against the identities on file
+ * (PLAN 7.14).
+ *
+ * `null` for no project, a folder that has gone, or a workspace with no
+ * `.aegis/roster/PROPOSAL.md`. A file that will not parse is a proposal with a
+ * `problem`, not a rejection.
+ */
+export function rosterProposal(
+  projectId: string | null,
+): Promise<RosterProposal | null> {
+  return call<RosterProposal | null>("roster_proposal", {
+    project_id: projectId,
+  });
+}
+
+/**
+ * Creates the identities the open project's roster proposes: the grant.
+ *
+ * `digest` is the one {@link rosterProposal} returned. A file that changed
+ * since is refused, so what is created is what was shown. Every new identity
+ * or none; names already on file are skipped. There is no tool behind this —
+ * a session can write a roster and cannot apply one.
+ */
+export function rosterApply(
+  projectId: string,
+  digest: string,
+): Promise<RosterApplied> {
+  return call<RosterApplied>("roster_apply", {
+    project_id: projectId,
+    digest,
+  });
 }
 
 /**

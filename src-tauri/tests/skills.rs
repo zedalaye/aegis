@@ -318,6 +318,7 @@ fn the_catalog_is_listable_and_carries_no_step_of_any_runbook() {
             skills::BUDGET_ALERT_SKILL,
             skills::BUDGET_POSITION_SKILL,
             skills::BUDGET_RUNWAY_SKILL,
+            skills::FOUND_SKILL,
             skills::COS_SKILL,
             skills::DEPLOY_SKILL,
             "inbox.triage",
@@ -348,6 +349,7 @@ fn the_catalog_is_listable_and_carries_no_step_of_any_runbook() {
     assert_eq!(
         scopes,
         vec![
+            SkillScope::Library,
             SkillScope::Library,
             SkillScope::Library,
             SkillScope::Library,

@@ -1357,6 +1357,97 @@ export type Risk = "low" | "medium" | "high";
 export type Role = "user" | "assistant" | "tool" | "system";
 
 /**
+ * What an apply did.
+ */
+export type RosterApplied = { 
+/**
+ * The identities created, as stored.
+ */
+created: Array<Agent>, 
+/**
+ * The names that already existed and were left alone.
+ */
+skipped: Array<string>, };
+
+/**
+ * One proposed identity, as Settings previews it.
+ */
+export type RosterEntry = { 
+/**
+ * The name it would be created under.
+ */
+name: string, 
+/**
+ * What it is for.
+ */
+role: string, 
+/**
+ * The tools it would hold, as the roster names them.
+ */
+tools: Array<string>, 
+/**
+ * The runbooks it would hold.
+ */
+skills: Array<string>, 
+/**
+ * Its ceiling on scheduled runs.
+ */
+runs_per_day: number, 
+/**
+ * What apply would do with it.
+ */
+state: RosterEntryState, 
+/**
+ * Why it cannot be created as proposed — which refuses the whole apply.
+ * Only a `new` entry is judged: the others are not written.
+ */
+problem: string | null, 
+/**
+ * What is true of it and does not block: a runbook it would hold and could
+ * not run, or one that is not on this machine yet.
+ */
+notes: Array<string>, };
+
+/**
+ * What apply would do with one proposed identity.
+ */
+export type RosterEntryState = "new" | "present" | "builtin";
+
+/**
+ * A workspace's roster proposal, judged against the identities on file.
+ */
+export type RosterProposal = { 
+/**
+ * The `PROPOSAL.md` itself.
+ */
+path: string, 
+/**
+ * SHA-256 of the file this preview was built from, hex. Apply is refused
+ * unless it is handed back and still matches.
+ */
+digest: string, 
+/**
+ * Every identity it proposes, in file order. Empty when it will not parse.
+ */
+entries: Array<RosterEntry>, 
+/**
+ * Clocks the founder intends. Apply creates none.
+ */
+intended_routines: Array<string>, 
+/**
+ * What the founder could not settle.
+ */
+open_questions: Array<string>, 
+/**
+ * Why it will not parse, when it will not.
+ */
+problem: string | null, 
+/**
+ * Whether apply would create at least one identity and refuse none.
+ */
+appliable: boolean, };
+
+/**
  * A routine, as the UI and the scheduler see it.
  */
 export type Routine = { 

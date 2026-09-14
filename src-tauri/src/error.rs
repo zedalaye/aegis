@@ -481,6 +481,20 @@ pub enum AppError {
         reason: String,
     },
 
+    /// A roster proposal could not be applied (PLAN 7.14).
+    ///
+    /// For the whole proposal, never one identity of it: apply creates every
+    /// new identity or none. The file is gone, it no longer parses, one of its
+    /// identities would be refused, or it changed after it was shown — which
+    /// is the refusal that matters, because confirming apply is signing the
+    /// allow-lists on screen, and a file rewritten since is not what was
+    /// signed. No `field`: nothing on a form is wrong, so it is a banner.
+    #[error("the roster was not applied: {reason}")]
+    Roster {
+        /// Why, in words somebody can act on.
+        reason: String,
+    },
+
     /// An execution host was set on a project and cannot be used (PLAN 7.12).
     ///
     /// Raised by the picker, not by a tool call: a distribution that is not
@@ -547,6 +561,7 @@ impl AppError {
             | Self::Agent { .. }
             | Self::Memory { .. }
             | Self::Routine { .. }
+            | Self::Roster { .. }
             | Self::Connector { .. } => ErrorCode::InvalidSetting,
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::ExecHost { .. } => ErrorCode::ExecHost,

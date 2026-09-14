@@ -442,25 +442,81 @@ impl AgentStore {
         let mut agents = self.agents();
         let valid = Valid::check(draft, &agents, None)?;
 
-        let stamp = now();
-        let stored = StoredAgent {
-            id: Uuid::new_v4().to_string(),
-            name: valid.name,
-            role: valid.role,
-            instructions: valid.instructions,
-            provider_id: valid.provider_id,
-            tools: valid.tools,
-            skills: valid.skills,
-            runs_per_day: valid.runs_per_day,
-            created_at: stamp.clone(),
-            updated_at: stamp,
-        };
+        let stored = valid.into_stored(&now());
         let created = stored.to_agent();
 
         agents.push(stored);
         self.save(&agents)?;
 
         tracing::info!(id = %created.id, name = %created.name, "identity created");
+        Ok(created)
+    }
+
+    /// Whether an identity already answers to `name`, the built-in one included.
+    ///
+    /// The comparison [`Valid::check`] refuses a duplicate on — trimmed and
+    /// case-insensitive — so a roster that asks this first and a create that
+    /// would collide can never disagree about what "already exists" means
+    /// (PLAN 7.14, *Existing names are skipped, never widened*).
+    pub fn name_taken(&self, name: &str) -> bool {
+        let name = name.trim();
+        Agent::builtin().name.eq_ignore_ascii_case(name)
+            || self
+                .agents()
+                .iter()
+                .any(|agent| agent.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Whether each draft would be accepted, as if they were created in order.
+    ///
+    /// One answer per draft, and every draft is judged: a roster preview has to
+    /// say what is wrong with the third identity even when the first is fine.
+    /// Earlier drafts count against later ones, so two rows with one name in a
+    /// batch are caught here rather than on the second write.
+    ///
+    /// An accepted draft comes back the way it would be stored — trimmed, tools
+    /// in registry order, skills deduplicated — so a preview drawn from it shows
+    /// the allow-lists the row will actually hold, not the order they were typed.
+    pub fn check_all(&self, drafts: &[AgentDraft]) -> Vec<AppResult<AgentDraft>> {
+        let mut scratch = self.agents().clone();
+        let stamp = now();
+
+        drafts
+            .iter()
+            .map(|draft| {
+                let valid = Valid::check(draft, &scratch, None)?;
+                let normal = valid.to_draft();
+                scratch.push(valid.into_stored(&stamp));
+                Ok(normal)
+            })
+            .collect()
+    }
+
+    /// Creates every draft, or none of them (PLAN 7.14).
+    ///
+    /// Validated as a batch under one lock and written once. A roster applied
+    /// halfway — a Chief with nobody to route to because the Reviewer after it
+    /// was refused — is a cabinet nobody signed, so the first refusal leaves the
+    /// document exactly as it was.
+    pub fn create_all(&self, drafts: &[AgentDraft]) -> AppResult<Vec<Agent>> {
+        let mut agents = self.agents();
+        let mut next = agents.clone();
+        let stamp = now();
+
+        let mut created = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            let stored = Valid::check(draft, &next, None)?.into_stored(&stamp);
+            created.push(stored.to_agent());
+            next.push(stored);
+        }
+
+        if created.is_empty() {
+            return Ok(created);
+        }
+        self.save(&next)?;
+        *agents = next;
+
+        tracing::info!(count = created.len(), "identities created from a roster");
         Ok(created)
     }
 
@@ -581,6 +637,35 @@ struct Valid {
 }
 
 impl Valid {
+    /// The draft as it would be stored.
+    fn to_draft(&self) -> AgentDraft {
+        AgentDraft {
+            name: self.name.clone(),
+            role: self.role.clone(),
+            instructions: self.instructions.clone(),
+            provider_id: self.provider_id.clone(),
+            tools: self.tools.clone(),
+            skills: self.skills.clone(),
+            runs_per_day: self.runs_per_day,
+        }
+    }
+
+    /// The row a create writes, with a fresh id and both stamps at `stamp`.
+    fn into_stored(self, stamp: &str) -> StoredAgent {
+        StoredAgent {
+            id: Uuid::new_v4().to_string(),
+            name: self.name,
+            role: self.role,
+            instructions: self.instructions,
+            provider_id: self.provider_id,
+            tools: self.tools,
+            skills: self.skills,
+            runs_per_day: self.runs_per_day,
+            created_at: stamp.to_owned(),
+            updated_at: stamp.to_owned(),
+        }
+    }
+
     /// Checks a draft against the identities already on file.
     ///
     /// `editing` is the id being updated, excluded from the name-collision
@@ -1192,6 +1277,58 @@ mod tests {
         fs::write(&path, with_bom).expect("write");
 
         assert!(AgentStore::load(dir.path()).get(&created.id).is_ok());
+    }
+
+    /// A roster applied halfway is a cabinet nobody signed (PLAN 7.14).
+    #[test]
+    fn creating_a_batch_writes_every_identity_or_none() {
+        let (_dir, store) = store();
+
+        let refused = store
+            .create_all(&[
+                draft("Chief"),
+                AgentDraft {
+                    tools: vec!["net_fetch".to_owned()],
+                    ..draft("Fetcher")
+                },
+            ])
+            .expect_err("refused");
+        assert!(refused.to_string().contains("net_fetch"), "{refused}");
+        assert_eq!(store.list().len(), 1, "the Chief was not created either");
+
+        let created = store
+            .create_all(&[draft("Chief"), draft("Reviewer")])
+            .expect("created");
+        assert_eq!(created.len(), 2);
+        assert_eq!(
+            AgentStore::load(store.path().parent().expect("dir"))
+                .list()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_batch_is_checked_against_itself_as_well_as_the_document() {
+        let (_dir, store) = store();
+        store.create(&draft("Reviewer")).expect("created");
+
+        let checked = store.check_all(&[draft("Chief"), draft("chief"), draft("REVIEWER")]);
+
+        assert!(checked[0].is_ok());
+        assert!(checked[1].is_err(), "the batch's own first Chief counts");
+        assert!(checked[2].is_err(), "the document's Reviewer counts");
+        assert_eq!(store.list().len(), 2, "checking writes nothing");
+    }
+
+    #[test]
+    fn a_name_is_taken_case_insensitively_and_the_builtin_one_counts() {
+        let (_dir, store) = store();
+        store.create(&draft("Reviewer")).expect("created");
+
+        assert!(store.name_taken(" reviewer "));
+        assert!(store.name_taken("assistant"));
+        assert!(!store.name_taken("Chief of Staff"));
     }
 
     #[test]
