@@ -274,6 +274,33 @@ cascaded; there is no command that rebinds a session's identity. Its *memories* 
 grow a document with records nothing can name — which is a different question from orphaning a
 transcript, and gets the opposite answer.
 
+**Roster** (§ 7.14 — not a phase)
+
+| Command | Args | Returns |
+| --- | --- | --- |
+| `roster_proposal` | `{ project_id? }` | `RosterProposal \| null` |
+| `roster_apply` | `{ project_id, digest }` | `RosterApplied` |
+
+```ts
+type RosterEntry = {
+  name: string; role: string; tools: string[]; skills: string[]; runs_per_day: number;
+  state: "new" | "present" | "builtin";  // only "new" is created
+  problem: string | null;                // refuses the whole apply
+  notes: string[];                       // true and not blocking
+};
+type RosterProposal = {
+  path: string; digest: string;          // sha256 of the file; apply hands it back
+  entries: RosterEntry[]; intended_routines: string[]; open_questions: string[];
+  problem: string | null; appliable: boolean;
+};
+type RosterApplied = { created: Agent[]; skipped: string[] };
+```
+
+`roster_apply` refuses with `E_INVALID_SETTING` and no `field` when the file changed since the
+preview, will not parse, or holds an entry that would be refused. It creates every `new` entry or
+none, writes one `operator` audit line per identity, and writes no routine, connector or world.
+Neither command is a tool.
+
 **Memory** (Phase 14, § 7.3 — not MVP)
 
 | Command | Args | Returns |
@@ -1049,12 +1076,13 @@ Six slices are **not** steps in this list:
 - **§ 7.13** skill promotion (`PROPOSAL.md` then apply; writing is still not granting)
   — *(landed)*
 - **§ 7.14** cabinet founding (a founder skill writes a roster proposal; apply is the grant)
+  — *(landed)*
 - **§ 7.15** workspace explorer (read-only tree + preview of the open folder; drop lands
   a brief). Not an editor — *(landed)*
 
-§ 7.10, § 7.11, § 7.12, § 7.13 and § 7.15 have landed.
+§ 7.10, § 7.11, § 7.12, § 7.13, § 7.14 and § 7.15 have landed.
 § 7.13 waited for Phase 17 (the CoS board), and it is not a number between 15 and
-16. § 7.14 waits for Phases 12, 13, 16 and 17
+16. § 7.14 waited for Phases 12, 13, 16 and 17
 (identities, skills, routines, board). It must not delay remaining domain packs,
 and it is not a number after 19.
 
@@ -1758,8 +1786,8 @@ supposed to mean, and the way to tell is that nothing in `src-tauri` learned wha
 mailbox, a release note, a statement, a timeline or a goal is.
 
 § 7.10 (chrome), § 7.11 (versioning), § 7.12 (execution host),
-§ 7.13 (skill promotion) and § 7.15 (explorer) have landed. § 7.14 (cabinet founding) may run after Phases 12, 13, 16
-and 17. They do not insert here, and they are not Phases 20–25.
+§ 7.13 (skill promotion), § 7.14 (cabinet founding) and § 7.15 (explorer) have landed.
+They do not insert here, and they are not Phases 20–25.
 
 ### 7.4 Hard rules that survive every later phase
 
@@ -2638,10 +2666,14 @@ closed.
   An operator who wants one asks for it, the way they would
   ask for a decision.
 
-### 7.14 Cabinet founding — not a CoS phase
+### 7.14 Cabinet founding — not a CoS phase *(landed)*
 
 Not a step in § 7.3. Not Phase 24. Not a first-run wizard. Not a
 fourth role. Not seeded identities.
+
+This slice has landed (`roster::parse`, `roster::read`, `roster::apply`,
+`AgentStore::create_all`, `commands::roster`, the `cabinet.found` seed).
+What it settled is at the end of this section, under *As landed*.
 
 Phases 12, 13, 16 and 17 have landed, and assembling a working cabinet
 is now the combinatorial product they left on the table: identities ×
@@ -2869,6 +2901,77 @@ the built-in Assistant is unchanged and still holds no skills;
 a routine still cannot be saved without a witnessed run; a
 session cannot apply. No new tool. No wizard. No Edit on the
 built-in row. The grant is the apply.
+
+**As landed.** What the text above left open, and how each was
+closed.
+
+- **The file is headings and dash lines.** `.aegis/roster/PROPOSAL.md`:
+  a `# ` title and prose are ignored; each `## Name` is an identity
+  with `- role:`, `- tools:`, `- skills:` and `- runs_per_day:`,
+  each exactly once (`roster::parse`). Lists are comma-separated and
+  `none` is an empty one. No field defaults: an identity missing one
+  is refused by name, so nothing it would hold is a value nobody
+  wrote. A line without a dash is prose and grants nothing, which is
+  what keeps "never give it tools: shell_exec" in a sentence from
+  being a grant. `## Intended routines` and `## Open questions` are
+  reserved, and their dash lines are listed as written. Capped at
+  16 KB and sixteen identities. No `instructions` field: a created
+  identity has none, and writing them stays a person's edit.
+- **The preview is judged by the runtime.** `roster_proposal(project_id)`
+  marks each entry `new`, `present` (a name on file, compared the way
+  `agent_create` compares) or `builtin`. Only `new` entries are judged,
+  by the identity form's own validator run as a batch
+  (`AgentStore::check_all`), so an unknown tool is refused with the
+  message the form would give. Two kinds of fact do not block and
+  are listed as `notes`: a runbook whose declared tools the identity
+  would not hold, and a runbook name that is not on this machine yet.
+  Both are allowed on the form, and both are said out loud here.
+  Settings → Identities draws the entries with the identity rows'
+  own markup; a skipped entry's proposed lists are not drawn.
+- **Apply is signed by digest.** The preview carries the SHA-256 of
+  the file it was built from. `roster_apply(project_id, digest)`
+  re-reads and re-judges the file and refuses when the digest no
+  longer matches: a session that rewrote the proposal between the
+  preview and the press would otherwise be granting what nobody read.
+  The button opens a sentence naming who is created; a second press
+  creates them.
+- **All or nothing.** One `new` entry that would be refused refuses
+  the apply, and `AgentStore::create_all` validates the batch under
+  one lock and writes `agents.json` once. A proposal whose every name
+  exists is not appliable.
+- **A connector tool has to be live at apply.** A `<connector>__<tool>`
+  no running connector offers refuses the entry. The form keeps such
+  a grant when a connector stops; a roster is a *new* grant, and one
+  for a program that is not running is a grant nobody watched work.
+- **The audit line is new.** Each identity created is one line with
+  tool `agent_create`, decision `operator`, no session, and the roster
+  path in its arguments. The text above says apply is "still on the
+  audit log as `agent_create`"; the form's own `agent_create` was
+  never audited, and is still not. Only identities made from a file
+  are on the log.
+- **The founder is a made row, and the empty state says so.** With
+  only the built-in identity listed, Settings → Identities names
+  Duplicate and the `cabinet.found` tick and performs neither. The
+  seeded runbook declares `fs_list`, `fs_read`, `fs_write`, and the
+  example roster in its steps is parsed by `roster.rs`'s tests.
+- **The default Reviewer stays narrow.** The text above gives it
+  `review.diff` on `fs_list`, `fs_read`, `skill_run`, `skill_return`
+  — but `review.diff` declares `fs_write` and `shell_exec`, so that
+  Reviewer would fail closed on every run. The runbook keeps the
+  Reviewer's tools as written, gives `review.diff` to the Delivery
+  specialist, and files an open question saying so. `world.check`
+  is the one seeded verifier a read-only Reviewer can run; it is
+  granted when the project has a world. A founder that proposes a
+  dead grant anyway gets a note on the entry.
+- **A world is named, not drafted.** When the human says the project
+  has an essence and there is no `world/`, the runbook names
+  `world.draft` under open questions and still writes the roster.
+- **No matrix row.** Writing the proposal is an ordinary `fs_write`
+  under `.aegis/`. Nothing refuses it inside a brief or recognises it
+  as special: it grants nothing until a person applies it, and the
+  press is not a tool call.
+- **The system prompt is unchanged.** Nothing tells a model that a
+  roster exists, and no roster body reaches a prompt.
 
 ### 7.15 Workspace explorer — not a CoS phase *(landed)*
 

@@ -190,7 +190,11 @@ never reads it, and copying it to `SKILL.md` is an `fs_write` that is asked
 every time, never replaces a runbook, and grants it to no identity. Cabinet
 founding (a founder skill, granted to a row the human made — never the
 built-in Assistant; a roster proposal, then apply is the grant; no
-wizard, no seeded identities) is § 7.14. A read-only workspace explorer
+wizard, no seeded identities) is § 7.14, and it has landed: `cabinet.found` files
+`.aegis/roster/PROPOSAL.md`, Settings previews it identity by identity, and applying
+it creates every new identity with those allow-lists or none, skips names that exist,
+refuses a file changed since the preview, and writes no routine, connector or world.
+A read-only workspace explorer
 (preview in, save out; a drop lands a brief) is § 7.15, and it has landed:
 the agent was in the system and the operator was not, so *Files* lists the
 open folder one directory at a time and previews without a save path. A

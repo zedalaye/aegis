@@ -484,15 +484,15 @@ with an empty list rather than refusing to open. Deleting a project forgets it a
 the workspace folder itself is never touched.
 
 Beside them, `skills/` holds your runbook library: one directory per skill, each with a
-`SKILL.md` in it. Aegis puts twenty-four there — `never-send-without-review`, `cos.loop`,
-`world.draft`, `world.perceive-delta`, `world.verify`, `world.check`, the delivery pack's
+`SKILL.md` in it. Aegis puts twenty-five there — `never-send-without-review`, `cos.loop`,
+`cabinet.found`, `world.draft`, `world.perceive-delta`, `world.verify`, `world.check`, the delivery pack's
 `review.diff`, `deploy.draft` and `alert.draft`, the intake pack's `mail.triage`,
 `thread.recap` and `reply.draft`, the watch pack's `watch.sweep`, `watch.digest` and
 `watch.impact`, the budget pack's `budget.position`, `budget.runway` and `budget.alert`, and the
 social pack's `social.scan`, `social.reply` and `social.post`, and the revenue pack's `wish.list`,
 `revenue.thesis` and `revenue.pipeline` — and offers each **once**, recorded by name in
 `skills/.seeded`. Delete one and it stays deleted, because a library is yours; a later version
-adding a twenty-fifth will offer that one and leave the rest alone. A workspace's own runbooks
+adding a twenty-sixth will offer that one and leave the rest alone. A workspace's own runbooks
 live in that workspace instead, under `.aegis/skills/`, and travel with it. See *Skills*.
 
 Beside them, `captures/` holds the PNGs `screen_capture` writes — one file per approved capture,
@@ -888,6 +888,36 @@ procedure in the instructions is paid for on every turn whether it is needed or 
 is the assistant Aegis had before either allow-list existed. Giving it every runbook the moment
 one appeared would change what the default identity means under the sessions already using it. A
 skill is always something you granted.
+
+### Founding a cabinet
+
+A Chief of Staff, a Reviewer and a specialist per domain is a lot of checkboxes. Aegis does not
+tick them for you, and it creates no identity on first launch. A session proposes the team as a
+file, and you apply it.
+
+1. **Duplicate** the Assistant, give the copy a role, and tick `cabinet.found` under Skills. The
+   built-in row itself cannot hold a skill.
+2. Open a session as the copy in a project with shared files, and ask for a cabinet. The runbook
+   asks what the cabinet is for, whether the project has a world, and whether anything should run
+   unattended. Then it writes `.aegis/roster/PROPOSAL.md` through the ordinary write dialog.
+3. **Settings → Identities** lists the proposal under the identities: each one with the tools, the
+   runbooks and the scheduled-run ceiling it would hold. **Apply roster…**, then **Create them**.
+
+- **Applying is the grant.** The identities are created with exactly the lists shown, and they are
+  in force on the next turn. Each is an `agent_create` line on the audit log, by you.
+- **What you confirmed is what is created.** If the file changed after the preview was drawn, the
+  apply is refused; re-read it.
+- **All or nothing.** One identity that would be refused refuses the whole roster, with the reason
+  beside it. A connector tool counts only if that connector is running.
+- **Existing names are skipped, never widened.** A Reviewer you made narrow stays narrow. The
+  Assistant is never changed.
+- **Only identities.** Intended routines and open questions are listed as written. A routine is
+  still saved under Routines after you have watched it run once, a connector is still yours to
+  install, and no `world/` is laid down.
+
+A session cannot apply a roster: there is no tool for it. The roster is plain markdown — each
+identity is a `## Name` heading with `- role:`, `- tools:`, `- skills:` and `- runs_per_day:` — so
+you can write or fix one in your editor too.
 
 ---
 
@@ -2170,8 +2200,9 @@ An install that does none of this work has eighteen folders it can delete. None 
 to anything by being seeded: a pack does not exist until you make an identity and tick the boxes.
 
 **And the standing cost is bounded.** The catalog — one line per runbook, never a step — is in the
-system message of every request an identity granted them makes. All twenty-four seeded runbooks
-together come to **5,556 characters**, against a 7,424 bound derived from the per-line cap, and
+system message of every request an identity granted them makes. The twenty-four seeded runbooks
+the six packs completed came to **5,556 characters**, against a bound derived from the per-line
+cap. `cabinet.found` added one more line under the same cap, and
 `a_library_holding_every_pack_still_costs_a_bounded_block` fails if that ever stops being true. Six
 packs added one at a time, each with a boring diff nobody was counting, is exactly how a library
 would otherwise become a context window.
