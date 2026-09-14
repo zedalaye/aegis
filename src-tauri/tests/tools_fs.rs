@@ -94,6 +94,12 @@ impl Fixture {
     /// without running anything. This is the whole of the turn loop's tool
     /// step, minus the events.
     fn call(&self, tool_name: &str, args: Value) -> ToolOutcome {
+        self.call_after(tool_name, args, || {})
+    }
+
+    /// [`Fixture::call`], with `between` run after policy decided and before
+    /// the tool runs — where a person would be reading the dialog.
+    fn call_after(&self, tool_name: &str, args: Value, between: impl FnOnce()) -> ToolOutcome {
         let ctx = PolicyCtx::new("session-1", Some(&self.workspace), &self.grants);
         let cancel = tokio_util::sync::CancellationToken::new();
         let tools_ctx = ToolCtx {
@@ -123,7 +129,10 @@ impl Fixture {
             routine: "",
         };
 
-        match decide(&ctx, tool_name, args.clone()) {
+        let decision = decide(&ctx, tool_name, args.clone());
+        between();
+
+        match decision {
             Decision::Auto { call, reason } => {
                 self.runtime
                     .block_on(tools::run(&tools_ctx, AuditDecision::Auto, reason, &call))
@@ -154,6 +163,69 @@ impl Fixture {
 /// fails a test rather than reaching a model.
 fn envelope(outcome: &ToolOutcome) -> Value {
     serde_json::from_str(&outcome.result.to_json()).expect("the envelope is valid JSON")
+}
+
+/// Links `link` to the directory `target`, or reports that this machine will
+/// not. On Windows a junction is the fallback, which needs no privilege and is
+/// what the runtime treats as a link anyway.
+fn link_dir(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(target, link).is_ok()
+        || std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|out| out.status.success());
+
+    if !made {
+        eprintln!("skipping: this machine does not allow creating a directory link");
+    }
+    made
+}
+
+// ---------------------------------------------------------------------------
+// Between the decision and the call
+// ---------------------------------------------------------------------------
+
+/// The decision is taken when the call arrives, and the dialog may be open for
+/// minutes. A folder that becomes a link in the meantime must not carry the
+/// write out of the workspace.
+#[test]
+fn a_folder_swapped_for_a_link_after_the_decision_stops_the_write() {
+    let fixture = Fixture::new();
+    let mut linked = false;
+
+    let outcome = fixture.call_after(
+        tool::FS_WRITE,
+        json!({ "path": "later/notes.md", "content": "hello", "create_dirs": true }),
+        || linked = link_dir(&fixture.outside, &fixture.workspace.join("later")),
+    );
+    if !linked {
+        return;
+    }
+
+    assert!(!outcome.result.ok, "{}", outcome.result.to_json());
+    assert!(
+        !fixture.outside.join("notes.md").exists(),
+        "nothing is written through the link"
+    );
+}
+
+#[test]
+fn a_path_that_did_not_move_is_still_written() {
+    let fixture = Fixture::new();
+
+    let outcome = fixture.call_after(
+        tool::FS_WRITE,
+        json!({ "path": "later/notes.md", "content": "hello", "create_dirs": true }),
+        || fs::create_dir(fixture.workspace.join("later")).expect("mkdir"),
+    );
+
+    assert!(outcome.result.ok, "{}", outcome.result.to_json());
+    assert!(fixture.workspace.join("later").join("notes.md").is_file());
 }
 
 // ---------------------------------------------------------------------------

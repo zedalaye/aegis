@@ -39,7 +39,7 @@ function scopeLabel(grant: Grant): string {
       return "Amend world/, this workspace’s constitution";
     case "shell":
       if (grant.program === "git") {
-        return "Run read-only `git` in this workspace (status, log, diff, show, …) — checkout, merge, push and reset are still asked about";
+        return "Run read-only `git` in this workspace (status, log, diff, show, …) — any other verb, an option before the verb, and a line that writes a file or runs a program are still asked about";
       }
       return `Run \`${grant.program}\` in this workspace, with any arguments`;
     case "screen_capture":

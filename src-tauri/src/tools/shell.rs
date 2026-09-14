@@ -1235,11 +1235,7 @@ pub(crate) fn resolve(program: &str, cwd: &Path) -> Result<PathBuf, String> {
 
     // A name with a separator in it is a path, not a PATH lookup — the same
     // rule every shell uses.
-    let has_separator = named
-        .parent()
-        .is_some_and(|parent| !parent.as_os_str().is_empty());
-
-    if has_separator {
+    if crate::policy::grants::names_a_path(program) {
         let candidate = if named.is_absolute() {
             named.to_path_buf()
         } else {

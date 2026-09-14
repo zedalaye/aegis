@@ -50,6 +50,14 @@ pub enum PathError {
     /// A link on the way could not be followed — dangling, looping, or
     /// unreadable.
     Unresolvable,
+    /// A segment Windows would silently respell: a trailing dot or space, which
+    /// Win32 strips before it opens anything, or a `:`, which names an
+    /// alternate data stream.
+    ///
+    /// `.git.\hooks` opens `.git\hooks`. A predicate reading the segment as
+    /// text would be judging a folder other than the one written to, so the
+    /// only safe reading is none.
+    WindowsName,
 }
 
 impl PathError {
@@ -59,6 +67,9 @@ impl PathError {
             Self::Empty => "no path was given",
             Self::RootedRelative => "a relative path may not start at a drive or a filesystem root",
             Self::Unresolvable => "the path could not be resolved",
+            Self::WindowsName => {
+                "on Windows a path segment may not end with a dot or a space, or contain `:`"
+            }
         }
     }
 }
@@ -116,6 +127,9 @@ pub fn resolve(workspace: &Path, raw: &str) -> Result<Resolved, PathError> {
     }
 
     let given = dunce::simplified(Path::new(trimmed));
+    if !spelled_literally(given) {
+        return Err(PathError::WindowsName);
+    }
     let joined = if given.is_absolute() {
         given.to_path_buf()
     } else {
@@ -131,7 +145,7 @@ pub fn resolve(workspace: &Path, raw: &str) -> Result<Resolved, PathError> {
     };
 
     let looked_inside = is_contained(workspace, &lexical(&joined));
-    let path = walk(&joined)?;
+    let path = on_disk(walk(&joined)?)?;
     let inside = is_contained(workspace, &path);
 
     Ok(Resolved {
@@ -139,6 +153,87 @@ pub fn resolve(workspace: &Path, raw: &str) -> Result<Resolved, PathError> {
         inside,
         looked_inside,
     })
+}
+
+/// Whether an already-resolved path still resolves to itself.
+///
+/// Policy resolves a path when it decides, and a person may take minutes to
+/// answer the dialog. In between, a folder that did not exist can appear as a
+/// link, or one that did can be swapped for one, and the tool would then act
+/// through it on somewhere it was never approved for. Walking the path again
+/// immediately before the tool touches it shrinks that window from minutes to
+/// the gap between two system calls. It is not a handle-based guarantee —
+/// nothing short of opening each component relative to its parent is.
+pub fn unchanged(resolved: &Path) -> bool {
+    walk(resolved)
+        .and_then(on_disk)
+        .is_ok_and(|again| same_path(&again, resolved))
+}
+
+/// Component-wise equality, with the same folding [`is_contained`] uses.
+fn same_path(a: &Path, b: &Path) -> bool {
+    let a = dunce::simplified(a);
+    let b = dunce::simplified(b);
+    a.components().count() == b.components().count()
+        && a.components()
+            .zip(b.components())
+            .all(|(one, two)| segments_eq(one, two))
+}
+
+/// Whether every segment of an argument means what it says to Win32.
+///
+/// See [`PathError::WindowsName`]. Checked on the argument rather than on the
+/// resolved path, because the respelling is exactly what resolution would
+/// hide.
+#[cfg(windows)]
+fn spelled_literally(path: &Path) -> bool {
+    path.components().all(|component| match component {
+        Component::Normal(name) => name
+            .to_str()
+            .is_none_or(|name| !(name.ends_with('.') || name.ends_with(' ') || name.contains(':'))),
+        _ => true,
+    })
+}
+
+/// Every segment means what it says: these filesystems respell nothing.
+#[cfg(not(windows))]
+const fn spelled_literally(_path: &Path) -> bool {
+    true
+}
+
+/// Respells the part of a path that exists the way the filesystem spells it.
+///
+/// Windows answers to more than one name for a folder: `GIT~1` is `.git`
+/// wherever short names are generated, and `SRC` is `src`. The predicates
+/// downstream — `.git/`, `world/`, the sensitive names — read segments as
+/// text, so the text has to be the one on disk. The deepest ancestor that
+/// exists is canonicalized once; the tail that does not exist yet is kept as
+/// written, since it cannot be an alias of anything.
+#[cfg(windows)]
+fn on_disk(path: PathBuf) -> Result<PathBuf, PathError> {
+    let mut missing = Vec::new();
+    let mut existing = path.as_path();
+    while fs::symlink_metadata(existing).is_err() {
+        let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+            return Ok(path.clone());
+        };
+        missing.push(name);
+        existing = parent;
+    }
+
+    let mut spelled = dunce::canonicalize(existing).map_err(|err| {
+        tracing::debug!(%err, "a folder on the path could not be canonicalized");
+        PathError::Unresolvable
+    })?;
+    spelled.extend(missing.into_iter().rev());
+    Ok(spelled)
+}
+
+/// The path as walked: off Windows, a name is the only name.
+#[cfg(not(windows))]
+#[allow(clippy::unnecessary_wraps)]
+fn on_disk(path: PathBuf) -> Result<PathBuf, PathError> {
+    Ok(path)
 }
 
 /// Whether `candidate` is `root` itself or below it.

@@ -643,6 +643,139 @@ fn a_git_session_grant_does_not_cover_a_verb_that_moves_the_tree() {
     assert!(matches!(auto(status), ResolvedCall::ShellExec { .. }));
 }
 
+/// Read-only is a property of the line, not of the verb. Each of these would
+/// have run a program, written a file or read one from anywhere, under a grant
+/// approved on `git status`.
+#[test]
+fn a_git_session_grant_covers_read_only_lines_and_nothing_else() {
+    let fixture = Fixture::new();
+    fixture.grants.insert("session-1", Grant::shell("git"));
+
+    for args in [
+        json!(["-c", "core.fsmonitor=calc", "status"]),
+        json!(["-C", "..", "status"]),
+        json!(["config", "core.fsmonitor", "calc"]),
+        json!(["st"]),
+        json!(["diff", "--output=../out.txt"]),
+        json!(["diff", "--no-index", "a", "b"]),
+        json!(["branch", "-D", "main"]),
+    ] {
+        let request = ask(decide(
+            &fixture.ctx(),
+            tool::SHELL_EXEC,
+            json!({ "program": "git", "args": args.clone() }),
+        ));
+        assert_eq!(request.grant, None, "{args}");
+    }
+
+    for args in [
+        json!(["--no-pager", "log", "--oneline"]),
+        json!(["branch", "--show-current"]),
+    ] {
+        let decision = decide(
+            &fixture.ctx(),
+            tool::SHELL_EXEC,
+            json!({ "program": "git", "args": args.clone() }),
+        );
+        assert!(
+            matches!(decision, Decision::Auto { .. }),
+            "{args}: {decision:?}"
+        );
+    }
+}
+
+/// A bare repository needs no `.git`: a `HEAD` beside `objects/` is enough for
+/// git to take the folder as one, and its `config` — a file `fs_write` may have
+/// created — then decides what `git status` runs.
+#[test]
+fn a_git_session_grant_does_not_reach_into_a_bare_repository_the_workspace_holds() {
+    let fixture = Fixture::new();
+    fixture.grants.insert("session-1", Grant::shell("git"));
+    fixture.file("planted/HEAD", "ref: refs/heads/main\n");
+    fixture.file("planted/config", "[core]\n\tfsmonitor = calc\n");
+    fs::create_dir_all(fixture.workspace.join("planted").join("objects")).expect("mkdir");
+    fs::create_dir_all(fixture.workspace.join("planted").join("refs")).expect("mkdir");
+
+    let request = ask(decide(
+        &fixture.ctx(),
+        tool::SHELL_EXEC,
+        json!({ "program": "git", "args": ["status"], "cwd": "planted/refs" }),
+    ));
+
+    assert_eq!(request.grant, None);
+    assert!(
+        request.reason.contains("bare repository"),
+        "{}",
+        request.reason
+    );
+}
+
+/// A shell grant used to be keyed on the basename, so a file in the workspace
+/// called `git` ran under a grant on git.
+#[test]
+fn a_file_called_git_is_not_covered_by_a_grant_on_git() {
+    let fixture = Fixture::new();
+    fixture.grants.insert("session-1", Grant::shell("git"));
+    let name = if cfg!(windows) {
+        "scripts/git.cmd"
+    } else {
+        "scripts/git"
+    };
+    fixture.file(name, "echo planted");
+
+    let request = ask(decide(
+        &fixture.ctx(),
+        tool::SHELL_EXEC,
+        json!({ "program": name, "args": ["log"] }),
+    ));
+
+    let Some(Grant::Shell { program }) = request.grant else {
+        panic!(
+            "a grant on the file itself is offered, got {:?}",
+            request.grant
+        );
+    };
+    assert_ne!(program, "git");
+    assert!(Path::new(&program).is_absolute(), "{program}");
+}
+
+/// Win32 strips a trailing dot or space from a segment and reads `:` as a
+/// stream, so `.git.\hooks` opens `.git\hooks`. Refused, rather than judged as
+/// the folder its text names.
+#[cfg(windows)]
+#[test]
+fn a_windows_respelling_of_a_guarded_folder_is_not_judged_by_its_text() {
+    let fixture = Fixture::new();
+    fixture.grants.insert("session-1", Grant::FsWrite);
+    fs::create_dir_all(fixture.workspace.join(".git").join("hooks")).expect("mkdir");
+    fs::create_dir(fixture.workspace.join("world")).expect("mkdir");
+
+    for path in [
+        r".git.\hooks\pre-commit",
+        r"world.\ESSENCE.md",
+        "credentials.",
+        "notes.md:hidden",
+    ] {
+        let code = denied(decide(
+            &fixture.ctx(),
+            tool::FS_WRITE,
+            json!({ "path": path, "content": "x" }),
+        ));
+        assert_eq!(code, ErrorCode::PathInvalid, "{path}");
+    }
+
+    if fixture.workspace.join("GIT~1").exists() {
+        let request = ask(decide(
+            &fixture.ctx(),
+            tool::FS_WRITE,
+            json!({ "path": r"GIT~1\hooks\pre-commit", "content": "x" }),
+        ));
+        assert_eq!(request.grant, None, "a short name for .git is still .git");
+    } else {
+        eprintln!("skipping the short-name half: this volume does not generate 8.3 names");
+    }
+}
+
 #[test]
 fn a_grant_belongs_to_the_session_that_made_it() {
     let fixture = Fixture::new();

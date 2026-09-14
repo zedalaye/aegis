@@ -708,6 +708,31 @@ impl fmt::Debug for ToolCtx<'_> {
     }
 }
 
+/// A refusal, when a path policy resolved no longer resolves to itself.
+///
+/// The decision was taken when the call arrived, and the dialog may have been
+/// open for minutes since. A folder swapped for a link in between would take
+/// the call somewhere nobody approved, so the path is walked again here,
+/// immediately before the tool touches it.
+fn moved(tool_name: &str, path: &Path) -> Option<Produced> {
+    if crate::policy::path::unchanged(path) {
+        return None;
+    }
+    tracing::warn!(
+        tool = tool_name,
+        "a resolved path changed on disk between the decision and the call"
+    );
+    Some(Produced::failed(
+        tool_name,
+        ErrorCode::PathInvalid,
+        format!(
+            "`{}` changed on disk after this call was decided: a folder on the way is now a link, \
+             or was replaced. Nothing was done. Make the call again to have it judged as it is now",
+            path.display()
+        ),
+    ))
+}
+
 /// Runs a call that policy — or the user — has cleared, and audits it.
 ///
 /// This is the only way a tool runs. `decision` and `reason` are what the
@@ -728,35 +753,40 @@ pub async fn run(
     let started = Instant::now();
 
     let produced = match call {
-        ResolvedCall::FsList { path, max_entries } => fs::list(path, *max_entries),
+        ResolvedCall::FsList { path, max_entries } => {
+            moved(name, path).unwrap_or_else(|| fs::list(path, *max_entries))
+        }
         ResolvedCall::FsRead {
             path,
             offset,
             limit,
-        } => fs::read(path, *offset, *limit),
+        } => moved(name, path).unwrap_or_else(|| fs::read(path, *offset, *limit)),
         ResolvedCall::FsWrite {
             path,
             content,
             create_dirs,
-        } => fs::write(path, content, *create_dirs),
+        } => moved(name, path).unwrap_or_else(|| fs::write(path, content, *create_dirs)),
         ResolvedCall::ShellExec {
             program,
             args,
             cwd,
             host,
             timeout_ms,
-        } => {
-            shell::exec(
-                program,
-                args,
-                cwd,
-                host.as_deref(),
-                *timeout_ms,
-                ctx.progress,
-                ctx.cancel,
-            )
-            .await
-        }
+        } => match moved(name, cwd) {
+            Some(refused) => refused,
+            None => {
+                shell::exec(
+                    program,
+                    args,
+                    cwd,
+                    host.as_deref(),
+                    *timeout_ms,
+                    ctx.progress,
+                    ctx.cancel,
+                )
+                .await
+            }
+        },
         // On a blocking thread, not inline: a capture is a round trip to the
         // window server, and on a compositor that raises its own consent
         // prompt it is a round trip through a person. Neither belongs on a

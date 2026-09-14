@@ -110,16 +110,16 @@ pub enum Grant {
 }
 
 impl Grant {
-    /// Builds a shell grant from the program as the model spelled it.
+    /// Builds a shell grant from the program a call names.
     ///
-    /// The key is the basename, so `/usr/bin/git`, `git` and (on Windows)
-    /// `C:\Program Files\Git\cmd\git.exe` all name the same grant — the user
-    /// approved *running git*, and which copy of git PATH finds is not a
-    /// distinction they were shown. Windows also drops the executable suffix
-    /// and folds case, because `git.exe`, `git.cmd` and `GIT` are one program
-    /// there. Phase 7 resolves the program through PATH before it runs; it
-    /// normalizes through this same function, so the grant a user created on
-    /// the prompt is the grant the resolved call matches.
+    /// A bare name is keyed on the program: `git` and (on Windows) `GIT.EXE`
+    /// or `git.cmd` are one grant, because PATH finds one program for all of
+    /// them, and which copy it finds is not a distinction the user was shown.
+    ///
+    /// A name with a separator in it is keyed on the whole path, and the
+    /// matrix passes it resolved. Keying it on the basename is how
+    /// `scripts\git.cmd` — a file the session could have written a minute ago
+    /// — used to run under a grant on git.
     pub fn shell(program: &str) -> Self {
         Self::Shell {
             program: shell_key(program),
@@ -169,7 +169,8 @@ impl Grant {
             }
             Self::Shell { program } if program == "git" => {
                 "run read-only `git` in this workspace (status, log, diff, show, …) for the rest \
-                 of this session — checkout, merge, push and reset are still asked about"
+                 of this session — any other verb, an option before the verb, and a line that \
+                 writes a file or runs a program are still asked about"
                     .to_owned()
             }
             Self::Shell { program } => format!(
@@ -185,7 +186,8 @@ impl Grant {
                     .to_owned()
             }
             Self::HandoffDelegate => {
-                "hand briefs to other identities, for the rest of this session — what each of                  them then does is still approved call by call"
+                "hand briefs to other identities, for the rest of this session — what each of \
+                 them then does is still approved call by call"
                     .to_owned()
             }
             Self::Connector { tool } => {
@@ -201,11 +203,37 @@ impl Grant {
     }
 }
 
-/// Normalizes a program name into a grant key.
-///
-/// Kept beside [`Grant::shell`] so the matrix, the approval path and Phase 7's
-/// PATH resolution cannot drift into three slightly different answers.
+/// Normalizes a program into a grant key. See [`Grant::shell`].
 fn shell_key(program: &str) -> String {
+    let trimmed = program.trim();
+    if !names_a_path(trimmed) {
+        return program_name(trimmed);
+    }
+    if cfg!(windows) {
+        trimmed.to_lowercase()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Whether `program` names a file by where it is, rather than a program to
+/// look up on PATH.
+///
+/// The rule every shell uses, and the one `shell_exec` resolves by: kept here
+/// so the grant key and the resolution cannot disagree about which it is.
+pub fn names_a_path(program: &str) -> bool {
+    std::path::Path::new(program.trim())
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+}
+
+/// Which program a name runs, whatever path it was reached by.
+///
+/// The basename; on Windows also without its executable suffix and folded to
+/// lower case, because `git.exe`, `git.cmd` and `GIT` are one program there.
+/// Used where the question is *what* runs — is this git, is this Aegis — and
+/// never as the key of a grant for a program named by a path.
+pub fn program_name(program: &str) -> String {
     let trimmed = program.trim();
     let basename = std::path::Path::new(trimmed)
         .file_name()
@@ -326,15 +354,28 @@ mod tests {
     }
 
     #[test]
-    fn shell_grants_are_keyed_on_the_program_alone() {
+    fn a_bare_name_is_keyed_on_the_program() {
         let store = GrantStore::new();
         store.insert("s1", Grant::shell("git"));
 
-        assert!(store.holds("s1", &Grant::shell("/usr/bin/git")));
+        assert!(store.holds("s1", &Grant::shell(" git ")));
         assert!(
             !store.holds("s1", &Grant::shell("rm")),
             "approving one program must not approve another"
         );
+    }
+
+    #[test]
+    fn a_program_named_by_a_path_is_keyed_on_the_path() {
+        let store = GrantStore::new();
+        store.insert("s1", Grant::shell("git"));
+
+        assert!(
+            !store.holds("s1", &Grant::shell("/ws/scripts/git")),
+            "a file called git is not git"
+        );
+        assert_ne!(Grant::shell("/ws/a/tool"), Grant::shell("/ws/b/tool"));
+        assert_eq!(program_name("/ws/scripts/git"), "git");
     }
 
     #[cfg(windows)]
@@ -342,9 +383,14 @@ mod tests {
     fn windows_shell_keys_ignore_case_and_the_executable_suffix() {
         assert_eq!(Grant::shell("GIT.EXE"), Grant::shell("git"));
         assert_eq!(
+            Grant::shell(r"C:\WS\Tool.cmd"),
+            Grant::shell(r"c:\ws\tool.cmd")
+        );
+        assert_ne!(
             Grant::shell(r"C:\Program Files\Git\cmd\git.cmd"),
             Grant::shell("git")
         );
+        assert_eq!(program_name(r"C:\Program Files\Git\cmd\git.cmd"), "git");
     }
 
     #[test]

@@ -292,6 +292,38 @@ mod windows {
         );
         assert_eq!(resolve(&ws, "C:tmp"), Err(PathError::RootedRelative));
     }
+
+    #[test]
+    fn a_segment_windows_would_respell_is_refused() {
+        let (_guard, ws) = temp();
+
+        for raw in [
+            r".git.\hooks",
+            r"world \ESSENCE.md",
+            "notes.md:stream",
+            r"a\b.",
+            "credentials. ",
+        ] {
+            assert_eq!(resolve(&ws, raw), Err(PathError::WindowsName), "{raw}");
+        }
+    }
+
+    #[test]
+    fn an_existing_folder_is_spelled_the_way_the_disk_spells_it() {
+        let (_guard, ws) = temp();
+        fs::create_dir_all(ws.join(".git").join("hooks")).expect("mkdir");
+        fs::create_dir(ws.join("Src")).expect("mkdir");
+
+        let cased = resolve(&ws, r"SRC\new.rs").expect("resolves");
+        assert_eq!(cased.path, ws.join("Src").join("new.rs"));
+
+        if ws.join("GIT~1").exists() {
+            let short = resolve(&ws, r"GIT~1\hooks\pre-commit").expect("resolves");
+            assert_eq!(short.path, ws.join(".git").join("hooks").join("pre-commit"));
+        } else {
+            eprintln!("skipping the short-name half: this volume does not generate 8.3 names");
+        }
+    }
 }
 
 #[cfg(not(windows))]

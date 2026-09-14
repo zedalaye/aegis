@@ -21,7 +21,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use aegis_lib::audit::{AuditDecision, AuditLog, Outcome};
-use aegis_lib::policy::{decide, tool, Decision, Grant, GrantStore, PolicyCtx};
+use aegis_lib::policy::{decide, tool, Decision, GrantStore, PolicyCtx};
 use aegis_lib::tools::{self, ProgressSink, Stream, ToolCtx, ToolOutcome};
 use aegis_lib::HandoffCtx;
 use aegis_lib::{MemoryStore, SkillCtx, DEFAULT_AGENT_ID};
@@ -248,7 +248,13 @@ async fn a_session_grant_covers_one_program_and_no_other() {
     let allowed = fixture.script("allowed", "echo yes", "echo yes");
     let other = fixture.script("other", "echo no", "echo no");
 
-    assert!(fixture.grants.insert("session-1", Grant::shell(&allowed)));
+    // The grant the dialog offered, as the approval path would record it: a
+    // program named by a path is keyed on where it resolves.
+    let grant = match fixture.judge(&json!({ "program": allowed })) {
+        Decision::Ask { request, .. } => request.grant.expect("a grant is offered"),
+        other => panic!("expected an ask, got {other:?}"),
+    };
+    assert!(fixture.grants.insert("session-1", grant));
 
     match fixture.judge(&json!({ "program": allowed })) {
         Decision::Auto { .. } => {}

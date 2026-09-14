@@ -30,6 +30,7 @@ use std::path::{Component, Path};
 
 use crate::store::connectors;
 
+use super::grants;
 use super::path::{self, Resolved};
 use super::{
     tool, ApprovalDetail, AskRequest, Decision, Grant, HandoffRow, PolicyCtx, ResolvedCall, Risk,
@@ -475,6 +476,31 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 None => None,
             };
 
+            // A program named by a path is keyed on where it is, not on what it
+            // is called: `scripts\git.cmd` is a file the session may have
+            // written a minute ago, and a grant on git must not run it. Resolved
+            // the way `shell_exec` will resolve it — against the working
+            // directory, or in the distribution's own spelling when there is a
+            // host.
+            let key = if grants::names_a_path(&program) {
+                match &host {
+                    Some(_) if program.starts_with('/') => program.clone(),
+                    Some(target) => format!("{}/{program}", target.cwd.trim_end_matches('/')),
+                    None => path::resolve(&directory.path, &program)
+                        .map_err(|err| {
+                            Decision::deny(
+                                ErrorCode::PathInvalid,
+                                format!("`{program}`: {}", err.reason()),
+                            )
+                        })?
+                        .path
+                        .display()
+                        .to_string(),
+                }
+            } else {
+                program.clone()
+            };
+
             let line = shell_line(&program, &args);
             let detail = ApprovalDetail::Shell {
                 program: program.clone(),
@@ -510,13 +536,20 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             // A session grant is the program, not the line — except git, where
             // "any arguments" is how `git status` silently covered `git
             // checkout` twice on a review.diff run (IDEAS.md § 12; PLAN 3.3).
-            // A verb that moves the tree offers no grant, so an earlier
-            // approval cannot collapse it: the user sees the exact line again.
+            // The grant covers read-only git and nothing else, and the verb is
+            // not enough to say so: `-c core.fsmonitor=…` makes `git status`
+            // run a program, `--output` makes `git diff` write a file, and a
+            // bare repository laid out in the workspace brings a configuration
+            // the model wrote. Those offer no grant, so an earlier approval
+            // cannot collapse them: the user sees the exact line again.
             let git_args = match &call {
                 ResolvedCall::ShellExec { args, .. } => args.as_slice(),
                 _ => &[],
             };
-            if git_moves_the_tree(&program, git_args) {
+            let not_grantable = (grants::program_name(&program) == "git")
+                .then(|| git_not_grantable(git_args, &directory.path, workspace))
+                .flatten();
+            if let Some(why) = not_grantable {
                 return Ok(ask(
                     call,
                     AskRequest {
@@ -527,9 +560,9 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                         detail,
                         grant: None,
                         scope_label: scope_label(None),
-                        reason: "this git command changes the working tree or the refs, and \
-                                 allowing git for the session does not cover that"
-                            .to_owned(),
+                        reason: format!(
+                            "allowing git for the session does not cover this line: {why}"
+                        ),
                     },
                 ));
             }
@@ -538,7 +571,7 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
             // whichever operating system runs it, and `wsl.exe` is not a
             // program anybody was asked about. What the host changes is what
             // the user is told they are agreeing to.
-            let grant = Grant::shell(&program);
+            let grant = Grant::shell(&key);
             let reason = match ctx.exec_host {
                 Some(ExecHost::Wsl { distro }) => format!(
                     "a command runs in `{distro}` as that distribution's own user, and is not sandboxed"
@@ -1064,100 +1097,150 @@ fn nearest_existing(path: &Path) -> Option<&Path> {
     path.ancestors().find(|ancestor| ancestor.exists())
 }
 
-/// Git subcommands that change the working tree or the refs.
+/// The verbs a `git` session grant covers (PLAN 3.3).
 ///
-/// PLAN 3.3: the user reads the exact args before anything mutating runs. A
-/// session grant keyed on the basename `git` would otherwise auto-allow
-/// `checkout` after someone approved `status`. This list is not a denylist
-/// that refuses the call — it is the set of verbs that still open a dialog.
-const GIT_MOVES_THE_TREE: &[&str] = &[
-    "add",
-    "am",
-    "apply",
-    "checkout",
-    "cherry-pick",
-    "clean",
-    "clone",
-    "commit",
-    "merge",
-    "mv",
-    "pull",
-    "push",
-    "rebase",
-    "reset",
-    "restore",
-    "revert",
-    "rm",
-    "stash",
-    "switch",
-    "worktree",
+/// An allow-list, where there used to be a list of verbs that move the tree.
+/// That shape covered whatever it had not heard of — `config`, an alias, a verb
+/// added in the next release — while the grant's own sentence promised
+/// *read-only*. `branch` is not here: it lists or it deletes, and
+/// [`GIT_BRANCH_LISTING`] is how the two are told apart.
+const GIT_READ_ONLY: &[&str] = &[
+    "blame",
+    "cat-file",
+    "describe",
+    "diff",
+    "log",
+    "ls-files",
+    "ls-tree",
+    "rev-list",
+    "rev-parse",
+    "shortlog",
+    "show",
+    "status",
+    "version",
 ];
 
-/// Git flags that take a value, so the next argument is not the subcommand.
-const GIT_VALUE_FLAGS: &[&str] = &[
-    "--config-env",
-    "--git-dir",
-    "--list-cmds",
-    "--namespace",
-    "--super-prefix",
-    "--work-tree",
-    "-C",
-    "-c",
+/// The options `git branch` may carry and still only list.
+const GIT_BRANCH_LISTING: &[&str] = &[
+    "--show-current",
+    "--list",
+    "-l",
+    "-a",
+    "--all",
+    "-r",
+    "--remotes",
+    "-v",
+    "-vv",
+    "--verbose",
+    "--no-color",
 ];
 
-/// Whether this is a `git` invocation whose subcommand moves the repository.
+/// The options that may come before the verb under a grant.
 ///
-/// Unknown verbs stay on the ordinary grant: the list above is the ones we
-/// have watched a session grant cover by accident, not a parser of git.
-fn git_moves_the_tree(program: &str, args: &[String]) -> bool {
-    if Grant::shell(program) != Grant::shell("git") {
-        return false;
-    }
-    git_subcommand(args).is_some_and(|verb| GIT_MOVES_THE_TREE.contains(&verb))
+/// Every other one changes where git looks (`-C`, `--git-dir`, `--work-tree`)
+/// or which configuration it runs with (`-c`, `--config-env`, `--exec-path`) —
+/// and configuration is how git runs programs: `core.fsmonitor` on `status`,
+/// `diff.external`, an `!` alias.
+const GIT_SAFE_GLOBALS: &[&str] = &[
+    "--no-pager",
+    "-P",
+    "--no-optional-locks",
+    "--literal-pathspecs",
+    "--version",
+];
+
+/// Options of a read-only verb that are not read-only.
+///
+/// `--output` writes a file wherever it names, `--no-index` and `--contents`
+/// read one from anywhere on disk, and `--ext-diff` runs a program.
+const GIT_UNSAFE_OPTIONS: &[&str] = &["--output", "--no-index", "--contents", "--ext-diff"];
+
+/// Why a `git` line is not one a session grant may cover, or `None` when it is.
+fn git_not_grantable(args: &[String], cwd: &Path, workspace: &Path) -> Option<&'static str> {
+    git_line_not_grantable(args).or_else(|| {
+        bare_repository_on_the_way(cwd, workspace).then_some(
+            "the working directory is laid out like a bare repository, and git would run with \
+             whatever configuration is in it",
+        )
+    })
 }
 
-/// The first non-option argument, skipping `git`'s own flags.
-fn git_subcommand(args: &[String]) -> Option<&str> {
-    let mut skip_value = false;
-    for arg in args {
-        if skip_value {
-            skip_value = false;
-            continue;
+/// The half of [`git_not_grantable`] that only reads the arguments.
+fn git_line_not_grantable(args: &[String]) -> Option<&'static str> {
+    let mut words = args.iter().map(String::as_str);
+    let verb = loop {
+        match words.next() {
+            // `git` alone prints its usage and opens no repository.
+            None => return None,
+            Some(word) if GIT_SAFE_GLOBALS.contains(&word) => {}
+            Some(word) if word.starts_with('-') => {
+                return Some(
+                    "an option before the verb changes where git looks, or which configuration \
+                     it runs with",
+                );
+            }
+            Some(verb) => break verb,
         }
-        if arg == "--" {
-            continue;
+    };
+    let rest: Vec<&str> = words.collect();
+
+    if verb == "branch" {
+        if !rest.iter().all(|word| GIT_BRANCH_LISTING.contains(word)) {
+            return Some("this `git branch` does more than list branches");
         }
-        if GIT_VALUE_FLAGS.contains(&arg.as_str()) {
-            skip_value = true;
-            continue;
-        }
-        if arg.starts_with("--git-dir=")
-            || arg.starts_with("--work-tree=")
-            || arg.starts_with("--namespace=")
-            || arg.starts_with("--super-prefix=")
-            || arg.starts_with("--config-env=")
-            || (arg.starts_with("-c") && arg.len() > 2)
-        {
-            continue;
-        }
-        if arg.starts_with('-') {
-            continue;
-        }
-        return Some(arg.as_str());
+    } else if !GIT_READ_ONLY.contains(&verb) {
+        return Some("only read-only verbs (status, log, diff, show, …) are covered");
     }
-    None
+
+    let unsafe_option = rest.iter().any(|word| {
+        GIT_UNSAFE_OPTIONS.iter().any(|option| {
+            word.strip_prefix(option)
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with('='))
+        })
+    });
+    unsafe_option.then_some(
+        "one of its options writes a file, reads one from anywhere on disk, or runs a program",
+    )
+}
+
+/// Whether git, started in `cwd`, could find a repository the workspace laid
+/// out as ordinary files.
+///
+/// Git walks up from where it starts and takes the first folder that has a
+/// `.git` or *is* one — and a bare repository needs no `.git` at all, only a
+/// `HEAD` beside `objects/`. Those are files `fs_write` may create under its
+/// grant, so the `config` beside them is one the model could have written, and
+/// a `core.fsmonitor` in it runs on `git status`. A `.git` on the way ends the
+/// walk: a write there is asked about every time, so what it holds is the
+/// user's. So does the workspace root, above which the model writes nothing
+/// without a prompt.
+fn bare_repository_on_the_way(cwd: &Path, workspace: &Path) -> bool {
+    for folder in cwd.ancestors() {
+        if !path::is_contained(workspace, folder) {
+            return false;
+        }
+        if fs::symlink_metadata(folder.join(".git")).is_ok() {
+            return false;
+        }
+        if folder.join("HEAD").is_file()
+            && (folder.join("objects").is_dir() || folder.join("commondir").is_file())
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether the program names this application's own binary.
 ///
-/// Compared through [`Grant::shell`], so the comparison folds exactly the same
-/// things the grant key folds — basename, executable suffix and case on
-/// Windows — and `aegis`, `Aegis.exe` and a full path to it are one answer.
+/// Compared through [`grants::program_name`], so basename, executable suffix
+/// and case on Windows fold the same way everywhere, and `aegis`, `Aegis.exe`
+/// and a full path to it are one answer.
 fn is_self(ctx: &PolicyCtx<'_>, program: &str) -> bool {
     ctx.self_exe
         .and_then(Path::file_name)
         .and_then(|name| name.to_str())
-        .is_some_and(|name| Grant::shell(program) == Grant::shell(name))
+        .is_some_and(|name| grants::program_name(program) == grants::program_name(name))
 }
 
 /// Whether the target is inside the workspace's constitution.
@@ -1376,42 +1459,61 @@ mod tests {
     }
 
     #[test]
-    fn git_subcommand_skips_the_flags_that_are_not_the_verb() {
-        assert_eq!(git_subcommand(&args(&["status"])), Some("status"));
-        assert_eq!(
-            git_subcommand(&args(&["--no-pager", "diff", "HEAD"])),
-            Some("diff")
-        );
-        assert_eq!(
-            git_subcommand(&args(&["-C", "/tmp/repo", "checkout", "--", "a"])),
-            Some("checkout")
-        );
-        assert_eq!(
-            git_subcommand(&args(&["--git-dir=.git", "log"])),
-            Some("log")
-        );
-        assert_eq!(git_subcommand(&args(&["--no-pager"])), None);
+    fn read_only_git_lines_are_grantable() {
+        for line in [
+            &[][..],
+            &["status"],
+            &["--no-pager", "log", "--oneline"],
+            &["diff", "HEAD", "--output-indicator-new=+"],
+            &["show", "HEAD:src/main.rs"],
+            &["branch", "--show-current"],
+            &["branch", "-a", "-v"],
+        ] {
+            assert_eq!(git_line_not_grantable(&args(line)), None, "{line:?}");
+        }
     }
 
     #[test]
-    fn only_git_verbs_that_move_the_tree_are_flagged() {
-        assert!(!git_moves_the_tree("git", &args(&["status"])));
-        assert!(!git_moves_the_tree("git", &args(&["log", "--oneline"])));
-        assert!(!git_moves_the_tree("git", &args(&["diff", "HEAD"])));
-        assert!(!git_moves_the_tree("git", &args(&["show", "HEAD"])));
-        assert!(!git_moves_the_tree(
-            "git",
-            &args(&["branch", "--show-current"])
-        ));
-        assert!(git_moves_the_tree("git", &args(&["checkout", "--", "a"])));
-        assert!(git_moves_the_tree(
-            "git.exe",
-            &args(&["--no-pager", "checkout", "main"])
-        ));
-        assert!(git_moves_the_tree(
-            "git",
-            &args(&["push", "origin", "HEAD"])
-        ));
-        assert!(!git_moves_the_tree("cargo", &args(&["test"])));
+    fn a_git_line_that_is_not_read_only_is_not_grantable() {
+        for line in [
+            &["checkout", "--", "a"][..],
+            &["push", "origin", "HEAD"],
+            &["config", "core.fsmonitor", "calc"],
+            &["st"],
+            &["-c", "core.fsmonitor=calc", "status"],
+            &["-ccore.pager=calc", "log"],
+            &["-C", "..", "status"],
+            &["--git-dir=elsewhere", "log"],
+            &["--exec-path=elsewhere", "status"],
+            &["--", "status"],
+            &["diff", "--output=../out.txt"],
+            &["diff", "--output", "../out.txt"],
+            &["diff", "--no-index", "a", "b"],
+            &["blame", "--contents", "/etc/passwd", "x"],
+            &["log", "-p", "--ext-diff"],
+            &["branch", "-D", "main"],
+            &["branch", "new-branch"],
+        ] {
+            assert!(git_line_not_grantable(&args(line)).is_some(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_folder_laid_out_like_a_bare_repository_is_found_on_the_way_up() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dunce::canonicalize(dir.path()).expect("canonical");
+        let planted = root.join("planted");
+        fs::create_dir_all(planted.join("objects")).expect("mkdir");
+        fs::create_dir_all(planted.join("refs").join("heads")).expect("mkdir");
+        fs::write(planted.join("HEAD"), "ref: refs/heads/main\n").expect("write");
+
+        assert!(bare_repository_on_the_way(&planted.join("refs"), &root));
+        assert!(!bare_repository_on_the_way(&root, &root));
+
+        fs::create_dir(planted.join("refs").join(".git")).expect("mkdir");
+        assert!(
+            !bare_repository_on_the_way(&planted.join("refs"), &root),
+            "a .git on the way is where git stops looking"
+        );
     }
 }
