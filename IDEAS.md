@@ -1,45 +1,28 @@
 # IDEAS.md — deferred work
 
-> **Role.** Things worth doing that we deliberately did not do, with enough of
-> the reasoning to judge them again later. Not a backlog, not a plan.
->
-> | Question | File |
-> | --- | --- |
-> | What we might do, and why we did not | **this file** |
-> | When, in what order, after MVP | `PLAN.md` § 7 |
-> | Stack, MVP scope, permissions | `AGENTS.md` |
->
-> An entry earns its place by being *checkable*: what it would change, what it
-> would buy, and what we do not know. An entry nobody can act on without
-> redoing the investigation is a note, not an idea — write the investigation
-> down or delete the entry.
+Things worth doing that we chose not to do yet, with enough of the investigation to judge them
+again. Not a backlog: an entry says what it would change, what it would buy, and what we do not
+know. Entries are numbered and cited from code (`IDEAS.md § 12`); keep the numbers.
+
+Order and scope live in `PLAN.md` § 7 and `AGENTS.md`.
 
 ## Prompt caching
 
-Turns on Anthropic go to `/v1/messages` and ask for the cache with three
-breakpoints: the tool schemas, the system prompt, and the newest message
-(`agent/provider/motosan.rs`, `to_chat_request`). What follows is what that
-left on the table.
+Anthropic turns go to `/v1/messages` with three cache breakpoints: the tool schemas, the system
+prompt and the newest message (`agent/provider/motosan.rs`, `to_chat_request`).
 
-**Measured baseline, 2026-09-03.** A `claude-sonnet-5` session over an OAuth
-login, doing code execution and file reads, settles around **74%** of input
-tokens served from cache. Effective input cost is roughly a third of the
-uncached price. Any idea below should be judged against that number, and the
-number should be re-measured before anyone acts on one — the badge in the
-session header reports it.
+**Baseline, 2026-09-03:** a `claude-sonnet-5` session over an OAuth login, reading files and running
+code, serves about **74%** of input tokens from cache. Re-measure (the session header shows it)
+before acting on anything below.
 
 ### 1. Teach `Role::Tool` to carry a cache breakpoint
 
-**The gap.** `motosan-ai` serializes a tool result without ever consulting
-`message.cache`, though the `User` and `Assistant` arms beside it do. So the
-breakpoint on the newest message skips a tool result and lands on the assistant
-turn that asked for the call (`mark_cache_breakpoint`). The cost is one round
-of lag: each tool result is paid at full price once, *then* written to the
-cache, then read. With PDF text and CSV content coming back through `fs_read`,
-that one full-price pass is probably most of the missing 26 points.
+**Gap.** `motosan-ai` serializes a tool result without reading `message.cache`, so the newest-message
+breakpoint skips tool results (`mark_cache_breakpoint`) and lands on the assistant turn before them.
+Each tool result is paid in full once before it is cached. With large `fs_read` results, that is
+probably most of the missing 26 points.
 
-**The change.** Build the block, then mark it — symmetric with the arms above
-it:
+**Change.** Mark the `tool_result` block, which the API accepts as a `cache_control` target:
 
 ```rust
 Role::Tool => {
@@ -57,599 +40,207 @@ Role::Tool => {
 }
 ```
 
-`tool_result` is a legitimate `cache_control` target — the API accepts it
-alongside `text`, `image`, `tool_use` and `document`. This is a case that was
-never wired, not a workaround.
+Then delete the `find` that skips `Role::Tool` in `mark_cache_breakpoint`.
 
-**Two things that will trip whoever does it.** The arm exists *twice* in
-`providers/anthropic.rs` — around line 329 for the API-key path and around 684
-for the OAuth path, which rebuilds its messages separately. A patch to one of
-them changes nothing for a session on a Claude Code login. And on the Aegis
-side the whole change is deleting the `find` that skips `Role::Tool` in
-`mark_cache_breakpoint`: the mark then goes on the last message, full stop.
+**Trips.** The arm exists twice in `providers/anthropic.rs` — the API-key path (around line 329) and
+the OAuth path (around line 684) — and patching one changes nothing for the other. Avoiding the
+role is not an option: `ContentBlock` cannot express a `tool_result`.
 
-**Not an alternative: routing around `Role::Tool`.** `ContentBlock`
-(`motosan-ai/types.rs`) is `Text | Image | Document`. There is no way to spell
-a `tool_result` block through the `content_blocks` path that *does* honour
-`cache`, so avoiding the role would mean being unable to answer a tool call at
-all. The role is right; the line is missing.
+**Try it** with `[patch.crates-io]` onto a local fork, then upstream. **Unknown:** how many of the
+26 points are recoverable.
 
-**How to try it.** `[patch.crates-io]` onto a local fork gives a measurement in
-an afternoon and costs nothing to throw away. Upstream PR is the clean version
-but its landing date is not ours. **Unknown:** whether the 26 points hide 15
-recoverable ones or 3. Measure before investing in the PR.
+### 2. The system prompt's tail moves
 
-### 2. The system prompt is one cache block, and its tail moves
+The workspace digest and the world block are appended to the end of the system prompt and rebuilt
+on every request, so any write under `.aegis/` invalidates the system breakpoint and the whole
+conversation behind it; only the tool schemas survive. Splitting the system prompt only moves the
+problem. What holds is carrying per-request state after the conversation, in the last user turn —
+a real change to `transcript::build` and `WireMessage`.
 
-`system_message` (`agent/transcript.rs`) appends the shared digest and the
-world block at the *end* of the system prompt, and `workspace::digest` is
-rebuilt on every request by design — so that a round which writes `DECISIONS.md`
-sees it in the next one. Caching is a prefix match, so on a workspace using the
-convention, any write into `.aegis/` invalidates the system breakpoint *and the
-entire conversation behind it*. The tool schemas survive, because they render
-first and hold their own breakpoint; nothing else does.
+**Unknown:** how often the digest changes mid-session. Count it before rebuilding.
 
-Splitting `system` into blocks would only move the problem — the stable half
-would stay readable, but everything after the volatile tail, which is the whole
-transcript, would still fall. The shape that actually holds is to stop carrying
-per-request state in the system message and put it *after* the conversation,
-in the last user turn, where the caching guidance says volatile content
-belongs. That is a real change to `transcript::build` and to the `WireMessage`
-shape, and it is worth it only on workspaces that write to `.aegis/` mid-turn.
+### 3. What is not recoverable
 
-**Unknown:** how often that actually happens in a working session. Instrument
-before rebuilding — a counter on how many requests see a changed digest would
-settle it in a day.
-
-### 3. What is not recoverable, so nobody chases it
-
-The first turn of a session has nothing to read and can only write. The last
-round of every turn writes an entry that is read only if the session
-continues. Both are structural: a session's cached share has a ceiling below
-100% no matter what, and a short session has a lower one than a long session.
-
-Related gotcha, not an idea: the minimum cacheable prefix on `claude-sonnet-5`
-is 1024 tokens. Below it the API ignores `cache_control` silently — no error,
-no cache entry. A short session reporting 0% may simply be too small to cache,
-and that is correct behaviour rather than a regression.
+The first turn can only write the cache; the last round of every turn writes an entry that is read
+only if the session continues. Short sessions have a lower ceiling. Below 1,024 tokens
+(`claude-sonnet-5`) the API ignores `cache_control` silently, so 0% on a tiny session is correct.
 
 ## Writing large files
 
-`fs_write` has no size limit of its own; what bounds it is the turn's output
-ceiling, because a file's content is emitted as the call's arguments. That
-ceiling now comes from the provider's catalog (128,000 tokens on
-`claude-sonnet-5`) instead of motosan's 8192 default, which is what made large
-writes fail silently. These are the things that cost us a session to learn and
-would cost another to re-derive.
+### 4. What a large write costs
 
-### 4. What a large write actually costs
+- **Output tokens**, which caching cannot reduce: about 100 KB of arguments is 30,000 output tokens,
+  paid again on every rewrite.
+- **JSON escaping is small** on ordinary text: +1.6% measured on a 63 KB file. It was wrongly blamed
+  twice for larger gaps.
+- **The output ceiling applies to escaped arguments.** It comes from the provider catalog (128,000
+  tokens on `claude-sonnet-5`), which bounds one write at roughly 300–350 KB. Larger files need
+  pieces or generation in place.
+- **Derivable content** is cheaper as a script run through `shell_exec`.
 
-**Output tokens, and they are the one thing caching cannot touch.** The cache
-works on the prompt; a file's content is generated, not re-read. Roughly 100 KB
-of arguments is 30,000-odd output tokens — on `claude-sonnet-5` that is more
-than the rest of the turn put together, and it recurs in full every time the
-file is rewritten.
+### 5. An expired approval throws away the expensive part
 
-**JSON escaping is small on ordinary text, and was measured, not guessed.** A
-63,000-byte file of regular lines escapes to 64,002 bytes: **+1.6%**. Do not
-reach for escaping to explain a large discrepancy — during this session it was
-blamed twice for gaps it could not account for, and both times the real cause
-was elsewhere. Content dense in quotes, backslashes or very short lines will
-sit higher, but nothing like a factor of two.
+`APPROVAL_TTL` (`src-tauri/src/approval.rs`) is five minutes from the request, which comes after the
+arguments were generated. A turn can spend minutes and 40,000 output tokens on a file and lose them
+because nobody was at the screen (observed: asked 06:38:48, refused 06:43:48, never seen).
 
-**The ceiling applies to the escaped arguments, not the file**, which bounds a
-single write at roughly 300-350 KB of real content. There is no setting that
-moves this; a bigger file has to be written in pieces or generated in place.
+The lever is making a pending approval hard to miss: a tray notification, a TTL that pauses while
+the window is unfocused, or different treatment for expensive calls (the runtime already counts
+argument size for `tool:drafting`). **Unknown:** which.
 
-**The cheap alternative, when it applies:** content that is *derivable* —
-transformed, extracted, computed — costs a few hundred tokens as a script run
-through `shell_exec` instead of forty thousand as generated text. This only
-helps when the content is not genuinely being authored.
+## motosan-ai backends Aegis does not use
 
-### 5. An approval that expires throws away the expensive part
+Aegis uses the HTTP backends (`anthropic`, `chatgpt-codex`, `gemini`) and reuses CLI *logins* as
+token sources. The CLI backends are subprocesses that are agents themselves.
 
-[`APPROVAL_TTL`](src-tauri/src/approval.rs) is five minutes, and the clock
-starts when the call is *requested* — which is after the arguments have been
-generated. So a turn can spend several minutes and forty thousand output tokens
-writing a file, ask, and lose all of it because nobody was at the screen. The
-tokens are spent either way; the refusal recovers nothing.
+### 6. Do not enable `claude-code` / `codex-cli` / `gemini-cli`
 
-Observed, not theorised: one test turn asked at 06:38:48 and was refused at
-06:43:48 having never been seen.
+They run the CLI (`claude --print --output-format stream-json`, `codex exec --json`,
+`gemini -p "" -o stream-json`), always report `end_turn`, name tools the CLI already ran, and keep
+tool results inside the CLI's sandbox. That is a second harness writing to disk while Aegis thinks
+it decides — what `PLAN.md` § 7.1 forbids.
 
-Nothing recovers a generation once it has happened, so the lever is not the TTL
-— it is making a pending approval impossible to miss. The app already owns a
-tray icon, which is the obvious place for it. **Unknown:** whether the right
-behaviour is a notification, a TTL that does not run while the window is
-unfocused, or both; and whether an expensive call deserves different treatment
-from a cheap one, which the runtime could know from the argument size it is
-already counting for `tool:drafting`. Decide that fresh rather than at the end
-of a debugging session.
+The "Claude Code login" setting is not this: `AuthKind::ClaudeCli` reads `~/.claude`, refreshes, and
+calls `api.anthropic.com`; tools stay Aegis's. The CLI backends might return as an *execution host*
+(a disposable specialist in a worktree, like WSL in § 7.12), which is a product decision.
 
-## motosan-ai backends Aegis is not using
+### 7. Gemini HTTP as an `AuthKind` — landed
 
-`motosan-ai` 0.27.1 ships two families of backends. Aegis is on the HTTP
-family (`anthropic`, `chatgpt-codex`) and reuses a Claude Code / Codex / Grok
-CLI *login* as a token source. The CLI family (`claude-code`, `codex-cli`,
-`gemini-cli`) is a subprocess that is itself an agent. The `Cargo.toml`
-comment already records the distinction; this is the investigation behind it,
-so nobody has to re-open the crate docs to decide again.
-
-### 6. Do not turn on `claude-code` / `codex-cli` / `gemini-cli`
-
-**What they are.** `ClaudeCodeProvider` runs `claude --print --output-format
-stream-json`. The Codex and Gemini CLI features are the same shape against
-`codex exec --json` and `gemini -p "" -o stream-json`. Since motosan 0.25 a
-completed CLI turn always reports `stop_reason = end_turn` (never
-`tool_use`); `tool_calls` names tools the CLI already ran; tool *results*
-stay inside the CLI sandbox and never surface.
-
-**What that would buy, if it bought anything.** A one-line feature flag and
-a fifth `AuthKind` that "just works" for anyone who already has `claude` on
-PATH. It does not. Aegis *is* the agent loop: the approval gate, the audit
-jsonl, workspace policy, `fs_*` / `shell_exec`, handoffs. A CLI backend is a
-second harness writing the disk while Aegis still thinks it is deciding.
-That is the thing `PLAN.md` § 7.1 forbids (one loop, tools in-process behind
-`ToolSpec`) and the thing `AGENTS.md` names: this repo is the harness, not a
-new LLM.
-
-The Settings option "Claude Code login on this machine" is **not** this
-feature. It is `AuthKind::ClaudeCli`: read `~/.claude`, refresh, POST
-`api.anthropic.com` via `Provider::Anthropic`. Tools stay Aegis's. Same
-shape as Codex and Grok. That path is already the right use of a CLI
-subscription.
-
-**When it might come back.** As an *execution host* later — a disposable
-specialist in a worktree, analogue of WSL (`PLAN.md` § 7.12) — not as a
-token source. That is a product decision, not a provider.
-
-### 7. Gemini HTTP (`gemini`) as a fifth `AuthKind` — landed
-
-`AuthKind::Gemini`, motosan-ai `gemini` feature, AI Studio key, Settings
-picker, probe, and `GET /v1beta/models`. The unknown is settled: motosan
-assigns opaque ids (`call_N`) on the stream, and `to_chat_request` remaps
-`Role::Tool` onto the function name before the second round. Do not redo
-that investigation. What is left of Gemini is § 8.
+`AuthKind::Gemini` with an AI Studio key, the Settings option, the probe and `GET /v1beta/models`.
+Settled: motosan assigns opaque call ids (`call_N`), and `to_chat_request` maps `Role::Tool` onto
+the function name before the next round. What remains is § 8.
 
 ### 8. Gemini Code Assist as the Claude-Code-login analogue
 
-**The change.** `gemini-code-assist` against `cloudcode-pa.googleapis.com`,
-OAuth `ya29.*` from a `gemini auth` already on the machine, plus the GCP
-project id from `loadCodeAssist`. New `oauth/gemini.rs` in the same shape as
-`claude.rs` / `codex.rs` / `grok.rs`. Billing is the Gemini CLI seat, not
-per-token.
+**Change.** `gemini-code-assist` against `cloudcode-pa.googleapis.com`, with the OAuth token of an
+existing `gemini auth` and the GCP project id from `loadCodeAssist`; a new `oauth/gemini.rs` shaped
+like `claude.rs`, `codex.rs` and `grok.rs`.
 
-**What it buys.** Anyone who already pays for Gemini CLI can point Aegis at
-it the way they already point it at Claude Code, without pasting an AI
-Studio key. Tools stay Aegis's.
+**Buys.** Gemini CLI subscribers can use Aegis without an AI Studio key.
 
-**Unknown:** where the current Gemini CLI actually writes its bundle on
-Windows / macOS / Linux, and whether `motosan-ai-oauth` is enough or Aegis
-should keep owning the file the way it does for the other three. Read the
-file once before choosing.
+**Unknown:** where the current CLI writes its bundle on each OS, and whether `motosan-ai-oauth`
+should own that file. Not the `gemini-cli` subprocess (§ 6).
 
-Do this if the demand is the subscription, not a key. Do not do
-`gemini-cli` (the subprocess) for the same reason as § 6.
+### 9. The provider roster is separate work
 
-### 9. The roster is a different piece of work
+A CoS on one model and a specialist on another needs `provider_id` on the identity, several keys in
+the keyring and a second arm in `AppState::provider_for`. The trait and the turn loop do not move.
+A new `AuthKind` is a Settings row, not the roster.
 
-A fifth `AuthKind` is a Settings row. CoS on one model and a specialist on
-another is `provider_id` on the identity, more than one key in the keyring,
-and a second arm in `AppState::provider_for`. The trait does not move; the
-turn loop does not move. That is the north-star item in `AGENTS.md`
-("roster of providers and a per-agent binding"). Gemini HTTP can land
-before it. Do not pretend adding Gemini *is* the roster.
+## Skill runs, turns and the round cap
 
-## Skill runs, turns, and the round cap
+Found on 2026-09-03 running `review.diff` against this worktree's diff: one run took 5 turns, 41
+tool calls and 9 minutes. The round cap cut it twice, half the calls lost their `skill` tag
+(including the artefact write), and the final `skill_return` was refused.
 
-Found by hand on 2026-09-03, running the Phase 19 `review.diff` runbook from
-Aegis against this worktree's own uncommitted diff. Nothing here is a Phase 19
-defect: the pack revealed it, it lives in Phases 13, 16 and 17. The numbers
-below are one real trace, in `audit.jsonl` between 18:46:45 and 18:55:52Z.
+### 10. A skill run outlived its turn — landed (A)
 
-### 10. A skill run is scoped to a turn, and a real run does not fit in one — landed (A)
+The options were **A**, the run lives on the session; **B**, accept a late `skill_return` (fixes the
+visible failure, leaves the middle of the run untagged); **C**, a higher round cap while a run is
+open. A and C landed.
 
-**What happened.** One `review.diff` run over a 507-line diff took **5 turns,
-41 tool calls and 9 minutes**. `MAX_TOOL_ROUNDS` cut the turn twice — after 16
-calls in the first, after 11 in the third. The run's name is a turn local
-(`agent/turn.rs:499`, *"A local, so it cannot outlive the turn"*), so:
+*As built:* `Live::run` in `agent/registry.rs` (`open_run` / `carry_run`); a turn seeds the run from
+the session and carries it back; `MAX_RUN_TURNS = 4`; Stop closes the run; the cap message tells the
+model its run is still open. Tests in `agent::registry`, `agent::turn` and `tests/skills.rs`.
 
-* 15 of the ~30 calls in the run carry `skill: ""`, **including the `fs_write`
-  of the review artefact**;
-* the final `skill_return` was **refused** — `E_TOOL_FAILED`, *"no skill is
-  running in this turn… a run lasts for the turn that opened it"* — so the run
-  never closed, and a person nonetheless got a correct review file on disk;
-* `board/trace.rs:141` keys a run on the `skill` field, so the untagged half is
-  counted as ordinary session traffic. That is exactly the property PLAN 7.6
-  says Phase 17 depends on: *"A run without `skill` on the line cannot be
-  budgeted or replayed."*
+**Open:** whether a run should survive an app restart (probably not).
 
-**The invariant is not wrong everywhere.** A delegated brief and a routine
-really are one turn — `handoff::Open` is created around a single `.run()`
-(`handoff/runner.rs:262`), with no human between rounds. The scope only strains
-in an interactive session, which is the one place a turn can end while the same
-work continues. But see § 11: the cap applies to the unattended paths too, and
-there nobody can say "continue".
+### 11. `MAX_TOOL_ROUNDS = 8` was never measured — landed (C)
 
-**Three ways out, and they are not substitutes.**
+The round cap bounds runaway loops and cost; it is not a permission gate, and no grant moves it. A
+focused `review.diff` needs 20–25 rounds, and routines hit the same wall with nobody to say
+"continue".
 
-| | What it changes | What it fixes | What it costs |
-| --- | --- | --- | --- |
-| **A. Run lives on the session** | the local moves to session state; `skill_run` opens, `skill_return` / Stop / cancel closes | attribution, the return, the board, budgets — for interactive runs | the risk `skills/mod.rs` names: a run tagging calls after the conversation moved on. Needs a ceiling (N turns, or an expiry) and cleanup on cancel, session close and restart. **Does nothing for routines.** |
-| **B. Accept a late `skill_return`** | the session remembers "last run opened, unreturned"; a later turn may close it. ~30 lines | the visible failure, and the board gets a closing line | the untagged middle stays untagged, so 7.6's property stays broken. A stopgap, not a fix |
-| **C. Raise the cap while a run is open** | see § 11 | attribution, the return, the board **and** the unattended path, by keeping the run inside one turn | loosens the runaway protection exactly where a runbook could loop; a 25-round turn re-sends the conversation 25 times |
+*As built:* `MAX_TOOL_ROUNDS_IN_SKILL = 24`, chosen per round by `round_cap(skill)`.
 
-**A and C both landed**, on the reasoning above: A gives the attribution PLAN
-7.6 asks for without pretending a review fits in 8 rounds; C is what makes the
-Phase 16 promise ("a scheduler fires a skill") true for a runbook of realistic
-length. B was not taken — it fixes the visible failure and leaves the property
-Phase 17 depends on broken.
-
-*Landed as:* `Live::run` in `agent/registry.rs` with `open_run` / `carry_run`,
-a turn that seeds its local from the session and carries it back, and
-`MAX_RUN_TURNS = 4` as the ceiling on the risk that made the scope a turn in
-the first place. A cancel closes the run, because pressing Stop is the clearest
-statement there is that the conversation has moved on. The refusal at the cap
-now tells the model its run is still open, so it does not conclude its
-procedure was abandoned. Tests: four in `agent::registry`, three in
-`agent::turn`, and the end-to-end one in `tests/skills.rs` that reproduces the
-trace — a run opened in one turn, the artefact written and returned in the
-next, every line of the second turn on the run's record.
-
-**What we do not know.** Whether a session-scoped run needs to survive an app
-restart (probably not: a run whose turn is gone has nothing to return), and
-what the ceiling in A should be — that is a measurement, see § 11.
-
-### 11. `MAX_TOOL_ROUNDS = 8` is a number nobody has measured — landed (C)
-
-**What it is.** `agent/turn.rs:99`. The round after the eighth is answered with
-`E_TOO_MANY_TOOL_ROUNDS` and the turn ends cleanly. **It is not a permission
-gate**: it fires whatever the approval matrix decides, so "allow everything for
-this session" does not move it, and neither would any judge in § 12. It is a
-runaway-loop bound and a cost bound, and those are the only two things to argue
-about when changing it.
-
-**What the one trace says.** 41 calls for a review of a 507-line diff — but
-~17 of those were a self-inflicted detour (the model noticed `bindings.ts` had
-been truncated, diagnosed it, and repaired it, which was not in the runbook).
-A focused run of that same review is closer to **20–25 rounds**. So 8 is not
-marginally low, it is low by a factor of three, and raising it to 12 would buy
-nothing. Before changing the number, measure the other runbooks the same way —
-`deploy.draft` and `alert.draft` are read-heavier and may be worse.
-
-**The unattended path is where this is not cosmetic.** `schedule/runner.rs`
-drives the same `Turn`, so a routine that fires a real runbook hits the same
-wall with nobody to answer *"answer with what you have, or ask the user to
-continue"*. Today, Phase 16 can only schedule runbooks short enough to fit in
-eight rounds, and nothing says so.
-
-**Landed as** the third of those: `MAX_TOOL_ROUNDS_IN_SKILL = 24`, chosen by
-`round_cap(skill)` per round rather than once per turn, so a run opened on the
-third round is judged against the ceiling that fits it from there on. A runbook
-declares its tools and its steps, so a bounded procedure is exactly the case
-where a higher ceiling is defensible, and every call still passes the gate one
-at a time.
-
-**Still open:** the other two options — a setting, and a wall-clock budget for
-unattended runs, which need it most and have nobody to say "continue". And the
-measurement nobody has taken: what a 24-round turn costs in tokens with the
-cache on, which the board's ledger can already answer. Measure it before
-raising the number again, and measure `deploy.draft` and `alert.draft` the way
-`review.diff` was measured — they are read-heavier and may want more.
+**Open:** a setting; a wall-clock budget for unattended runs; what a 24-round turn costs with caching
+(the board's ledger can answer); round counts for `deploy.draft` and `alert.draft`.
 
 ### 12. A model that judges how dangerous a call is
 
-Asked directly: could a model watch what the session wants to run, so the
-gate could relax? Three different features hide in that question, and only one
-of them is available.
+Three features hide in the question:
 
-**Auto-approving judge — excluded, and not by taste.** PLAN 7.4: *"A verifier
-(agent or CI) can raise confidence; it cannot silently flip the default to
-auto."* PLAN 7.1 refuses MCP `sampling` with the argument that applies verbatim
-here — *"a second agent loop with no session, no identity and no dialog in front
-of it"*. Three concrete costs beyond the rule: the audit line becomes *allowed
-because a model said so*, which makes the log's value depend on something
-non-deterministic that cannot be replayed; the text being judged usually came
-from what the session just read (a diff, a README, an alert), so a judge that
-reads attacker-influenced content in order to auto-approve is the standard
-injection target; and it is a model call in the hottest path there is.
+- **A judge that auto-approves — excluded.** `PLAN.md` § 7.4: a verifier can raise confidence, not
+  flip the default. It would make the audit depend on a non-replayable model, read attacker-influenced
+  text in order to approve, and sit in the hottest path.
+- **A judge that only tightens** is allowed, but it does not reduce prompts.
+- **A judge that explains** — one line in the dialog saying what a command does — is worth building.
+  Name the complacency risk ("the AI said it was fine").
 
-**A judge that can only tighten — compatible.** Raising a risk badge, or
-refusing to let a session grant cover a call whose argument shape has drifted,
-only ever adds friction. It is allowed by 7.4. It also does not reduce the
-number of dialogs, which is what the complaint was about.
+**What reduces prompts without a model** is a deterministic allow-list of read-only command shapes.
+The `git` half has landed as a tighten: the `git` session grant covers only read-only verbs, with no
+option before the verb, none of `--output`, `--no-index`, `--contents` or `--ext-diff`, and not in a
+folder laid out like a bare repository (`policy/matrix.rs`). The previous deny-list of tree-moving
+verbs let `git -c core.fsmonitor=<program> status` and `git config` run under the grant (review of
+2026-09-14); before that, `git checkout -- src/ipc/bindings.ts` had slipped through twice after a
+filtered `cargo test` truncated that file (2026-09-03, 2026-09-12).
 
-**A judge that explains — the one worth building.** One line in the approval
-dialog saying what the command actually does, for the case a human misreads a
-shell one-liner (`find … -exec` inside a pipe). It does not move who decides.
-Costs: latency inside the dialog, and a complacency risk worth naming out loud
-("the AI said it was fine") rather than discovering.
+**Open:** a per-project allow-list for other read-only shapes (`ls`, `rg`).
 
-**What actually reduces the prompts, with no model in it.** Most of what the
-gate asks about is read-only shell. A per-project allow-list of read-only
-command *shapes* — `git diff|log|show|status`, `ls`, `rg` — is deterministic,
-auditable, and testable, which a judge is not. Do that before considering any
-of the above; if it is not enough afterwards, the residue is the honest brief
-for a judge.
+## Settings, identities and project scope
 
-**The git half of that landed as a tighten, not as the allow-list.** A session
-grant on `git` still exists, and still covers `status` / `log` / `diff` /
-`show`. A verb that moves the tree (`checkout`, `merge`, `push`, `reset`, …)
-offers no grant, so the earlier approval cannot collapse it. Found twice on
-`review.diff` against this worktree: 2026-09-03 (`IDEAS.md` § 10) and
-2026-09-12, both times `git checkout -- src/ipc/bindings.ts` after a filtered
-`cargo test` had truncated that file. The cargo-test bait is still there;
-the silent checkout is not.
+### 13. Grants live on the identity; two cabinets will conflict
 
-## Settings, identities, and project scope
+**Gap.** Settings, identities, memories, connectors and the skill library are install-global; the
+cabinet (`.aegis/`, `world/`, workspace skills) is per-project. The pressure that will feel like
+"per-project settings" is that **the allow-list is a field on the identity**: a Reviewer granted
+`shell_exec` for one repository holds it in a watch folder.
 
-Asked directly: Settings feel global, and everything else wants to become
-per-project, leaving only the provider credentials as the install-wide
-fact. Three different moves hide in that sentence. Two are refused in
-`PLAN.md` (§ 7.4, § 7.5, § 7.14). One is this entry.
+**Refused.** Moving `settings.json`, `agents.json` or keys into the workspace (credentials in git,
+allow-lists shipped with a clone, a second store), and per-project identity rows.
 
-### 13. Grants live on the identity; two cabinets will fight over them
+**The change, when needed:** a **binding** `(identity × project) → tools[], skills[]`. The identity
+stays a global row; applying a roster writes the project's binding; `policy::decide_call` and
+`tools::schemas_for` take the open project's id; routines keep their own standing grants; connector
+programs stay global.
 
-**The gap.** Settings, identities, memories, connectors and the skill
-library are install-global (`store/mod.rs`: seven documents under
-application-data). The cabinet (`.aegis/`, `world/`, workspace skills) is
-per-project. Routines and sessions *name* a project but live in the
-global files. Founding (`PLAN.md` § 7.14) writes a roster in the
-workspace and apply writes global identities. That split is load-bearing:
-a Reviewer is a Reviewer in the next project too, and apply never widens
-a name that exists.
+| Scope | Holds |
+| --- | --- |
+| Machine | keys, provider roster, MCP programs, skill library, role definitions |
+| Identity | perimeter, provider binding, instructions |
+| Project | the world, who is needed here, grants here, clocks, execution host |
 
-The Settings panel looks like one blob. The pressure that will feel like
-"make settings per-project" is not `settings.json`. It is that **the
-allow-list is a field on the identity**. A CoS granted `mail__list` for
-intake sees mail tools in a delivery session. A Reviewer granted
-`shell_exec` for one repo holds it in a watch folder. Role memory that is
-actually about a client ("this client wants French") lives in
-`memories.json` keyed on the identity, so it follows the CoS into the
-next cabinet — which is why `COS.md` *Memory* puts that class of fact in
-workspace files.
+**Not:** per-project providers (§ 9), per-project connector processes, per-project identities, a
+settings file under `.aegis/`, or the command-shape allow-list of § 12.
 
-**What we refused.** Moving `settings.json` / `agents.json` / the keyring
-into the workspace. Credentials in a git tree is the forbidden thing.
-Identities in `.aegis/` would ship allow-lists (`shell_exec`, connector
-tools) with the clone, and a session on another machine would inherit
-grants for programs that are not there. A second `settings.json` under
-`.aegis/` is a second store with a second schema. Seeding per-project
-identity *rows* is the Phase 19 Delivery-identity refusal again.
-
-**The change, when two cabinets share a role and disagree.** Not
-per-project settings. Three scopes, of which two already exist:
-
-| Scope | Holds | Today |
-| --- | --- | --- |
-| Machine / operator | keys, provider roster, MCP programs, skill library, the *definition* of a role | `settings.json`, keyring, `connectors.json`, library `skills/`, `agents.json` minus the allow-lists |
-| Identity | perimeter, provider binding | `provider_id`, instructions, role. `AGENTS.md` north star: CoS on one model, specialist on another |
-| Project | the world, who is needed here, which grants *here*, which clocks, exec host | `.aegis/`, `world/`, § 7.14 roster, routines that name a project, § 7.12 `exec_host` |
-
-The missing piece is a **binding**: `(identity × project) → tools[],
-skills[]`. The identity stays a global row. Apply of a roster writes or
-updates *that project's* binding, not the identity. A session in project
-A as Reviewer sees A's list. The same Reviewer in project B sees B's. An
-identity with no binding in this project is not offered, or is offered
-with an empty list (fail closed).
-
-**What it would change.** `Agent::tools` / `Agent::skills` move off the
-row, or become the *default* a binding may narrow (never widen without a
-Settings act — same as § 7.14 apply). `policy::decide_call` and
-`tools::schemas_for` take the open project's id. The Identities form
-grows an "in this project" list when a project is open. Routines already
-name a project: their standing grants stay on the routine (they already
-do). Connector *programs* stay global; a binding names `git__status`, it
-does not start git.
-
-**What it would buy.** A cabinet can be narrow without cloning the
-Reviewer. Founding (§ 7.14) becomes "write the binding", which is what
-the roster file already is, instead of "mint a global identity and hope
-the next project does not need it wider". Memories stay per-identity for
-*role* facts; client facts stay files (`COS.md`).
-
-**What it is not.** Per-project providers (the key stays in the keyring;
-`provider_id` stays on the identity — that is § 9). Per-project
-connectors as processes (starting a program is still the operator on this
-machine). Per-project *identities* (a fourth CoS per folder is a
-generalist that rots, `COS.md` *Roles*). A Settings document inside
-`.aegis/`. The per-project allow-list of read-only *command shapes* in
-§ 12, which is a policy row on the project, not a binding of an identity.
-
-**Unknown:** whether two projects will actually share a role with
-conflicting grants before the provider roster (§ 9) lands. Until they
-do, this is theatre — the same test `PLAN.md` § 7.2 uses for several
-worlds. § 7.14's "skip names that exist, never widen" is the bandage that
-makes that wait cheap. Do not build the binding in order to make
-founding look finished.
-
-**When it might come back.** The first time apply of a second roster
-wants to grant a tool the existing Reviewer does not hold, *and* taking
-it away from the first project would be wrong. Measure that by trying to
-found a second cabinet, not by designing the table.
+**Unknown:** whether two projects will ever need one role with conflicting grants. Until then,
+"skip names that exist, never widen" (`PLAN.md` § 7.14) is enough. Find out by founding a second
+cabinet, not by designing the table.
 
 ## Transcript display
 
-The bubble already names this as a deferred question
-(`src/components/chat/MessageBubble.tsx`). The comment still says
-"Phase 10". Phase 10 landed without it. This is the investigation so
-the next person does not treat the comment as a plan, or treat PLAN
-§ 7.10's file preview as the same work.
+### 14. Markdown in the chat bubble, with a sanitizer
 
-### 14. Markdown in the bubble, with a sanitizer
+**Gap.** Assistant text is a `<p>` with `white-space: pre-wrap`; fences, lists and headings stay
+punctuation.
 
-**The gap.** Assistant text is drawn as a `<p>` with `white-space:
-pre-wrap`. Headings, lists, fences and emphasis stay as punctuation.
-A coding turn of any length is harder to read than the same text in
-the operator's editor. That is the whole complaint.
+**Why not yet.** Model output is untrusted, and the WebView is the whole UI, approval dialog
+included.
 
-**Why it was not done.** The model's output is untrusted input, and
-the WebView is the whole UI — sessions, the approval dialog, `invoke`.
-`DiffPreview` and `ToolCallCard` stay in `<pre>` for the same reason:
-a renderer that puts the model's words into the DOM is one escaping
-bug away from that surface. `pre-wrap` was the MVP's honest
-substitute, not a missing stylesheet.
+**Change.** A parser, not `dangerouslySetInnerHTML`: reuse the typed-tree approach of
+`src/lib/markdown.ts` (built for § 7.15). Raw HTML stays inert, remote images do not load, and links
+are text until a Rust command opens them in the OS browser. `Message.text` stays a plain string.
 
-**What it is not.** PLAN § 7.15's read-only preview of a workspace
-file. A file the operator owns, shown in the explorer. An in-app
-editor is refused there and stays refused here. Chat markdown is a
-*display* of a stored string; the transcript on disk does not
-change.
+**Trips.** Streaming: an unclosed fence mid-stream looks broken if re-parsed on every token —
+debounce, or render it as `<pre>` until it closes. Links: an `<a href>` can navigate the app away or
+hit `tauri:` / `file:`.
 
-**The change.** A parser in the bubble, not `dangerouslySetInnerHTML`
-of a model's HTML. A subset is enough: headings, lists, emphasis,
-inline code, fences, links-as-text or links that leave the WebView
-through a Rust command. Raw HTML in the source stays inert (`html:
-false`). Remote images (`![](url)`) do not load — that would be the
-model choosing who the WebView talks to. Syntax highlighting is a
-second dependency and a second HTML path; fences as a `<pre>` already
-buy most of the readability. The stored `Message.text` stays the
-plain string it is today.
-
-**Two things that will trip whoever does it.** Streaming: the caret
-sits in a growing buffer, and a fence that has not closed yet is
-legal CommonMark that looks like a broken page if you re-parse every
-token. Debounce, or treat an unclosed fence as a `<pre>` until it
-closes, and keep the caret. Links: an `<a href>` in this WebView can
-navigate the app away, or hit a `tauri:` / `file:` scheme. Default
-closed — render the URL as text — until a command exists that opens
-it in the OS browser, same shape as `workspace_reveal` (the WebView
-never gains opener permissions, PLAN § 7.10).
-
-**What it would buy.** Readable replies. Fences are the thing a
-person actually cannot scan as punctuation; lists and headings are
-second.
-
-**Unknown:** whether a sanitizer plus `html: false` plus no remote
-images is a closed set, or whether the next CommonMark extension
-(tables, footnotes, raw HTML "passthrough") reopens it. Pick the
-library by that test, not by GitHub stars. User messages: the same
-renderer is fine — the operator can type markdown — but paste is
-still untrusted in the DOM sense, so the sanitizer does not become
-optional on `role: user`. Do not start this in order to make the
-transcript look like a chat product. Start it when a long fenced
-reply is the thing someone cannot read, and ship the sanitizer in
-the same change.
+**Unknown:** whether the sanitizer stays closed as CommonMark extensions are added. Start when a long
+fenced reply is genuinely unreadable, and ship the sanitizer in the same change.
 
 ## Seeing the workspace
 
-**Moved to PLAN § 7.15, which has landed** (its *As landed*
-closes the unknowns below). The contract no longer refuses a
-workspace explorer. What follows is the investigation that made
-the old cut the wrong one, so nobody puts "no file tree" back.
+### 15. A workspace explorer is not an IDE — landed (`PLAN.md` § 7.15)
 
-Asked more than once. Shared files still only says whether the five
-directories exist, then collapses to a sentence. `workspace_reveal`
-opens the OS file manager — and on macOS Finder hides `.aegis/`
-until ⌘⇧. (`workspace.rs` records that cost). The reveal works;
-the UI that owns the folder still cannot show a file.
+The operator needed to see what the agent can already `fs_list` and `fs_read`. What stays
+load-bearing: no editor, no save path from the WebView, no `file://`, no `fs:` or opener plugin.
+What was a slogan and was dropped: "a code repository already has an editor" (a project is not
+assumed to be code) and "the convention directories are the tree" (brief inputs are paths anywhere
+in the workspace).
 
-PLAN bundled two asks with an "or" and refused both: "a file tree
-or a markdown editor", "Aegis is not an IDE", `node_modules/` as
-the scare. The editor half is load-bearing. The explorer half was
-a slogan. § 7.10 was right to keep a tree *out of the chrome
-slice*; it was wrong to treat that as an invariant. The drop zone
-is a third thing, and it is a brief.
+### 16. A dropped file is a brief, never an artefact — landed (`PLAN.md` § 7.15)
 
-### 15. A workspace explorer is not an IDE; an editor is
-
-**Moved to PLAN § 7.15.** Spec, commands, exit criteria: there.
-The gap and the slogan stay here so the next person does not
-re-derive them.
-
-**The gap.** The agent can `fs_list` / `fs_read`; the operator
-cannot, except by leaving the app. Shared memory is files. A UI
-that cannot show them makes the transcript the place you look
-again — the thing the convention exists to stop being.
-
-**What is actually load-bearing — keep.** No Monaco, no cursor, no
-save path from the WebView. Writing `DECISIONS.md` or a `SKILL.md`
-that way is a second write path around the gate (`AGENTS.md`,
-PLAN § 7.6 *Authoring*). No `file://`, no `fs:` / opener plugin
-(capabilities stay a review flag, PLAN § 5.4 / § 7.10). Files stay
-ordinary files: the tree *shows* them, it does not become their
-store. Listing `node_modules/` and `.git` as the default tree is
-still the wrong default.
-
-**What was a slogan — drop.** "If it is a code repo the operator
-already has an editor": they are in *this* window, and PLAN § 7.1
-already says a project is not assumed to be a software repo. A
-watch folder, a budget, an inbox, a wish list often have no
-editor open at all. "The convention directories *are* the tree":
-a brief's inputs are *paths* anywhere in the workspace (`COS.md`,
-never paste). A cabinet-only list cannot show the CSV at the
-root, the dump, the compose file a deploy runbook reads. Equating
-a read-only listing with VS Code.
-
-**The change.** PLAN § 7.15. A tree of the open workspace,
-preview in / save out, `.aegis/` visible, gitignore for the
-noise. The one write from this surface is § 16 / the drop in
-that same slice.
-
-**What it would buy.** The operator can see the work the digest
-already names, and the inputs a brief merely points at. An
-artefact from `skill_return` becomes a thing you can open. The
-Phase 19 packs stop depending on a hidden folder.
-
-**Unknown:** depth and size on a monorepo (gitignore is the
-first bound; a "recent in `.aegis/artefacts/`" grouping is a
-measurement if the tree is still slow). Whether the tree is a
-rail panel or a mode like Board. Whether it watches the disk or
-refreshes on focus / after a turn. Do not let preview grow a
-cursor and a Save — that is the editor, and that refusal stands.
-
-### 16. Drop a file onto the project → a brief, never an artefact
-
-**Moved to PLAN § 7.15** (the drop is in-scope there, not a
-second slice). The destination rule stays here so a later
-explorer does not grow a drop onto artefacts.
-
-**Yes, a brief.** `.aegis/briefs/` is work going *in*: a delegated
-piece of work, or the material a pack already accepts as input (a
-saved page, an `.eml`, a CSV, a note). `.aegis/artefacts/` is work
-coming *out* — a draft, a report, a patch, written by a skill or a
-handoff under the gate. The operator does not drop artefacts. A
-connector later replaces the *source* of a brief, not the folder
-(PLAN § 7.6: "a markdown file in `.aegis/briefs/` is a valid input").
-
-**A third destination, not this drop.** A new dump or log declared
-in `world/sources.yml` is the operator dropping a source artefact
-(`COS.md` *Work*, PLAN § 7.2). That is the only legitimate
-re-perception of a world. It is not a brief and it is not this
-target. Mixing them would put intake into the constitution.
-
-**The change.** PLAN § 7.15. A drop target on the open project,
-and on `.aegis/briefs/` in the tree. Drops onto
-`.aegis/artefacts/` or `world/` refuse. Copy, do not move. Source
-may be outside the workspace: the operator chose it, which is the
-same class as picking the folder in the first place, not an agent
-`fs_read` of `~/Desktop`. The WebView does not read the bytes. If
-`.aegis/briefs/` is missing, refuse (or offer scaffold) — do not
-create the convention because something was dropped.
-
-This write is the operator's, like *Set up shared files*, not the
-agent's. It does not go through the approval dialog. An audit line
-that a brief arrived from outside is still worth having, so the
-board can see intake that no session wrote.
-
-**What it would buy.** The intake path the packs already describe,
-without asking anyone to find a dot-directory. Watch, mail, budget
-all start with "get the material onto disk".
-
-**Two things that will trip whoever does it.** Name collisions
-(keep both, do not overwrite — same promise as scaffold). A
-canonical brief is goal + input *paths* + definition of done; a
-raw CSV in `briefs/` is also how those packs work today. Do not
-wrap every drop in a generated markdown file "to make it a real
-brief": the file *is* the input, and the next turn's `fs_list` of
-`.aegis/briefs/` is how the runbook finds it. Drag-and-drop in
-Tauri is a capability question; the command takes a path the OS
-already handed the process, not an arbitrary string from the
-WebView.
-
-**Unknown:** whether a drop should also start a turn, or only land
-the file and leave the operator to say what to do with it. Landing
-only is the smaller thing and matches "a markdown file is a valid
-input". Starting a `mail.triage` because the name ended in `.eml`
-is a skill the operator did not grant on this drop. Do not infer
-the runbook from the extension.
+`.aegis/briefs/` is work going in; `.aegis/artefacts/` is work coming out, written under the gate. A
+new source declared in `world/sources.yml` is a third destination (re-perception), not a drop
+target. The drop copies, keeps both files on a name clash, does not wrap the file in markdown, does
+not start a turn, and does not infer a runbook from the extension.

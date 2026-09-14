@@ -1,0 +1,112 @@
+# Security posture
+
+Read this before pointing Aegis at anything you care about.
+
+## The approval gate
+
+- **Reads inside the workspace are automatic; mutating calls ask.** Writes, commands, captures,
+  memories, delegations and connector calls prompt. A path outside the workspace prompts every time
+  and can never be allowed for a session. Credential-shaped names (`.env*`, `*.pem`, `*.key`,
+  `id_rsa*`, `.ssh`, `.aws`, `credentials`, …) are asked about even for reads.
+- **Paths are judged as the OS will open them.** Symlinks and junctions are resolved before
+  containment is decided, and a path that looks contained but leads out through a link is refused
+  outright. On Windows, a path segment ending in a dot or a space, or containing `:`, is refused
+  (Win32 would open a different name), and existing folders are spelled as the disk spells them, so
+  `GIT~1` is judged as `.git`.
+- **A path is resolved again just before the tool runs.** If a folder became a link while the dialog
+  was open, the call is refused. What remains is the gap between two system calls, not a
+  handle-based guarantee.
+- **"Allow for this session" is narrow and temporary.** A grant lives in memory, dies with the
+  session, and is listed under the transcript with a Revoke button.
+
+  | Grant | Covers |
+  | --- | --- |
+  | workspace write | any file in the workspace, except under `.git/` and `world/` |
+  | world | writes under `world/`, and nothing else |
+  | a program by name (`pnpm`) | that program as found on PATH, with any arguments |
+  | a program by path (`./gradlew`) | that file only, by its resolved path |
+  | `git` | **read-only lines**: `status`, `log`, `diff`, `show`, `blame` and similar, and `branch` when it only lists — with no option before the verb besides `--no-pager` and the like, none of `--output`, `--no-index`, `--contents` or `--ext-diff`, and not in a folder laid out like a bare repository |
+  | a connector tool | that one tool, by full name |
+  | large reads, screen capture, memory, delegation | that call type |
+
+  Never granted, always asked: paths outside the workspace, writes under `.git/`, applying a skill
+  proposal, and any other `git` line.
+- **A program allowed for the session can do whatever that program does.** Allowing `pnpm` allows
+  its scripts; allowing workspace writes and a build tool lets a session change what the build runs.
+  Grant a program the way you would hand over a terminal.
+- **An unanswered prompt is a refusal** after five minutes, as is a prompt whose turn you stop. The
+  model is told, and the turn carries on.
+- **A routine's standing approvals are the one grant that outlives a session**, and you sign them
+  when saving the routine. They cannot exceed what the runbook declares or the identity holds, and
+  cannot cover anything outside the workspace, under `.git/` or in `world/`. Every other call a
+  scheduled run makes is refused, not queued.
+
+## Tools
+
+- **`shell_exec` uses no shell.** A program and an argument vector, spawned directly: no
+  metacharacters, pipes, globs or `&&`. Risk badges on `rm` or `curl` are presentational. On Windows
+  a `.cmd` shim goes through `cmd.exe` with its arguments escaped by the Rust standard library.
+- **A command is bounded, not contained.** It has a deadline (two minutes at most), Stop, 64 KB of
+  output to the model, and an audit line. **There is no sandbox**: approved tools run as you, with
+  your privileges and environment. Treat every approval as if you were typing the command.
+- **Screen captures always ask** and show no preview. The PNG is written under the app data
+  directory, never into the workspace, and never reaches the model or the provider: the model gets a
+  path, a size and a SHA-256. A blank capture (macOS without Screen Recording permission) is refused
+  with `E_SCREEN_PERMISSION`.
+- **A connector is a program Aegis cannot see into.** Every call asks, a server's `readOnlyHint`
+  changes nothing, a grant covers one tool, the server is given no client capabilities (no
+  `sampling`, no `roots`), and its tool descriptions reach your prompt. Treat a connector like a
+  script you are about to run. Only you can add one.
+
+## Identities, skills and delegation
+
+- **An allow-list narrows; it never auto-allows.** A tool outside it is refused with no prompt, and a
+  tool inside it still goes through the gate.
+- **A skill is a procedure, not a permission.** Every step is an ordinary call. A `SKILL.md` someone
+  sent you is instructions your model will follow, with whatever you ticked.
+- **Writing is not granting.** A skill or roster proposal does nothing until you apply it. Applying a
+  roster is the grant, and its preview shows every list first.
+- **Delegation is one approval, for the routing.** Each specialist runs in its own session with none
+  of your grants, so its writes and commands prompt again, and it cannot delegate further.
+- **Delegated work cannot amend `world/`**, and a workspace-write grant never reaches it. The limits:
+  only the first path segment counts; `shell_exec` is not covered by this rule (its own prompt is);
+  and a declared source that has *changed* is readable again by design.
+
+## What reaches your provider
+
+- **Memories**, in every request of the identity holding them. The dialog shows the whole sentence;
+  the model cannot delete a memory or read another identity's.
+- **Shared files**: `STATUS.md` and the end of `DECISIONS.md` (2 KB each), and the *names* of files
+  in `briefs/` and `artefacts/`.
+- **Compaction** changes only what is sent. The transcript stays whole, and the folded state is
+  derived from the record, not written by a model.
+- **Keys stay out of the WebView.** The key sits in the OS credential store or `AEGIS_API_KEY`, is
+  read only by the Rust runtime, and is never written to `settings.json`, logged or audited. The UI
+  sees where it came from and four characters. Never put a key in `localStorage`.
+- **A base URL is where your key goes.** There is no fallback endpoint, and no key is borrowed from
+  another tool's variable. Over `http://` the key crosses the network in clear text; keep that for a
+  local server.
+- **CLI logins** (Claude Code, Codex, Grok) reuse that CLI's credentials and present Aegis as the
+  CLI. That may be outside the provider's terms for your account; check before relying on it.
+
+## Files, git and the window
+
+- **Nothing commits for you.** *Set up shared files* may run `git init`; the runtime never makes a
+  commit or writes a remote, a `.gitignore` or a git identity. A commit is a `git` command you
+  approve.
+- **The window shows files; it does not write them.** *Files* uses the same containment, the window
+  holds no filesystem or opener permission, and markdown is drawn as elements (no HTML, no remote
+  images). The only write is a file you drop, copied by the runtime into `.aegis/briefs/`. Tauri
+  widens the `asset:` scope for dropped paths; Aegis narrows it back to the captures directory on
+  every drop.
+- **Capabilities are least-privilege.** The window holds no plugin permission; every privileged
+  operation is a policy-gated Rust command.
+
+## The record
+
+Every tool call is one line in `audit.jsonl` — allowed, refused or failed — with the identity, skill
+run, routine, delegation, policy reason and outcome. Arguments are stored as a SHA-256 plus a
+redacted copy that keeps paths and replaces content with its size. Nothing in the UI can write to or
+clear the log.
+
+Design: `PLAN.md` § 3 (matrix and grants), § 5.4 and § 7.4.

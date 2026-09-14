@@ -1,273 +1,141 @@
-# [AGENTS.md](http://AGENTS.md) — Aegis (working title)
+# AGENTS.md — Aegis
 
-Desktop AI harness. Cross-platform. No Electron.
+The contract for coding agents in this repository. Aegis is a cross-platform desktop AI harness.
+No Electron.
+
+## Where things are written down
+
+| Question | File |
+| --- | --- |
+| Scope, permissions, code rules | **this file** |
+| Design decisions in force: IPC, policy matrix, wire protocol, platform risks, phase history | `PLAN.md` |
+| Rules of the Chef-de-Cabinet operating mode | `COS.md` |
+| Deferred ideas, with their investigation | `IDEAS.md` |
+| Messaging-face sketch (not scheduled) | `CONTROL.md` |
+| How to use it | `README.md`, `docs/` |
+| What changed | `CHANGELOG.md` |
+
+On conflict: this file wins on scope and rules, `PLAN.md` on design and order, `COS.md` on the
+mode. Code comments cite `PLAN.md` sections by number (`PLAN 7.13`); keep those numbers stable.
 
 ## Stack (non-negotiable)
 
 - UI shell: Tauri 2 + TypeScript + React + Vite
-
-- Runtime: Rust (src-tauri)
-
-- Tools: MCP client in Rust; tools are separate processes / MCP servers
-
-- Package manager frontend: pnpm
-
-- Rust edition 2021+, Tauri 2.x only
-
+- Runtime: Rust (`src-tauri`), edition 2021, Tauri 2.x only
+- Tools: in-process Rust tools behind one `ToolSpec` registry; external tools are MCP servers
+  (separate processes)
+- Frontend package manager: pnpm
 - Never add Electron, Neutralino, Wails, or a bundled Chromium
 
 ## Product
 
-Local desktop app that:
+This repository is the harness (UI + runtime + permissions), not an LLM. It:
 
-- runs multi-agent sessions
-
-- can operate the machine (fs, shell, git) under an approval gate
-
-- manages projects (workspace folder + session + task list + optional
-  execution host). The folder's convention files are git-backed by
-  default when they are laid down (`PLAN.md` § 7.11); picking a folder
-  does not `git init`, and the harness is not a git host. A WSL distro
-  is an execution host on the project (`PLAN.md` § 7.12), not a second
-  runtime: `fs_*` stays on this process; `shell_exec` lands in the
-  distro the operator named. Picking a folder does not imply WSL.
-
-- stays in the system tray
-
-This repo is the harness (UI + runtime + permissions). It is not a new LLM.
-
-Domains (client delivery, inbox, watch, finance, social, revenue, wish list)
-are workloads that will sit on the harness later. They are not reasons to
-enlarge the MVP runtime. See **North star** and `PLAN.md` § 7.
+- runs multi-agent sessions in one process: identities, skills, handoffs, routines;
+- operates the machine (files, shell, screen capture, git) under an approval gate;
+- manages projects: a workspace folder, its sessions, its shared files, an optional execution
+  host. Picking a folder mutates nothing. *Set up shared files* lays down `.aegis/` and runs
+  `git init` when the folder is not in a work tree, and never commits. A WSL distribution is an
+  execution host on the project (`PLAN.md` § 7.12), not a second runtime: `fs_*` stays in this
+  process, `shell_exec` lands in the distribution;
+- stays in the system tray.
 
 ## Architecture
 
-ui (React) --invoke/events--&gt; rust runtime  
-|- sessions / approvals / audit log  
-|- MCP client  
-|- tools: fs, shell, screenshot  
-- optional later: python sidecar (not in MVP)
+```
+ui (React) --invoke/events--> rust runtime
+  |- sessions / approvals / audit log
+  |- agent loop, providers
+  |- tools: fs, shell, screenshot, skill, memory, handoff, connector (MCP client)
+  |- skills, handoff bus, scheduler, board
+```
 
-WebView renders UI only. Agent loop and tool execution live in Rust.
+The WebView renders UI only. The agent loop and tool execution live in Rust.
 
-## MVP scope (do this, nothing else)
+## State
 
-Must work on macOS, Windows, Linux (best-effort Linux WebView):
+The MVP (Phases 0–10) is done. The post-MVP phases of `PLAN.md` § 7.3 (11–19) have landed, and so
+have the slices § 7.10–7.15 and `world/` (§ 7.2). New work is proposed as a section of `PLAN.md`
+§ 7 before it is coded: what it settles, what it refuses, its exit.
 
-1. Tauri 2 app boots, tray icon, show/hide main window
+## Out of scope (do not start, even as a head start)
 
-2. Chat panel + session list
+- Messaging faces / control channels (Keybase, X Chat, Telegram, Discord). `CONTROL.md` is a
+  sketch; `PLAN.md` § 7.7.
+- Remote access inside the process: embedded Tailscale, a public or `0.0.0.0` listener, inbound
+  webhooks. `PLAN.md` § 7.8.
+- A fleet of agent processes or a hypervisor / VM control plane. A workspace-scoped executor is a
+  later seam, not current work. `PLAN.md` § 7.9.
+- Computer-use of the desktop: accessibility-tree control, Playwright / browser-use as the agent's
+  hands.
+- A Python sidecar; auto-update, signing, installers beyond `tauri build`; mobile.
+- An in-app editor or any save path from the WebView.
+- A domain as a runtime feature. A domain is a pack: workspace + skills + connectors + an
+  identity. A domain never grows `agent/turn.rs`.
 
-3. Fake-then-real agent loop: user message -&gt; runtime -&gt; streamed tokens/events to UI
+## North star
 
-4. Tools with allow / deny / always-allow-this-session:
+Operating mode: **Chef de Cabinet** — three roles (Chief of Staff, specialist, human), files as
+shared memory, skills as runbooks, handoffs instead of shared transcripts. The CoS does not copy a
+human project-management method: generating an instance is cheap, re-perceiving a project that
+already lives in files is the waste, and the unit of cost is a round-trip. Work is a world
+specialists read and do not write, briefs that are oracle clauses, disposable instances,
+verification that is a program, and écarts that escalate to the human. `COS.md` has the rules.
+A CoS without shared files, memory and skills recites.
 
-   - list/read/write files inside a user-picked workspace
-
-   - run shell command in workspace
-
-   - capture primary monitor screenshot (plugin or crate)
-
-5. Project = workspace path + name + last sessions
-
-6. Audit log of tool calls (jsonl)
-
-7. Settings: provider placeholder (OpenAI-compatible base URL + model + API key in OS keyring or env), no keys in frontend
-
-Out of scope for MVP (do not start, even as a "head start"):
-
-- real multi-agent graph (supervisor / workers / Chef de Cabinet)
-
-- skills, scheduler, per-agent memory, compaction-as-state
-
-- domain connectors (mail, SMS, WhatsApp, GitHub/GitLab, Coolify, monitoring, X, brokers)
-
-- messaging faces / control channels (Keybase, X Chat, Telegram, Discord). A
-  face is a later UI onto this runtime, not a reason to enlarge the MVP loop.
-
-- Playwright / browser-use
-
-- accessibility-tree desktop control
-
-- Python sidecar
-
-- auto-update, signing, installers beyond `tauri build` default
-
-- mobile
-
-Until the **Done when** line below is true, ignore the North star for coding.
-`PLAN.md` § 7 exists so remaining MVP work does not paint those later phases
-into a corner.
-
-## North star (after MVP — do not implement now)
-
-Operating-mode brief: `COS.md` (invariants). Sequence: `PLAN.md` § 7.
-This file remains the coding contract. Intended mode: **Chef de Cabinet**
-— three roles (CoS, specialist, human), files as shared memory, skills as
-runbooks, handoffs instead of shared transcripts. The CoS does **not** copy
-a human project-management method (sprints, activity tickets, stand-ups,
-cherishing the implementation). Those optimise calendar time and scarce
-writing. Agents invert the costs: generating an instance is cheap,
-re-perceiving a project that already lives in files is the waste, and the
-unit of cost is a round-trip. Work is a world specialists read and do not
-write, briefs that are oracle clauses, instances that are disposable,
-verification that is a program, écarts (the world would have to change)
-that escalate to the human. Read
-`COS.md` for those rules; `PLAN.md` § 7.2 for how they sit on this tree.
-Do not restate them here. Recurring work that still lives in a chat or a
-system prompt is not a skill — do not schedule it (`PLAN.md` § 7.6).
-
-### What the harness must make possible (later)
-
-| Workload | Harness job | Not a product inside this repo |
+| Workload | Harness job | Not a product in this repo |
 | --- | --- | --- |
-| Client delivery | operate a repo (dev, review), draft deploy / monitor / alert responses | a PaaS or Coolify clone |
-| Client intake | triage inbound work (mail, SMS, WhatsApp) into tickets and files | a messaging server |
-| Tech / AI / econ watch | scheduled research → artefacts in a workspace | a scraping farm |
+| Client delivery | operate a repo; draft deploy, monitoring and alert responses | a PaaS or Coolify clone |
+| Client intake | triage inbound work into tickets and files | a messaging server |
+| Tech / AI / econ watch | scheduled research → artefacts | a scraping farm |
 | Budget and portfolio | read-only surveillance, alerts, a status file | a bank or broker |
-| Revenue experiments | propose (trading ideas, X drafts); never execute | an autonomous trader or poster |
-| Wish list | prioritized goals; CoS tracks, human decides spend | a shopping agent |
+| Revenue experiments | propose (trading ideas, drafts); never execute | an autonomous trader or poster |
+| Wish list | prioritized goals; the CoS tracks, the human decides spend | a shopping agent |
 
-Three later surfaces, not one:
+Later surfaces, none of them a second agent loop:
 
-- **Remote access** is the same runtime over a private network
-  (e.g. Tailscale). It is not a second process and not a crate in
-  this repo. Preferred path: the host joins the tailnet and you
-  drive the existing window (OS remote desktop or Tailscale SSH).
-  A later optional loopback HTTP/WS on `127.0.0.1` may mirror the
-  same commands as the WebView, reached via Tailscale Serve — never
-  Funnel, never `0.0.0.0`. Outbound SSH or MCP to another machine
-  is a **tool** under the approval gate, not remote access and not
-  a second agent loop. See `PLAN.md` § 7.8.
-- **Messaging face** (Keybase first for confidentiality; X Chat as the
-  other E2EE-shaped adapter; then Telegram or Discord) is a UI onto this
-  runtime — same sessions, same approval gate, same audit. It is not an
-  agent and not an inbox. Preferred first face: Keybase, via the local
-  `keybase` CLI already logged in (`chat api` / `api-listen`): chat is
-  E2EE, the client is outbound-only, nothing listens on a public port.
-  X Chat (Chat XDK + `GET /2/activity/stream`) is the same outbound
-  shape with client-side E2EE and an official Rust core; it is not a
-  second agent and not the Phase 19 social pack. Telegram long-poll and
-  Discord Gateway fit that outbound shape with weaker confidentiality.
-  See `PLAN.md` § 7.7.
-- **Inbox intake** (mail, SMS, WhatsApp) is a domain pack later
-  (`PLAN.md` § 7.3 Phase 19). WhatsApp is not a control channel.
+- **Remote access** is the same runtime over the operator's private network (the host joins the
+  tailnet; later, optionally, a loopback HTTP/WS on `127.0.0.1` via Tailscale Serve — never
+  Funnel). Outbound SSH or MCP to another machine is a tool under the gate.
+- **A messaging face** is a UI onto the same sessions, gate and audit, over an outbound-only
+  channel (Keybase first).
+- **Inbox intake** is a domain pack. WhatsApp is not a control channel.
+- **Multi-LLM** is a provider roster with a per-identity binding. Keys stay in the OS keyring or
+  the environment.
 
-Do not expose the runtime on the public internet. A face that needs an
-inbound webhook (WhatsApp Cloud API, Telegram `setWebhook`, X
-`POST /2/webhooks`, ngrok) is the wrong shape.
-
-Multi-LLM: the MVP has one OpenAI-compatible provider. Later, a roster of
-providers and a per-agent binding (CoS on one model, a coding specialist
-on another). Keys stay in the OS keyring / env, never in the WebView.
-
-### After-MVP order (fixed — `PLAN.md` § 7)
-
-1. Shared workspace convention (cabinet files under `.aegis/`, plus an
-   optional `world/` at the root) +
-   per-agent memory + skill runner
-2. Then Chef de Cabinet (handoff bus, fan-out / fan-in, status board)
-3. Then scheduler of routines
-4. Then MCP connectors
-5. Then domain packs as skills, not new runtime features
-
-A CoS without (1) recites. Do not build (2) first.
-
-Chrome polish is `PLAN.md` § 7.10, and it has landed: title-bar icons,
-each named, and Open reveals the folder in the file manager — the
-WebView never opens `file://`. Workspace versioning (`git init` on scaffold,
-never an auto-commit) is § 7.11, and it has landed: *Set up shared files* leaves
-a `.git` in a folder that is not already in a work tree, nests nothing inside one
-that is, and commits nothing then or ever. A commit is `shell_exec` of `git`
-under the gate, asked for by a person. There is no Commit button. Execution host
-(WSL) is § 7.12, and it has landed too: opt-in per project, nothing infers it
-from a `\\wsl$\` folder, `fs_*` is unchanged, and a distro that cannot take the
-command refuses rather than falling back to this computer — which is also whose
-`git` a scaffold runs. Skill promotion
-(a proposal file, then apply; writing is still not granting) is § 7.13, and it
-has landed: a session files `.aegis/skills/<name>/PROPOSAL.md`, the catalog
-never reads it, and copying it to `SKILL.md` is an `fs_write` that is asked
-every time, never replaces a runbook, and grants it to no identity. Cabinet
-founding (a founder skill, granted to a row the human made — never the
-built-in Assistant; a roster proposal, then apply is the grant; no
-wizard, no seeded identities) is § 7.14, and it has landed: `cabinet.found` files
-`.aegis/roster/PROPOSAL.md`, Settings previews it identity by identity, and applying
-it creates every new identity with those allow-lists or none, skips names that exist,
-refuses a file changed since the preview, and writes no routine, connector or world.
-A read-only workspace explorer
-(preview in, save out; a drop lands a brief) is § 7.15, and it has landed:
-the agent was in the system and the operator was not, so *Files* lists the
-open folder one directory at a time and previews without a save path. A
-file dropped on it is copied into `.aegis/briefs/` by the runtime, from the
-path the OS handed over. That write is the operator's, audited, and never
-onto artefacts or `world/`. The `world/` constitution was the
-missed half of Phase 11 (`PLAN.md` § 7.2), not a Phase 20, and it has landed:
-opt-in, nothing scaffolds it, the frame is a harness injection, and a
-specialist's write into it is refused rather than asked. None of these is a
-step in this list, and none is a reason to delay (1)–(3). There is no in-app
-editor. A skill is a file: the operator's editor, or `fs_write` under the
-gate. Granting it to an identity is a separate act.
+Do not expose the runtime on the public internet.
 
 ## Permissions
 
-- Default: ask before every mutating tool (write, shell)
-
-- Reads inside workspace: auto-allow
-
-- Paths outside workspace: always ask
-
-- Never exfiltrate secrets to the WebView beyond masked settings
-
-- Capabilities JSON must be least-privilege
-
-- Irreversible actions (send, pay, merge, publish, deploy, trade) stay
-  behind a human gate. Later domain tools inherit this matrix; they do
-  not get a bypass.
-
-- The MVP has no OS sandbox: tools run as the user. The approval gate is
-  a human boundary, not containment. Do not treat "allow this session"
-  as "the agent owns the host". A fleet of agent processes and a
-  hypervisor control plane are **not products in this repo** — not
-  because the work is useless, but because they do not belong in the
-  harness: multi-agent is in-process (CoS + specialists + files);
-  `docker` / `ssh` / `sbx` on PATH are already `shell_exec` under the
-  gate; WSL is not a program the model calls — wrapping is
-  `shell_exec`'s when the project has that host (`PLAN.md` § 7.12); a
-  later workspace-scoped executor (`PLAN.md` § 7.9) is containment for
-  *our* tools, not a VM manager and not computer-use of the desktop.
+- Default: ask before every mutating tool (write, shell, capture, memory, delegation, connector).
+- Reads inside the workspace: auto-allow, except credential-shaped names.
+- Paths outside the workspace: always ask, never granted for a session.
+- Session grants are narrow, session-lifetime and revocable (`PLAN.md` § 3.1).
+- Never expose secrets to the WebView beyond masked settings. No API keys in `localStorage`.
+- Capabilities JSON stays least-privilege; a plugin permission there is a review flag.
+- Irreversible actions (send, pay, merge, publish, deploy, trade) stay behind a human gate. Later
+  domain tools inherit the matrix; they do not get a bypass.
+- Writing is not granting. A skill or roster file grants nothing; granting it to an identity is a
+  separate act, in Settings.
+- There is no OS sandbox: tools run as the user. The approval gate is a human boundary, not
+  containment. "Allow for this session" does not mean the agent owns the host.
 
 ## Code rules
 
-- Rust: no unwrap in library paths; use Result + thiserror; structured tracing
-
-- TS: strict, no `any`, components small
-
-- IPC: typed commands + events; one module per command domain
-
-- Do not put LLM API keys in localStorage
-
-- Do not treat the chat transcript as durable memory. Facts that must
-  survive compaction belong in workspace files or stores. (MVP still
-  persists the transcript; it is a session log, not the source of truth
-  for decisions.)
-
-- Do not copy a human project-management method into a prompt, a skill,
-  or the board. Sprints, activity tickets, and "don't rewrite" are the
-  wrong scarcity. A turn that starts by exploring a world already in
-  `world/` is a defect, not professionalism.
-
-- Conventional commits
-
-- README in English with run instructions
+- Rust: no `unwrap` in library paths; `Result` + `thiserror`; structured `tracing`.
+- TypeScript: strict, no `any`, small components.
+- IPC: typed commands and events, one module per command domain; `src/ipc/bindings.ts` is
+  generated by `ts-rs`.
+- The transcript is a session log, not durable memory. Facts that must survive compaction belong
+  in workspace files or stores.
+- Do not copy a human project-management method (sprints, activity tickets, "don't rewrite") into
+  a prompt, a skill or the board. A turn that starts by exploring a world already in `world/` is a
+  defect.
+- Comments say what is not obvious, briefly. The design argument lives in `PLAN.md`: cite the
+  section instead of restating it.
+- Conventional commits. README and docs in English.
 
 ## Commands
 
-- Frontend: `pnpm install` / `pnpm tauri dev`
-
-- Rust: `cargo test` in src-tauri
-
-- Format: rustfmt + prettier if added
-
-## Done when
-
-`pnpm tauri dev` launches a window + tray, you can pick a workspace, send a message, see a streamed reply, approve a `lsecho` tool call, and find an audit line on disk.
+- Frontend: `pnpm install`, `pnpm tauri dev`, `pnpm typecheck`
+- Rust (in `src-tauri`): `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt`
