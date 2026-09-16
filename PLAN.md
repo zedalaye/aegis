@@ -6,8 +6,8 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 (`§ 7.6 *Authoring*`): amend sections in place, and keep the numbers and lead-ins.
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
-open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.17, landed), and
-three surfaces that are not scheduled (§ 7.7–7.9).
+open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.17, landed;
+§ 7.18 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
 edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets and policy live
@@ -426,6 +426,7 @@ Constraints that still hold, not work to do.
 | Seam | Must not |
 | --- | --- |
 | **Provider** | key the turn loop on a global singleton that cannot become a roster |
+| **Decision model** | treat a System One model as a chat `Provider`; let the LLM invent the questions as the primary path; dump the transcript or `world/` as state; or skip the gate because of a probability or a confidence (§ 7.18) |
 | **Agent identity** | persist "the assistant" as the only identity, or keep a role prompt only in the transcript |
 | **Transcript** | become the source of truth for decisions, briefs or status |
 | **Workspace** | grow a second hidden agent-memory filesystem that bypasses the workspace and the matrix |
@@ -526,7 +527,7 @@ like any runbook and granted like any runbook. There is no `world.amend` for spe
 ### 7.3 Post-MVP phase order
 
 Each phase ended runnable; none depended on a later one; domain work came last. The slices
-§ 7.10–7.17 are not steps in this list and did not delay it.
+§ 7.10–7.18 are not steps in this list and did not delay it.
 
 **Phase 11 — Workspace convention.** Shared memory as files a session reads at start and writes
 through the gate. Exit: a decision and a status filed without a new agent type.
@@ -742,7 +743,7 @@ no command, tool, matrix row, binding or UI change. What each settled:
   apply (§ 7.14).
 - A `settings.json` or `agents.json` under `.aegis/`. Conflicting grants across cabinets are a binding
   (`IDEAS.md` § 13), not a second settings file.
-- Inserting a slice (§ 7.10–7.17) into § 7.3 as a fractional phase, or delaying a phase for one.
+- Inserting a slice (§ 7.10–7.18) into § 7.3 as a fractional phase, or delaying a phase for one.
 - Teaching the model to call `wsl.exe` or `bash -c`; falling back to Windows when WSL is missing.
 - `git init` on `project_create`, a nested repository, auto-committing writes, or a GitHub product in
   the runtime.
@@ -1105,3 +1106,293 @@ dumping `COS.md` into the system prompt; a file checklist.
 - **Writing is still not granting.** Naming the runbook does not put it on the identity. An
   Assistant that does not hold it is told to say so.
 - **Briefs still launch.** `blocking` is unchanged: no constitution means no drift gate.
+
+### 7.18 Decision models (TypeSafe / Jev) — proposed
+
+Jev (TypeSafe AI) is a System One model: typed questions against a state, values and probabilities
+out. It does not generate text, tool calls or explanations, and it does not choose the next
+action. Treating it as the turn-loop chat model is a category error. Treating it as a tool the
+LLM uses to invent questions is the architecture TypeSafe designed against
+([How to build with TypeSafe](https://docs.typesafe.ai/concepts/how-to-build-with-system-one)):
+code owns the workflow; System One is inserted only where a snap judgment over unstructured data
+is needed; answers are composed in code.
+
+**In scope**: a first-class decision client beside the chat provider; a credential of its own; one
+harness-owned eval whose questions live in Rust; project evals as cabinet files, collected then
+signed like a skill proposal; a probe in Settings; `jev_ask` as a soupape, not the north star.
+**Out**: wrapping Jev as OpenAI `chat/completions`; using it as `provider_id`; a gate that
+auto-allows or denies from a probability; mining transcripts for questions; a composition language
+that can send, pay or trade; growing `agent/turn.rs` with Jev-specific or domain-specific branches;
+shipping TypeSafe as an MCP connector instead of first-class; putting the key in the WebView.
+
+*Settles*:
+
+- **Not a `Provider`.** `Provider::stream` produces `ModelEvent`s (text deltas, tool-call deltas).
+  Jev produces none of those. It does not implement the trait, does not appear in
+  `AppState::provider_for`, and never answers a turn. The chat provider and the decision client
+  coexist: a session still needs an LLM.
+- **Code owns the questions.** An eval is a frozen set of atomic questions, a state builder, and a
+  composition function, in Rust, in one module. TypeSafe's own agent skill says agents are bad at
+  writing questions; constants (questions and thresholds) stay in one place so a person can review
+  them. Control flow, deterministic rules and side effects stay in code. Questions in one request
+  are independent and run in parallel: ask every question the composition might need, including
+  speculative ones, then ignore the rest in code. A second HTTP round trip is the exception, and
+  only when the next state cannot be built without the first answer.
+- **State is structured.** Prefer a JSON object with named fields; a string is for a single
+  passage. Questions name the part they judge with a backticked path
+  (`` `ticket.messages[0].text` ``). Do not dump the transcript, the system prompt or `world/`
+  wholesale. Do not stringify an object into a blob on the way to TypeSafe: the structure is the
+  context. Cap the payload (64 KiB). TypeSafe's request budget is about 32,000 tokens shared by
+  state and questions; do not cap harness evals at a small question count.
+- **Instructions and criteria may be structured.** A string is fine when the question is
+  unambiguous. When options need contrast, use objects (`what`, `not_for`, `examples`) so the
+  boundary is reviewable. The client accepts string | object | array for `instructions` and for
+  each criterion, matching the HTTP API.
+- **Compose in code, route on uncertainty.** Choice returns `choice` + `probabilities` +
+  `confidence`. Score returns a position on the levels (it can land between them) + the same.
+  Noul returns only `noul` (0..1): that probability *is* the uncertainty; there is no separate
+  `confidence`. Thresholds sit next to the questions. High confidence never skips PLAN 3: send,
+  pay, merge, publish, deploy, trade stay behind the human gate. A probability can only make the
+  harness *more* cautious or more informative, not less gated.
+- **A second credential, not an `AuthKind`.** `AuthKind` picks how the *chat* provider authenticates.
+  Jev is a different key to a different host. Keyring account `typesafe-api-key` (service still
+  `Aegis`); environment `AEGIS_TYPESAFE_API_KEY`; the chat key (`provider-api-key` /
+  `AEGIS_API_KEY`) is never sent to TypeSafe. `settings.json` grows a nested `decision` object
+  (`model`, optional `base_url`, `annotate_approvals`); schema version stays 1 with
+  `#[serde(default)]`. Empty model means `jev-latest`. Empty base URL means
+  `https://api.typesafe.ai`. `annotate_approvals` defaults to true: a key you saved is used for
+  harness evals; the toggle turns that off without deleting the key. The WebView sees only a
+  `MaskedDecision` (source, hint, model, base URL, the toggle) nested on `MaskedSettings` —
+  PLAN 7.1's "do not freeze the settings payload against a provider list".
+- **Client.** `agent/decision/`: HTTP `POST {base}/v1/systemone`, `Authorization: Bearer`. No
+  TypeSafe JSON leaves that module. Reuses the process `reqwest::Client`. Default model
+  `jev-latest`. A missing key or missing TLS client fails closed for harness evals (the dialog
+  is unchanged) and is an envelope (`E_NO_API_KEY` / `E_PROVIDER_HTTP`) for `jev_ask`.
+- **First consumer: a harness-owned eval, `tool_risk`.** When policy has already decided **ask**
+  (a dialog is about to open), and a TypeSafe key is configured, and `annotate_approvals` is on,
+  the runtime evaluates the call as the dialog already describes it. It does not change
+  Auto / Ask / Deny. Unattended refusals do not call it. Latency is TypeSafe's (tens to hundreds
+  of milliseconds); start it when the ask is emitted, show the dialog without the annotation if
+  the eval is late or fails.
+
+  State (object, no transcript): `tool`, `summary`, `reason`, `risk`, and the same preview the
+  dialog shows (write preview already capped at 4 KiB). Questions, frozen here:
+
+  | id | type | What it asks |
+  | --- | --- | --- |
+  | `destructive` | noul | Does this destroy data, overwrite a file, or run a program that can change the machine? |
+  | `exfil` | noul | Does this send local file contents, credentials, or workspace text to a network service? |
+  | `git_history` | noul | Does this change git history or repository state (commit, push, reset, rewrite)? |
+  | `bucket` | choice | What kind of change: `workspace_write`, `shell`, `capture`, `outbound`, `read` |
+  | `undo` | score | How hard to undo: revert the file / revert with git / likely gone |
+
+  Composition (Rust, next to those questions): raise the wording on the dialog when `destructive`
+  or `exfil` is high, or `undo` is toward "gone"; omit `bucket` when its `confidence` is low; never
+  map an answer onto Auto. The annotation is advisory. PLAN 3 still decides.
+- **Project evals live in the cabinet.** Recurring judgments of *this* workspace — classify a mail,
+  does this invoice match the named envelope, does this thesis still hold given these files — are
+  files under `.aegis/evals/`, not chat, not `world/`, not `agent/turn.rs`. `.aegis/decisions/` is
+  the log of decisions *taken*; an eval is *how this project will judge* the next one. Essence
+  ("we never trade") stays in `world/decisions.md` and is a human amend. A domain pack may *ship*
+  example evals the way it ships runbooks; it still does not grow the turn loop (Phase 19).
+
+  **Not a skill.** A skill sequences tools toward a done criterion (`COS.md` *Skills*). An eval is
+  one System One request plus a bounded composition. A skill may name an eval as a step
+  (`inbox.triage` runs `inbox.classify`, then files). An eval is not a seven-heading runbook, and
+  a runbook is not a place to hide a free-form `jev_ask`.
+
+  **Collect, then sign — the § 7.13 analogue.** TypeSafe's own skill says agents are bad at writing
+  questions; the CoS may *notice* a judgment repeating in briefs and draft
+  `.aegis/evals/<name>/PROPOSAL.yml` through the ordinary `fs_write` dialog. Nothing mines
+  transcripts (`COS.md`: no extractor). Only `eval.yml` is runnable. Apply is a second `fs_write`
+  copying the proposal byte-for-byte onto `eval.yml`; the preview is where the human signs the
+  questions and the thresholds. No auto-apply, the CoS does not apply, an apply does not grant
+  the identity, a routine cannot name a proposal. An existing `eval.yml` is not replaced by this
+  path (hand-edit, or a new name). Unattended apply is refused. The listing of proposals is its
+  own command, never merged into the grantable catalog.
+
+  **File shape** (one document, reviewable): `name`; `when` (one line, for the catalog); `inputs`
+  (paths the harness reads into a structured `state` object — a brief's rule: paths, never paste);
+  `questions` (the TypeSafe map, atomic, structured criteria welcome); `compose` (the closed
+  vocabulary below). A file that does not parse is listed with the reason and never offered.
+
+  **Compose is a closed vocabulary**, interpreted in Rust, next to the questions in that file:
+
+  | Form | Meaning |
+  | --- | --- |
+  | `noul <id> >= <t>` | the probability itself |
+  | `choice <id>` | the selected option, only if `confidence >= <t>` (else uncertain) |
+  | `score <id> >= <t>` | position on the levels, same confidence floor |
+  | `weight` of nouls | a named sum with coefficients in the file |
+  | `if … then escalate` | `needs_you` / `blocked`, one sentence |
+  | `if … then route <label>` | a label for the caller (a skill, the board), not an action |
+
+  No shell, no HTTP beyond the one TypeSafe call, no `fs_write` from the composer. Route labels
+  are data. Send, pay, merge, publish, deploy, trade are still PLAN 3 — a `route: take_position`
+  is a recommendation in the envelope, not a broker call. Budget arithmetic stays copied or shown
+  in code; Jev judges the unstructured part (does this text match the envelope), it does not add
+  the numbers. Trading evals *propose*; they do not execute (`AGENTS.md`).
+
+  **Run.** Tool `jev_eval` `{ name, inputs? }`. The harness loads the signed `eval.yml`, resolves
+  contained input paths, builds the JSON state, calls Jev, composes, returns the composed object
+  (routes, escalations, the raw answers). The model does not supply questions. Extra `inputs`
+  override paths declared in the file, still contained; they cannot inject a question. Policy:
+  **ask**, grant `JevEval { name }` (narrow, like `Connector { tool }`), risk **high** — named
+  workspace files leave the machine. Unattended without that grant refuses. A missing TypeSafe
+  key is an envelope after approval.
+- **Soupape: the tool `jev_ask`.** For a judgment the harness does not yet own — the draft that
+  may become a `PROPOSAL.yml`, not the steady state. The model supplies structured state and
+  atomic questions; the runtime does not dump the transcript. Granted per
+  identity. The built-in Assistant holds it because it holds `tools::names()`; a stored identity
+  does not gain it until the operator ticks it. The tool description states TypeSafe's rules:
+  one snap judgment per question, many questions in one call, structured state, compose the
+  numbers in the next step — do not ask Jev "what should I do".
+- **Policy for `jev_ask`.** Every call **asks**. Session grant `JevAsk`. Risk **high**: arbitrary
+  state leaves the machine, like a connector. Unattended without a held grant refuses through the
+  existing last-check. Unlike `WorldAmend`, `JevAsk` *may* be signed on a routine. A missing key
+  is a tool envelope after approval, not a policy denial. `schedule::check` does not special-case
+  it. `compact.rs` needs no arm.
+- **Probe.** `settings_probe_decision`: one cheap `noul` against a fixed probe state. Reuse
+  `ProviderProbe`. Distinguishes no key, unreachable, 401, 422, 429/529, 200.
+- **Commands** (update § 2.1 when this lands): `settings_set_decision` (`model`, `base_url`,
+  `annotate_approvals`, `api_key?`), `settings_clear_decision_key`, `settings_probe_decision`;
+  `eval_list`, `eval_proposals` (proposals never merged into the identity catalog). Do not
+  overload `settings_set`. `ApprovalRequest` grows an optional annotation from `tool_risk`
+  (not named `Decision` — that tag is taken).
+- **Matrix / grant / schema** (update § 3, § 3.1, § 4.1 when this lands):
+
+  | Tool | Condition | Decision | Session grant | Risk |
+  | --- | --- | --- | --- | --- |
+  | `jev_eval` | signed `.aegis/evals/<name>/eval.yml`; identity holds the tool | **ask** | `JevEval { name }` | high |
+  | `jev_ask` | identity holds it; a key is a tool concern, not a policy one | **ask** | `JevAsk` | high |
+
+  ```
+  jev_eval  { name, inputs? }          // paths; the eval file owns the questions
+  jev_ask   { state, questions[] }     // soupape only
+  ```
+
+  `tool_risk` is not a tool and has no matrix row.
+
+*Refuses*:
+
+- Using Jev as the model that streams a turn.
+- An `AuthKind::TypeSafe` in the chat Authentication dropdown.
+- Letting the LLM invent the question set as the primary integration. `jev_ask` exists to *draft*;
+  a live eval is a signed file. A proposal in the grantable catalog, or a CoS that applies, is
+  the same defect as § 7.13.
+- Auto-extracting questions from transcripts or from `DECISIONS.md`.
+- Auto-allow, or Deny, because of a noul, a choice or a confidence. The table in § 3 does not
+  consult Jev. A `route` label is not an irreversible act.
+- Dumping the transcript, the system prompt or `world/` as state. An eval may *name* a world path
+  as an input (specialists read `world/`); it does not write it.
+- A composition form that shells out, writes files, or calls anything but TypeSafe.
+- Growing `agent/turn.rs` past passing a `DecisionClient` into `ToolCtx`. `tool_risk` runs from
+  the approval path; `jev_eval` is dispatch in `tools::run`. Domain questions never land in
+  `turn.rs` (Phase 19).
+- A live TypeSafe key in CI, in the repo, or in a test fixture.
+
+*`jev_ask` schema* (what the model fills; converted to TypeSafe's `questions` map inside
+`agent/decision/`):
+
+```
+state: string | object | array        // required; cap 64 KiB of JSON. Keep structure.
+questions: [                          // 1..; cap is the payload, not 32 items
+  { id, type: "noul" | "choice" | "score",
+    instructions,                     // string | object | array
+    yes?, no?,                        // noul criteria (optional; string | object)
+    options?: { name: description },  // choice, required, >= 2; description may be object
+    levels?: [string | object, ...] } // score, required, >= 2
+]
+```
+
+`id` is the key the answer comes back under. It is not sent to Jev as inference input. Duplicate
+ids are refused at parse. `choice` / `score` missing their criteria are refused at parse.
+
+*Exit*: Settings stores, clears and probes a TypeSafe key; with a key and the toggle on, an ask
+dialog can show a `tool_risk` annotation composed in Rust from frozen questions; that annotation
+never flips the policy decision; a signed `.aegis/evals/<name>/eval.yml` runs through `jev_eval`
+and returns a composed route or an escalation, not an action; a proposal that was not applied
+cannot run; an identity granted `jev_ask` can still draft; tests mock HTTP on a loopback socket;
+no live key in CI.
+
+*Not this slice, deliberately*: a pre-tool gate that can Deny or Auto from Jev (the pi-jev
+pattern, a later section, and it still must not silently auto-allow); CoS routing or écart
+detection as a *second* program beyond `compose` + `escalate`; skill suggestion as a catalog
+product; using confidence to skip the human gate; seeding evals into every workspace (empty
+`evals/` is a directory, not theatre). A verifier remains a skill (`COS.md`); the skill names
+the eval. Packs may later ship example `eval.yml` the way they ship runbooks — still files, still
+signed, still not `turn.rs`.
+
+*Where it lands* (the map an implementing session follows; not coded yet):
+
+- **Tree.** `src-tauri/src/agent/decision/` is the client (`DecisionClient`, evaluate, probe),
+  `tool_risk`, and the project-eval loader/composer (the closed vocabulary, not a scripting
+  language). TypeSafe request/response JSON does not leave that tree — same rule as PLAN 4.1 for
+  `agent/provider/`. `src-tauri/src/tools/jev.rs` holds `jev_eval` and the soupape `jev_ask`.
+  Do not put this under `agent/provider/`, and do not implement `Provider`. When this lands,
+  scaffold grows `.aegis/evals/` and § 7.2's cabinet list names it. Empty: no seed files.
+- **Secrets.** Service still `Aegis`. New account `typesafe-api-key`, env `AEGIS_TYPESAFE_API_KEY`.
+  `SecretStore::inspect` / `store` / `clear` stay the chat-key wrappers. Add
+  `inspect_account` / `store_account` / `clear_account`. `KeySource` CLI variants are unused here.
+- **Settings document.** `SettingsFile { version: 1, provider, #[serde(default)] decision }`.
+  `DecisionSettings { model, base_url, annotate_approvals }`. Empty model / base URL resolved at
+  *use* time. Origin only: refuse a URL that already ends in `/v1/systemone`. `http://` allowed
+  (loopback tests) and warned. **Trap:** today `SettingsStore` locks and writes only `provider`.
+  A chat save that does not round-trip `decision` will drop it. Persist both on every write.
+- **IPC.** `settings_set_decision` (`model`, `base_url`, `annotate_approvals`, `api_key?`),
+  `settings_clear_decision_key`, `settings_probe_decision`. Do not change `settings_set`.
+  `MaskedSettings.decision` includes the toggle. `ApprovalRequest` grows an optional annotation
+  (`destructive` / `exfil` / `undo` / `bucket` as already composed, plus a one-line summary).
+  Reuse `ProviderProbe`. `src/ipc/bindings.ts` is generated (`cargo test`); do not hand-edit.
+- **Wire.** `POST {base}/v1/systemone`, `Authorization: Bearer`. Body: `state` (string or JSON),
+  `model`, `questions` as a *map* keyed by id. 401 invalid key, 422 validation, 429 rate limit,
+  529 overloaded. Retry 429/529 with backoff; do not retry 401/422. Docs:
+  https://docs.typesafe.ai/api and https://docs.typesafe.ai/concepts/how-to-build-with-system-one
+- **Approval path.** After `Decision::Ask` and before the dialog is shown, if the key and toggle
+  are on, run `tool_risk` against the `AskRequest` already built. Failure or timeout: no
+  annotation, the ask still opens. Do not call Jev from `matrix.rs` itself (the table stays
+  pure). Unattended asks that become refusals skip it.
+- **`jev_eval`.** Load `.aegis/evals/<name>/eval.yml` only. `Grant::JevEval { name }`.
+  `ApprovalDetail::JevEval` (name, input paths, question ids — not the whole YAML unless short).
+  Parse of the *file* is the loader's; the tool args are `name` + optional path map. Apply of a
+  proposal: same recognition as § 7.13 (`eval.yml` byte-for-byte from `PROPOSAL.yml` beside it),
+  high-risk ask, no grant. Commands: `eval_list`, `eval_proposals` (never merged into the
+  identity form's catalog).
+- **`jev_ask`.** `Grant::JevAsk`. `ApprovalDetail::JevAsk` (model, question count, one line per
+  question, state preview). `ToolCall` / `ResolvedCall` carry parsed questions, not raw JSON.
+  Parse **before** the connector `other` arm. Payload cap 64 KiB. The table always asks
+  (`Risk::High`).
+- **Exhaustive matches** until an arm is added: `Grant::tool` and `scope_label`; `ToolCall::tool`
+  and `parse`; `ResolvedCall::tool`; `tools::run`; `ApprovalDetail` in `DiffPreview.tsx`;
+  `TOOL_SUMMARY` in `AgentForm.tsx`; `ApprovalRequest` consumers. Grep `Turn {` and `ToolCtx {`
+  (including `tests/`) and pass `decision: None` where no client is built.
+- **Turn.** `Turn` and `ToolCtx` gain `decision: Option<&DecisionClient>` for `jev_ask` only.
+  Build the client next to `AppState::provider_for`. Reuse `AppState`'s `reqwest::Client`. No
+  Jev branch in the turn loop. The harness eval is not a turn concern.
+- **UI.** A **Decision model** section in `SettingsPanel`, under the chat provider, not inside
+  `ProviderForm`: key, model, base URL, probe, `annotate_approvals` toggle, and a sentence that
+  Jev does not write replies. The chat Save must not send decision fields. The approval dialog
+  shows the annotation when present (advisory; the buttons are unchanged). `DiffPreview`
+  `case "jev_ask"` for the soupape. Identity form:
+  `jev_eval: "run a signed project eval (questions the cabinet already holds)"`;
+  `jev_ask: "draft typed questions the harness does not yet own"`.
+- **Tests, no live key.** Client: bearer header, path `/v1/systemone`, map-shaped `questions`,
+  structured state kept as JSON, 200 / 401 / 422, cancel. `tool_risk` composition: high
+  `destructive` raises the wording; low `bucket` confidence omits the bucket; a 5xx leaves the
+  ask unannotated and still an ask. Matrix for `jev_ask`: asks, offers `JevAsk`, high risk; a
+  held grant collapses the ask; unattended without grant denies. Parse refusals (empty state,
+  duplicate ids, `choice` without options). Settings load without a `decision` key.
+  `MaskedSettings` still carries no key. `tests/agents.rs` already asserts the builtin list
+  equals `tools::names()`.
+- **Order.** Secrets → settings document (both halves survive a save) → `agent/decision/` +
+  loopback tests → `tool_risk` + approval annotation → eval file loader + closed compose +
+  `jev_eval` + proposal/apply → `jev_ask` → Settings UI → user-guide docs and CHANGELOG → mark
+  this section landed and patch § 2.1, § 3, § 3.1, § 4.1, § 7.2's cabinet list,
+  `docs/architecture.md`, `docs/guide/workspace.md`.
+- **User-guide docs, on landing only.** README Settings; `docs/guide/data.md` (second keyring
+  account, `AEGIS_TYPESAFE_API_KEY`); `docs/security.md` (`tool_risk` sends the approval preview
+  when the toggle is on; `jev_eval` sends the named input files; `jev_ask` sends the
+  model-supplied `state`); `docs/guide/workspace.md` (`.aegis/evals/`).
+
+The operator pastes the TypeSafe key in Settings once the form exists. Never in git, never in a
+fixture, never in chat.
