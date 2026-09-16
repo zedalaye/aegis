@@ -7,7 +7,7 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
 open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.17, landed;
-§ 7.18 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
+§ 7.18–7.19 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
 edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets and policy live
@@ -527,7 +527,7 @@ like any runbook and granted like any runbook. There is no `world.amend` for spe
 ### 7.3 Post-MVP phase order
 
 Each phase ended runnable; none depended on a later one; domain work came last. The slices
-§ 7.10–7.18 are not steps in this list and did not delay it.
+§ 7.10–7.19 are not steps in this list and did not delay it.
 
 **Phase 11 — Workspace convention.** Shared memory as files a session reads at start and writes
 through the gate. Exit: a decision and a status filed without a new agent type.
@@ -743,7 +743,7 @@ no command, tool, matrix row, binding or UI change. What each settled:
   apply (§ 7.14).
 - A `settings.json` or `agents.json` under `.aegis/`. Conflicting grants across cabinets are a binding
   (`IDEAS.md` § 13), not a second settings file.
-- Inserting a slice (§ 7.10–7.18) into § 7.3 as a fractional phase, or delaying a phase for one.
+- Inserting a slice (§ 7.10–7.19) into § 7.3 as a fractional phase, or delaying a phase for one.
 - Teaching the model to call `wsl.exe` or `bash -c`; falling back to Windows when WSL is missing.
 - `git init` on `project_create`, a nested repository, auto-committing writes, or a GitHub product in
   the runtime.
@@ -1332,13 +1332,16 @@ signed, still not `turn.rs`.
   Do not put this under `agent/provider/`, and do not implement `Provider`. When this lands,
   scaffold grows `.aegis/evals/` and § 7.2's cabinet list names it. Empty: no seed files.
 - **Secrets.** Service still `Aegis`. New account `typesafe-api-key`, env `AEGIS_TYPESAFE_API_KEY`.
-  `SecretStore::inspect` / `store` / `clear` stay the chat-key wrappers. Add
-  `inspect_account` / `store_account` / `clear_account`. `KeySource` CLI variants are unused here.
-- **Settings document.** `SettingsFile { version: 1, provider, #[serde(default)] decision }`.
-  `DecisionSettings { model, base_url, annotate_approvals }`. Empty model / base URL resolved at
-  *use* time. Origin only: refuse a URL that already ends in `/v1/systemone`. `http://` allowed
-  (loopback tests) and warned. **Trap:** today `SettingsStore` locks and writes only `provider`.
-  A chat save that does not round-trip `decision` will drop it. Persist both on every write.
+  If § 7.19 has landed, reuse `inspect_account` / `store_account` / `clear_account`; do not add a
+  second helper. Otherwise add those, and keep `inspect` / `store` / `clear` as the default
+  chat-row wrappers. `KeySource` CLI variants are unused here.
+- **Settings document.** `DecisionSettings { model, base_url, annotate_approvals }` nested as
+  `#[serde(default)] decision`. Empty model / base URL resolved at *use* time. Origin only:
+  refuse a URL that already ends in `/v1/systemone`. `http://` allowed (loopback tests) and
+  warned. **Trap:** persist every half of the document on every write. After § 7.19 the file is
+  `{ version: 1, providers, decision }`; a chat-row save that does not round-trip `decision`
+  (or a decision save that does not round-trip `providers`) drops the other. Do not assume a
+  singleton `provider` key.
 - **IPC.** `settings_set_decision` (`model`, `base_url`, `annotate_approvals`, `api_key?`),
   `settings_clear_decision_key`, `settings_probe_decision`. Do not change `settings_set`.
   `MaskedSettings.decision` includes the toggle. `ApprovalRequest` grows an optional annotation
@@ -1396,3 +1399,163 @@ signed, still not `turn.rs`.
 
 The operator pastes the TypeSafe key in Settings once the form exists. Never in git, never in a
 fixture, never in chat.
+
+### 7.19 Provider roster — proposed
+
+Phase 8 stored one chat provider. Phase 12 put `provider_id` on the identity and resolved it
+through `AppState::provider_for`, "where a roster lands". Today the only accepted id is
+`"default"`, Settings holds one row, one keyring account, and the model badge reads that
+singleton. A CoS on one model and a specialist on another cannot be expressed (`IDEAS.md` § 9).
+The trait and the turn loop still do not move.
+
+Land this before § 7.18: Jev's settings trap is a second nested object on the same document, and
+`inspect_account` is the secret helper it reuses. A new `AuthKind` remains a Settings row, not
+this slice.
+
+**In scope**: several named chat providers on this machine; a default `(provider_id, model)` on
+each identity; a per-session override of that pair that does not rebind the identity.
+**Out**: per-project providers (`IDEAS.md` § 13); a provider in `.aegis/` or in a roster
+proposal; switching over chat (`CONTROL.md`); treating Jev as a `provider_id` (§ 7.18); a
+second turn loop; rebinding `agent_id`.
+
+*Settles*:
+
+- **A roster is a list of rows, not a new trait.** Each row is `{ id, label, auth_kind, base_url,
+  model, max_output_tokens }`. `id` `"default"` is reserved and cannot be deleted — it is the
+  migrated singleton, and the built-in Assistant stays bound to it. New ids are UUID v4, minted
+  on add, never typed. Label is display (empty allowed, 48 characters). Cap 16. Two rows may
+  share an `AuthKind` (OpenAI and a local server are both `api_key`). The `Provider` trait, the
+  dialects in `agent/provider/`, and `turn.rs` do not grow a per-provider branch.
+- **One document, version still 1.** `settings.json` becomes `{ version: 1, providers: [...] }`.
+  A document that still has the singleton `provider` object loads as one row `id: "default"` and
+  is rewritten in the new shape on the next save. `#[serde(default)]` for anything nested later
+  (`decision` in § 7.18). **Trap:** `SettingsStore` today locks and writes only `provider`. Lock
+  and persist the whole file; a save of one row that does not round-trip the others (or a later
+  `decision` object) drops them.
+- **Keys are per row.** Service still `Aegis`. Account `provider-api-key` stays the default row
+  (existing installs keep their key). Every other row is `provider-api-key:{id}`. Add
+  `SecretStore::inspect_account` / `store_account` / `clear_account`; keep `inspect` / `store` /
+  `clear` as wrappers on the default account so the refactor can land in pieces. `AEGIS_API_KEY`
+  fills only the default row, and only when that row is `api_key` or `gemini` — never a second
+  env var per id, never a CLI row. CLI logins (`claude_cli`, `codex_cli`, `grok_cli`) stay the
+  CLI's own file; two Claude rows share that login and differ by model. `clear_key` on a CLI row
+  is `E_INVALID_SETTING`: the key is not Aegis's. The WebView still never sees a key.
+- **Binding, not a snapshot.** Identity grows `model` (empty string, `#[serde(default)]`: use the
+  row's model). `provider_id` other than `"default"` becomes legal when that id is on file.
+  `agents.json` version stays 1. The built-in Assistant cannot be edited: it keeps `"default"`
+  and an empty model, so it tracks the default row the way today's singleton works. A cabinet
+  proposal does not name a provider; `roster_apply` still writes `"default"` and an empty model.
+  An identity edit reaches sessions that have not overridden, on their next turn — the same
+  rule as instructions.
+- **Resolve at the turn, one function.** `AppState::provider_for` takes the identity and the
+  session. Effective `provider_id`: session override, else identity, else `"default"`. Effective
+  model: session override, else (when the session overrode the provider) the row's model, else
+  the identity's model if non-empty, else the row's model. A missing row on a hand-edited file
+  warns and answers from `"default"`, as today; create, update and the session picker refuse an
+  unknown id so that path stays a hand-edit. An unconfigured row is the scripted provider, as
+  today. Handoffs and routines call the same function; they do not pick a model of their own.
+- **Override is not rebinding.** `agent_id` stays fixed at creation (Phase 12). The session
+  stores optional `provider_id` and `model` (`#[serde(default)]`, `sessions.json` version stays
+  1). Absent means inherit. A model with no `provider_id` is "this identity's provider, that
+  model". A `provider_id` with no model is "that row's default model". Both is the pair.
+  `session_create` takes optional `provider_id` and `model`; omitted inherit. `session_set_binding`
+  writes or clears the override; refused while a turn runs (`E_TURN_BUSY`), takes effect on the
+  next send. Clearing both fields returns to the identity default. Delegated and scheduled
+  sessions are ordinary sessions: created inheriting, overridable in the UI afterwards. Routines
+  do not gain a provider field.
+- **Delete is like `agent_delete`.** Refused for `"default"`. Refused when any identity or any
+  session override names the row, with the counts, never cascaded, never a silent fallback that
+  would change who answers. Removing the key is `settings_clear_key`, not delete.
+- **IPC.** `settings_get` returns a list. Do not keep the flat `MaskedSettings` fields as a
+  shadow of the default row — that is the freeze § 7.1 forbids.
+
+  | Command | Role |
+  | --- | --- |
+  | `settings_get` | `MaskedSettings { providers: MaskedProvider[], keyring_available, presets }` |
+  | `settings_set` | update one row (`provider_id` defaults to `"default"`; unknown id refused). Same fields as today plus `label?` |
+  | `settings_add_provider` | mint a UUID, append a row, optional key |
+  | `settings_delete_provider` | the rule above |
+  | `settings_clear_key` | `provider_id` defaults to `"default"` |
+  | `settings_probe_provider` | `provider_id` defaults to `"default"` |
+  | `settings_list_models` | unchanged: `auth_kind` + `base_url`, for a form that is not saved yet |
+  | `session_create` | optional `provider_id`, `model` |
+  | `session_set_binding` | `session_id`, `provider_id?`, `model?` — both omitted clears |
+  | `agent_create` / `agent_update` | `provider_id` must name a row; `model` may be empty |
+
+  `settings:changed` carries the new `MaskedSettings`. `session:updated` after a binding change.
+  `src/ipc/bindings.ts` is generated (`cargo test`); do not hand-edit. Update § 2.1 and § 4.1
+  (`"model": "<resolved binding>"`) when this lands. Do not overload these with § 7.18's
+  decision commands.
+- **UI.** Settings is a list of provider rows; each row is today's form (auth, URL, model, key,
+  probe). Add / delete live there, not on the identity. The identity form gains a provider
+  picker and a model field (catalog from that row; empty model means the row's default). The
+  session header's model badge becomes a picker: provider, model, and an "identity default"
+  choice that clears the override. Changing it does not change the identity, the allow-list or
+  the memories. No slash-command, no chat verb.
+
+*Refuses*:
+
+- Keying `turn.rs` on a global `provider()` now that a roster exists, or adding a second loop.
+- A flat `MaskedSettings` kept "for the default row" beside `providers[]`.
+- Per-project providers, a `settings.json` under `.aegis/`, a provider field on
+  `.aegis/roster/PROPOSAL.md`, or apply that writes anything but `"default"`.
+- `AuthKind::TypeSafe` / a Jev row in this list (§ 7.18).
+- Rebinding `agent_id` to change model. Snapshotting the pair at `session_create` so an identity
+  edit no longer reaches sessions that have not overridden.
+- A provider field on routines, or a tool that sets a session's binding.
+- `use grok` and any other chat-side switch (`CONTROL.md`).
+- An env var per provider id. A second service name in the keyring.
+- Deleting `"default"`, or deleting a row in use and answering from another row without asking.
+- Seeding provider rows. A first-run wizard.
+
+*Exit*: Settings holds more than one chat row, each with its own key when the kind stores one;
+an identity can be saved with `(provider_id, model)` other than the default row; a session can
+change that pair without changing identity; the next turn uses the resolved binding; a document
+from before this slice loads as the default row; tests cover migration, resolution order,
+delete-in-use, and the scripted fallback; no live extra keys in CI.
+
+*Not this slice, deliberately*: per-project bindings of the `IDEAS.md` § 13 kind (tools and
+skills, not providers); a model catalog cache beyond today's `max_output_tokens`; spend caps per
+provider; picking a provider from a messaging face.
+
+*Where it lands* (the map an implementing session follows; not coded yet):
+
+- **Secrets.** `inspect_account` / `store_account` / `clear_account` first. Default account
+  string stays `provider-api-key`. Tests still must not touch the machine's real store.
+- **Settings document.** `ProviderEntry` (the row) beside today's `ProviderSettings` fields.
+  Load: `providers` if present and non-empty, else wrap `provider`. Save: `providers` only,
+  always including `"default"`. Empty list is impossible. `MaskedSettings` becomes the list;
+  grep `MaskedSettings`, `settings.model`, `isConfigured`, `effectiveBaseUrl`, `draftOf`,
+  `ProviderForm`, `ActiveProvider`.
+- **Resolution.** `AppState::provider_for(&self, agent: &Agent, session: Option<&SessionSummary>)`
+  (or a small `Binding` the callers build). Same constructors as `provider()` today. Grep
+  `provider_for` and `state.provider()`: session send, handoff runner, schedule runner. The
+  scripted provider remains the unconfigured path.
+- **Identity.** `Agent.model: String`. `AgentDraft` too. `check` accepts any on-file
+  `provider_id`. Builtin unchanged. `roster.rs` `RosterEntry::draft` still writes
+  `DEFAULT_PROVIDER_ID` and, once the field exists, an empty model. Tests in `tests/agents.rs`
+  that pass `provider_id: DEFAULT_PROVIDER_ID` keep compiling; add one that binds a second row
+  and one that refuses an unknown id.
+- **Session.** `StoredSession` / `SessionSummary` optional `provider_id`, `model`.
+  `session_set_binding` validates, writes, emits `session:updated`. Refuse during a turn.
+  `session_create` writes the override only when the caller passed one.
+- **UI.** `SettingsPanel` lists rows; `ProviderForm` edits one `MaskedProvider`. `AgentForm`:
+  provider select + model. `ModelBadge`: picker, not a `<span>`. `AgentBadge` copy is already
+  right ("the identity is fixed per session, the model is not").
+- **Tests.** Load of a singleton `provider` document; save does not emit that key; default
+  keyring account unchanged; a second row stores under `provider-api-key:{id}`; env never fills
+  a non-default row; resolution matrix (identity default, identity model, session model-only,
+  session provider-only, session pair, missing row); delete `"default"` refused; delete in use
+  refused; `roster_apply` still `"default"`; `E_TURN_BUSY` on `session_set_binding`; builtin
+  still not editable. No live extra key in CI.
+- **Order.** Secrets per account → settings list + migration + masked payload → `provider_for`
+  resolution → identity `model` + non-default `provider_id` → session override +
+  `session_set_binding` → Settings / identity / session UI → user-guide docs and CHANGELOG →
+  mark this section landed and patch § 2.1, § 4.1.
+- **User-guide docs, on landing only.** README Settings; `docs/guide/data.md` (several rows,
+  `provider-api-key` and `provider-api-key:{id}`, `AEGIS_API_KEY` only for default);
+  `docs/guide/identities.md` (the pair, session override, identity still fixed);
+  `docs/guide/handoffs.md` if the header copy names "the" model.
+
+The operator adds a second provider in Settings, then binds an identity or overrides a session.
+Never a key in git, never in a fixture, never in chat.

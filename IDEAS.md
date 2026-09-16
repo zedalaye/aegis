@@ -121,11 +121,13 @@ like `claude.rs`, `codex.rs` and `grok.rs`.
 **Unknown:** where the current CLI writes its bundle on each OS, and whether `motosan-ai-oauth`
 should own that file. Not the `gemini-cli` subprocess (§ 6).
 
-### 9. The provider roster is separate work
+### 9. The provider roster is separate work — now PLAN 7.19
 
 A CoS on one model and a specialist on another needs `provider_id` on the identity, several keys in
 the keyring and a second arm in `AppState::provider_for`. The trait and the turn loop do not move.
 A new `AuthKind` is a Settings row, not the roster.
+
+Proposed as `PLAN.md` § 7.19. Per-project providers stay refused (§ 13).
 
 ## Skill runs, turns and the round cap
 
