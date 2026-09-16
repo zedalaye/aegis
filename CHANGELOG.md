@@ -32,6 +32,15 @@ under an approval that did not describe it.
   `fs_write` and the working directory of `shell_exec` now refuse when the path no longer resolves to
   what was decided.
 
+### Added
+
+- **More than one provider.** *Settings → Providers* holds up to 16, each with its own label,
+  authentication, base URL, model and key (`provider-api-key:<id>` in the credential store; the
+  default provider keeps `provider-api-key`). An identity picks a provider and a model, and the model
+  badge in a session's header overrides them for that session without changing its identity. A
+  provider still in use cannot be deleted. An existing `settings.json` becomes the default provider
+  (`PLAN.md` § 7.19).
+
 ### Changed
 
 - **A turn no longer stops after eight tool rounds and asks you to type continue.** Repeating the

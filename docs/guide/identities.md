@@ -9,11 +9,18 @@ A session runs as an identity. **Settings → Identities** is where they are mad
 | **Name** | unique, case-insensitively |
 | **Role** | one line saying what it is for; shown in the picker, and the first thing the model is told about itself |
 | **Instructions** | carried into every request. Capped at 2,000 characters: a procedure belongs in a [skill](skills.md) |
+| **Provider** | which provider in *Settings → Providers* answers for it |
+| **Model** | the model it sends. Empty uses the provider's, and follows it when that changes |
 | **Tools** | the allow-list. Anything unticked is refused |
 | **Skills** | the runbooks it may load. Granting one ticks `skill_run` and `skill_return` |
 
 - **A session's identity is fixed.** Pick one from **+** next to *Sessions*. There is no rebinding:
   the transcript is the record of what that identity did.
+- **A session's model is not.** The model badge in the header opens a picker: another provider,
+  another model, or *Use identity default*. The change applies from the next message and is refused
+  while a turn runs. It never changes the identity, its tools, its skills or its memories; a dot on
+  the badge marks a session that overrides its identity. Delegated and scheduled sessions start on
+  their identity's pair and can be switched the same way.
 - **The allow-list is enforced twice.** The model is only shown the tools it holds, and a call for
   any other tool is refused before the approval matrix is read — with no dialog, because a prompt to
   exceed an allow-list should not exist.
@@ -21,9 +28,12 @@ A session runs as an identity. **Settings → Identities** is where they are mad
   the dialog. A call has to pass both the allow-list and the matrix.
 - **The built-in Assistant** holds every tool (connector tools included), no skills and no
   instructions, and cannot be edited or deleted. A session gets it when you do not choose.
-  *Duplicate* makes an editable copy with the same perimeter and none of the memories.
-- Deleting an identity that sessions or routines still use is refused, with the count. An edit
-  reaches its sessions on their next turn.
+  *Duplicate* makes an editable copy with the same perimeter and none of the memories. The Assistant
+  always answers from the default provider.
+- Deleting an identity that sessions or routines still use is refused, with the count. An edit —
+  its provider and model included — reaches its sessions on their next turn, except where a session
+  overrides them.
+- A roster you apply binds every new identity to the default provider; pick another afterwards.
 
 ### Founding a cabinet
 

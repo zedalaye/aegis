@@ -6,8 +6,8 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 (`§ 7.6 *Authoring*`): amend sections in place, and keep the numbers and lead-ins.
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
-open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.17, landed;
-§ 7.18–7.19 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
+open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.17 and
+§ 7.19, landed; § 7.18 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
 edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets and policy live
@@ -38,9 +38,9 @@ Commands are `domain_verb`, events are `domain:verb`. Payloads are Rust structs 
 | Domain | Commands | Decisions |
 | --- | --- | --- |
 | Projects | `project_pick_workspace`, `project_create`, `project_list`, `project_open`, `project_delete`, `project_list_exec_hosts`, `project_set_exec_host` | The folder dialog runs in Rust; the WebView holds no `dialog:` permission. A workspace path is canonicalized once, on the way in. Deleting a project forgets it and never touches the folder. Hosts: § 7.12 |
-| Sessions | `session_create` (`project_id`, `title?`, `agent_id?`), `session_list`, `session_open`, `session_rename`, `session_delete`, `session_send`, `session_cancel`, `session_compact` | `session_send` returns a `TurnHandle` once the turn is registered; everything after is events. Sending while running is `E_TURN_BUSY`. The identity is fixed at creation. `session_compact` always returns the detail (a session too short to fold is an answer) and is refused while a turn runs |
+| Sessions | `session_create` (`project_id`, `title?`, `agent_id?`, `provider_id?`, `model?`), `session_set_binding` (`session_id`, `provider_id?`, `model?`), `session_list`, `session_open`, `session_rename`, `session_delete`, `session_send`, `session_cancel`, `session_compact` | `session_send` returns a `TurnHandle` once the turn is registered; everything after is events. Sending while running is `E_TURN_BUSY`. The identity is fixed at creation; the provider and model are an override of the identity's pair, refused while a turn runs, and both omitted inherits (§ 7.19). `session_compact` always returns the detail (a session too short to fold is an answer) and is refused while a turn runs |
 | Approvals | `approval_list_pending`, `approval_resolve` (`allow_once` / `allow_session` / `deny`), `approval_grants`, `approval_revoke_grant` | An unknown or expired request is `E_APPROVAL_STALE` and the UI re-syncs. `allow_session` on a row offering no grant is `E_GRANT_NOT_ALLOWED`, enforced in Rust. Requests expire after five minutes as a denial |
-| Identities | `agent_list`, `agent_create`, `agent_update`, `agent_delete` | A refused field is `E_INVALID_SETTING` with `error.field`. Deleting an identity that sessions or routines use is refused, never cascaded; its memories do cascade. The built-in identity is a constant and cannot be edited |
+| Identities | `agent_list`, `agent_create`, `agent_update`, `agent_delete` | A refused field is `E_INVALID_SETTING` with `error.field`. `provider_id` must name a row on file; an empty `model` uses the row's. Deleting an identity that sessions or routines use is refused, never cascaded; its memories do cascade. The built-in identity is a constant and cannot be edited |
 | Roster | `roster_proposal`, `roster_apply` (`project_id`, `digest`) | Apply re-reads the file and refuses when the digest changed, the file does not parse, or any new entry would be refused. All or nothing; one `operator` audit line per identity; no routine, connector or world. Neither is a tool (§ 7.14) |
 | Memory | `memory_list`, `memory_save`, `memory_forget` | Saving text already held touches that memory. Forgetting another identity's memory is *not found*, not refused |
 | Skills | `skill_list`, `skill_proposals` | Proposals are a separate command, never merged into the catalog the identity form grants from (§ 7.13) |
@@ -49,7 +49,7 @@ Commands are `domain_verb`, events are `domain:verb`. Payloads are Rust structs 
 | Board | `board_read`, `board_trace` | Read-only (Phase 17) |
 | Workspace | `workspace_layout`, `workspace_scaffold`, `workspace_reveal`, `world_status` | Scaffold creates only what is missing and runs `git init` per § 7.11. Reveal accepts only a contained path (§ 7.10). `world_status` is the expensive read, for the panel |
 | Explorer | `workspace_tree`, `workspace_preview`, `workspace_image`, `workspace_import_brief` | Contained to the open workspace. Import takes a drop id, never a path (§ 7.15) |
-| Settings / audit | `settings_get`, `settings_set`, `settings_clear_key`, `settings_probe_provider`, `settings_list_models`, `audit_tail`, `audit_log_path` | Settings are masked: the key's source and last four characters. No command returns a key |
+| Settings / audit | `settings_get`, `settings_set`, `settings_add_provider`, `settings_delete_provider`, `settings_clear_key`, `settings_probe_provider`, `settings_list_models`, `audit_tail`, `audit_log_path` | Settings are a roster of masked rows: each key's source and last four characters. No command returns a key. `provider_id` defaults to `"default"`, which cannot be deleted; a row in use is not deleted (§ 7.19) |
 | Window / tray | `window_toggle`, `window_hide`, `window_has_tray`, `app_quit` | |
 
 ### 2.2 Events (`emit` → main window)
@@ -220,7 +220,7 @@ Providers sit behind one trait and normalize to one event stream; no provider JS
 
 ```jsonc
 {
-  "model": "<from settings>",
+  "model": "<resolved binding: session, else identity, else the row's (§ 7.19)>",
   "stream": true,
   "messages": [
     { "role": "system", "content": "<identity, policy summary, workspace digest, world frame, memories, skill catalog>" },
@@ -1400,7 +1400,7 @@ signed, still not `turn.rs`.
 The operator pastes the TypeSafe key in Settings once the form exists. Never in git, never in a
 fixture, never in chat.
 
-### 7.19 Provider roster — proposed
+### 7.19 Provider roster — landed
 
 Phase 8 stored one chat provider. Phase 12 put `provider_id` on the identity and resolved it
 through `AppState::provider_for`, "where a roster lands". Today the only accepted id is
@@ -1518,44 +1518,38 @@ delete-in-use, and the scripted fallback; no live extra keys in CI.
 skills, not providers); a model catalog cache beyond today's `max_output_tokens`; spend caps per
 provider; picking a provider from a messaging face.
 
-*Where it lands* (the map an implementing session follows; not coded yet):
+*As landed*:
 
-- **Secrets.** `inspect_account` / `store_account` / `clear_account` first. Default account
-  string stays `provider-api-key`. Tests still must not touch the machine's real store.
-- **Settings document.** `ProviderEntry` (the row) beside today's `ProviderSettings` fields.
-  Load: `providers` if present and non-empty, else wrap `provider`. Save: `providers` only,
-  always including `"default"`. Empty list is impossible. `MaskedSettings` becomes the list;
-  grep `MaskedSettings`, `settings.model`, `isConfigured`, `effectiveBaseUrl`, `draftOf`,
-  `ProviderForm`, `ActiveProvider`.
-- **Resolution.** `AppState::provider_for(&self, agent: &Agent, session: Option<&SessionSummary>)`
-  (or a small `Binding` the callers build). Same constructors as `provider()` today. Grep
-  `provider_for` and `state.provider()`: session send, handoff runner, schedule runner. The
-  scripted provider remains the unconfigured path.
-- **Identity.** `Agent.model: String`. `AgentDraft` too. `check` accepts any on-file
-  `provider_id`. Builtin unchanged. `roster.rs` `RosterEntry::draft` still writes
-  `DEFAULT_PROVIDER_ID` and, once the field exists, an empty model. Tests in `tests/agents.rs`
-  that pass `provider_id: DEFAULT_PROVIDER_ID` keep compiling; add one that binds a second row
-  and one that refuses an unknown id.
-- **Session.** `StoredSession` / `SessionSummary` optional `provider_id`, `model`.
-  `session_set_binding` validates, writes, emits `session:updated`. Refuse during a turn.
-  `session_create` writes the override only when the caller passed one.
-- **UI.** `SettingsPanel` lists rows; `ProviderForm` edits one `MaskedProvider`. `AgentForm`:
-  provider select + model. `ModelBadge`: picker, not a `<span>`. `AgentBadge` copy is already
-  right ("the identity is fixed per session, the model is not").
-- **Tests.** Load of a singleton `provider` document; save does not emit that key; default
-  keyring account unchanged; a second row stores under `provider-api-key:{id}`; env never fills
-  a non-default row; resolution matrix (identity default, identity model, session model-only,
-  session provider-only, session pair, missing row); delete `"default"` refused; delete in use
-  refused; `roster_apply` still `"default"`; `E_TURN_BUSY` on `session_set_binding`; builtin
-  still not editable. No live extra key in CI.
-- **Order.** Secrets per account → settings list + migration + masked payload → `provider_for`
-  resolution → identity `model` + non-default `provider_id` → session override +
-  `session_set_binding` → Settings / identity / session UI → user-guide docs and CHANGELOG →
-  mark this section landed and patch § 2.1, § 4.1.
-- **User-guide docs, on landing only.** README Settings; `docs/guide/data.md` (several rows,
-  `provider-api-key` and `provider-api-key:{id}`, `AEGIS_API_KEY` only for default);
-  `docs/guide/identities.md` (the pair, session override, identity still fixed);
-  `docs/guide/handoffs.md` if the header copy names "the" model.
+- **Keys.** `SecretStore::inspect_account` / `store_account` / `clear_account`, with
+  `secrets::account_for(id)`; `inspect` / `store` / `clear` are the default-row wrappers. Only
+  `provider-api-key` falls back to `AEGIS_API_KEY`. Deleting a row also clears its account; a
+  failure there is logged, not returned.
+- **Document.** `SettingsStore` holds `{ providers, rest }` under one lock. `rest` keeps every
+  top-level key this build does not own and writes it back, so § 7.18's `decision` survives a
+  roster save before § 7.18 exists. Load drops blank or repeated ids and puts exactly one
+  `"default"` row first. `RowDraft` carries a save or an add; `set` is the default-row wrapper.
+- **Resolution.** `store::settings::resolve(rows, BindingRequest)` is the one function, pure and
+  tested as a matrix. `AppState::provider_for(agent, session_id)` reads the session's override and
+  builds from it; the handoff and schedule hosts take `Fn(&Agent, &str)` and pass the session they
+  just opened. A model other than the row's drops the row's `max_output_tokens`. A missing row
+  answers from the default row as it stands, identity and session models ignored.
+- **Identity.** `AgentStore::create` / `update` still accept only `"default"` (and so do
+  `check_all` / `create_all`, which roster apply uses); `create_with` / `update_with` take the
+  roster, and `AppState::create_agent` / `update_agent` pass it. `AgentStore::count_for_provider`.
+- **Session.** `StoredSession` writes `provider_id` / `model` only when set.
+  `SessionStore::create_bound` writes an override in the same save as the record;
+  `set_binding` does not bump `updated_at`. `AppState::set_session_binding` refuses during a turn,
+  treats blank as absent, and checks the row. `Event::SessionUpdated` is boxed: the summary grew.
+- **Errors.** `ProviderNotFound` (a stale row id) and `ProviderInUse { identities, sessions }`,
+  both `E_INTERNAL` like their identity counterparts. Deleting `"default"`, an unknown id on an
+  identity or a session, and clearing a CLI row's key are `E_INVALID_SETTING`.
+- **IPC.** As the table above, plus: `settings_list_models` takes an optional `provider_id` to
+  pick whose stored key asks (default `"default"`); a second OpenAI-compatible row would
+  otherwise list with the default row's key.
+- **UI.** `ProviderList` above `ProviderForm`; the form edits the selected row or a new one and
+  carries the delete. `state/binding.ts` mirrors `resolve` for the header and the empty
+  transcript. `ModelBadge` is a button opening a picker (provider, model, *Use identity default*),
+  disabled while a turn runs; a dot marks an override.
 
 The operator adds a second provider in Settings, then binds an identity or overrides a session.
 Never a key in git, never in a fixture, never in chat.

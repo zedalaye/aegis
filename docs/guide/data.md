@@ -18,7 +18,7 @@ Aegis keeps its own records in seven JSON documents in the application-data dire
 | `memories.json` | what each identity remembers. Deleting an identity deletes its memories |
 | `routines.json` | what is on a clock, its standing approvals, and today's run count |
 | `connectors.json` | external MCP servers: id, program, arguments, and the *names* of the environment variables they need |
-| `settings.json` | base URL and model id |
+| `settings.json` | the provider roster: for each provider an id, a label, the authentication kind, base URL and model id |
 
 - **No document holds a key**, and none records whether something is running: after a crash a
   session comes back idle and a connector comes back disconnected.
@@ -26,10 +26,14 @@ Aegis keeps its own records in seven JSON documents in the application-data dire
   renamed `<name>.corrupt-<timestamp>.json`, and Aegis starts with an empty list.
 - Deleting a project forgets it and its sessions. The workspace folder is never touched.
 
-**Keys** go to the OS credential store under the service **Aegis** and the account
-**provider-api-key** (Credential Manager, Keychain, Secret Service), where you can inspect or delete
-them without Aegis. `AEGIS_API_KEY` in the environment works too; the credential store wins when
-both are set.
+**Keys** go to the OS credential store under the service **Aegis** (Credential Manager, Keychain,
+Secret Service), where you can inspect or delete them without Aegis. The default provider's key is
+the account **provider-api-key**; every other provider's is `provider-api-key:<id>`, with the
+id from `settings.json`. `AEGIS_API_KEY` in the environment fills the default provider only; the
+credential store wins when both are set. A CLI login stays in that CLI's own file.
+
+A `settings.json` from before the roster (one `provider` object) is read as the default provider and
+rewritten as a `providers` list on the next save.
 
 Beside the documents:
 

@@ -79,26 +79,35 @@ No provider is needed: the scripted provider exercises the whole runtime.
 
 ## Point it at a model
 
-Open **Settings** in the title bar.
+Open **Settings** in the title bar. **Providers** lists every provider on this machine; the
+**default** one answers for the built-in Assistant and cannot be removed. **Add a provider** for a
+second one (up to 16), and **Edit** to change one.
 
 | | |
 | --- | --- |
+| **Label** | how identities and the session picker name it. May be empty |
 | **Authentication** | an OpenAI-compatible API key, a **Gemini** AI Studio key, or an existing **Claude Code**, **Codex CLI** or **Grok CLI** login on this machine |
 | **Base URL** | for an API key, the endpoint up to where `/chat/completions` would begin: `https://api.openai.com/v1`, `http://127.0.0.1:11434/v1`, … Leave it empty for Gemini or a CLI login unless you override the endpoint |
 | **Model** | the model id, as that server spells it |
-| **API key** | saved to the OS credential store. Leave empty to keep the stored one |
+| **API key** | saved to the OS credential store, one per provider. Leave empty to keep the stored one |
 
 - **Test connection** sends one short completion and tells a wrong address from a wrong key from
   an unknown model.
 - **Anthropic's API** is recognised by its base URL (`https://api.anthropic.com`): turns go to
   `/v1/messages` with prompt caching, not to the compatibility layer, which drops caching.
-- **Gemini** talks to `generativelanguage.googleapis.com` in its own dialect. It replaces the
-  single configured provider like any other kind.
+- **Gemini** talks to `generativelanguage.googleapis.com` in its own dialect.
+- **Who answers.** An identity names a provider and, optionally, a model. The model badge in a
+  session's header changes that session's provider or model without changing its identity; *Use
+  identity default* goes back. See [Identities](docs/guide/identities.md).
+- **Deleting a provider** is refused while an identity or a session override still uses it.
 - **A CLI login** reads that CLI's credential file, refreshes the token and writes it back, and
-  presents itself as that CLI. That may be outside the provider's terms for your account.
+  presents itself as that CLI. That may be outside the provider's terms for your account. Two
+  providers on the same CLI share its login and differ by model.
 - **Without a credential store** (headless Linux, a locked keychain, a dev build whose signature
-  keeps changing), set `AEGIS_API_KEY` in the environment and restart. No other variable is read.
-- With no base URL, replies come from the scripted provider.
+  keeps changing), set `AEGIS_API_KEY` in the environment and restart. It fills the default
+  provider only. No other variable is read.
+- A provider with no base URL (or no model) is not configured: sessions that answer from it get the
+  scripted provider.
 
 ## Build and test
 
