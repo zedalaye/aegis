@@ -20,10 +20,30 @@ use crate::error::{AppError, AppResult};
 /// The application's name, as shown in Credential Manager or Keychain Access.
 pub const KEYRING_SERVICE: &str = "Aegis";
 
-/// Account name within [`KEYRING_SERVICE`].
+/// Account name within [`KEYRING_SERVICE`] for the default provider row.
 ///
-/// Named after the role; a later provider roster adds accounts (PLAN 7.1).
+/// Every other row files its key under [`account_for`] (PLAN 7.19).
 pub const KEYRING_ACCOUNT: &str = "provider-api-key";
+
+/// The provider row whose key lives under [`KEYRING_ACCOUNT`] and may come from
+/// [`ENV_API_KEY`]. Same string as the store's `DEFAULT_PROVIDER_ID`.
+const DEFAULT_ROW: &str = "default";
+
+/// Whether an account falls back to [`ENV_API_KEY`]: only the default row's.
+/// A second variable per row is refused (PLAN 7.19).
+fn reads_env(account: &str) -> bool {
+    account == KEYRING_ACCOUNT
+}
+
+/// The credential-store account a provider row's key is filed under:
+/// [`KEYRING_ACCOUNT`] for the default row, `provider-api-key:{id}` otherwise.
+pub fn account_for(provider_id: &str) -> String {
+    if provider_id == DEFAULT_ROW {
+        KEYRING_ACCOUNT.to_owned()
+    } else {
+        format!("{KEYRING_ACCOUNT}:{provider_id}")
+    }
+}
 
 /// The environment variable consulted when the credential store holds nothing.
 pub const ENV_API_KEY: &str = "AEGIS_API_KEY";
@@ -144,24 +164,43 @@ impl SecretStore {
         Self
     }
 
-    /// Reads the key, and everything that can be said about where it is.
+    /// [`SecretStore::inspect_account`] for the default row.
+    pub fn inspect(&self) -> Held {
+        self.inspect_account(KEYRING_ACCOUNT)
+    }
+
+    /// [`SecretStore::store_account`] for the default row.
+    pub fn store(&self, key: &ApiKey) -> AppResult<()> {
+        self.store_account(KEYRING_ACCOUNT, key)
+    }
+
+    /// [`SecretStore::clear_account`] for the default row.
+    pub fn clear(&self) -> AppResult<()> {
+        self.clear_account(KEYRING_ACCOUNT)
+    }
+
+    /// Reads one account's key, and everything that can be said about where it
+    /// is.
     ///
     /// The credential store wins over the environment. Store failures are
-    /// logged and fall through to [`ENV_API_KEY`].
-    pub fn inspect(&self) -> Held {
-        let (stored, keyring_available) =
-            match Self::entry().as_ref().map(keyring::Entry::get_password) {
-                Ok(Ok(password)) => (ApiKey::new(password), true),
-                Ok(Err(keyring::Error::NoEntry)) => (None, true),
-                Ok(Err(err)) => {
-                    tracing::warn!(%err, "the credential store did not answer");
-                    (None, false)
-                }
-                Err(err) => {
-                    tracing::warn!(%err, "no credential store on this machine");
-                    (None, false)
-                }
-            };
+    /// logged and fall through to [`ENV_API_KEY`] — for [`KEYRING_ACCOUNT`]
+    /// only: no other row reads the environment.
+    pub fn inspect_account(&self, account: &str) -> Held {
+        let (stored, keyring_available) = match Self::entry(account)
+            .as_ref()
+            .map(keyring::Entry::get_password)
+        {
+            Ok(Ok(password)) => (ApiKey::new(password), true),
+            Ok(Err(keyring::Error::NoEntry)) => (None, true),
+            Ok(Err(err)) => {
+                tracing::warn!(%err, "the credential store did not answer");
+                (None, false)
+            }
+            Err(err) => {
+                tracing::warn!(%err, "no credential store on this machine");
+                (None, false)
+            }
+        };
 
         if stored.is_some() {
             return Held {
@@ -171,7 +210,7 @@ impl SecretStore {
             };
         }
 
-        match Self::env_key() {
+        match Self::env_key().filter(|_| reads_env(account)) {
             Some(key) => Held {
                 key: Some(key),
                 source: KeySource::Env,
@@ -185,28 +224,28 @@ impl SecretStore {
         }
     }
 
-    /// Files a key in the credential store, replacing whatever is there.
+    /// Files a key under one account, replacing whatever is there.
     ///
     /// Fails with `E_KEYRING_UNAVAILABLE`; never falls back to a file.
-    pub fn store(&self, key: &ApiKey) -> AppResult<()> {
-        let entry = Self::entry().map_err(Self::unavailable)?;
+    pub fn store_account(&self, account: &str, key: &ApiKey) -> AppResult<()> {
+        let entry = Self::entry(account).map_err(Self::unavailable)?;
 
         entry
             .set_password(key.expose())
             .map_err(Self::unavailable)?;
-        tracing::info!("the API key was saved to the credential store");
+        tracing::info!(account, "an API key was saved to the credential store");
         Ok(())
     }
 
-    /// Removes the stored key. Removing one that is not there succeeds.
+    /// Removes one account's key. Removing one that is not there succeeds.
     ///
     /// A key in [`ENV_API_KEY`] is untouched.
-    pub fn clear(&self) -> AppResult<()> {
-        let entry = Self::entry().map_err(Self::unavailable)?;
+    pub fn clear_account(&self, account: &str) -> AppResult<()> {
+        let entry = Self::entry(account).map_err(Self::unavailable)?;
 
         match entry.delete_credential() {
             Ok(()) => {
-                tracing::info!("the API key was removed from the credential store");
+                tracing::info!(account, "an API key was removed from the credential store");
                 Ok(())
             }
             Err(keyring::Error::NoEntry) => Ok(()),
@@ -214,9 +253,9 @@ impl SecretStore {
         }
     }
 
-    /// The credential-store entry this application uses.
-    fn entry() -> keyring::Result<keyring::Entry> {
-        keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+    /// The credential-store entry for one account of this application.
+    fn entry(account: &str) -> keyring::Result<keyring::Entry> {
+        keyring::Entry::new(KEYRING_SERVICE, account)
     }
 
     /// The key in [`ENV_API_KEY`], if it is set to something.
@@ -297,6 +336,25 @@ mod tests {
         let debugged = format!("{key:?}");
         assert_eq!(debugged, "ApiKey(<redacted>)");
         assert!(!debugged.contains("secret"), "{debugged}");
+    }
+
+    /// Existing installs keep their key: the default row's account is the one
+    /// every earlier build wrote.
+    #[test]
+    fn the_default_row_keeps_the_original_account() {
+        assert_eq!(account_for("default"), "provider-api-key");
+        assert_eq!(
+            account_for("0b6f7c1e-9f8a-4c55-9d7e-2f1c3a4b5d6e"),
+            "provider-api-key:0b6f7c1e-9f8a-4c55-9d7e-2f1c3a4b5d6e"
+        );
+    }
+
+    #[test]
+    fn only_the_default_row_reads_the_environment() {
+        assert!(reads_env(&account_for("default")));
+        assert!(!reads_env(&account_for(
+            "0b6f7c1e-9f8a-4c55-9d7e-2f1c3a4b5d6e"
+        )));
     }
 
     #[test]
