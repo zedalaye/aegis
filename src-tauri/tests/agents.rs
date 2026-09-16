@@ -103,6 +103,7 @@ impl App {
                 role: "reads the workspace and reports what is risky".to_owned(),
                 instructions: "Quote the line you are worried about.".to_owned(),
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                model: String::new(),
                 tools: vec![tool::FS_LIST.to_owned(), tool::FS_READ.to_owned()],
                 skills: Vec::new(),
                 runs_per_day: 24,
@@ -505,13 +506,14 @@ fn an_identity_cannot_be_deleted_while_a_session_still_runs_as_it() {
             role: "reads and reports".to_owned(),
             instructions: String::new(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             tools: vec![tool::FS_READ.to_owned()],
             skills: Vec::new(),
             runs_per_day: 24,
         })
         .expect("created");
     let session = state
-        .create_session("project-1", None, Some(&reviewer.id))
+        .create_session("project-1", None, Some(&reviewer.id), None, None)
         .expect("session");
 
     // Through `AppState`, not the store: the store cannot see the session
@@ -571,13 +573,14 @@ fn an_identity_and_its_sessions_survive_a_restart_of_the_runtime() {
             role: "reads and reports".to_owned(),
             instructions: String::new(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             tools: vec![tool::FS_READ.to_owned()],
             skills: Vec::new(),
             runs_per_day: 24,
         })
         .expect("created");
     let session = first
-        .create_session("project-1", None, Some(&reviewer.id))
+        .create_session("project-1", None, Some(&reviewer.id), None, None)
         .expect("session");
     drop(first);
 

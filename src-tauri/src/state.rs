@@ -23,11 +23,12 @@ use crate::mcp::{ConnectorView, Connectors};
 use crate::oauth;
 use crate::policy::GrantStore;
 use crate::schedule::runner::Scheduler;
-use crate::secrets::{key_hint, SecretStore};
+use crate::secrets::{self, key_hint, ApiKey, KeySource, SecretStore};
 use crate::store::{
-    Agent, AgentStore, AuthKind, Connector, ConnectorStore, MaskedSettings, Memory, MemoryDraft,
-    MemoryStore, Routine, RoutineStore, SessionDetail, SessionState, SessionStore, SessionSummary,
-    SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    self, Agent, AgentDraft, AgentStore, AuthKind, Binding, BindingRequest, Connector,
+    ConnectorStore, MaskedProvider, MaskedSettings, Memory, MemoryDraft, MemoryStore,
+    ProviderEntry, Routine, RoutineStore, RowDraft, SessionDetail, SessionState, SessionStore,
+    SessionSummary, SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
 /// How many audit lines a board is folded from (Phase 17): the most
@@ -133,141 +134,321 @@ impl AppState {
         &self.turns
     }
 
-    /// Who answers a turn, decided per turn so a settings change applies to the
-    /// next message.
-    ///
-    /// Unconfigured settings get the scripted provider. Configured settings get
-    /// the real one even with no key, so the user sees `E_NO_API_KEY` rather than
-    /// a silent fake
-    /// ([`ProviderSettings::is_configured`](crate::store::ProviderSettings::is_configured)).
-    /// A provider roster would be decided here (PLAN 7.1).
+    /// The default row's provider, as a session of the built-in identity with no
+    /// override would get it.
     pub fn provider(&self) -> Box<dyn Provider> {
-        let settings = self.settings.get();
+        self.build_provider(&self.binding(&Agent::builtin(), None))
+    }
+
+    /// Who answers one turn of `session_id` as `agent` (PLAN 7.19), decided per
+    /// turn so a settings, identity or override change applies to the next
+    /// message. Turns, handoffs and routines all come through here.
+    pub fn provider_for(&self, agent: &Agent, session_id: &str) -> Box<dyn Provider> {
+        let binding = self.sessions.binding_of(session_id).unwrap_or_else(|err| {
+            tracing::warn!(%err, session_id, "no session to read a binding from");
+            (None, None)
+        });
+        self.build_provider(
+            &self.binding(agent, Some((binding.0.as_deref(), binding.1.as_deref()))),
+        )
+    }
+
+    /// The row and model `agent` answers with, under a session's override.
+    pub fn binding(&self, agent: &Agent, session: Option<(Option<&str>, Option<&str>)>) -> Binding {
+        let (session_provider, session_model) = session.unwrap_or((None, None));
+        store::settings::resolve(
+            &self.settings.list(),
+            &BindingRequest {
+                identity_provider: &agent.provider_id,
+                identity_model: &agent.model,
+                session_provider,
+                session_model,
+            },
+        )
+    }
+
+    /// The provider for a resolved binding.
+    ///
+    /// An unconfigured row gets the scripted provider. A configured row gets the
+    /// real one even with no key, so the user sees `E_NO_API_KEY` rather than a
+    /// silent fake
+    /// ([`ProviderSettings::is_configured`](crate::store::ProviderSettings::is_configured)).
+    fn build_provider(&self, binding: &Binding) -> Box<dyn Provider> {
+        let settings = binding.settings.clone();
 
         if !settings.is_configured() {
             return Box::new(FakeProvider::new());
         }
 
+        let key = self.row_key(&binding.provider_id, settings.auth_kind);
+
         // motosan handles the CLI logins, Gemini, and an API key for
         // Anthropic's own host, whose compatibility layer drops prompt caching.
         if catalog::uses_motosan(settings.auth_kind, &settings.base_url) {
-            // Only a key needs the secret store; a CLI login reads its own file.
-            let key = if settings.auth_kind.is_cli() {
-                None
-            } else {
-                self.secrets.inspect().key
-            };
-
             return Box::new(SubscriptionProvider::new(settings, key, self.http.clone()));
         }
 
-        Box::new(OpenAiProvider::new(
-            self.http.clone(),
-            &settings,
-            self.secrets.inspect().key,
-        ))
+        Box::new(OpenAiProvider::new(self.http.clone(), &settings, key))
     }
 
-    /// Who answers for one identity (Phase 12). Only [`DEFAULT_PROVIDER_ID`]
-    /// exists; any other binding (a hand-edited `agents.json`) falls back with a
-    /// warning. A provider roster is a second arm here, not a turn-loop change.
-    pub fn provider_for(&self, agent: &Agent) -> Box<dyn Provider> {
-        if agent.provider_id != DEFAULT_PROVIDER_ID {
-            tracing::warn!(
-                agent = %agent.name,
-                provider_id = %agent.provider_id,
-                "this build has one provider; answering from the configured one"
-            );
+    /// A row's stored key. A CLI login reads its own file, so it has none here.
+    fn row_key(&self, provider_id: &str, kind: AuthKind) -> Option<ApiKey> {
+        if kind.is_cli() {
+            return None;
         }
-
-        self.provider()
+        self.secrets
+            .inspect_account(&secrets::account_for(provider_id))
+            .key
     }
 
-    /// The provider settings and what may be shown about the key: settings from
-    /// disk, key facts from one read of the platform store
-    /// ([`SecretStore::inspect`](crate::secrets::SecretStore::inspect)).
+    /// The roster and what may be shown about each key: rows from disk, key
+    /// facts from one platform read per keyed row
+    /// ([`SecretStore::inspect_account`](crate::secrets::SecretStore::inspect_account)).
     pub fn masked_settings(&self) -> MaskedSettings {
-        let provider = self.settings.get();
-        let held = self.secrets.inspect();
+        // The default account answers for availability even when its row is a
+        // CLI login, which never reads the store.
+        let default_held = self.secrets.inspect();
+        let keyring_available = default_held.keyring_available;
 
-        let (key_source, key_hint) = if provider.auth_kind.is_cli() {
-            let source = match provider.auth_kind {
-                AuthKind::ClaudeCli => crate::secrets::KeySource::ClaudeCli,
-                AuthKind::CodexCli => crate::secrets::KeySource::CodexCli,
-                AuthKind::GrokCli => crate::secrets::KeySource::GrokCli,
-                AuthKind::ApiKey | AuthKind::Gemini => crate::secrets::KeySource::None,
-            };
-            let hint =
-                oauth::peek(provider.auth_kind).map(|peek| key_hint(peek.access_token.expose()));
-            (source, hint)
-        } else {
-            (
-                held.source,
-                held.key.as_ref().map(|key| key_hint(key.expose())),
-            )
-        };
+        let providers = self
+            .settings
+            .list()
+            .into_iter()
+            .map(|entry| {
+                let kind = entry.settings.auth_kind;
+                let (key_source, key_hint) = if kind.is_cli() {
+                    let source = match kind {
+                        AuthKind::ClaudeCli => KeySource::ClaudeCli,
+                        AuthKind::CodexCli => KeySource::CodexCli,
+                        AuthKind::GrokCli => KeySource::GrokCli,
+                        AuthKind::ApiKey | AuthKind::Gemini => KeySource::None,
+                    };
+                    let hint = oauth::peek(kind).map(|peek| key_hint(peek.access_token.expose()));
+                    (source, hint)
+                } else {
+                    let held = if entry.is_default() {
+                        None
+                    } else {
+                        Some(
+                            self.secrets
+                                .inspect_account(&secrets::account_for(&entry.id)),
+                        )
+                    };
+                    let held = held.as_ref().unwrap_or(&default_held);
+                    (
+                        held.source,
+                        held.key.as_ref().map(|key| key_hint(key.expose())),
+                    )
+                };
+
+                MaskedProvider {
+                    id: entry.id,
+                    label: entry.label,
+                    auth_kind: kind,
+                    base_url: entry.settings.base_url,
+                    model: entry.settings.model,
+                    max_output_tokens: entry.settings.max_output_tokens,
+                    key_source,
+                    key_hint,
+                }
+            })
+            .collect();
 
         MaskedSettings {
-            auth_kind: provider.auth_kind,
-            base_url: provider.base_url,
-            model: provider.model,
-            max_output_tokens: provider.max_output_tokens,
-            key_source,
-            key_hint,
-            keyring_available: held.keyring_available,
+            providers,
+            keyring_available,
             presets: AuthKind::presets().to_vec(),
         }
     }
 
-    /// Asks the configured server whether it is reachable and the key works.
-    pub async fn probe_provider(&self) -> ProviderProbe {
-        let settings = self.settings.get();
+    /// The row `provider_id` names, or `E_INVALID_SETTING` on `field`.
+    fn known_row(&self, provider_id: &str, field: &'static str) -> AppResult<ProviderEntry> {
+        self.settings
+            .entry(provider_id)
+            .ok_or_else(|| AppError::Settings {
+                field,
+                reason: format!("`{provider_id}` is not a provider in Settings"),
+            })
+    }
 
-        // The same fork as `provider`: the probe must reach what a turn would.
+    /// Saves one row, and its key when one is given.
+    ///
+    /// Settings are validated and written before the key, so a rejected URL
+    /// never touches the credential store. The model's output ceiling is
+    /// looked up first, with the key about to be stored.
+    pub async fn save_provider(
+        &self,
+        provider_id: &str,
+        draft: &RowDraft<'_>,
+        api_key: Option<&str>,
+    ) -> AppResult<ProviderEntry> {
+        if !self.settings.contains(provider_id) {
+            return Err(AppError::ProviderNotFound {
+                id: provider_id.to_owned(),
+            });
+        }
+        let cap = self
+            .model_output_cap(
+                provider_id,
+                draft.auth_kind,
+                draft.base_url,
+                draft.model,
+                api_key,
+            )
+            .await;
+
+        let saved = self.settings.update(
+            provider_id,
+            &RowDraft {
+                max_output_tokens: cap,
+                ..*draft
+            },
+        )?;
+        self.store_row_key(&saved, api_key)?;
+        Ok(saved)
+    }
+
+    /// Appends a row under a fresh id, and its key when one is given.
+    pub async fn add_provider(
+        &self,
+        draft: &RowDraft<'_>,
+        api_key: Option<&str>,
+    ) -> AppResult<ProviderEntry> {
+        let pending = api_key.and_then(ApiKey::new);
+        let cap = catalog::output_cap(
+            draft.auth_kind,
+            draft.base_url,
+            draft.model,
+            self.http.as_ref(),
+            pending.as_ref(),
+        )
+        .await;
+
+        let added = self.settings.add(&RowDraft {
+            max_output_tokens: cap,
+            ..*draft
+        })?;
+        self.store_row_key(&added, api_key)?;
+        Ok(added)
+    }
+
+    /// Files a row's key. A blank key keeps what is stored; a CLI row stores
+    /// none.
+    fn store_row_key(&self, entry: &ProviderEntry, api_key: Option<&str>) -> AppResult<()> {
+        let Some(key) = api_key.and_then(ApiKey::new) else {
+            return Ok(());
+        };
+        if entry.settings.auth_kind.is_cli() {
+            tracing::warn!(id = %entry.id, "a key sent for a CLI login was not stored");
+            return Ok(());
+        }
+        self.secrets
+            .store_account(&secrets::account_for(&entry.id), &key)
+    }
+
+    /// Removes a row's stored key. Refused for a CLI row: that login is the
+    /// CLI's, not Aegis's.
+    pub fn clear_provider_key(&self, provider_id: &str) -> AppResult<()> {
+        let entry = self
+            .settings
+            .entry(provider_id)
+            .ok_or_else(|| AppError::ProviderNotFound {
+                id: provider_id.to_owned(),
+            })?;
+        if entry.settings.auth_kind.is_cli() {
+            return Err(AppError::Settings {
+                field: "key",
+                reason: "this provider signs in through its CLI; sign out there — Aegis \
+                         stores no key for it"
+                    .to_owned(),
+            });
+        }
+        self.secrets
+            .clear_account(&secrets::account_for(provider_id))
+    }
+
+    /// Deletes a row, unless it is the default one or an identity or a
+    /// session override still names it. Its key goes with it.
+    pub fn delete_provider(&self, provider_id: &str) -> AppResult<()> {
+        if provider_id != DEFAULT_PROVIDER_ID {
+            let identities = self.agents.count_for_provider(provider_id);
+            let sessions = self.sessions.count_for_provider(provider_id);
+            if identities > 0 || sessions > 0 {
+                return Err(AppError::ProviderInUse {
+                    identities,
+                    sessions,
+                });
+            }
+        }
+
+        let entry = self.settings.entry(provider_id);
+        self.settings.delete(provider_id)?;
+
+        if let Some(entry) = entry.filter(|entry| !entry.settings.auth_kind.is_cli()) {
+            if let Err(err) = self.secrets.clear_account(&secrets::account_for(&entry.id)) {
+                tracing::warn!(%err, id = %entry.id, "the provider is gone; its key is not");
+            }
+        }
+        Ok(())
+    }
+
+    /// Asks one row's server whether it is reachable and the key works.
+    pub async fn probe_provider(&self, provider_id: &str) -> AppResult<ProviderProbe> {
+        let entry = self
+            .settings
+            .entry(provider_id)
+            .ok_or_else(|| AppError::ProviderNotFound {
+                id: provider_id.to_owned(),
+            })?;
+        let settings = entry.settings;
+        let key = self.row_key(&entry.id, settings.auth_kind);
+
+        // The same fork as `build_provider`: the probe must reach what a turn
+        // would.
         if catalog::uses_motosan(settings.auth_kind, &settings.base_url) {
-            let key = if settings.auth_kind.is_cli() {
-                None
-            } else {
-                self.secrets.inspect().key
-            };
-
-            return motosan::probe(
+            return Ok(motosan::probe(
                 settings.auth_kind,
                 &settings.model,
                 &settings.base_url,
                 key,
                 self.http.as_ref(),
             )
-            .await;
+            .await);
         }
 
-        let key = self.secrets.inspect().key;
-        openai::probe(self.http.as_ref(), &settings, key.as_ref()).await
+        Ok(openai::probe(self.http.as_ref(), &settings, key.as_ref()).await)
     }
 
     /// The named model's largest reply, from the provider's catalog.
-    /// `pending_key`, from a form not saved yet, wins over the stored key.
+    /// `pending_key`, from a form not saved yet, wins over the row's stored key.
     pub async fn model_output_cap(
         &self,
+        provider_id: &str,
         kind: AuthKind,
         base_url: &str,
         model: &str,
         pending_key: Option<&str>,
     ) -> Option<u32> {
         let key = pending_key
-            .and_then(crate::secrets::ApiKey::new)
-            .or_else(|| self.secrets.inspect().key);
+            .and_then(ApiKey::new)
+            .or_else(|| self.row_key(provider_id, kind));
 
         catalog::output_cap(kind, base_url, model, self.http.as_ref(), key.as_ref()).await
     }
 
-    /// The models an authentication kind accepts, for the base URL in the form.
-    pub async fn list_models(&self, kind: AuthKind, base_url: &str) -> ModelCatalog {
+    /// The models an authentication kind accepts, for the base URL in the form,
+    /// asked with `provider_id`'s stored key.
+    pub async fn list_models(
+        &self,
+        provider_id: &str,
+        kind: AuthKind,
+        base_url: &str,
+    ) -> ModelCatalog {
         catalog::list(
             kind,
             base_url,
             self.http.as_ref(),
-            self.secrets.inspect().key.as_ref(),
+            self.row_key(provider_id, kind).as_ref(),
         )
         .await
     }
@@ -277,8 +458,8 @@ impl AppState {
         &self.settings
     }
 
-    /// The API key, wherever this machine keeps it — never in a document Aegis
-    /// writes.
+    /// The API keys, wherever this machine keeps them — never in a document
+    /// Aegis writes.
     pub fn secrets(&self) -> &SecretStore {
         &self.secrets
     }
@@ -286,6 +467,18 @@ impl AppState {
     /// The identities on disk, and the built-in one that is not.
     pub fn agents(&self) -> &AgentStore {
         &self.agents
+    }
+
+    /// Creates an identity bound to any row on file.
+    pub fn create_agent(&self, draft: &AgentDraft) -> AppResult<Agent> {
+        self.agents
+            .create_with(draft, &|id| self.settings.contains(id))
+    }
+
+    /// Replaces an identity's fields, bound to any row on file.
+    pub fn update_agent(&self, agent_id: &str, draft: &AgentDraft) -> AppResult<Agent> {
+        self.agents
+            .update_with(agent_id, draft, &|id| self.settings.contains(id))
     }
 
     /// Every identity, for the picker.
@@ -307,17 +500,68 @@ impl AppState {
     }
 
     /// Creates a session bound to an identity, checked here because the session
-    /// store cannot see the agent document.
+    /// store cannot see the agent document or the roster. An omitted
+    /// `provider_id` or `model` inherits (PLAN 7.19).
     pub fn create_session(
         &self,
         project_id: &str,
         title: Option<&str>,
         agent_id: Option<&str>,
+        provider_id: Option<&str>,
+        model: Option<&str>,
     ) -> AppResult<SessionSummary> {
         let agent_id = agent_id.unwrap_or(DEFAULT_AGENT_ID);
         let agent = self.agents.get(agent_id)?;
+        let (provider_id, model) = self.check_override(provider_id, model)?;
 
-        self.sessions.create(project_id, title, &agent.id)
+        self.sessions.create_bound(
+            project_id,
+            title,
+            &agent.id,
+            provider_id.as_deref(),
+            model.as_deref(),
+        )
+    }
+
+    /// Writes or clears a session's provider and model override (PLAN 7.19).
+    /// Both `None` returns to the identity's pair. Refused while a turn runs;
+    /// the next send uses it. The identity is untouched.
+    pub fn set_session_binding(
+        &self,
+        session_id: &str,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+    ) -> AppResult<SessionSummary> {
+        if let Some(turn_id) = self.turns.active_turn(session_id) {
+            return Err(AppError::TurnBusy { turn_id });
+        }
+        let (provider_id, model) = self.check_override(provider_id, model)?;
+
+        self.sessions.set_binding(
+            session_id,
+            provider_id.as_deref(),
+            model.as_deref(),
+            self.turns.state_of(session_id),
+        )
+    }
+
+    /// An override as it will be stored: blank is absent, a row must be on
+    /// file, a model is one word.
+    fn check_override(
+        &self,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+    ) -> AppResult<(Option<String>, Option<String>)> {
+        let provider_id = provider_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(|id| self.known_row(id, "provider").map(|entry| entry.id))
+            .transpose()?;
+        let model = model
+            .map(store::settings::normalize_model)
+            .transpose()?
+            .filter(|model| !model.is_empty());
+        Ok((provider_id, model))
     }
 
     /// Deletes an identity, unless sessions or routines still use it
@@ -902,6 +1146,9 @@ mod tests {
 
     /// The provider follows the settings: scripted when unconfigured, the real
     /// one once a URL and model are set. Nothing here writes a key.
+    ///
+    /// Only rows whose kind is a CLI login are added below, so no test reads a
+    /// non-default keyring account.
     #[test]
     fn the_provider_follows_the_settings() {
         let dir = TempDir::new().expect("temp dir");
@@ -938,9 +1185,14 @@ mod tests {
         let state = AppState::new(dir.path());
 
         let masked = state.masked_settings();
-        assert_eq!(masked.base_url, "");
-        assert_eq!(masked.model, "");
-        assert_eq!(masked.auth_kind, crate::store::AuthKind::ApiKey);
+        assert_eq!(masked.providers.len(), 1);
+        assert_eq!(masked.providers[0].id, DEFAULT_PROVIDER_ID);
+        assert_eq!(masked.providers[0].base_url, "");
+        assert_eq!(masked.providers[0].model, "");
+        assert_eq!(
+            masked.providers[0].auth_kind,
+            crate::store::AuthKind::ApiKey
+        );
 
         let rendered = serde_json::to_string(&masked).expect("serializes");
         assert!(
@@ -989,5 +1241,233 @@ mod tests {
             !second.grants().holds("s1", &crate::policy::Grant::FsWrite),
             "an allow-session grant must never survive a restart"
         );
+    }
+
+    /// A second row as a CLI login: keyless, so no test reaches the
+    /// credential store for it.
+    fn cli_row(state: &AppState, model: &str) -> String {
+        state
+            .settings()
+            .add(&RowDraft {
+                label: Some("Claude"),
+                base_url: "",
+                model,
+                auth_kind: AuthKind::ClaudeCli,
+                max_output_tokens: None,
+            })
+            .expect("added")
+            .id
+    }
+
+    fn reviewer_on(state: &AppState, provider_id: &str, model: &str) -> Agent {
+        state
+            .create_agent(&AgentDraft {
+                name: "Reviewer".to_owned(),
+                role: "reads and reports".to_owned(),
+                instructions: String::new(),
+                provider_id: provider_id.to_owned(),
+                model: model.to_owned(),
+                tools: Vec::new(),
+                skills: Vec::new(),
+                runs_per_day: 0,
+            })
+            .expect("created")
+    }
+
+    /// PLAN 7.19's exit, end to end below the commands: an identity bound to a
+    /// second row answers from it, a session overrides that without touching
+    /// the identity, and clearing the override goes back.
+    #[test]
+    fn a_turn_answers_from_the_resolved_binding() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+        let second = cli_row(&state, "claude-sonnet-4-6");
+        let reviewer = reviewer_on(&state, &second, "claude-opus-4-1");
+        let session = state
+            .create_session("p1", None, Some(&reviewer.id), None, None)
+            .expect("session");
+
+        assert_eq!(
+            state.provider_for(&reviewer, &session.id).model(),
+            "claude-opus-4-1",
+            "the identity's model"
+        );
+
+        let bound = state
+            .set_session_binding(&session.id, None, Some("claude-haiku-4-5"))
+            .expect("bound");
+        assert_eq!(bound.model.as_deref(), Some("claude-haiku-4-5"));
+        assert_eq!(bound.agent_id, reviewer.id, "the identity stays");
+        assert_eq!(
+            state.provider_for(&reviewer, &session.id).model(),
+            "claude-haiku-4-5"
+        );
+
+        state
+            .set_session_binding(&session.id, Some(DEFAULT_PROVIDER_ID), None)
+            .expect("bound");
+        assert_eq!(
+            state.provider_for(&reviewer, &session.id).model(),
+            crate::agent::provider::fake::FAKE_MODEL,
+            "the unconfigured default row is the scripted provider"
+        );
+
+        let cleared = state
+            .set_session_binding(&session.id, Some("  "), Some(""))
+            .expect("cleared");
+        assert_eq!((cleared.provider_id, cleared.model), (None, None));
+        assert_eq!(
+            state.provider_for(&reviewer, &session.id).model(),
+            "claude-opus-4-1"
+        );
+        assert_eq!(
+            state.agents().get(&reviewer.id).expect("kept"),
+            reviewer,
+            "no override rebinds the identity"
+        );
+    }
+
+    #[test]
+    fn a_session_can_be_created_with_an_override() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+        let second = cli_row(&state, "claude-sonnet-4-6");
+
+        let session = state
+            .create_session("p1", None, None, Some(&second), None)
+            .expect("session");
+        assert_eq!(session.provider_id.as_deref(), Some(second.as_str()));
+        assert_eq!(session.model, None);
+        assert_eq!(
+            state.provider_for(&Agent::builtin(), &session.id).model(),
+            "claude-sonnet-4-6",
+            "a row with no model override sends the row's"
+        );
+
+        let err = state
+            .create_session("p1", None, None, Some("gone"), None)
+            .expect_err("refused");
+        assert_eq!(
+            serde_json::to_value(&err).expect("serializes")["field"],
+            "provider"
+        );
+    }
+
+    #[test]
+    fn a_binding_cannot_change_while_a_turn_runs() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+        let session = state
+            .create_session("p1", None, None, None, None)
+            .expect("session");
+        let _cancel = state.turns().begin(&session.id, "t1").expect("begun");
+
+        let err = state
+            .set_session_binding(&session.id, None, Some("m"))
+            .expect_err("refused");
+        assert_eq!(
+            serde_json::to_value(&err).expect("serializes")["code"],
+            "E_TURN_BUSY"
+        );
+        assert_eq!(
+            state.sessions().binding_of(&session.id).expect("read"),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn an_identity_cannot_name_a_row_that_is_not_on_file() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+        let second = cli_row(&state, "m");
+        let reviewer = reviewer_on(&state, &second, "");
+
+        let err = state
+            .update_agent(
+                &reviewer.id,
+                &AgentDraft {
+                    name: reviewer.name.clone(),
+                    role: reviewer.role.clone(),
+                    instructions: String::new(),
+                    provider_id: "gone".to_owned(),
+                    model: String::new(),
+                    tools: Vec::new(),
+                    skills: Vec::new(),
+                    runs_per_day: 0,
+                },
+            )
+            .expect_err("refused");
+        assert_eq!(
+            serde_json::to_value(&err).expect("serializes")["field"],
+            "provider"
+        );
+    }
+
+    /// A row something answers from is not deleted, and nothing is moved to
+    /// another row to make room.
+    #[test]
+    fn a_row_in_use_is_not_deleted() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+
+        assert!(state.delete_provider(DEFAULT_PROVIDER_ID).is_err());
+
+        let bound = cli_row(&state, "m");
+        let reviewer = reviewer_on(&state, &bound, "");
+        let overridden = cli_row(&state, "m");
+        let session = state
+            .create_session("p1", None, None, Some(&overridden), None)
+            .expect("session");
+
+        let err = state.delete_provider(&bound).expect_err("refused");
+        assert!(
+            matches!(
+                err,
+                AppError::ProviderInUse {
+                    identities: 1,
+                    sessions: 0
+                }
+            ),
+            "{err}"
+        );
+        let err = state.delete_provider(&overridden).expect_err("refused");
+        assert!(
+            matches!(
+                err,
+                AppError::ProviderInUse {
+                    identities: 0,
+                    sessions: 1
+                }
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            state.agents().get(&reviewer.id).expect("kept").provider_id,
+            bound
+        );
+
+        state
+            .set_session_binding(&session.id, None, None)
+            .expect("cleared");
+        state.delete_provider(&overridden).expect("deleted");
+        assert!(!state.settings().contains(&overridden));
+    }
+
+    /// Clearing a key a CLI owns is refused: Aegis never stored it.
+    #[test]
+    fn a_cli_row_has_no_key_to_clear() {
+        let dir = TempDir::new().expect("temp dir");
+        let state = AppState::new(dir.path());
+        let second = cli_row(&state, "m");
+
+        let err = state.clear_provider_key(&second).expect_err("refused");
+        assert_eq!(
+            serde_json::to_value(&err).expect("serializes")["code"],
+            "E_INVALID_SETTING"
+        );
+        assert!(matches!(
+            state.clear_provider_key("gone"),
+            Err(AppError::ProviderNotFound { .. })
+        ));
     }
 }

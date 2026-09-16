@@ -22,7 +22,7 @@ pub fn agent_list(state: State<'_, AppState>) -> AppResult<Vec<Agent>> {
 /// so the form marks the input rather than raising a banner over itself.
 #[tauri::command(rename_all = "snake_case")]
 pub fn agent_create(state: State<'_, AppState>, draft: AgentDraft) -> AppResult<Agent> {
-    state.agents().create(&draft)
+    state.create_agent(&draft)
 }
 
 /// Replaces an identity's fields, keeping its id.
@@ -36,7 +36,7 @@ pub fn agent_update(
     agent_id: String,
     draft: AgentDraft,
 ) -> AppResult<Agent> {
-    state.agents().update(&agent_id, &draft)
+    state.update_agent(&agent_id, &draft)
 }
 
 /// Deletes an identity.

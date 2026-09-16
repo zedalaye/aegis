@@ -1019,7 +1019,7 @@ impl Turn<'_> {
     fn session_changed(&self, plan: &TurnPlan) {
         let state = self.turns.state_of(&plan.session_id);
         if let Some(summary) = summarize(self.sessions, &plan.session_id, state) {
-            self.sink.emit(Event::SessionUpdated(summary));
+            self.sink.emit(Event::SessionUpdated(Box::new(summary)));
         }
     }
 
@@ -1146,7 +1146,7 @@ impl Turn<'_> {
             .sessions
             .append(&plan.session_id, message, SessionState::Running)
         {
-            Ok(summary) => self.sink.emit(Event::SessionUpdated(summary)),
+            Ok(summary) => self.sink.emit(Event::SessionUpdated(Box::new(summary))),
             Err(err) => {
                 tracing::warn!(%err, call_id = %call.call_id, "could not record the tool result");
             }
@@ -1174,7 +1174,7 @@ impl Turn<'_> {
                     turn_id: plan.turn_id.clone(),
                     message,
                 })));
-                self.sink.emit(Event::SessionUpdated(summary));
+                self.sink.emit(Event::SessionUpdated(Box::new(summary)));
             }
             Err(err) => {
                 tracing::error!(%err, session_id = %plan.session_id, "could not persist the reply");

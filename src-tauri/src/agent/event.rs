@@ -284,7 +284,7 @@ pub enum Event {
     /// `tool:finished`.
     ToolFinished(ToolFinished),
     /// `session:updated`.
-    SessionUpdated(SessionSummary),
+    SessionUpdated(Box<SessionSummary>),
     /// `audit:appended`.
     AuditAppended(Box<AuditEntry>),
     /// `routine:updated` (Phase 16): a routine's row changed, e.g. a run ended.

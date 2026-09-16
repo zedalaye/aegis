@@ -455,6 +455,8 @@ _Nothing blocked._
             id: id.to_owned(),
             project_id: "p1".to_owned(),
             agent_id: "assistant".to_owned(),
+            provider_id: None,
+            model: None,
             title: format!("{id} conversation"),
             created_at: "2026-09-01T07:00:00.000Z".to_owned(),
             updated_at: "2026-09-01T07:30:00.000Z".to_owned(),

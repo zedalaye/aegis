@@ -680,6 +680,7 @@ async fn a_connector_tool_outside_the_allow_list_is_refused_by_name() {
         role: "reads".to_owned(),
         instructions: String::new(),
         provider_id: "default".to_owned(),
+        model: String::new(),
         tools: vec!["fs_read".to_owned(), "mock__status".to_owned()],
         skills: Vec::new(),
         runs_per_day: 0,

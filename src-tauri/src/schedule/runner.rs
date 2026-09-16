@@ -78,7 +78,7 @@ pub struct Host<'a> {
     /// routine signed for it by name.
     pub connectors: &'a Connectors,
     /// Which provider answers for an identity (PLAN 7.1, *Provider*).
-    pub provider: &'a (dyn Fn(&Agent) -> Box<dyn Provider> + Send + Sync),
+    pub provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
 }
 
 /// Which routines are running now, in memory only. Shared by the tick and
@@ -245,7 +245,8 @@ pub async fn fire(host: &Host<'_>, routine_id: &str) {
     };
     // Emitted as it opens rather than when it ends: work the machine does on
     // your behalf should be watchable while it happens, the same as a brief's.
-    host.sink.emit(Event::SessionUpdated(session.clone()));
+    host.sink
+        .emit(Event::SessionUpdated(Box::new(session.clone())));
 
     // The signed approvals become ordinary session grants for this run only.
     for grant in &routine.grants {
@@ -294,7 +295,7 @@ async fn drive(
     });
 
     let reported = Reported::new();
-    let provider = (host.provider)(&ready.agent);
+    let provider = (host.provider)(&ready.agent, session_id);
     let plan = TurnPlan {
         session_id: session_id.to_owned(),
         turn_id: turn_id.clone(),
@@ -331,7 +332,7 @@ async fn drive(
     let resting = turn::resting_state(reason);
     host.turns.finish(session_id, &turn_id, resting);
     if let Some(summary) = turn::summarize(host.sessions, session_id, resting) {
-        host.sink.emit(Event::SessionUpdated(summary));
+        host.sink.emit(Event::SessionUpdated(Box::new(summary)));
     }
 
     match reported.take() {
@@ -499,7 +500,7 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
     };
 
     let sink = WindowSink::new(app.clone());
-    let provider = |agent: &Agent| state.provider_for(agent);
+    let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
     let host = Host {
         projects: state.store(),
         routines: state.routines(),

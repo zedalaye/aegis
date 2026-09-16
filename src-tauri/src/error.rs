@@ -310,6 +310,27 @@ pub enum AppError {
         count: usize,
     },
 
+    /// No provider row carries that id (PLAN 7.19): the UI's list is stale,
+    /// refetch.
+    #[error("that provider no longer exists")]
+    ProviderNotFound {
+        /// The id that was looked up. Logged, not shown.
+        id: String,
+    },
+
+    /// A provider row was deleted while identities or session overrides still
+    /// name it (PLAN 7.19). Refused, never cascaded: deleting it would change
+    /// who answers.
+    #[error(
+        "this provider cannot be deleted while {identities} identities and {sessions} sessions          still answer from it"
+    )]
+    ProviderInUse {
+        /// How many identities are bound to it.
+        identities: usize,
+        /// How many sessions override to it.
+        sessions: usize,
+    },
+
     /// The OS credential store could not be used. Carries nothing: platform
     /// text belongs in the log, and the panel suggests `AEGIS_API_KEY`.
     #[error("your system's credential store could not be used")]
@@ -417,6 +438,8 @@ impl AppError {
             | Self::AgentBuiltin { .. }
             | Self::AgentInUse { .. }
             | Self::AgentHasRoutines { .. }
+            | Self::ProviderNotFound { .. }
+            | Self::ProviderInUse { .. }
             | Self::RoutineNotFound { .. }
             | Self::ConnectorNotFound { .. }
             | Self::RunNotFound { .. }

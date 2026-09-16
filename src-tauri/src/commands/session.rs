@@ -23,16 +23,44 @@ use super::window::MAIN_WINDOW;
 
 /// Creates a session in a project, as an identity.
 ///
-/// An omitted `agent_id` is the built-in identity; the binding is permanent
-/// ([`SessionStore::create`](crate::store::SessionStore::create)).
+/// An omitted `agent_id` is the built-in identity; that binding is permanent
+/// ([`SessionStore::create`](crate::store::SessionStore::create)). An omitted
+/// `provider_id` or `model` inherits the identity's (PLAN 7.19).
 #[tauri::command(rename_all = "snake_case")]
 pub fn session_create(
     state: State<'_, AppState>,
     project_id: String,
     title: Option<String>,
     agent_id: Option<String>,
+    provider_id: Option<String>,
+    model: Option<String>,
 ) -> AppResult<SessionSummary> {
-    state.create_session(&project_id, title.as_deref(), agent_id.as_deref())
+    state.create_session(
+        &project_id,
+        title.as_deref(),
+        agent_id.as_deref(),
+        provider_id.as_deref(),
+        model.as_deref(),
+    )
+}
+
+/// Overrides the provider row and model a session answers from (PLAN 7.19).
+///
+/// Both omitted returns to the identity's pair. The identity, its allow-list
+/// and its memories do not change. `E_TURN_BUSY` while a turn runs.
+#[tauri::command(rename_all = "snake_case")]
+pub fn session_set_binding(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    provider_id: Option<String>,
+    model: Option<String>,
+) -> AppResult<SessionSummary> {
+    let summary =
+        state.set_session_binding(&session_id, provider_id.as_deref(), model.as_deref())?;
+
+    WindowSink::new(app).emit(Event::SessionUpdated(Box::new(summary.clone())));
+    Ok(summary)
 }
 
 /// A project's sessions, most recently active first.
@@ -63,7 +91,7 @@ pub fn session_rename(
             .sessions()
             .rename(&session_id, &title, state.turns().state_of(&session_id))?;
 
-    WindowSink::new(app).emit(Event::SessionUpdated(summary));
+    WindowSink::new(app).emit(Event::SessionUpdated(Box::new(summary)));
     Ok(())
 }
 
@@ -99,7 +127,7 @@ pub fn session_send(
         .sessions()
         .append(&session_id, Message::user(text), SessionState::Running)
         .and_then(|summary| {
-            sink.emit(Event::SessionUpdated(summary));
+            sink.emit(Event::SessionUpdated(Box::new(summary)));
             state.workspace_of(&session_id)
         });
 
@@ -179,7 +207,7 @@ async fn run_turn<R: Runtime>(
     // identity — an identity edited between two messages should reach the next
     // turn whole, rather than halfway through one.
     let agent = state.agent_of(&plan.session_id);
-    let provider = state.provider_for(&agent);
+    let provider = state.provider_for(&agent, &plan.session_id);
 
     // Per-turn delegation state (Phase 15); none without a workspace, since a
     // team needs shared files (`COS.md` *Memory*).
@@ -224,7 +252,7 @@ async fn run_turn<R: Runtime>(
     state.retire_turn(&plan.session_id, &plan.turn_id, resting);
 
     if let Some(summary) = turn::summarize(state.sessions(), &plan.session_id, resting) {
-        sink.emit(Event::SessionUpdated(summary));
+        sink.emit(Event::SessionUpdated(Box::new(summary)));
     }
 }
 

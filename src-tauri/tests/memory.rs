@@ -96,6 +96,7 @@ impl App {
                 role: "keeps notes and remembers what matters".to_owned(),
                 instructions: String::new(),
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                model: String::new(),
                 tools: vec![
                     tool::FS_READ.to_owned(),
                     tool::FS_WRITE.to_owned(),

@@ -32,7 +32,10 @@ pub use sessions::{
     Compaction, Cost, Delegated, Message, Role, Scheduled, SessionDetail, SessionState,
     SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle,
 };
-pub use settings::{AuthKind, AuthPreset, MaskedSettings, ProviderSettings, SettingsStore};
+pub use settings::{
+    AuthKind, AuthPreset, Binding, BindingRequest, MaskedProvider, MaskedSettings, ProviderEntry,
+    ProviderSettings, RowDraft, SettingsStore, PROVIDERS_MAX,
+};
 
 /// Rename attempts before a failed save gives up: on Windows an antivirus or
 /// indexer can hold the old file for a few milliseconds

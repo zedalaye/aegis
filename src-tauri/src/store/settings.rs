@@ -1,12 +1,13 @@
 //! The settings document: `settings.json`.
 //!
-//! Base URL, model and auth kind — never the key, which lives in the OS
-//! credential store, the environment or a CLI login ([`secrets`](crate::secrets),
-//! [`oauth`](crate::oauth)).
+//! A roster of chat provider rows (PLAN 7.19): base URL, model and auth kind —
+//! never the key, which lives in the OS credential store, the environment or a
+//! CLI login ([`secrets`](crate::secrets), [`oauth`](crate::oauth)). The row
+//! [`DEFAULT_PROVIDER_ID`] always exists, and comes first.
 //!
-//! Unconfigured settings mean the scripted provider
-//! ([`ProviderSettings::is_configured`]); a configured provider without a key
-//! is `E_NO_API_KEY`.
+//! An unconfigured row means the scripted provider
+//! ([`ProviderSettings::is_configured`]); a configured row without a key is
+//! `E_NO_API_KEY`.
 
 use std::fs;
 use std::io;
@@ -17,6 +18,10 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use serde_json::{Map, Value};
+use uuid::Uuid;
+
+use super::agents::DEFAULT_PROVIDER_ID;
 use super::{quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 use crate::secrets::KeySource;
@@ -26,6 +31,12 @@ const SETTINGS_FILE: &str = "settings.json";
 
 /// Schema version of [`SettingsFile`]; any other version is quarantined.
 const SCHEMA_VERSION: u32 = 1;
+
+/// Most provider rows one machine may hold.
+pub const PROVIDERS_MAX: usize = 16;
+
+/// Longest row label.
+const LABEL_MAX_CHARS: usize = 48;
 
 /// The path a base URL must *not* already include.
 ///
@@ -122,17 +133,36 @@ pub struct AuthPreset {
     pub default_model: String,
 }
 
-/// Everything the WebView is allowed to know about the provider settings.
+/// Everything the WebView is allowed to know about the provider roster.
 ///
 /// No unmasked counterpart exists: a key is written or cleared, never read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct MaskedSettings {
+    /// Every row, [`DEFAULT_PROVIDER_ID`] first.
+    pub providers: Vec<MaskedProvider>,
+    /// Whether this machine has a credential store that answered.
+    ///
+    /// `false` on headless Linux or a locked keychain.
+    pub keyring_available: bool,
+    /// Prefill values for every authentication kind, so switching in the form
+    /// can fill the matching URL and model without a second round trip.
+    pub presets: Vec<AuthPreset>,
+}
+
+/// One provider row, as the WebView may see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct MaskedProvider {
+    /// [`DEFAULT_PROVIDER_ID`], or a UUID v4 minted on add.
+    pub id: String,
+    /// Display name. May be empty.
+    pub label: String,
     /// How this provider authenticates.
     pub auth_kind: AuthKind,
-    /// The OpenAI-compatible base URL, normalized. Empty when unset.
+    /// The base URL, normalized. Empty when unset.
     pub base_url: String,
-    /// The model id sent with every request. Empty when unset.
+    /// The model id sent when nothing overrides it. Empty when unset.
     pub model: String,
     /// The output ceiling the provider's catalog reported for that model, or
     /// `None` for an endpoint that does not publish one.
@@ -145,13 +175,6 @@ pub struct MaskedSettings {
     /// A few characters of the key, for recognition. `None` when there is no
     /// key at all.
     pub key_hint: Option<String>,
-    /// Whether this machine has a credential store that answered.
-    ///
-    /// `false` on headless Linux or a locked keychain.
-    pub keyring_available: bool,
-    /// Prefill values for every authentication kind, so switching in the form
-    /// can fill the matching URL and model without a second round trip.
-    pub presets: Vec<AuthPreset>,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,15 +182,51 @@ pub struct MaskedSettings {
 // ---------------------------------------------------------------------------
 
 /// The document itself.
+///
+/// `provider` is the singleton written before PLAN 7.19: read, never written.
+/// Keys this build does not know land in `rest` and are written back, so a
+/// save never drops another half of the document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SettingsFile {
     version: u32,
-    provider: ProviderSettings,
+    #[serde(default)]
+    providers: Vec<ProviderEntry>,
+    #[serde(default, skip_serializing)]
+    provider: Option<ProviderSettings>,
+    #[serde(flatten)]
+    rest: Map<String, Value>,
 }
 
-/// The provider settings, as persisted and as the runtime reads them.
-///
-/// Nested under a `provider` key so a roster can be added later (PLAN 7.1).
+/// One row of the roster, as persisted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderEntry {
+    /// [`DEFAULT_PROVIDER_ID`], or a UUID v4.
+    pub id: String,
+    /// Display name. May be empty.
+    #[serde(default)]
+    pub label: String,
+    /// Where requests go, and as which model.
+    #[serde(flatten)]
+    pub settings: ProviderSettings,
+}
+
+impl ProviderEntry {
+    /// The row a fresh install, or an unreadable document, starts with.
+    fn unconfigured_default() -> Self {
+        Self {
+            id: DEFAULT_PROVIDER_ID.to_owned(),
+            label: String::new(),
+            settings: ProviderSettings::default(),
+        }
+    }
+
+    /// Whether this is the row that cannot be deleted.
+    pub fn is_default(&self) -> bool {
+        self.id == DEFAULT_PROVIDER_ID
+    }
+}
+
+/// One row's connection settings, as persisted and as the runtime reads them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSettings {
     /// How to authenticate. Missing in documents written before this field
@@ -202,6 +261,85 @@ impl ProviderSettings {
             return false;
         }
         !matches!(self.auth_kind, AuthKind::ApiKey) || !self.base_url.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resolution (PLAN 7.19)
+// ---------------------------------------------------------------------------
+
+/// What asks for a provider: an identity's default pair, and a session's
+/// override of it. Empty and `None` mean "inherit".
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BindingRequest<'a> {
+    /// The identity's `provider_id`.
+    pub identity_provider: &'a str,
+    /// The identity's `model`; empty uses the row's.
+    pub identity_model: &'a str,
+    /// The session's override of the row.
+    pub session_provider: Option<&'a str>,
+    /// The session's override of the model.
+    pub session_model: Option<&'a str>,
+}
+
+/// The row a turn answers from, and the settings it sends with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    /// The row that answered — [`DEFAULT_PROVIDER_ID`] when the named one is
+    /// missing.
+    pub provider_id: String,
+    /// The row's settings with the resolved model in place.
+    pub settings: ProviderSettings,
+}
+
+/// Picks the row and model for one turn (PLAN 7.19). `rows` holds the default
+/// row first, as [`SettingsStore::list`] returns it.
+///
+/// Row: session, else identity, else default. Model: session, else the row's
+/// when the session chose the row, else the identity's, else the row's. A row
+/// that is not on file answers from the default row, as it stands. The
+/// catalog ceiling is kept only while the model is the row's own.
+pub fn resolve(rows: &[ProviderEntry], request: &BindingRequest<'_>) -> Binding {
+    let session_provider = request.session_provider.filter(|id| !id.is_empty());
+    let session_model = request.session_model.filter(|model| !model.is_empty());
+    let wanted = session_provider
+        .or(Some(request.identity_provider).filter(|id| !id.is_empty()))
+        .unwrap_or(DEFAULT_PROVIDER_ID);
+
+    let fallback = || {
+        rows.iter()
+            .find(|entry| entry.is_default())
+            .cloned()
+            .unwrap_or_else(ProviderEntry::unconfigured_default)
+    };
+    let Some(entry) = rows.iter().find(|entry| entry.id == wanted).cloned() else {
+        tracing::warn!(
+            provider_id = wanted,
+            "a binding names a provider that is not on file; answering from the default one"
+        );
+        let entry = fallback();
+        return Binding {
+            provider_id: entry.id,
+            settings: entry.settings,
+        };
+    };
+
+    let model = session_model
+        .or_else(|| {
+            (session_provider.is_none() && !request.identity_model.is_empty())
+                .then_some(request.identity_model)
+        })
+        .unwrap_or(&entry.settings.model)
+        .to_owned();
+
+    let mut settings = entry.settings;
+    if model != settings.model {
+        settings.model = model;
+        settings.max_output_tokens = None;
+    }
+    Binding {
+        provider_id: entry.id,
+        settings,
     }
 }
 
@@ -273,34 +411,127 @@ pub fn normalize_model(raw: &str) -> AppResult<String> {
     Ok(trimmed.to_owned())
 }
 
+/// Accepts a row label, or says what is wrong with it. Empty is allowed.
+pub fn normalize_label(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim();
+
+    if trimmed.chars().count() > LABEL_MAX_CHARS {
+        return Err(AppError::Settings {
+            field: "label",
+            reason: format!("keep it under {LABEL_MAX_CHARS} characters"),
+        });
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// What a save or an add carries for one row, before normalizing.
+#[derive(Debug, Clone, Copy)]
+pub struct RowDraft<'a> {
+    /// `None` keeps the stored label.
+    pub label: Option<&'a str>,
+    /// The base URL as typed.
+    pub base_url: &'a str,
+    /// The model id as typed.
+    pub model: &'a str,
+    /// How the row authenticates.
+    pub auth_kind: AuthKind,
+    /// The model's output ceiling, looked up by the caller.
+    pub max_output_tokens: Option<u32>,
+}
+
+impl RowDraft<'_> {
+    /// The settings this draft stands for, validated.
+    fn settings(&self) -> AppResult<ProviderSettings> {
+        Ok(ProviderSettings {
+            auth_kind: self.auth_kind,
+            base_url: normalize_base_url(self.base_url)?,
+            model: normalize_model(self.model)?,
+            max_output_tokens: self.max_output_tokens,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
-/// The settings store: the values in memory plus the document backing them.
+/// What the store holds in memory: the rows, and the keys it does not own.
+#[derive(Debug)]
+struct Document {
+    providers: Vec<ProviderEntry>,
+    rest: Map<String, Value>,
+}
+
+impl Document {
+    fn empty() -> Self {
+        Self {
+            providers: vec![ProviderEntry::unconfigured_default()],
+            rest: Map::new(),
+        }
+    }
+
+    /// The rows of a file as read: `providers` when present, else the
+    /// singleton `provider`; in every case exactly one default row, first.
+    fn from_file(file: SettingsFile) -> Self {
+        let listed = if file.providers.is_empty() {
+            vec![ProviderEntry {
+                settings: file.provider.unwrap_or_default(),
+                ..ProviderEntry::unconfigured_default()
+            }]
+        } else {
+            file.providers
+        };
+
+        let mut providers: Vec<ProviderEntry> = Vec::with_capacity(listed.len());
+        for entry in listed {
+            if entry.id.trim().is_empty() || providers.iter().any(|kept| kept.id == entry.id) {
+                tracing::warn!(id = %entry.id, "a provider row with a blank or repeated id was dropped");
+                continue;
+            }
+            providers.push(entry);
+        }
+        match providers.iter().position(ProviderEntry::is_default) {
+            Some(0) => {}
+            Some(at) => {
+                let default = providers.remove(at);
+                providers.insert(0, default);
+            }
+            None => providers.insert(0, ProviderEntry::unconfigured_default()),
+        }
+
+        Self {
+            providers,
+            rest: file.rest,
+        }
+    }
+}
+
+/// The settings store: the rows in memory plus the document backing them.
 ///
-/// Written out whole on every change.
+/// Written out whole on every change, under the one lock.
 #[derive(Debug)]
 pub struct SettingsStore {
     path: PathBuf,
-    provider: Mutex<ProviderSettings>,
+    document: Mutex<Document>,
 }
 
 impl SettingsStore {
     /// Loads the settings from `data_dir`.
     ///
-    /// Never fails: unreadable settings start empty.
+    /// Never fails: unreadable settings start with one unconfigured row.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(SETTINGS_FILE);
 
-        let provider = match fs::read(&path) {
+        let document = match fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<SettingsFile>(strip_bom(&bytes)) {
                 Ok(file) if file.version == SCHEMA_VERSION => {
+                    let document = Document::from_file(file);
                     tracing::info!(
-                        configured = file.provider.is_configured(),
+                        providers = document.providers.len(),
+                        configured = document.providers[0].settings.is_configured(),
                         "settings loaded"
                     );
-                    file.provider
+                    document
                 }
                 Ok(file) => {
                     tracing::error!(
@@ -309,45 +540,62 @@ impl SettingsStore {
                         "unknown settings version"
                     );
                     quarantine(&path);
-                    ProviderSettings::default()
+                    Document::empty()
                 }
                 Err(err) => {
                     tracing::error!(%err, "settings are not readable JSON");
                     quarantine(&path);
-                    ProviderSettings::default()
+                    Document::empty()
                 }
             },
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 tracing::info!("no settings yet; no provider is configured");
-                ProviderSettings::default()
+                Document::empty()
             }
             Err(err) => {
                 tracing::error!(%err, "could not read the settings");
-                ProviderSettings::default()
+                Document::empty()
             }
         };
 
         Self {
             path,
-            provider: Mutex::new(provider),
+            document: Mutex::new(document),
         }
     }
 
-    /// Locks the values, recovering from poison: they cannot be left torn.
-    fn provider(&self) -> MutexGuard<'_, ProviderSettings> {
-        self.provider
+    /// Locks the document, recovering from poison: it cannot be left torn.
+    fn document(&self) -> MutexGuard<'_, Document> {
+        self.document
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The current provider settings.
-    pub fn get(&self) -> ProviderSettings {
-        self.provider().clone()
+    /// Every row, the default one first.
+    pub fn list(&self) -> Vec<ProviderEntry> {
+        self.document().providers.clone()
     }
 
-    /// Replaces the provider settings, after normalizing both fields.
-    ///
-    /// Validated first, so a rejection changes nothing.
+    /// One row by id.
+    pub fn entry(&self, id: &str) -> Option<ProviderEntry> {
+        self.document()
+            .providers
+            .iter()
+            .find(|entry| entry.id == id)
+            .cloned()
+    }
+
+    /// Whether a row carries `id`.
+    pub fn contains(&self, id: &str) -> bool {
+        self.document().providers.iter().any(|entry| entry.id == id)
+    }
+
+    /// The default row's settings.
+    pub fn get(&self) -> ProviderSettings {
+        self.document().providers[0].settings.clone()
+    }
+
+    /// Replaces the default row's settings, keeping its label.
     pub fn set(
         &self,
         base_url: &str,
@@ -355,25 +603,102 @@ impl SettingsStore {
         auth_kind: AuthKind,
         max_output_tokens: Option<u32>,
     ) -> AppResult<ProviderSettings> {
-        let next = ProviderSettings {
+        let draft = RowDraft {
+            label: None,
+            base_url,
+            model,
             auth_kind,
-            base_url: normalize_base_url(base_url)?,
-            model: normalize_model(model)?,
             max_output_tokens,
         };
-
-        let mut provider = self.provider();
-        provider.clone_from(&next);
-        self.save(&provider)?;
-
-        Ok(next)
+        self.update(DEFAULT_PROVIDER_ID, &draft)
+            .map(|entry| entry.settings)
     }
 
-    /// Writes the document.
-    fn save(&self, provider: &ProviderSettings) -> AppResult<()> {
+    /// Replaces one row's settings. Validated first, so a rejection changes
+    /// nothing; an unknown id is refused.
+    pub fn update(&self, id: &str, draft: &RowDraft<'_>) -> AppResult<ProviderEntry> {
+        let settings = draft.settings()?;
+        let label = draft.label.map(normalize_label).transpose()?;
+
+        let mut document = self.document();
+        let mut next = document.providers.clone();
+        let entry = next
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| AppError::ProviderNotFound { id: id.to_owned() })?;
+        entry.settings = settings;
+        if let Some(label) = label {
+            entry.label = label;
+        }
+        let updated = entry.clone();
+
+        self.save(&next, &document.rest)?;
+        document.providers = next;
+        Ok(updated)
+    }
+
+    /// Appends a row under a fresh UUID. Refused past [`PROVIDERS_MAX`].
+    pub fn add(&self, draft: &RowDraft<'_>) -> AppResult<ProviderEntry> {
+        let settings = draft.settings()?;
+        let label = normalize_label(draft.label.unwrap_or_default())?;
+
+        let mut document = self.document();
+        if document.providers.len() >= PROVIDERS_MAX {
+            return Err(AppError::Settings {
+                field: "provider",
+                reason: format!("at most {PROVIDERS_MAX} providers on one machine"),
+            });
+        }
+
+        let entry = ProviderEntry {
+            id: Uuid::new_v4().to_string(),
+            label,
+            settings,
+        };
+        let mut next = document.providers.clone();
+        next.push(entry.clone());
+
+        self.save(&next, &document.rest)?;
+        document.providers = next;
+        tracing::info!(id = %entry.id, "provider row added");
+        Ok(entry)
+    }
+
+    /// Removes a row. Refused for [`DEFAULT_PROVIDER_ID`]; whether anything
+    /// still names the row is the caller's check
+    /// ([`AppState::delete_provider`](crate::AppState::delete_provider)).
+    pub fn delete(&self, id: &str) -> AppResult<()> {
+        if id == DEFAULT_PROVIDER_ID {
+            return Err(AppError::Settings {
+                field: "provider",
+                reason: "the default provider cannot be deleted — the built-in Assistant \
+                         answers from it"
+                    .to_owned(),
+            });
+        }
+
+        let mut document = self.document();
+        let mut next = document.providers.clone();
+        let before = next.len();
+        next.retain(|entry| entry.id != id);
+        if next.len() == before {
+            return Err(AppError::ProviderNotFound { id: id.to_owned() });
+        }
+
+        self.save(&next, &document.rest)?;
+        document.providers = next;
+        tracing::info!(id, "provider row deleted");
+        Ok(())
+    }
+
+    /// Writes the document: the rows given, and every key this build does not
+    /// own as it was read.
+    fn save(&self, providers: &[ProviderEntry], rest: &Map<String, Value>) -> AppResult<()> {
         let file = SettingsFile {
             version: SCHEMA_VERSION,
-            provider: provider.clone(),
+            providers: providers.to_vec(),
+            provider: None,
+            rest: rest.clone(),
         };
 
         let bytes = serde_json::to_vec_pretty(&file).map_err(|err| {
@@ -612,5 +937,286 @@ mod tests {
 
         assert_eq!(store.get(), ProviderSettings::default());
         assert!(!path.exists(), "the damaged document was moved aside");
+    }
+
+    fn entry(id: &str, model: &str, cap: Option<u32>) -> ProviderEntry {
+        ProviderEntry {
+            id: id.to_owned(),
+            label: String::new(),
+            settings: ProviderSettings {
+                auth_kind: AuthKind::ApiKey,
+                base_url: format!("https://{id}.test/v1"),
+                model: model.to_owned(),
+                max_output_tokens: cap,
+            },
+        }
+    }
+
+    /// The resolution order PLAN 7.19 fixes, one row per case.
+    #[test]
+    fn a_binding_resolves_session_then_identity_then_row() {
+        let rows = [
+            entry(DEFAULT_PROVIDER_ID, "d-model", Some(100)),
+            entry("second", "s-model", Some(200)),
+        ];
+        let identity = |provider: &'static str, model: &'static str| BindingRequest {
+            identity_provider: provider,
+            identity_model: model,
+            ..BindingRequest::default()
+        };
+
+        let cases: [(&str, BindingRequest<'_>, &str, &str, Option<u32>); 8] = [
+            (
+                "identity default",
+                identity(DEFAULT_PROVIDER_ID, ""),
+                DEFAULT_PROVIDER_ID,
+                "d-model",
+                Some(100),
+            ),
+            (
+                "identity row, row model",
+                identity("second", ""),
+                "second",
+                "s-model",
+                Some(200),
+            ),
+            (
+                "identity model",
+                identity("second", "s-big"),
+                "second",
+                "s-big",
+                None,
+            ),
+            (
+                "session model only",
+                BindingRequest {
+                    session_model: Some("s-small"),
+                    ..identity("second", "s-big")
+                },
+                "second",
+                "s-small",
+                None,
+            ),
+            (
+                "session provider only",
+                BindingRequest {
+                    session_provider: Some(DEFAULT_PROVIDER_ID),
+                    ..identity("second", "s-big")
+                },
+                DEFAULT_PROVIDER_ID,
+                "d-model",
+                Some(100),
+            ),
+            (
+                "session pair",
+                BindingRequest {
+                    session_provider: Some(DEFAULT_PROVIDER_ID),
+                    session_model: Some("d-other"),
+                    ..identity("second", "s-big")
+                },
+                DEFAULT_PROVIDER_ID,
+                "d-other",
+                None,
+            ),
+            (
+                "missing row",
+                identity("gone", "g-model"),
+                DEFAULT_PROVIDER_ID,
+                "d-model",
+                Some(100),
+            ),
+            (
+                "session model equal to the row's keeps the ceiling",
+                BindingRequest {
+                    session_model: Some("s-model"),
+                    ..identity("second", "s-big")
+                },
+                "second",
+                "s-model",
+                Some(200),
+            ),
+        ];
+
+        for (name, request, provider, model, cap) in cases {
+            let binding = resolve(&rows, &request);
+            assert_eq!(binding.provider_id, provider, "{name}");
+            assert_eq!(binding.settings.model, model, "{name}");
+            assert_eq!(binding.settings.max_output_tokens, cap, "{name}");
+            assert_eq!(
+                binding.settings.base_url,
+                format!("https://{provider}.test/v1"),
+                "{name}"
+            );
+        }
+    }
+
+    fn row<'a>(label: &'a str, model: &'a str) -> RowDraft<'a> {
+        RowDraft {
+            label: Some(label),
+            base_url: "http://127.0.0.1:11434/v1",
+            model,
+            auth_kind: AuthKind::ApiKey,
+            max_output_tokens: None,
+        }
+    }
+
+    /// A document from before PLAN 7.19 loads as the default row, and the next
+    /// save writes the roster shape and nothing else.
+    #[test]
+    fn a_singleton_document_becomes_the_default_row() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            br#"{"version":1,"provider":{"auth_kind":"claude_cli","base_url":"","model":"claude-sonnet-4-6"}}"#,
+        )
+        .expect("write");
+
+        let store = SettingsStore::load(dir.path());
+        let rows = store.list();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, DEFAULT_PROVIDER_ID);
+        assert_eq!(rows[0].settings.auth_kind, AuthKind::ClaudeCli);
+        assert_eq!(rows[0].settings.model, "claude-sonnet-4-6");
+
+        store.add(&row("Local", "llama3")).expect("added");
+
+        let written: Value =
+            serde_json::from_slice(&fs::read(&path).expect("the document")).expect("json");
+        assert!(written.get("provider").is_none(), "{written}");
+        assert_eq!(written["version"], 1);
+        let providers = written["providers"].as_array().expect("a list");
+        assert_eq!(providers.len(), 2);
+        assert_eq!(providers[0]["id"], DEFAULT_PROVIDER_ID);
+        assert_eq!(providers[0]["model"], "claude-sonnet-4-6");
+        assert_eq!(providers[1]["label"], "Local");
+    }
+
+    /// The trap PLAN 7.19 names: a save of one row must not drop the others,
+    /// nor a nested object a later build owns.
+    #[test]
+    fn a_save_round_trips_every_row_and_every_unknown_key() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join(SETTINGS_FILE);
+        fs::write(
+            &path,
+            br#"{"version":1,"providers":[{"id":"default","model":"m"}],"decision":{"model":"jev"}}"#,
+        )
+        .expect("write");
+
+        let store = SettingsStore::load(dir.path());
+        let local = store.add(&row("Local", "llama3")).expect("added");
+        store
+            .set("https://x.test/v1", "m2", AuthKind::ApiKey, None)
+            .expect("saved");
+
+        let written: Value =
+            serde_json::from_slice(&fs::read(&path).expect("the document")).expect("json");
+        assert_eq!(written["decision"]["model"], "jev", "{written}");
+
+        let reopened = SettingsStore::load(dir.path());
+        let ids: Vec<String> = reopened.list().into_iter().map(|entry| entry.id).collect();
+        assert_eq!(ids, [DEFAULT_PROVIDER_ID.to_owned(), local.id.clone()]);
+        assert_eq!(reopened.get().model, "m2");
+        assert_eq!(
+            reopened.entry(&local.id).expect("kept").settings.model,
+            "llama3"
+        );
+    }
+
+    #[test]
+    fn a_roster_without_a_default_row_gets_one_first() {
+        let dir = TempDir::new().expect("temp dir");
+        fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"version":1,"providers":[{"id":"x","model":"a"},{"id":"x","model":"b"},{"id":"default","model":"d"}]}"#,
+        )
+        .expect("write");
+
+        let rows = SettingsStore::load(dir.path()).list();
+        let ids: Vec<&str> = rows.iter().map(|entry| entry.id.as_str()).collect();
+        assert_eq!(ids, [DEFAULT_PROVIDER_ID, "x"]);
+        assert_eq!(rows[0].settings.model, "d");
+        assert_eq!(rows[1].settings.model, "a", "the first of two repeats wins");
+    }
+
+    #[test]
+    fn an_added_row_gets_a_minted_id_and_a_checked_label() {
+        let (_dir, store) = {
+            let dir = TempDir::new().expect("temp dir");
+            let store = SettingsStore::load(dir.path());
+            (dir, store)
+        };
+
+        let added = store.add(&row("  Local  ", "llama3")).expect("added");
+        assert!(Uuid::parse_str(&added.id).is_ok(), "{}", added.id);
+        assert_eq!(added.label, "Local");
+        assert!(store.contains(&added.id));
+
+        let long = "x".repeat(LABEL_MAX_CHARS + 1);
+        let err = store.add(&row(&long, "llama3")).expect_err("refused");
+        assert_eq!(
+            serde_json::to_value(&err).expect("serializes")["field"],
+            "label"
+        );
+        assert_eq!(store.list().len(), 2, "a refusal adds nothing");
+    }
+
+    #[test]
+    fn an_update_keeps_the_label_unless_one_is_given() {
+        let dir = TempDir::new().expect("temp dir");
+        let store = SettingsStore::load(dir.path());
+        let added = store.add(&row("Local", "llama3")).expect("added");
+
+        let kept = store
+            .update(
+                &added.id,
+                &RowDraft {
+                    label: None,
+                    ..row("", "qwen3")
+                },
+            )
+            .expect("updated");
+        assert_eq!(kept.label, "Local");
+        assert_eq!(kept.settings.model, "qwen3");
+
+        let err = store
+            .update("no-such-row", &row("x", "m"))
+            .expect_err("refused");
+        assert!(matches!(err, AppError::ProviderNotFound { .. }), "{err}");
+    }
+
+    #[test]
+    fn the_roster_is_capped() {
+        let dir = TempDir::new().expect("temp dir");
+        let store = SettingsStore::load(dir.path());
+
+        for _ in 1..PROVIDERS_MAX {
+            store.add(&row("", "m")).expect("under the cap");
+        }
+        let err = store.add(&row("", "m")).expect_err("over the cap");
+        assert!(err.to_string().contains("16"), "{err}");
+        assert_eq!(store.list().len(), PROVIDERS_MAX);
+    }
+
+    #[test]
+    fn the_default_row_cannot_be_deleted_and_others_can() {
+        let dir = TempDir::new().expect("temp dir");
+        let store = SettingsStore::load(dir.path());
+        let added = store.add(&row("Local", "llama3")).expect("added");
+
+        let err = store.delete(DEFAULT_PROVIDER_ID).expect_err("refused");
+        assert_eq!(
+            serde_json::to_value(&err).expect("serializes")["code"],
+            "E_INVALID_SETTING"
+        );
+
+        store.delete(&added.id).expect("deleted");
+        assert!(!store.contains(&added.id));
+        assert!(matches!(
+            store.delete(&added.id),
+            Err(AppError::ProviderNotFound { .. })
+        ));
+        assert_eq!(SettingsStore::load(dir.path()).list().len(), 1);
     }
 }

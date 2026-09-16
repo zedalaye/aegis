@@ -109,6 +109,7 @@ impl App {
                 role: "folds what came in into one note".to_owned(),
                 instructions: String::new(),
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                model: String::new(),
                 tools: vec![
                     tool::FS_LIST.to_owned(),
                     tool::FS_READ.to_owned(),

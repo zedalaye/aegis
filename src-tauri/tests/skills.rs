@@ -122,6 +122,7 @@ impl App {
                 role: "sorts what comes in into the board".to_owned(),
                 instructions: String::new(),
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                model: String::new(),
                 tools: vec![
                     tool::FS_LIST.to_owned(),
                     tool::FS_READ.to_owned(),
@@ -657,6 +658,7 @@ async fn a_skill_outside_the_allow_list_never_reaches_the_library() {
             role: "checks drafts before they leave".to_owned(),
             instructions: String::new(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             tools: vec![
                 tool::FS_READ.to_owned(),
                 tool::SKILL_RUN.to_owned(),
@@ -704,6 +706,7 @@ async fn a_runbook_the_identity_cannot_carry_out_fails_closed() {
             role: "reads and reports, and changes nothing".to_owned(),
             instructions: String::new(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             // Granted the skill, and not the `fs_write` its steps call.
             tools: vec![
                 tool::FS_LIST.to_owned(),

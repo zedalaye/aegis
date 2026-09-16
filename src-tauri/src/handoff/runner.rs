@@ -74,7 +74,7 @@ pub struct Host<'a> {
     /// identity's tools and grants.
     pub connectors: &'a Connectors,
     /// Which provider answers for an identity (per identity, PLAN 7.1).
-    pub provider: &'a (dyn Fn(&Agent) -> Box<dyn Provider> + Send + Sync),
+    pub provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
 }
 
 /// One session's delegations, and the runs they have opened.
@@ -209,7 +209,7 @@ impl Delegating {
         }
 
         let open = handoff::Open::new(slot.handoff);
-        let provider = (host.provider)(&agent);
+        let provider = (host.provider)(&agent, &session_id);
         let plan = TurnPlan {
             session_id: session_id.clone(),
             turn_id: turn_id.clone(),
@@ -243,7 +243,8 @@ impl Delegating {
         let resting = turn::resting_state(reason);
         host.turns.finish(&session_id, &turn_id, resting);
         if let Some(summary) = turn::summarize(host.sessions, &session_id, resting) {
-            host.sink.emit(crate::agent::Event::SessionUpdated(summary));
+            host.sink
+                .emit(crate::agent::Event::SessionUpdated(Box::new(summary)));
         }
 
         open.take().ok_or_else(|| match reason {
@@ -295,8 +296,9 @@ impl Delegating {
         // Emitted so a delegated run appears in the sidebar as it opens, rather
         // than after it has finished: work being done on your behalf should be
         // watchable while it happens.
-        host.sink
-            .emit(crate::agent::Event::SessionUpdated(summary.clone()));
+        host.sink.emit(crate::agent::Event::SessionUpdated(Box::new(
+            summary.clone(),
+        )));
 
         sessions.insert(slot.seq, summary.id.clone());
         Ok(summary.id)
@@ -346,7 +348,7 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
             };
 
             let sink = WindowSink::new(self.app.clone());
-            let provider = |agent: &Agent| state.provider_for(agent);
+            let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
             let host = Host {
                 agents: state.agents(),
                 sessions: state.sessions(),

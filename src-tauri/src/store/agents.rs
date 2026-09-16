@@ -24,7 +24,7 @@ use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 use crate::policy::tool;
 use crate::skills;
-use crate::store::connectors;
+use crate::store::{connectors, settings};
 use crate::tools;
 
 /// Name of the document under the application-data directory.
@@ -37,9 +37,18 @@ const SCHEMA_VERSION: u32 = 1;
 /// agent carries it.
 pub const DEFAULT_AGENT_ID: &str = "default";
 
-/// The only provider binding this build resolves: the one in Settings. Named
-/// per identity so a provider roster can land later (PLAN 7.1).
+/// The provider row that always exists (PLAN 7.19). The built-in identity and
+/// every applied roster answer from it.
 pub const DEFAULT_PROVIDER_ID: &str = "default";
+
+/// Whether a provider id is on file. The agent store cannot see the settings
+/// document; [`AppState`](crate::AppState) passes the roster in.
+pub type KnownProvider<'a> = &'a dyn Fn(&str) -> bool;
+
+/// The roster as a store without settings sees it: the default row only.
+fn only_default(id: &str) -> bool {
+    id == DEFAULT_PROVIDER_ID
+}
 
 /// Longest identity name.
 const NAME_MAX_CHARS: usize = 48;
@@ -76,8 +85,10 @@ pub struct Agent {
     pub role: String,
     /// What it carries into every system message; empty for the built-in one.
     pub instructions: String,
-    /// Which provider answers for it. [`DEFAULT_PROVIDER_ID`] today.
+    /// Which provider row answers for it (PLAN 7.19).
     pub provider_id: String,
+    /// The model it sends; empty uses the row's.
+    pub model: String,
     /// The tools it may call, in registry order: the only schemas shown, and
     /// policy refuses the rest.
     pub tools: Vec<String>,
@@ -102,6 +113,7 @@ impl Agent {
             role: String::new(),
             instructions: String::new(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             tools: tools::names()
                 .iter()
                 .map(|name| (*name).to_owned())
@@ -124,6 +136,7 @@ impl Agent {
             role: "this session names an identity that is no longer on file".to_owned(),
             instructions: String::new(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             tools: Vec::new(),
             skills: Vec::new(),
             runs_per_day: 0,
@@ -152,8 +165,11 @@ pub struct AgentDraft {
     pub role: String,
     /// What it carries into every request. May be empty.
     pub instructions: String,
-    /// Which provider answers for it.
+    /// Which provider row answers for it. Must be on file.
     pub provider_id: String,
+    /// The model it sends; empty uses the row's. Defaulted for older callers.
+    #[serde(default)]
+    pub model: String,
     /// Tool names from the registry. May be empty — an identity that only reads
     /// and writes prose is a useful thing to be able to make.
     pub tools: Vec<String>,
@@ -190,6 +206,8 @@ struct StoredAgent {
     role: String,
     instructions: String,
     provider_id: String,
+    #[serde(default)]
+    model: String,
     tools: Vec<String>,
     #[serde(default)]
     skills: Vec<String>,
@@ -211,6 +229,7 @@ impl StoredAgent {
             role: self.role.clone(),
             instructions: self.instructions.clone(),
             provider_id: self.provider_id.clone(),
+            model: self.model.clone(),
             tools: self.tools.clone(),
             skills: self.skills.clone(),
             runs_per_day: self.runs_per_day,
@@ -318,10 +337,15 @@ impl AgentStore {
         }
     }
 
-    /// Creates an identity.
+    /// Creates an identity bound to the default provider row, or refuses.
     pub fn create(&self, draft: &AgentDraft) -> AppResult<Agent> {
+        self.create_with(draft, &only_default)
+    }
+
+    /// Creates an identity whose provider `known` accepts.
+    pub fn create_with(&self, draft: &AgentDraft, known: KnownProvider<'_>) -> AppResult<Agent> {
         let mut agents = self.agents();
-        let valid = Valid::check(draft, &agents, None)?;
+        let valid = Valid::check(draft, &agents, None, known)?;
 
         let stored = valid.into_stored(&now());
         let created = stored.to_agent();
@@ -355,7 +379,7 @@ impl AgentStore {
         drafts
             .iter()
             .map(|draft| {
-                let valid = Valid::check(draft, &scratch, None)?;
+                let valid = Valid::check(draft, &scratch, None, &only_default)?;
                 let normal = valid.to_draft();
                 scratch.push(valid.into_stored(&stamp));
                 Ok(normal)
@@ -372,7 +396,7 @@ impl AgentStore {
 
         let mut created = Vec::with_capacity(drafts.len());
         for draft in drafts {
-            let stored = Valid::check(draft, &next, None)?.into_stored(&stamp);
+            let stored = Valid::check(draft, &next, None, &only_default)?.into_stored(&stamp);
             created.push(stored.to_agent());
             next.push(stored);
         }
@@ -387,21 +411,32 @@ impl AgentStore {
         Ok(created)
     }
 
-    /// Replaces an identity's fields, keeping its id. Refused for the built-in
-    /// identity.
+    /// Replaces an identity's fields, keeping its id, with the default row as
+    /// the only provider. Refused for the built-in identity.
     pub fn update(&self, id: &str, draft: &AgentDraft) -> AppResult<Agent> {
+        self.update_with(id, draft, &only_default)
+    }
+
+    /// Replaces an identity's fields, with any provider `known` accepts.
+    pub fn update_with(
+        &self,
+        id: &str,
+        draft: &AgentDraft,
+        known: KnownProvider<'_>,
+    ) -> AppResult<Agent> {
         if id == DEFAULT_AGENT_ID {
             return Err(AppError::AgentBuiltin { action: "edited" });
         }
 
         let mut agents = self.agents();
-        let valid = Valid::check(draft, &agents, Some(id))?;
+        let valid = Valid::check(draft, &agents, Some(id), known)?;
 
         let stored = Self::find_mut(&mut agents, id)?;
         stored.name = valid.name;
         stored.role = valid.role;
         stored.instructions = valid.instructions;
         stored.provider_id = valid.provider_id;
+        stored.model = valid.model;
         stored.tools = valid.tools;
         stored.skills = valid.skills;
         stored.runs_per_day = valid.runs_per_day;
@@ -411,6 +446,14 @@ impl AgentStore {
         self.save(&agents)?;
         tracing::info!(id, name = %updated.name, "identity updated");
         Ok(updated)
+    }
+
+    /// How many stored identities answer from `provider_id`.
+    pub fn count_for_provider(&self, provider_id: &str) -> usize {
+        self.agents()
+            .iter()
+            .filter(|agent| agent.provider_id == provider_id)
+            .count()
     }
 
     /// Deletes an identity. Usage checks live in
@@ -484,6 +527,7 @@ struct Valid {
     role: String,
     instructions: String,
     provider_id: String,
+    model: String,
     tools: Vec<String>,
     skills: Vec<String>,
     runs_per_day: u32,
@@ -497,6 +541,7 @@ impl Valid {
             role: self.role.clone(),
             instructions: self.instructions.clone(),
             provider_id: self.provider_id.clone(),
+            model: self.model.clone(),
             tools: self.tools.clone(),
             skills: self.skills.clone(),
             runs_per_day: self.runs_per_day,
@@ -511,6 +556,7 @@ impl Valid {
             role: self.role,
             instructions: self.instructions,
             provider_id: self.provider_id,
+            model: self.model,
             tools: self.tools,
             skills: self.skills,
             runs_per_day: self.runs_per_day,
@@ -521,7 +567,12 @@ impl Valid {
 
     /// Checks a draft against the identities on file; `editing` is excluded
     /// from the name check. Messages say what a working value looks like.
-    fn check(draft: &AgentDraft, agents: &[StoredAgent], editing: Option<&str>) -> AppResult<Self> {
+    fn check(
+        draft: &AgentDraft,
+        agents: &[StoredAgent],
+        editing: Option<&str>,
+        known: KnownProvider<'_>,
+    ) -> AppResult<Self> {
         let name = draft.name.trim();
         if name.is_empty() {
             return Err(AppError::Agent {
@@ -585,15 +636,20 @@ impl Valid {
         }
 
         let provider_id = draft.provider_id.trim();
-        if provider_id != DEFAULT_PROVIDER_ID {
+        if !known(provider_id) {
             return Err(AppError::Agent {
                 field: "provider",
                 reason: format!(
-                    "this build has one provider, `{DEFAULT_PROVIDER_ID}` — the one named in \
-                     Settings. A roster to bind identities to comes later"
+                    "`{provider_id}` is not a provider in Settings — pick one from the list, \
+                     or `{DEFAULT_PROVIDER_ID}`"
                 ),
             });
         }
+        let model = settings::normalize_model(&draft.model).map_err(|_| AppError::Agent {
+            field: "model",
+            reason: "a model id has no spaces in it; leave it empty to use the provider's"
+                .to_owned(),
+        })?;
 
         // Registry order rather than the order the form sent, so the schemas
         // the model is shown stay in the order the registry chose: look, read,
@@ -689,6 +745,7 @@ impl Valid {
             role: role.to_owned(),
             instructions: instructions.to_owned(),
             provider_id: provider_id.to_owned(),
+            model,
             tools,
             skills,
             runs_per_day: draft.runs_per_day,
@@ -718,6 +775,7 @@ mod tests {
             role: "reviews changes and reports what is risky".to_owned(),
             instructions: "Read before you judge.".to_owned(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             tools: vec![tool::FS_READ.to_owned(), tool::FS_LIST.to_owned()],
             skills: Vec::new(),
             runs_per_day: AGENT_RUNS_PER_DAY_DEFAULT,
@@ -741,6 +799,7 @@ mod tests {
             "role",
             "instructions",
             "provider_id",
+            "model",
             "tools",
             "skills",
             "builtin",
@@ -929,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_one_provider_this_build_has_can_be_bound() {
+    fn a_provider_not_on_file_is_refused() {
         let (_dir, store) = store();
 
         let err = store
@@ -941,7 +1000,67 @@ mod tests {
 
         let json = serde_json::to_value(&err).expect("serializes");
         assert_eq!(json["field"], "provider");
-        assert!(err.to_string().contains(DEFAULT_PROVIDER_ID), "{err}");
+        assert!(err.to_string().contains("anthropic"), "{err}");
+    }
+
+    /// PLAN 7.19: any row the roster holds can be bound, with a model of its
+    /// own or none.
+    #[test]
+    fn a_second_row_and_a_model_can_be_bound() {
+        let (_dir, store) = store();
+        let known = |id: &str| id == DEFAULT_PROVIDER_ID || id == "second";
+
+        let bound = store
+            .create_with(
+                &AgentDraft {
+                    provider_id: "second".to_owned(),
+                    model: "  big-model ".to_owned(),
+                    ..draft("Reviewer")
+                },
+                &known,
+            )
+            .expect("accepted");
+        assert_eq!(bound.provider_id, "second");
+        assert_eq!(bound.model, "big-model");
+        assert_eq!(store.count_for_provider("second"), 1);
+
+        let err = store
+            .update_with(
+                &bound.id,
+                &AgentDraft {
+                    model: "big model".to_owned(),
+                    ..draft("Reviewer")
+                },
+                &known,
+            )
+            .expect_err("refused");
+        assert_eq!(
+            serde_json::to_value(&err).expect("serializes")["field"],
+            "model"
+        );
+
+        let back = store
+            .update_with(&bound.id, &draft("Reviewer"), &known)
+            .expect("accepted");
+        assert_eq!(back.provider_id, DEFAULT_PROVIDER_ID);
+        assert!(back.model.is_empty());
+        assert_eq!(store.count_for_provider("second"), 0);
+    }
+
+    /// An identity written before PLAN 7.19 reads back with no model: it
+    /// tracks its row's.
+    #[test]
+    fn an_identity_without_a_model_reads_back_empty() {
+        let dir = TempDir::new().expect("temp dir");
+        fs::write(
+            dir.path().join(AGENTS_FILE),
+            br#"{"version":1,"agents":[{"id":"a","name":"Old","role":"r","instructions":"","provider_id":"default","tools":[],"created_at":"","updated_at":""}]}"#,
+        )
+        .expect("write");
+
+        let agent = AgentStore::load(dir.path()).get("a").expect("loaded");
+        assert_eq!(agent.model, "");
+        assert!(Agent::builtin().model.is_empty());
     }
 
     #[test]

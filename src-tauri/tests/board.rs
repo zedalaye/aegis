@@ -162,6 +162,7 @@ impl App {
                 role: "keeps an eye on what changed".to_owned(),
                 instructions: String::new(),
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                model: String::new(),
                 tools: vec![
                     tool::FS_LIST.to_owned(),
                     tool::FS_READ.to_owned(),
@@ -194,7 +195,7 @@ impl App {
     /// Fires one routine the way the scheduler fires it.
     async fn fire(&self, routine_id: &str) {
         let sink = Silent::default();
-        let provider = |_: &Agent| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
+        let provider = |_: &Agent, _: &str| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
         let host = runner::Host {
             projects: &self.projects,
             routines: &self.routines,

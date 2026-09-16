@@ -57,11 +57,11 @@ pub use skills::{ProposalState, Reported, Returned, Skill, SkillCtx, SkillPropos
 pub use state::AppState;
 pub use store::{
     Agent, AgentDraft, AgentStore, AuthKind, AuthPreset, Compaction, Connector, ConnectorDraft,
-    ConnectorStore, Cost, LastRun, MaskedSettings, Memory, MemoryDraft, MemoryKind, MemoryStore,
-    Message, Project, ProjectDetail, ProviderSettings, Role, Routine, RoutineDraft, RoutineStore,
-    RunOutcome, Schedule, Scheduled, SessionDetail, SessionState, SessionStore, SessionSummary,
-    SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle, DEFAULT_AGENT_ID,
-    DEFAULT_PROVIDER_ID,
+    ConnectorStore, Cost, LastRun, MaskedProvider, MaskedSettings, Memory, MemoryDraft, MemoryKind,
+    MemoryStore, Message, Project, ProjectDetail, ProviderEntry, ProviderSettings, Role, Routine,
+    RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled, SessionDetail, SessionState,
+    SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnCost,
+    TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
@@ -217,6 +217,7 @@ pub fn run() {
             commands::agent::agent_update,
             commands::agent::agent_delete,
             commands::session::session_create,
+            commands::session::session_set_binding,
             commands::session::session_list,
             commands::session::session_open,
             commands::session::session_rename,
@@ -234,6 +235,8 @@ pub fn run() {
             commands::board::board_trace,
             commands::settings::settings_get,
             commands::settings::settings_set,
+            commands::settings::settings_add_provider,
+            commands::settings::settings_delete_provider,
             commands::settings::settings_clear_key,
             commands::settings::settings_probe_provider,
             commands::settings::settings_list_models,

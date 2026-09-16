@@ -161,6 +161,7 @@ impl App {
                 role: "keeps an eye on what changed".to_owned(),
                 instructions: String::new(),
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                model: String::new(),
                 tools: vec![
                     tool::FS_LIST.to_owned(),
                     tool::FS_READ.to_owned(),
@@ -225,7 +226,7 @@ impl App {
     ///
     /// Through [`runner::fire`] itself, not a copy.
     async fn fire(&self, routine_id: &str, sink: &Recorder) {
-        let provider = |_: &Agent| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
+        let provider = |_: &Agent, _: &str| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
         let host = runner::Host {
             projects: &self.projects,
             routines: &self.routines,
@@ -306,6 +307,7 @@ fn a_routine_may_only_name_a_live_granted_skill_somebody_has_already_watched() {
                 role: agent.role.clone(),
                 instructions: agent.instructions.clone(),
                 provider_id: agent.provider_id.clone(),
+                model: agent.model.clone(),
                 tools: agent.tools.clone(),
                 skills: vec![WATCH_SKILL.to_owned(), "watch.proposed".to_owned()],
                 runs_per_day: agent.runs_per_day,
@@ -328,6 +330,7 @@ fn a_routine_may_only_name_a_live_granted_skill_somebody_has_already_watched() {
             role: "holds every tool and no runbooks".to_owned(),
             instructions: String::new(),
             provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+            model: String::new(),
             tools: vec![tool::FS_WRITE.to_owned()],
             skills: Vec::new(),
             runs_per_day: 24,
@@ -652,6 +655,7 @@ fn a_routine_says_what_is_wrong_instead_of_firing() {
                 role: agent.role.clone(),
                 instructions: agent.instructions.clone(),
                 provider_id: agent.provider_id.clone(),
+                model: agent.model.clone(),
                 tools: agent.tools.clone(),
                 skills: Vec::new(),
                 runs_per_day: agent.runs_per_day,

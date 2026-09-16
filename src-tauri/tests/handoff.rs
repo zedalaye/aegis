@@ -97,6 +97,7 @@ impl App {
                 role: format!("does the {name} part"),
                 instructions: String::new(),
                 provider_id: DEFAULT_PROVIDER_ID.to_owned(),
+                model: String::new(),
                 tools,
                 skills: Vec::new(),
                 runs_per_day: 24,
@@ -126,7 +127,7 @@ impl App {
     /// What a delegated run borrows, with a provider the test chooses.
     fn host<'a>(
         &'a self,
-        provider: &'a (dyn Fn(&Agent) -> Box<dyn Provider> + Send + Sync),
+        provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
     ) -> HandoffHost<'a> {
         HandoffHost {
             agents: &self.agents,
@@ -216,7 +217,7 @@ impl Runner for TestRunner {
         Box::pin(async move {
             let rounds = self.script.get(&brief.owner).cloned().unwrap_or_default();
 
-            let provider = move |_: &Agent| -> Box<dyn Provider> {
+            let provider = move |_: &Agent, _: &str| -> Box<dyn Provider> {
                 Box::new(FakeProvider::scripted(rounds.clone()))
             };
             let host = self.app.host(&provider);

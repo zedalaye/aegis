@@ -21,9 +21,13 @@ role: string,
  */
 instructions: string, 
 /**
- * Which provider answers for it. [`DEFAULT_PROVIDER_ID`] today.
+ * Which provider row answers for it (PLAN 7.19).
  */
 provider_id: string, 
+/**
+ * The model it sends; empty uses the row's.
+ */
+model: string, 
 /**
  * The tools it may call, in registry order: the only schemas shown, and
  * policy refuses the rest.
@@ -62,9 +66,13 @@ role: string,
  */
 instructions: string, 
 /**
- * Which provider answers for it.
+ * Which provider row answers for it. Must be on file.
  */
 provider_id: string, 
+/**
+ * The model it sends; empty uses the row's. Defaulted for older callers.
+ */
+model: string, 
 /**
  * Tool names from the registry. May be empty — an identity that only reads
  * and writes prose is a useful thing to be able to make.
@@ -863,21 +871,27 @@ outcome: RunOutcome,
 detail: string, };
 
 /**
- * Everything the WebView is allowed to know about the provider settings.
- *
- * No unmasked counterpart exists: a key is written or cleared, never read.
+ * One provider row, as the WebView may see it.
  */
-export type MaskedSettings = { 
+export type MaskedProvider = { 
+/**
+ * [`DEFAULT_PROVIDER_ID`], or a UUID v4 minted on add.
+ */
+id: string, 
+/**
+ * Display name. May be empty.
+ */
+label: string, 
 /**
  * How this provider authenticates.
  */
 auth_kind: AuthKind, 
 /**
- * The OpenAI-compatible base URL, normalized. Empty when unset.
+ * The base URL, normalized. Empty when unset.
  */
 base_url: string, 
 /**
- * The model id sent with every request. Empty when unset.
+ * The model id sent when nothing overrides it. Empty when unset.
  */
 model: string, 
 /**
@@ -895,7 +909,18 @@ key_source: KeySource,
  * A few characters of the key, for recognition. `None` when there is no
  * key at all.
  */
-key_hint: string | null, 
+key_hint: string | null, };
+
+/**
+ * Everything the WebView is allowed to know about the provider roster.
+ *
+ * No unmasked counterpart exists: a key is written or cleared, never read.
+ */
+export type MaskedSettings = { 
+/**
+ * Every row, [`DEFAULT_PROVIDER_ID`] first.
+ */
+providers: Array<MaskedProvider>, 
 /**
  * Whether this machine has a credential store that answered.
  *
@@ -1601,6 +1626,16 @@ project_id: string,
  * [`DEFAULT_AGENT_ID`](super::agents::DEFAULT_AGENT_ID).
  */
 agent_id: string, 
+/**
+ * The provider row this session answers from instead of its identity's
+ * (PLAN 7.19). `None` inherits.
+ */
+provider_id: string | null, 
+/**
+ * The model this session sends instead of the inherited one. `None`
+ * inherits.
+ */
+model: string | null, 
 /**
  * Display title. Taken from the first user message when not given.
  */

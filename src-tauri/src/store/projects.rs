@@ -453,6 +453,8 @@ mod tests {
             },
             sessions: vec![SessionSummary {
                 agent_id: crate::store::DEFAULT_AGENT_ID.to_owned(),
+                provider_id: None,
+                model: None,
                 id: "s".to_owned(),
                 project_id: "p".to_owned(),
                 title: "First".to_owned(),
@@ -506,6 +508,8 @@ mod tests {
                 "id",
                 "project_id",
                 "agent_id",
+                "provider_id",
+                "model",
                 "title",
                 "created_at",
                 "updated_at",

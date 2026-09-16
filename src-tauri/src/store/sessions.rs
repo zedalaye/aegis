@@ -201,6 +201,12 @@ pub struct SessionSummary {
     /// from before identities resolves to
     /// [`DEFAULT_AGENT_ID`](super::agents::DEFAULT_AGENT_ID).
     pub agent_id: String,
+    /// The provider row this session answers from instead of its identity's
+    /// (PLAN 7.19). `None` inherits.
+    pub provider_id: Option<String>,
+    /// The model this session sends instead of the inherited one. `None`
+    /// inherits.
+    pub model: Option<String>,
     /// Display title. Taken from the first user message when not given.
     pub title: String,
     /// RFC3339, UTC.
@@ -460,6 +466,11 @@ struct StoredSession {
     /// one.
     #[serde(default)]
     agent_id: Option<String>,
+    /// The override of the identity's provider row and model (PLAN 7.19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     title: String,
     created_at: String,
     updated_at: String,
@@ -490,6 +501,8 @@ impl StoredSession {
                 .agent_id
                 .clone()
                 .unwrap_or_else(|| DEFAULT_AGENT_ID.to_owned()),
+            provider_id: self.provider_id.clone(),
+            model: self.model.clone(),
             title: self.title.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
@@ -577,7 +590,24 @@ impl SessionStore {
         title: Option<&str>,
         agent_id: &str,
     ) -> AppResult<SessionSummary> {
-        self.open_session(project_id, title, agent_id, None, None)
+        self.create_bound(project_id, title, agent_id, None, None)
+    }
+
+    /// [`SessionStore::create`], with an override of the identity's provider
+    /// and model written in the same save (PLAN 7.19).
+    pub fn create_bound(
+        &self,
+        project_id: &str,
+        title: Option<&str>,
+        agent_id: &str,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+    ) -> AppResult<SessionSummary> {
+        let mut sessions = self.sessions();
+        let mut session = Self::record(project_id, title, agent_id, None, None);
+        session.provider_id = provider_id.map(str::to_owned);
+        session.model = model.map(str::to_owned);
+        Self::push(&mut sessions, session, |all| self.save(all))
     }
 
     /// Creates the session a brief opens (Phase 15): an ordinary session with a
@@ -613,11 +643,26 @@ impl SessionStore {
         delegated: Option<Delegated>,
         scheduled: Option<Scheduled>,
     ) -> AppResult<SessionSummary> {
+        let mut sessions = self.sessions();
+        let session = Self::record(project_id, title, agent_id, delegated, scheduled);
+        Self::push(&mut sessions, session, |all| self.save(all))
+    }
+
+    /// A fresh record, inheriting its identity's provider and model.
+    fn record(
+        project_id: &str,
+        title: Option<&str>,
+        agent_id: &str,
+        delegated: Option<Delegated>,
+        scheduled: Option<Scheduled>,
+    ) -> StoredSession {
         let stamp = now();
-        let session = StoredSession {
+        StoredSession {
             id: Uuid::new_v4().to_string(),
             project_id: project_id.to_owned(),
             agent_id: Some(agent_id.to_owned()),
+            provider_id: None,
+            model: None,
             title: match title.map(str::trim) {
                 Some("") | None => DEFAULT_TITLE.to_owned(),
                 Some(given) => given.to_owned(),
@@ -629,14 +674,25 @@ impl SessionStore {
             delegated,
             scheduled,
             costs: Vec::new(),
-        };
+        }
+    }
+
+    /// Appends a record and saves the list.
+    fn push(
+        sessions: &mut Vec<StoredSession>,
+        session: StoredSession,
+        save: impl FnOnce(&[StoredSession]) -> AppResult<()>,
+    ) -> AppResult<SessionSummary> {
         let created = session.to_summary(SessionState::Idle);
-
-        let mut sessions = self.sessions();
         sessions.push(session);
-        self.save(&sessions)?;
+        save(sessions)?;
 
-        tracing::info!(id = %created.id, project_id, agent_id, "session created");
+        tracing::info!(
+            id = %created.id,
+            project_id = %created.project_id,
+            agent_id = %created.agent_id,
+            "session created"
+        );
         Ok(created)
     }
 
@@ -778,6 +834,43 @@ impl SessionStore {
     pub fn agent_of(&self, id: &str) -> AppResult<Option<String>> {
         let sessions = self.sessions();
         Ok(Self::find(&sessions, id)?.agent_id.clone())
+    }
+
+    /// A session's override of its identity's provider and model, as stored.
+    pub fn binding_of(&self, id: &str) -> AppResult<(Option<String>, Option<String>)> {
+        let sessions = self.sessions();
+        let session = Self::find(&sessions, id)?;
+        Ok((session.provider_id.clone(), session.model.clone()))
+    }
+
+    /// Writes or clears a session's override (PLAN 7.19). The caller checks
+    /// the row exists and that no turn runs
+    /// ([`AppState::set_session_binding`](crate::AppState::set_session_binding)).
+    /// Does not bump `updated_at`: nothing was said.
+    pub fn set_binding(
+        &self,
+        id: &str,
+        provider_id: Option<&str>,
+        model: Option<&str>,
+        state: SessionState,
+    ) -> AppResult<SessionSummary> {
+        let mut sessions = self.sessions();
+        let session = Self::find_mut(&mut sessions, id)?;
+        session.provider_id = provider_id.map(str::to_owned);
+        session.model = model.map(str::to_owned);
+        let bound = session.to_summary(state);
+
+        self.save(&sessions)?;
+        tracing::info!(id, ?provider_id, ?model, "session binding changed");
+        Ok(bound)
+    }
+
+    /// How many sessions override to `provider_id`.
+    pub fn count_for_provider(&self, provider_id: &str) -> usize {
+        self.sessions()
+            .iter()
+            .filter(|session| session.provider_id.as_deref() == Some(provider_id))
+            .count()
     }
 
     /// How many sessions run as `agent_id`.
@@ -1013,6 +1106,49 @@ mod tests {
         fn reopen(&self) -> SessionStore {
             SessionStore::load(&self.data)
         }
+    }
+
+    /// A session override survives a restart, is absent from the document
+    /// while it inherits, and clearing it returns to inheriting (PLAN 7.19).
+    #[test]
+    fn a_binding_override_survives_a_restart_and_clears() {
+        let fx = Fixture::new();
+        let plain = fx
+            .store
+            .create("p1", None, DEFAULT_AGENT_ID)
+            .expect("create");
+        let bound = fx
+            .store
+            .create_bound("p1", None, DEFAULT_AGENT_ID, Some("second"), None)
+            .expect("create");
+
+        let written = fs::read_to_string(fx.document()).expect("the document");
+        assert_eq!(
+            written.matches("\"provider_id\"").count(),
+            1,
+            "only the overriding session writes the key: {written}"
+        );
+
+        fx.store
+            .set_binding(&plain.id, None, Some("small"), SessionState::Idle)
+            .expect("bound");
+        assert_eq!(fx.store.count_for_provider("second"), 1);
+
+        let reopened = fx.reopen();
+        assert_eq!(
+            reopened.binding_of(&plain.id).expect("read"),
+            (None, Some("small".to_owned()))
+        );
+        assert_eq!(
+            reopened.binding_of(&bound.id).expect("read"),
+            (Some("second".to_owned()), None)
+        );
+
+        let cleared = reopened
+            .set_binding(&bound.id, None, None, SessionState::Idle)
+            .expect("cleared");
+        assert_eq!((cleared.provider_id, cleared.model), (None, None));
+        assert_eq!(reopened.count_for_provider("second"), 0);
     }
 
     #[test]
@@ -1529,6 +1665,8 @@ mod tests {
                 id: "s".to_owned(),
                 project_id: "p".to_owned(),
                 agent_id: DEFAULT_AGENT_ID.to_owned(),
+                provider_id: None,
+                model: None,
                 title: "First".to_owned(),
                 created_at: "2026-08-28T09:41:07.412Z".to_owned(),
                 updated_at: "2026-08-28T09:41:07.412Z".to_owned(),
@@ -1591,6 +1729,8 @@ mod tests {
                 "id",
                 "project_id",
                 "agent_id",
+                "provider_id",
+                "model",
                 "title",
                 "created_at",
                 "updated_at",
