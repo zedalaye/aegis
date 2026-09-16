@@ -179,17 +179,39 @@ export function agentDelete(agentId: string): Promise<void> {
 
 /**
  * Creates a session in a project, bound for good to `agentId` (default: the
- * built-in identity). Without a title, the first message names it.
+ * built-in identity). Without a title, the first message names it. An omitted
+ * `providerId` or `model` inherits the identity's (PLAN 7.19).
  */
 export function sessionCreate(
   projectId: string,
   title?: string,
   agentId?: string,
+  providerId?: string,
+  model?: string,
 ): Promise<SessionSummary> {
   return call<SessionSummary>("session_create", {
     project_id: projectId,
     title: title ?? null,
     agent_id: agentId ?? null,
+    provider_id: providerId ?? null,
+    model: model ?? null,
+  });
+}
+
+/**
+ * Overrides the provider row and model a session answers from (PLAN 7.19).
+ * Both `null` returns to the identity's pair; the identity never changes.
+ * `E_TURN_BUSY` while a turn runs.
+ */
+export function sessionSetBinding(
+  sessionId: string,
+  providerId: string | null,
+  model: string | null,
+): Promise<SessionSummary> {
+  return call<SessionSummary>("session_set_binding", {
+    session_id: sessionId,
+    provider_id: providerId,
+    model,
   });
 }
 
@@ -325,32 +347,66 @@ export function boardTrace(
 }
 
 /**
- * The provider settings with the key masked (`key_hint`, `key_source`). No
- * command returns the key itself.
+ * Every provider row with its key masked (`key_hint`, `key_source`). No
+ * command returns a key itself.
  */
 export function settingsGet(): Promise<MaskedSettings> {
   return call<MaskedSettings>("settings_get");
 }
 
+/** What a save or an add sends for one provider row. */
+export type ProviderRowInput = {
+  readonly label: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly authKind: AuthKind;
+  /** Empty keeps the stored key (see {@link settingsClearKey}). */
+  readonly apiKey: string;
+};
+
 /**
- * Saves the base URL and model, and the key if one is passed (empty or omitted
- * keeps the stored key; see {@link settingsClearKey}).
+ * Saves one row, and its key if one is passed.
  *
  * - `E_INVALID_SETTING`: nothing was saved; `error.field` names the input.
- * - `E_KEYRING_UNAVAILABLE`: URL and model were saved, the key was not — use
- *   `AEGIS_API_KEY`.
+ * - `E_KEYRING_UNAVAILABLE`: the row was saved, the key was not — use
+ *   `AEGIS_API_KEY` (default row only).
  */
 export function settingsSet(
-  baseUrl: string,
-  model: string,
-  apiKey?: string,
-  authKind?: AuthKind,
+  providerId: string,
+  row: ProviderRowInput,
 ): Promise<MaskedSettings> {
   return call<MaskedSettings>("settings_set", {
-    base_url: baseUrl,
-    model,
-    api_key: apiKey ?? null,
-    auth_kind: authKind ?? "api_key",
+    provider_id: providerId,
+    label: row.label,
+    base_url: row.baseUrl,
+    model: row.model,
+    api_key: row.apiKey.length === 0 ? null : row.apiKey,
+    auth_kind: row.authKind,
+  });
+}
+
+/** Appends a provider row under a fresh id, and its key if one is passed. */
+export function settingsAddProvider(
+  row: ProviderRowInput,
+): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_add_provider", {
+    label: row.label,
+    base_url: row.baseUrl,
+    model: row.model,
+    api_key: row.apiKey.length === 0 ? null : row.apiKey,
+    auth_kind: row.authKind,
+  });
+}
+
+/**
+ * Deletes a provider row. Refused for the default row and while an identity or
+ * a session override names it.
+ */
+export function settingsDeleteProvider(
+  providerId: string,
+): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_delete_provider", {
+    provider_id: providerId,
   });
 }
 
@@ -361,19 +417,23 @@ export function settingsSet(
 export function settingsListModels(
   authKind: AuthKind,
   baseUrl: string,
+  providerId?: string,
 ): Promise<ModelCatalog> {
   return call<ModelCatalog>("settings_list_models", {
     auth_kind: authKind,
     base_url: baseUrl,
+    provider_id: providerId ?? null,
   });
 }
 
 /**
- * Removes the key from the OS credential store. A key in `AEGIS_API_KEY` stays,
- * so the result may still say `key_source: "env"`.
+ * Removes one row's key from the OS credential store. A key in
+ * `AEGIS_API_KEY` stays, so the default row may still say `key_source: "env"`.
  */
-export function settingsClearKey(): Promise<MaskedSettings> {
-  return call<MaskedSettings>("settings_clear_key");
+export function settingsClearKey(providerId: string): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_clear_key", {
+    provider_id: providerId,
+  });
 }
 
 /**
@@ -381,8 +441,12 @@ export function settingsClearKey(): Promise<MaskedSettings> {
  * tiny completion on the turn's own endpoint (a few tokens). Never rejects:
  * every outcome is a {@link ProviderProbe} message.
  */
-export function settingsProbeProvider(): Promise<ProviderProbe> {
-  return call<ProviderProbe>("settings_probe_provider");
+export function settingsProbeProvider(
+  providerId: string,
+): Promise<ProviderProbe> {
+  return call<ProviderProbe>("settings_probe_provider", {
+    provider_id: providerId,
+  });
 }
 
 /**

@@ -13,7 +13,8 @@ import { Fragment, useCallback, useLayoutEffect, useRef } from "react";
 
 import type { Message } from "../../ipc/bindings";
 import { isVisible, useSessions } from "../../state/sessions";
-import { isConfigured, useSettings } from "../../state/settings";
+import { useBinding } from "../../state/binding";
+import { useSettings } from "../../state/settings";
 
 import CompactionNotice from "./CompactionNotice";
 import MessageBubble from "./MessageBubble";
@@ -22,13 +23,15 @@ import MessageBubble from "./MessageBubble";
 const STICK_THRESHOLD = 64;
 
 /**
- * The empty-transcript hint: the scripted provider's cues only when no provider
- * is configured (mirrors `ProviderSettings::is_configured`), and nothing while
- * settings are still loading.
+ * The empty-transcript hint: the scripted provider's cues only when the
+ * session's binding is not configured (mirrors `ProviderSettings::is_configured`),
+ * and nothing while settings are still loading.
  */
 function EmptyTranscript() {
   const settings = useSettings((s) => s.settings);
-  const configured = settings !== null && isConfigured(settings);
+  const session = useSessions((s) => s.detail?.session ?? null);
+  const binding = useBinding(session);
+  const configured = binding.configured;
 
   const gate = (
     <>
@@ -46,15 +49,15 @@ function EmptyTranscript() {
     return (
       <p className="messages__empty">
         Nothing here yet. Ask for something — the reply comes from{" "}
-        <code>{settings.model}</code>. {gate}
+        <code>{binding.model}</code>. {gate}
       </p>
     );
   }
 
   return (
     <p className="messages__empty">
-      Nothing here yet. Ask for something — no provider is configured, so the
-      reply comes from the scripted provider and tells you what the runtime
+      Nothing here yet. Ask for something — this session&rsquo;s provider is
+      not configured, so the reply comes from the scripted provider and tells you what the runtime
       actually sent. Include <code>/write</code> in a message to make it ask
       for permission to write a file, <code>/run</code> to make it ask to run a
       command in your workspace, <code>/capture</code> to make it ask for a

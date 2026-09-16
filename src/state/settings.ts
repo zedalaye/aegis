@@ -1,8 +1,10 @@
 /**
- * Provider settings state.
+ * Provider roster state (PLAN 7.19).
  *
- * A cache of the *masked* settings; the key never reaches the WebView.
+ * A cache of the *masked* roster; no key reaches the WebView.
  *
+ * - The form edits one row at a time: `selected` names it, or `NEW_ROW` while
+ *   adding one.
  * - The draft is separate from the saved values, so a rejected save keeps the
  *   text; `E_INVALID_SETTING` errors land under their field.
  * - The key field is write-only: empty on load, empty means "keep", cleared
@@ -13,12 +15,16 @@ import { create } from "zustand";
 
 import type {
   AuthKind,
+  AuthPreset,
+  MaskedProvider,
   MaskedSettings,
   ModelCatalog,
   ProviderProbe,
 } from "../ipc/bindings";
 import {
+  settingsAddProvider,
   settingsClearKey,
+  settingsDeleteProvider,
   settingsGet,
   settingsListModels,
   settingsProbeProvider,
@@ -35,11 +41,22 @@ export type LoadStatus = "idle" | "loading" | "ready" | "error";
 /**
  * The key's environment variable, shown when there is no keyring. Must match
  * `ENV_API_KEY` in `src-tauri/src/secrets.rs` (constants do not cross `ts-rs`).
+ * Only the default row reads it.
  */
 export const ENV_API_KEY = "AEGIS_API_KEY";
 
+/** Mirrors `DEFAULT_PROVIDER_ID` in `store/agents.rs`: the row that always exists. */
+export const DEFAULT_PROVIDER_ID = "default";
+
+/** Mirrors `PROVIDERS_MAX` in `store/settings.rs`. */
+export const PROVIDERS_MAX = 16;
+
+/** The `selected` value while a row is being added. */
+export const NEW_ROW = "";
+
 /** What the user has typed but not yet saved. */
 export type Draft = {
+  readonly label: string;
   readonly authKind: AuthKind;
   readonly baseUrl: string;
   readonly model: string;
@@ -55,6 +72,7 @@ export type FieldError = {
 };
 
 const EMPTY_DRAFT: Draft = {
+  label: "",
   authKind: "api_key",
   baseUrl: "",
   model: "",
@@ -62,16 +80,18 @@ const EMPTY_DRAFT: Draft = {
 };
 
 export type SettingsState = {
-  /** The saved settings, masked, or `null` before the first load. */
+  /** The saved roster, masked, or `null` before the first load. */
   readonly settings: MaskedSettings | null;
   readonly status: LoadStatus;
   /** Whether the panel is showing. */
   readonly open: boolean;
+  /** The row the form edits, or {@link NEW_ROW}. */
+  readonly selected: string;
   /** What is in the form right now. */
   readonly draft: Draft;
   /** True while a command is in flight, so the panel can disable its buttons. */
   readonly busy: boolean;
-  /** The last connection test, or `null` if none has been run. */
+  /** The last connection test of the selected row, or `null`. */
   readonly probe: ProviderProbe | null;
   readonly probing: boolean;
   /** A refusal about one input. */
@@ -87,19 +107,23 @@ export type SettingsState = {
   /** True while a models fetch is in flight. */
   readonly modelsBusy: boolean;
 
-  /** Loads the settings and fills the form from them. */
+  /** Loads the roster and fills the form from the selected row. */
   load: () => Promise<void>;
   /** Shows the panel, refreshing what it shows. */
   openPanel: () => Promise<void>;
   /** Hides the panel. */
   closePanel: () => void;
+  /** Puts one row in the form, or a blank one for {@link NEW_ROW}. */
+  select: (providerId: string) => void;
   /** Edits the form. */
   edit: (patch: Partial<Draft>) => void;
   /** Saves the form. Resolves to whether it was accepted. */
   save: () => Promise<boolean>;
-  /** Removes the key from the credential store. */
+  /** Deletes a row. Resolves to whether it was deleted. */
+  remove: (providerId: string) => Promise<boolean>;
+  /** Removes the selected row's key from the credential store. */
   clearKey: () => Promise<void>;
-  /** Asks the runtime to try the configured server. */
+  /** Asks the runtime to try the selected row's server. */
   runProbe: () => Promise<void>;
   /** Asks the chosen authentication which models it will accept. */
   loadModels: () => Promise<void>;
@@ -109,40 +133,85 @@ export type SettingsState = {
   dismissError: () => void;
 };
 
+/** One row by id. */
+export function rowOf(
+  settings: MaskedSettings | null,
+  providerId: string,
+): MaskedProvider | undefined {
+  return settings?.providers.find((row) => row.id === providerId);
+}
+
+/** The default row, which the runtime always sends first. */
+export function defaultRow(settings: MaskedSettings): MaskedProvider | undefined {
+  return rowOf(settings, DEFAULT_PROVIDER_ID) ?? settings.providers[0];
+}
+
 /**
- * Whether these settings name a real provider.
+ * Whether a row, sending `model`, names a real provider.
  *
  * Mirrors `ProviderSettings::is_configured`: a CLI login or Gemini implies
  * its own endpoint, so a model id is enough. An OpenAI-compatible API key
  * still needs a URL and a model.
  */
-export function isConfigured(settings: MaskedSettings): boolean {
-  if (settings.model.length === 0) {
+export function isConfigured(
+  row: MaskedProvider,
+  model: string = row.model,
+): boolean {
+  if (model.length === 0) {
     return false;
   }
-  return settings.auth_kind !== "api_key" || settings.base_url.length > 0;
+  return row.auth_kind !== "api_key" || row.base_url.length > 0;
+}
+
+/** The prefill values for one authentication kind. */
+export function presetOf(
+  presets: ReadonlyArray<AuthPreset>,
+  kind: AuthKind,
+): AuthPreset | undefined {
+  return presets.find((item) => item.auth_kind === kind);
 }
 
 /**
- * The URL a request would actually hit: the saved one, or the CLI default
+ * The URL a request would actually hit: the saved one, or the kind's default
  * when the field was left empty.
  */
-export function effectiveBaseUrl(settings: MaskedSettings): string {
-  if (settings.base_url.length > 0) {
-    return settings.base_url;
+export function effectiveBaseUrl(
+  row: MaskedProvider,
+  presets: ReadonlyArray<AuthPreset>,
+): string {
+  if (row.base_url.length > 0) {
+    return row.base_url;
   }
-  const preset = settings.presets.find(
-    (item) => item.auth_kind === settings.auth_kind,
-  );
-  return preset?.default_base_url ?? "";
+  return presetOf(presets, row.auth_kind)?.default_base_url ?? "";
 }
 
-/** The form as it should look for these saved settings. */
-function draftOf(settings: MaskedSettings): Draft {
+const KIND_NAMES: Readonly<Record<AuthKind, string>> = {
+  api_key: "API key",
+  gemini: "Gemini",
+  claude_cli: "Claude Code",
+  codex_cli: "Codex",
+  grok_cli: "Grok",
+};
+
+/** How a row is named in lists and pickers: its label, else what it is. */
+export function providerName(row: MaskedProvider): string {
+  if (row.label.length > 0) {
+    return row.label;
+  }
+  const kind = KIND_NAMES[row.auth_kind];
+  return row.id === DEFAULT_PROVIDER_ID ? `Default (${kind})` : kind;
+}
+
+/** The form as it should look for a saved row, or a blank one. */
+function draftOf(row: MaskedProvider | undefined): Draft {
+  if (row === undefined) {
+    return EMPTY_DRAFT;
+  }
   return {
-    authKind: settings.auth_kind,
-    baseUrl: settings.base_url,
-    model: settings.model,
+    label: row.label,
+    authKind: row.auth_kind,
+    baseUrl: row.base_url,
+    model: row.model,
     // Never the key: there is nothing to prefill it with, and an empty field
     // is exactly what "leave the stored key alone" means on the way back.
     apiKey: "",
@@ -152,16 +221,29 @@ function draftOf(settings: MaskedSettings): Draft {
 export const useSettings = create<SettingsState>((set, get) => {
   /**
    * Runs a command, routing a field refusal under its input and anything else
-   * to the banner; both are cleared first.
+   * to the banner; both are cleared first. On success the form is refilled
+   * from the row `selectAfter` names (default: the selected one).
    */
   const guard = async (
     command: string,
     run: () => Promise<MaskedSettings>,
+    selectAfter?: (settings: MaskedSettings) => string,
   ): Promise<boolean> => {
     set({ busy: true, error: null, fieldError: null });
     try {
       const settings = await run();
-      set({ settings, status: "ready", draft: draftOf(settings) });
+      const wanted = selectAfter?.(settings) ?? get().selected;
+      // A row deleted elsewhere falls back to the default one.
+      const selected =
+        wanted === NEW_ROW || rowOf(settings, wanted) !== undefined
+          ? wanted
+          : DEFAULT_PROVIDER_ID;
+      set({
+        settings,
+        status: "ready",
+        selected,
+        draft: draftOf(rowOf(settings, selected)),
+      });
       return true;
     } catch (cause) {
       const error = toIpcError(cause, command);
@@ -171,8 +253,8 @@ export const useSettings = create<SettingsState>((set, get) => {
         set({ error });
       }
 
-      // The document may be saved even if the key was not: re-read, keeping
-      // the draft.
+      // The row may be saved even if the key was not: re-read, keeping the
+      // draft.
       if (command !== "settings_get") {
         try {
           set({ settings: await settingsGet() });
@@ -190,6 +272,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     settings: null,
     status: "idle",
     open: false,
+    selected: DEFAULT_PROVIDER_ID,
     draft: EMPTY_DRAFT,
     busy: false,
     probe: null,
@@ -209,7 +292,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     },
 
     openPanel: async () => {
-      // Refetched on every open rather than trusted from the last one: the key
+      // Refetched on every open rather than trusted from the last one: a key
       // can have been added or removed outside Aegis since, and the panel's
       // whole job is to report what is actually there.
       set({ open: true, probe: null });
@@ -218,13 +301,33 @@ export const useSettings = create<SettingsState>((set, get) => {
 
     closePanel: () => set({ open: false, fieldError: null }),
 
+    select: (providerId) =>
+      set({
+        selected: providerId,
+        draft: draftOf(rowOf(get().settings, providerId)),
+        probe: null,
+        fieldError: null,
+        models: [],
+        modelsLive: false,
+        modelsMessage: "",
+      }),
+
     edit: (patch) => set({ draft: { ...get().draft, ...patch } }),
 
     save: async () => {
-      const { authKind, baseUrl, model, apiKey } = get().draft;
-      const saved = await guard("settings_set", () =>
-        settingsSet(baseUrl, model, apiKey, authKind),
-      );
+      const { selected, draft } = get();
+      const before = new Set(get().settings?.providers.map((row) => row.id));
+      const saved =
+        selected === NEW_ROW
+          ? await guard(
+              "settings_add_provider",
+              () => settingsAddProvider(draft),
+              // The added row is the one id the roster did not have.
+              (settings) =>
+                settings.providers.find((row) => !before.has(row.id))?.id ??
+                DEFAULT_PROVIDER_ID,
+            )
+          : await guard("settings_set", () => settingsSet(selected, draft));
 
       // A stale result from the last configuration would be worse than none:
       // it describes a server this one may no longer point at.
@@ -234,14 +337,30 @@ export const useSettings = create<SettingsState>((set, get) => {
       return saved;
     },
 
+    remove: async (providerId) =>
+      guard(
+        "settings_delete_provider",
+        () => settingsDeleteProvider(providerId),
+        () =>
+          get().selected === providerId ? DEFAULT_PROVIDER_ID : get().selected,
+      ),
+
     clearKey: async () => {
-      await guard("settings_clear_key", settingsClearKey);
+      const { selected } = get();
+      if (selected === NEW_ROW) {
+        return;
+      }
+      await guard("settings_clear_key", () => settingsClearKey(selected));
     },
 
     runProbe: async () => {
+      const { selected } = get();
+      if (selected === NEW_ROW) {
+        return;
+      }
       set({ probing: true, error: null });
       try {
-        set({ probe: await settingsProbeProvider() });
+        set({ probe: await settingsProbeProvider(selected) });
       } catch (cause) {
         set({ error: toIpcError(cause, "settings_probe_provider") });
       } finally {
@@ -250,10 +369,18 @@ export const useSettings = create<SettingsState>((set, get) => {
     },
 
     loadModels: async () => {
-      const { authKind, baseUrl } = get().draft;
+      const { selected, draft } = get();
       set({ modelsBusy: true, modelsMessage: "" });
       try {
-        const catalog: ModelCatalog = await settingsListModels(authKind, baseUrl);
+        const catalog: ModelCatalog = await settingsListModels(
+          draft.authKind,
+          draft.baseUrl,
+          selected === NEW_ROW ? undefined : selected,
+        );
+        // Dropped if the user moved to another row meanwhile.
+        if (get().selected !== selected) {
+          return;
+        }
         const current = get().draft.model;
         const first = catalog.models[0];
         const nextModel =
@@ -277,15 +404,27 @@ export const useSettings = create<SettingsState>((set, get) => {
     },
 
     applyChanged: (settings) => {
+      const { selected, draft } = get();
+      const saved = rowOf(get().settings, selected);
+      const next = rowOf(settings, selected);
       // The form is only refilled when the user is not in the middle of
       // editing it: an event arriving mid-typing must not take the text away.
       const untouched =
-        get().draft.apiKey.length === 0 &&
-        get().draft.authKind === get().settings?.auth_kind;
+        selected !== NEW_ROW &&
+        draft.apiKey.length === 0 &&
+        draft.authKind === saved?.auth_kind;
+      const gone = selected !== NEW_ROW && next === undefined;
       set({
         settings,
         status: "ready",
-        ...(untouched ? { draft: draftOf(settings) } : {}),
+        ...(gone
+          ? {
+              selected: DEFAULT_PROVIDER_ID,
+              draft: draftOf(rowOf(settings, DEFAULT_PROVIDER_ID)),
+            }
+          : untouched
+            ? { draft: draftOf(next) }
+            : {}),
       });
     },
 

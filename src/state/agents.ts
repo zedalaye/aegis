@@ -17,15 +17,12 @@ import {
 } from "../ipc/commands";
 import { toIpcError } from "../lib/errors";
 import type { IpcError } from "../lib/errors";
+import { DEFAULT_PROVIDER_ID } from "./settings";
 
 /** Whether the list has been fetched yet. */
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
-/**
- * Mirrors `DEFAULT_PROVIDER_ID` in `store/agents.rs`: not a choice yet
- * (PLAN 7.1), but still sent and validated.
- */
-export const DEFAULT_PROVIDER_ID = "default";
+export { DEFAULT_PROVIDER_ID } from "./settings";
 
 /** The identity a session gets when none is chosen. */
 export const DEFAULT_AGENT_ID = "default";
@@ -37,6 +34,7 @@ export function blankDraft(): AgentDraft {
     role: "",
     instructions: "",
     provider_id: DEFAULT_PROVIDER_ID,
+    model: "",
     tools: [],
     skills: [],
     runs_per_day: DEFAULT_RUNS_PER_DAY,
@@ -69,6 +67,7 @@ export function draftOf(agent: Agent): AgentDraft {
     role: agent.role,
     instructions: agent.instructions,
     provider_id: agent.provider_id,
+    model: agent.model,
     tools: [...agent.tools],
     skills: [...agent.skills],
     runs_per_day: agent.runs_per_day,

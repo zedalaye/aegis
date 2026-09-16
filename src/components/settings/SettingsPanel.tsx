@@ -1,5 +1,5 @@
 /**
- * The settings surface: one panel, one provider.
+ * The settings surface: one panel, a roster of providers.
  *
  * Takes over the work area (not a modal) and works with no project open:
  * provider, identities, skills, connectors, memory and routines are
@@ -10,7 +10,12 @@ import { useEffect } from "react";
 
 import { useConnectors } from "../../state/connectors";
 import { useRoutines } from "../../state/routines";
-import { effectiveBaseUrl, isConfigured, useSettings } from "../../state/settings";
+import {
+  defaultRow,
+  effectiveBaseUrl,
+  isConfigured,
+  useSettings,
+} from "../../state/settings";
 
 import AgentList from "../agents/AgentList";
 import ConnectorList from "../connectors/ConnectorList";
@@ -18,32 +23,36 @@ import MemoryList from "../memory/MemoryList";
 import RoutineList from "../routines/RoutineList";
 import SkillList from "../skills/SkillList";
 import ProviderForm from "./ProviderForm";
+import ProviderList from "./ProviderList";
 
 /**
- * Which provider will answer next; mirrors `ProviderSettings::is_configured`
- * for display only.
+ * What the default provider does, since the built-in Assistant answers from
+ * it; mirrors `ProviderSettings::is_configured` for display only.
  */
 function ActiveProvider() {
   const settings = useSettings((s) => s.settings);
   if (settings === null) {
     return null;
   }
-
-  const configured = isConfigured(settings);
-  const url = effectiveBaseUrl(settings);
+  const row = defaultRow(settings);
+  if (row === undefined) {
+    return null;
+  }
 
   return (
     <p className="settings__lede">
-      {configured ? (
+      {isConfigured(row) ? (
         <>
-          Messages go to <code>{url}</code> as <code>{settings.model}</code>.
+          The default provider sends to{" "}
+          <code>{effectiveBaseUrl(row, settings.presets)}</code> as{" "}
+          <code>{row.model}</code>.
         </>
       ) : (
         <>
-          No provider is configured, so replies come from the built-in scripted
-          provider — enough to walk the approval gate and the audit log, but
-          there is no model behind it. Name a base URL and a model to use a real
-          one.
+          The default provider is not configured, so sessions that answer from
+          it get the built-in scripted provider — enough to walk the approval
+          gate and the audit log, but there is no model behind it. Name a base
+          URL and a model to use a real one.
         </>
       )}
     </p>
@@ -87,7 +96,8 @@ export default function SettingsPanel() {
       {status === "loading" && <p className="settings__lede">Loading…</p>}
       <ActiveProvider />
 
-      <h2 className="settings__section">Provider</h2>
+      <h2 className="settings__section">Providers</h2>
+      <ProviderList />
       <ProviderForm />
 
       <h2 className="settings__section">Identities</h2>
@@ -107,8 +117,8 @@ export default function SettingsPanel() {
 
       <h2 className="settings__section">Where things are kept</h2>
       <p className="settings__note">
-        The base URL and the model are written to <code>settings.json</code>{" "}
-        beside your projects. Identities go in <code>agents.json</code> next to
+        Each provider&rsquo;s label, base URL and model are written to{" "}
+        <code>settings.json</code> beside your projects. Identities go in <code>agents.json</code> next to
         them, which is a file you can read and edit by hand. Memories go in{" "}
         <code>memories.json</code>, beside both. Connectors go in{" "}
         <code>connectors.json</code>, which holds the program and its arguments
@@ -117,11 +127,12 @@ export default function SettingsPanel() {
         environment when it starts one. Runbooks are
         ordinary markdown in <code>skills/</code>, either beside those files or
         inside a workspace, where they travel with the repository. Routines and
-        what they have spent today are in <code>routines.json</code>. The key is
-        not: it
-        goes to this machine's own
-        credential store — Credential Manager, Keychain, or a Secret Service —
-        and Aegis has no command that can read one back out. Nothing in this
+        what they have spent today are in <code>routines.json</code>. Keys are
+        not: each goes to this machine's own credential store — Credential
+        Manager, Keychain, or a Secret Service — under{" "}
+        <code>provider-api-key</code> for the default provider and{" "}
+        <code>provider-api-key:&lt;id&gt;</code> for the others, and Aegis has
+        no command that can read one back out. Nothing in this
         window is ever given the key; it is attached to the request in the
         runtime, as a header, and it is never written to the audit log.
       </p>

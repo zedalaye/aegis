@@ -1,5 +1,5 @@
 /**
- * Where the model comes from: a base URL, a model id, and a key.
+ * One provider row (PLAN 7.19): a label, a base URL, a model id, and a key.
  *
  * The key is write-only: empty keeps the stored one, and only its source and a
  * four-character hint are shown. Errors land under the field the runtime names.
@@ -7,8 +7,15 @@
 
 import { useEffect } from "react";
 
-import type { AuthKind, AuthPreset, MaskedSettings } from "../../ipc/bindings";
-import { ENV_API_KEY, useSettings } from "../../state/settings";
+import type { AuthKind, MaskedProvider } from "../../ipc/bindings";
+import {
+  DEFAULT_PROVIDER_ID,
+  ENV_API_KEY,
+  NEW_ROW,
+  presetOf,
+  rowOf,
+  useSettings,
+} from "../../state/settings";
 
 const AUTH_LABELS: Readonly<Record<AuthKind, string>> = {
   api_key: "API key (OpenAI-compatible)",
@@ -20,13 +27,6 @@ const AUTH_LABELS: Readonly<Record<AuthKind, string>> = {
 
 function isCliLogin(kind: AuthKind): boolean {
   return kind === "claude_cli" || kind === "codex_cli" || kind === "grok_cli";
-}
-
-function presetOf(
-  presets: ReadonlyArray<AuthPreset>,
-  kind: AuthKind,
-): AuthPreset | undefined {
-  return presets.find((item) => item.auth_kind === kind);
 }
 
 /** One labelled input, with the refusal that belongs to it. */
@@ -67,15 +67,15 @@ function Field({
   );
 }
 
-/** What Aegis currently has for a key, in one sentence. */
-function KeyStatus({ settings }: { readonly settings: MaskedSettings }) {
+/** What Aegis currently has for a row's key, in one sentence. */
+function KeyStatus({ row }: { readonly row: MaskedProvider }) {
   const clearKey = useSettings((s) => s.clearKey);
   const busy = useSettings((s) => s.busy);
 
-  if (settings.key_source === "keyring") {
+  if (row.key_source === "keyring") {
     return (
       <p className="provider__note">
-        A key is stored in this machine's credential store ({settings.key_hint}
+        A key is stored in this machine's credential store ({row.key_hint}
         ).{" "}
         <button
           type="button"
@@ -89,35 +89,35 @@ function KeyStatus({ settings }: { readonly settings: MaskedSettings }) {
     );
   }
 
-  if (settings.key_source === "env") {
+  if (row.key_source === "env") {
     return (
       <p className="provider__note">
-        Using the key in <code>{ENV_API_KEY}</code> ({settings.key_hint}). Aegis
+        Using the key in <code>{ENV_API_KEY}</code> ({row.key_hint}). Aegis
         does not change the environment it was started in, so this one can only
         be removed by unsetting the variable and restarting.
       </p>
     );
   }
 
-  if (settings.key_source === "claude_cli") {
+  if (row.key_source === "claude_cli") {
     return (
       <CliStatus
-        found={settings.key_hint}
+        found={row.key_hint}
         cli="claude"
         file="~/.claude/.credentials.json"
       />
     );
   }
 
-  if (settings.key_source === "codex_cli") {
+  if (row.key_source === "codex_cli") {
     return (
-      <CliStatus found={settings.key_hint} cli="codex login" file="~/.codex/auth.json" />
+      <CliStatus found={row.key_hint} cli="codex login" file="~/.codex/auth.json" />
     );
   }
 
-  if (settings.key_source === "grok_cli") {
+  if (row.key_source === "grok_cli") {
     return (
-      <CliStatus found={settings.key_hint} cli="grok login" file="~/.grok/auth.json" />
+      <CliStatus found={row.key_hint} cli="grok login" file="~/.grok/auth.json" />
     );
   }
 
@@ -156,8 +156,14 @@ function CliStatus({
 }
 
 /** How this machine stores a key, when it will not store one. */
-function KeyStorage({ settings }: { readonly settings: MaskedSettings }) {
-  if (settings.keyring_available) {
+function KeyStorage({
+  available,
+  isDefault,
+}: {
+  readonly available: boolean;
+  readonly isDefault: boolean;
+}) {
+  if (available) {
     return null;
   }
 
@@ -165,8 +171,17 @@ function KeyStorage({ settings }: { readonly settings: MaskedSettings }) {
     <p className="provider__note provider__note--warning">
       This machine has no credential store Aegis can use — headless Linux and a
       locked keychain both look like this. A key saved here would have nowhere
-      to go, so set <code>{ENV_API_KEY}</code> in the environment and restart
-      instead.
+      to go.{" "}
+      {isDefault ? (
+        <>
+          Set <code>{ENV_API_KEY}</code> in the environment and restart instead.
+        </>
+      ) : (
+        <>
+          Only the default provider reads <code>{ENV_API_KEY}</code>; this one
+          needs a credential store, or a CLI login.
+        </>
+      )}
     </p>
   );
 }
@@ -198,6 +213,9 @@ function ProbeResult() {
 
 export default function ProviderForm() {
   const settings = useSettings((s) => s.settings);
+  const selected = useSettings((s) => s.selected);
+  const remove = useSettings((s) => s.remove);
+  const select = useSettings((s) => s.select);
   const draft = useSettings((s) => s.draft);
   const busy = useSettings((s) => s.busy);
   const probing = useSettings((s) => s.probing);
@@ -219,11 +237,18 @@ export default function ProviderForm() {
       void loadModels();
     }, 400);
     return () => window.clearTimeout(handle);
-  }, [draft.authKind, draft.baseUrl, loadModels, settings]);
+  }, [draft.authKind, draft.baseUrl, loadModels, selected, settings]);
 
   if (settings === null) {
     return <p className="provider__note">Loading settings…</p>;
   }
+
+  const adding = selected === NEW_ROW;
+  const row = rowOf(settings, selected);
+  if (!adding && row === undefined) {
+    return null;
+  }
+  const isDefault = selected === DEFAULT_PROVIDER_ID;
 
   const errorFor = (field: string) =>
     fieldError?.field === field ? fieldError.message : null;
@@ -242,6 +267,18 @@ export default function ProviderForm() {
         void save();
       }}
     >
+      <Field
+        id="provider-label"
+        label="Label"
+        value={draft.label}
+        maxLength={48}
+        placeholder={isDefault ? "Default" : "Local server, Claude for review…"}
+        error={errorFor("label")}
+        hint="How identities and the session picker name this provider. May be left empty."
+        onChange={(event) => edit({ label: event.target.value })}
+        disabled={busy}
+      />
+
       <div className="field">
         <label className="field__label" htmlFor="provider-auth">
           Authentication
@@ -279,7 +316,9 @@ export default function ProviderForm() {
             ? "Reuses a login the official CLI already wrote on this machine. Aegis presents itself as that CLI. That is widely done and may be outside the provider's terms."
             : geminiAuth
               ? "A Google AI Studio key (AIza…), stored in this machine's credential store or AEGIS_API_KEY. Aegis talks to the Generative Language API, not an OpenAI-compatible server."
-              : "An API key stored in this machine's credential store, or AEGIS_API_KEY."}
+              : isDefault
+                ? "An API key stored in this machine's credential store, or AEGIS_API_KEY."
+                : "An API key stored in this machine's credential store. Only the default provider reads AEGIS_API_KEY."}
         </p>
       </div>
 
@@ -346,12 +385,13 @@ export default function ProviderForm() {
           model's number. Its absence is meaningful too: no line means the
           catalog did not publish one, and the provider's own default applies.
         */}
-        {settings.max_output_tokens !== null &&
-        draft.model === settings.model ? (
+        {row !== undefined &&
+        row.max_output_tokens !== null &&
+        draft.model === row.model ? (
           <p className="field__hint">
             Replies — and files written by <code>fs_write</code>, which are
             emitted as tool-call arguments — are capped at{" "}
-            {settings.max_output_tokens.toLocaleString()} tokens, from this
+            {row.max_output_tokens.toLocaleString()} tokens, from this
             provider&rsquo;s catalog.
           </p>
         ) : null}
@@ -364,7 +404,7 @@ export default function ProviderForm() {
           type="password"
           value={draft.apiKey}
           placeholder={
-            settings.key_source === "none"
+            row === undefined || row.key_source === "none"
               ? geminiAuth
                 ? "Paste an AI Studio key (AIza…)"
                 : "Paste a key"
@@ -376,21 +416,37 @@ export default function ProviderForm() {
         />
       )}
 
-      <KeyStatus settings={settings} />
-      {cliAuth ? null : <KeyStorage settings={settings} />}
+      {row === undefined ? null : <KeyStatus row={row} />}
+      {cliAuth ? null : (
+        <KeyStorage
+          available={settings.keyring_available}
+          isDefault={isDefault}
+        />
+      )}
 
       <div className="provider__actions">
         <button type="submit" className="button button--primary" disabled={busy}>
-          Save
+          {adding ? "Add provider" : "Save"}
         </button>
-        <button
-          type="button"
-          className="button"
-          onClick={() => void runProbe()}
-          disabled={busy || probing}
-        >
-          Test connection
-        </button>
+        {adding ? (
+          <button
+            type="button"
+            className="button"
+            onClick={() => select(DEFAULT_PROVIDER_ID)}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="button"
+            onClick={() => void runProbe()}
+            disabled={busy || probing}
+          >
+            Test connection
+          </button>
+        )}
         <button
           type="button"
           className="button"
@@ -399,6 +455,17 @@ export default function ProviderForm() {
         >
           Refresh models
         </button>
+        {adding || isDefault ? null : (
+          <button
+            type="button"
+            className="button button--danger"
+            onClick={() => void remove(selected)}
+            disabled={busy}
+            title="Refused while an identity or a session still answers from it. Its stored key goes with it."
+          >
+            Delete provider
+          </button>
+        )}
       </div>
 
       <p className="field__hint">

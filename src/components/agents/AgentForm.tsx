@@ -19,6 +19,12 @@ import {
   useAgents,
 } from "../../state/agents";
 import { liveTools, useConnectors } from "../../state/connectors";
+import {
+  DEFAULT_PROVIDER_ID,
+  providerName,
+  rowOf,
+  useSettings,
+} from "../../state/settings";
 import { useSkills } from "../../state/skills";
 
 /** What each tool does, in the fewest words that distinguish it. */
@@ -187,6 +193,7 @@ export default function AgentForm({
   const cancel = useAgents((s) => s.cancelEdit);
   const toolsError = useFieldError("tools");
   const known = useSkills((s) => s.skills);
+  const settings = useSettings((s) => s.settings);
   // What a *new* identity opens filled in with: a duplicate's fields, or
   // nothing. Read once, with the draft below, for the same reason.
   const seed = useAgents((s) => s.seed);
@@ -295,6 +302,62 @@ export default function AgentForm({
             rows={4}
             value={draft.instructions}
             onChange={(event) => patch({ instructions: event.target.value })}
+            aria-invalid={invalid}
+            aria-describedby={describedBy}
+          />
+        )}
+      </Field>
+
+      <Field
+        id="agent-provider"
+        label="Provider"
+        field="provider"
+        hint="Which provider answers for this identity. A session opened as it can switch its own from the chat header; that never changes the identity."
+      >
+        {({ id, invalid, describedBy }) => (
+          <select
+            id={id}
+            className={`field__input${invalid ? " field__input--bad" : ""}`}
+            value={draft.provider_id}
+            onChange={(event) => patch({ provider_id: event.target.value })}
+            aria-invalid={invalid}
+            aria-describedby={describedBy}
+          >
+            {(settings?.providers ?? []).map((row) => (
+              <option key={row.id} value={row.id}>
+                {providerName(row)}
+              </option>
+            ))}
+            {/* A binding to a row that is gone stays visible until changed. */}
+            {settings === null ||
+            rowOf(settings, draft.provider_id) !== undefined ? null : (
+              <option value={draft.provider_id}>
+                Not on file ({draft.provider_id})
+              </option>
+            )}
+          </select>
+        )}
+      </Field>
+
+      <Field
+        id="agent-model"
+        label="Model"
+        field="model"
+        hint="Leave empty to use the provider's own model, and follow it when that changes."
+      >
+        {({ id, invalid, describedBy }) => (
+          <input
+            id={id}
+            className={`field__input${invalid ? " field__input--bad" : ""}`}
+            value={draft.model}
+            onChange={(event) => patch({ model: event.target.value })}
+            placeholder={
+              rowOf(settings, draft.provider_id)?.model ||
+              rowOf(settings, DEFAULT_PROVIDER_ID)?.model ||
+              "the provider's model"
+            }
+            spellCheck={false}
+            autoComplete="off"
             aria-invalid={invalid}
             aria-describedby={describedBy}
           />

@@ -27,6 +27,7 @@ import {
   sessionOpen,
   sessionRename,
   sessionSend,
+  sessionSetBinding,
 } from "../ipc/commands";
 import { subscribe } from "../ipc/events";
 import { toIpcError } from "../lib/errors";
@@ -106,6 +107,12 @@ export type SessionsState = {
    * Omitted is the built-in one.
    */
   create: (projectId: string, agentId?: string) => Promise<void>;
+  /**
+   * Overrides the provider row and model the open session answers from
+   * (PLAN 7.19); both `null` returns to its identity's pair. Resolves to
+   * whether it was accepted.
+   */
+  setBinding: (providerId: string | null, model: string | null) => Promise<boolean>;
   /** Renames a session. */
   rename: (sessionId: string, title: string) => Promise<void>;
   /** Deletes a session. */
@@ -292,6 +299,33 @@ export const useSessions = create<SessionsState>((set, get) => {
           output: {},
         });
       }
+    },
+
+    setBinding: async (providerId, model) => {
+      const sessionId = get().detail?.session.id;
+      if (sessionId === undefined) {
+        return false;
+      }
+
+      const outcome = await guard("session_set_binding", () =>
+        sessionSetBinding(sessionId, providerId, model),
+      );
+      if (!outcome.ok) {
+        return false;
+      }
+      // The runtime also emits `session:updated`; applying the row here too
+      // keeps the header right if the event is missed.
+      const summary = outcome.value;
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === summary.id ? summary : session,
+        ),
+        detail:
+          state.detail?.session.id === summary.id
+            ? { ...state.detail, session: summary }
+            : state.detail,
+      }));
+      return true;
     },
 
     rename: async (sessionId, title) => {
