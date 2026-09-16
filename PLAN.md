@@ -6,7 +6,7 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 (`§ 7.6 *Authoring*`): amend sections in place, and keep the numbers and lead-ins.
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
-open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.15, landed), and
+open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.17, landed), and
 three surfaces that are not scheduled (§ 7.7–7.9).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
@@ -283,10 +283,12 @@ session_send
    whatever the outcome.
 5. One tool message per call, then back to Building.
 
-The cap is **8 tool rounds per turn**, or **24 while the turn follows a runbook**, chosen per round;
-the round past it yields `E_TOO_MANY_TOOL_ROUNDS` and a clean finish. The cap is not a permission
-gate: no grant moves it. A skill run may continue across turns of the same session, up to four
-(`IDEAS.md` § 10–11).
+Two guards, neither a permission gate: a **loop** (`E_TOOL_LOOP`) is the same round fingerprint
+three times running; a **ceiling** of 64 rounds (`E_TOO_MANY_TOOL_ROUNDS`) bounds the bill when
+work is still progressing. The same ceiling applies with or without a runbook. Hitting either
+refuses the pending calls and gives the model one wrap-up round to finish; the recovery is not
+"ask the user to continue" (§ 7.16). A skill run may still span turns of the same session, up to
+four (`IDEAS.md` § 10).
 
 ### 4.3 ToolResult envelope
 
@@ -316,7 +318,7 @@ A denial is an ordinary result (`ok: false`, `E_DENIED`); the turn continues.
 Stable strings, shared by IPC and envelopes: `E_TURN_BUSY`, `E_NO_WORKSPACE`,
 `E_PATH_OUTSIDE_WORKSPACE`, `E_PATH_INVALID`, `E_DENIED`, `E_GRANT_NOT_ALLOWED`, `E_APPROVAL_STALE`,
 `E_TIMEOUT`, `E_TOOL_FAILED`, `E_EXEC_HOST`, `E_PROVIDER_HTTP`, `E_PROVIDER_PARSE`, `E_NO_API_KEY`,
-`E_KEYRING_UNAVAILABLE`, `E_CANCELLED`, `E_TOO_MANY_TOOL_ROUNDS`, `E_SCREEN_PERMISSION`,
+`E_KEYRING_UNAVAILABLE`, `E_CANCELLED`, `E_TOO_MANY_TOOL_ROUNDS`, `E_TOOL_LOOP`, `E_SCREEN_PERMISSION`,
 `E_INVALID_SETTING`, `E_INTERNAL`.
 
 `E_EXEC_HOST` is its own code because it says what no other does: the command ran nowhere, and the
@@ -489,7 +491,8 @@ brief does not go out unless it is the perceive-delta.
 
 **Frame, not a skill.** The standing constraint — read `world/`, do not write it, do not reopen the
 sources, stop on an écart — is injected by the harness, because a skill can be skipped. It carries
-status, never `essence.md`.
+status, never `essence.md`. The absence of a world is a shorter frame of the same kind (§ 7.17):
+the two layers and the runbook name, not a procedure.
 
 **Library skills.** `world.draft`, `world.perceive-delta`, `world.verify` and `world.check` are seeded
 like any runbook and granted like any runbook. There is no `world.amend` for specialists.
@@ -501,11 +504,11 @@ like any runbook and granted like any runbook. There is no `world.amend` for spe
   button.
 - It sits at the workspace root; the cabinet moved under `.aegis/` in the same change. Workspaces
   laid out before keep root directories, reported as strays and never moved.
-- The frame is a `transcript::Context` field built per round beside the cabinet digest. Its *write*
-  paragraph depends on the run: a brief is told it does not write `world/`; a session is told a
-  person asking *is* the decision and `world.draft` is the runbook. A single paragraph for both made a
-  session decline even when asked, leaving no `fs_write` in the audit — a prompt refusing is much
-  harder to find than a gate refusing.
+- The frame is a `transcript::Context` field built per round beside the cabinet digest. Without a
+  world it is the absence paragraph (§ 7.17). With one, its *write* paragraph depends on the run: a
+  brief is told it does not write `world/`; a session is told a person asking *is* the decision and
+  `world.draft` is the runbook. A single paragraph for both made a session decline even when asked,
+  leaving no `fs_write` in the audit — a prompt refusing is much harder to find than a gate refusing.
 - Two matrix rows, chosen by the **run**, not the identity: delegated → deny; session → high-risk ask
   with `Grant::WorldAmend`, which matches no `FsWrite` row. Unattended runs are offered no grant, and
   `schedule::check` refuses to store it on a routine.
@@ -523,7 +526,7 @@ like any runbook and granted like any runbook. There is no `world.amend` for spe
 ### 7.3 Post-MVP phase order
 
 Each phase ended runnable; none depended on a later one; domain work came last. The slices
-§ 7.10–7.15 are not steps in this list and did not delay it.
+§ 7.10–7.17 are not steps in this list and did not delay it.
 
 **Phase 11 — Workspace convention.** Shared memory as files a session reads at start and writes
 through the gate. Exit: a decision and a status filed without a new agent type.
@@ -739,7 +742,7 @@ no command, tool, matrix row, binding or UI change. What each settled:
   apply (§ 7.14).
 - A `settings.json` or `agents.json` under `.aegis/`. Conflicting grants across cabinets are a binding
   (`IDEAS.md` § 13), not a second settings file.
-- Inserting a slice (§ 7.10–7.15) into § 7.3 as a fractional phase, or delaying a phase for one.
+- Inserting a slice (§ 7.10–7.17) into § 7.3 as a fractional phase, or delaying a phase for one.
 - Teaching the model to call `wsl.exe` or `bash -c`; falling back to Windows when WSL is missing.
 - `git init` on `project_create`, a nested repository, auto-committing writes, or a GitHub product in
   the runtime.
@@ -1052,3 +1055,53 @@ markdown (`IDEAS.md` § 14); drops into `world/sources.yml`; "open in VS Code" a
   `path`, never content. The board does not show intake yet.
 - **The asset scope stays the captures**: Tauri widens it to every dropped path, so `lib.rs` forbids
   those paths again on every drop.
+
+### 7.16 Turn guards — landed
+
+The round cap counted rounds as if a `review.diff` of forty calls and `fs_read` of the same file
+forever were the same thing. Eight was never measured (`IDEAS.md` § 11). The turn then ended and
+told the model to ask the user to continue — which is a human in the hottest path, and a silence
+when nobody is there.
+
+**In scope**: stop a stuck model; let progressing work finish in the same turn; still bound the
+bill.
+**Out**: a model that auto-approves or that judges "this is still progress" (`IDEAS.md` § 12);
+removing a ceiling; synthesizing a user "continue" as a new turn.
+
+*As landed*:
+
+- **A loop is a fingerprint.** The round's identity is the tool names and canonical arguments,
+  sorted, so parallel order and fresh call ids are not progress. Three identical rounds in a row
+  refuse the third (`E_TOOL_LOOP`). Two can be a retry after a failed read.
+- **A ceiling is a bill bound.** 64 rounds, the same with or without a runbook. Past it:
+  `E_TOO_MANY_TOOL_ROUNDS`. Ordinary work should not hit it; a measured `review.diff` needed about
+  twenty.
+- **A halt wraps up.** The pending calls are refused, then the model gets one more request to
+  summarize or `skill_return`. A second tool round after that stops. The envelope does not say
+  "ask the user to continue".
+- **Carry still exists.** Stop, a new user message, or a run past four turns still split a skill
+  run across turns. The halt itself is no longer that split.
+- **Unattended** is still bounded by the scheduler's `RUN_TIMEOUT` (15 minutes). The ceiling is not
+  a second clock.
+
+### 7.17 World absence frame — landed
+
+A first session on a project with no `world/` was told nothing about the word. The in-force frame
+is gated on a constitution that does not exist yet; `world.draft` is a skill the built-in Assistant
+does not hold, so the catalog does not name it either. The model guessed.
+
+**In scope**: name the two layers and the runbook, in the same injection path as the in-force frame.
+**Out**: granting `world.draft` to the built-in row; empty `world/` templates; a first-run wizard;
+dumping `COS.md` into the system prompt; a file checklist.
+
+*As landed*:
+
+- **`world::block` is no longer `None` without a world.** A session gets one short paragraph:
+  `world/` is the constitution, `.aegis/` is the cabinet, founding is `world.draft`, do not invent
+  an essence. A brief gets the layers without the runbook name. Bound at 400 characters. A founded
+  world still gets the existing frame, not this one.
+- **`sources.yml` alone is still not a world.** It gets the absence paragraph, not the in-force one,
+  and still does not refuse reads of a dump.
+- **Writing is still not granting.** Naming the runbook does not put it on the identity. An
+  Assistant that does not hold it is told to say so.
+- **Briefs still launch.** `blocking` is unchanged: no constitution means no drift gate.

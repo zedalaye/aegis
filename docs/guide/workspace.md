@@ -141,5 +141,6 @@ Four runbooks come with it:
 - **`world.verify`** checks an instance against the oracle as a program.
 - **`world.check`** reads the constitution and says where things stand.
 
-They are granted to identities like any runbook. Reasoning: `COS.md` *Work*. Design: `PLAN.md`
-§ 7.2.
+They are granted to identities like any runbook. A session on a folder that has no `world/` yet is
+still told the two layers and the name `world.draft` — not the steps. Reasoning: `COS.md` *Work*.
+Design: `PLAN.md` § 7.2 and § 7.17.

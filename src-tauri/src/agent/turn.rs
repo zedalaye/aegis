@@ -13,8 +13,10 @@
 //! * **Cancellation is checked at every await**; text already streamed is kept.
 //! * **Deltas are coalesced** into ~50 ms frames opened by the first token.
 //! * **A denial is a result**: refusals, unanswered approvals, unparsed
-//!   arguments and the round cap become `tool` messages, and the turn continues
-//!   (PLAN 4.3). Only cancellation and provider failure end it early.
+//!   arguments and a loop or round-ceiling halt become `tool` messages, and the
+//!   turn continues (PLAN 4.3). Only cancellation and provider failure end it
+//!   early. A halt gives the model one wrap-up round to finish; it is not told
+//!   to ask the user to continue (PLAN 7.16).
 //! * **Waiting for a person is a state**: the session reads `awaiting_approval`,
 //!   inside the same `select!` as cancel and under a five-minute deadline.
 //! * [`Standing`] (Phase 15) and [`Unattended`] (Phase 16) are the only ways a
@@ -52,32 +54,16 @@ use super::event::{
     Event, EventSink, ToolApprovalResolved, ToolDrafting, ToolFinished, ToolProgress,
     ToolRequested, ToolStarted, TurnDelta, TurnError, TurnFinished, TurnMessage, TurnStarted,
 };
+use super::guard::{self, Halt};
 use super::provider::Provider;
 use super::registry::{TurnRegistry, MAX_RUN_TURNS};
 use super::transcript;
 use super::wire::{AssembledCall, ModelEvent, StopReason, Usage};
 
-/// Tool rounds allowed in one turn (PLAN 4.2). The round past it is answered
-/// with `E_TOO_MANY_TOOL_ROUNDS`, not run. It bounds a loop and a bill; it is
-/// not a permission gate, and no grant moves it.
-pub const MAX_TOOL_ROUNDS: u32 = 8;
-
-/// Tool rounds allowed while a turn follows a runbook (`IDEAS.md` § 11). A
-/// measured `review.diff` needed about twenty; a runbook bounds its steps and
-/// tools, and every call still passes the gate.
-pub const MAX_TOOL_ROUNDS_IN_SKILL: u32 = 24;
+pub use super::guard::{LOOP_STREAK, MAX_TOOL_ROUNDS};
 
 /// How long a `turn:delta` frame stays open.
 pub const DELTA_FRAME: Duration = Duration::from_millis(50);
-
-/// The round cap for this turn: one function, so the limit the model is told and
-/// the limit enforced are the same number.
-const fn round_cap(skill: Option<&str>) -> u32 {
-    match skill {
-        Some(_) => MAX_TOOL_ROUNDS_IN_SKILL,
-        None => MAX_TOOL_ROUNDS,
-    }
-}
 
 /// A tool call the model is still writing: enough to show that something is
 /// happening while no text streams.
@@ -330,6 +316,11 @@ impl Turn<'_> {
 
         let mut seq = 0u32;
         let mut rounds = 0u32;
+        let mut fingerprints: Vec<String> = Vec::new();
+        // A halt refuses the pending round and then lets the model speak once
+        // more. A second tool round after that stops; the wrap-up is not a
+        // new budget.
+        let mut wrapping: Option<Halt> = None;
         let mut usage: Option<Usage> = None;
 
         // Whether this turn is a brief: the same fact policy reads, so the world
@@ -469,24 +460,29 @@ impl Turn<'_> {
                         break reason;
                     }
 
-                    // The round past the cap is answered, not run. The cap is
-                    // read per round, so a run opened mid-turn gets the larger
-                    // one from then on.
-                    let cap = round_cap(skill.as_deref());
-                    if rounds >= cap {
+                    let incoming = guard::fingerprint(&calls);
+                    let halt = wrapping.or_else(|| guard::halt(rounds, &fingerprints, &incoming));
+                    if let Some(halt) = halt {
                         tracing::warn!(
                             session_id = %plan.session_id,
                             rounds,
-                            cap,
+                            ?halt,
                             skill = skill.as_deref().unwrap_or(""),
-                            "tool round cap reached"
+                            "tool round halted"
                         );
-                        self.refuse_all(plan, &calls, &held, skill.as_deref());
-                        break StopReason::Stop;
+                        self.refuse_all(plan, &calls, &held, skill.as_deref(), halt);
+                        if wrapping.is_some() {
+                            // Already had the wrap-up request and still called
+                            // tools. Stop rather than refuse forever.
+                            break StopReason::Stop;
+                        }
+                        wrapping = Some(halt);
+                        continue;
                     }
 
                     self.execute(plan, &calls, offered, cancel, &progress_seq, &mut skill)
                         .await;
+                    fingerprints.push(incoming);
                     rounds += 1;
 
                     if cancel.is_cancelled() {
@@ -1027,33 +1023,21 @@ impl Turn<'_> {
         }
     }
 
-    /// Answers every call of a round without running it (the round cap). Every
-    /// call needs a `tool` message, or the next request is invalid
-    /// ([`transcript`]).
+    /// Answers every call of a round without running it (a loop or the round
+    /// ceiling). Every call needs a `tool` message, or the next request is
+    /// invalid ([`transcript`]).
     fn refuse_all(
         &self,
         plan: &TurnPlan,
         calls: &[AssembledCall],
         held: &[String],
         skill: Option<&str>,
+        halt: Halt,
     ) {
         let refused = CancellationToken::new();
+        let reason = halt.reason(skill);
 
-        let cap = round_cap(skill);
         for call in calls {
-            let reason = format!(
-                "this turn already ran {cap} rounds of tools, which is the limit; answer with \
-                 what you have, or ask the user to continue{}",
-                match skill {
-                    // Say the run stays open, or the model assumes it was
-                    // abandoned.
-                    Some(name) => format!(
-                        ". The `{name}` run stays open, so you can carry on with it in the next \
-                         turn and close it with `skill_return` there"
-                    ),
-                    None => String::new(),
-                }
-            );
             let ctx = ToolCtx {
                 session_id: &plan.session_id,
                 agent_id: &self.agent.id,
@@ -1070,7 +1054,7 @@ impl Turn<'_> {
                     library: self.skills,
                     workspace: plan.workspace.as_deref(),
                     tools: held,
-                    // The cap was reached inside whatever run was open, and
+                    // The halt was reached inside whatever run was open, and
                     // the refusals it produces belong to that run.
                     active: skill,
                 },
@@ -1079,13 +1063,8 @@ impl Turn<'_> {
                 handoffs: self.standing.ctx(),
                 connectors: self.connectors,
             };
-            let outcome = tools::refuse(
-                &ctx,
-                &call.name,
-                AuditDecision::Deny,
-                ErrorCode::TooManyToolRounds,
-                &reason,
-            );
+            let outcome =
+                tools::refuse(&ctx, &call.name, AuditDecision::Deny, halt.code(), &reason);
             self.finish_call(plan, call, &outcome, ToolCallStatus::Denied);
         }
     }
@@ -2065,16 +2044,17 @@ mod tests {
         assert_eq!(error.code, "E_PROVIDER_PARSE");
     }
 
-    /// The ceiling of PLAN 4.2: the round after the cap is answered rather
-    /// than executed, and the turn finishes cleanly.
+    /// PLAN 7.16: repeating the same call is a loop, not a request for the
+    /// user to type continue. The third identical round is refused; the two
+    /// before it ran.
     #[tokio::test]
-    async fn the_tool_round_cap_ends_the_turn_cleanly() {
+    async fn a_repeated_call_stops_as_a_loop() {
         let fx = Fixture::new();
         std::fs::write(fx.workspace.join("a.txt"), "x").expect("write");
         fx.say("keep reading");
 
-        // One more round than the cap allows, so the last one is refused.
-        let script = (0..=MAX_TOOL_ROUNDS)
+        // LOOP_STREAK identical rounds, plus one more the wrap-up must not run.
+        let script = (0..=LOOP_STREAK)
             .map(|round| {
                 tool_call_script(
                     &format!("call_{round}"),
@@ -2092,10 +2072,31 @@ mod tests {
 
         assert_eq!(reason, StopReason::Stop);
 
-        let transcript = fx.transcript();
-        let last = transcript.last().expect("a final tool message");
-        let envelope: serde_json::Value = serde_json::from_str(&last.text).expect("an envelope");
-        assert_eq!(envelope["error"]["code"], "E_TOO_MANY_TOOL_ROUNDS");
+        let envelopes: Vec<serde_json::Value> = fx
+            .transcript()
+            .into_iter()
+            .filter(|message| message.role == crate::store::Role::Tool)
+            .map(|message| serde_json::from_str(&message.text).expect("an envelope"))
+            .collect();
+        let looped = envelopes
+            .iter()
+            .filter(|envelope| envelope["error"]["code"] == "E_TOOL_LOOP")
+            .count();
+        assert!(
+            looped >= 1,
+            "the repeated round is refused as a loop: {envelopes:?}"
+        );
+        assert!(
+            envelopes.iter().all(|envelope| {
+                envelope["error"]["code"] != "E_TOOL_LOOP"
+                    || !envelope["error"]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains("continue")
+            }),
+            "the recovery is finish, not a human continue: {envelopes:?}"
+        );
 
         let executed = fx
             .sink
@@ -2105,8 +2106,56 @@ mod tests {
             .count();
         assert_eq!(
             executed,
-            usize::try_from(MAX_TOOL_ROUNDS).expect("small"),
-            "the round past the cap is answered, not run"
+            usize::try_from(LOOP_STREAK.saturating_sub(1)).expect("small"),
+            "only the rounds before the loop ran"
+        );
+    }
+
+    /// Distinct work past the old eight-round cap keeps running. The ceiling
+    /// is a bill bound, not "stop and wait for continue".
+    #[tokio::test]
+    async fn progress_past_the_old_cap_keeps_running() {
+        let fx = Fixture::new();
+        fx.say("read them");
+
+        let old_cap = 8u32;
+        let past = old_cap + 2;
+        for n in 0..past {
+            std::fs::write(fx.workspace.join(format!("a{n}.txt")), "x").expect("write");
+        }
+        let script = (0..past)
+            .map(|n| {
+                tool_call_script(
+                    &format!("call_{n}"),
+                    tool::FS_READ,
+                    &format!(r#"{{"path":"a{n}.txt"}}"#),
+                )
+            })
+            .collect();
+
+        let provider = FakeProvider::scripted(script);
+        fx.turn(&provider)
+            .run(&fx.plan(), &CancellationToken::new())
+            .await;
+
+        let refused = fx.transcript().into_iter().any(|message| {
+            serde_json::from_str::<serde_json::Value>(&message.text).is_ok_and(|envelope| {
+                envelope["error"]["code"] == "E_TOO_MANY_TOOL_ROUNDS"
+                    || envelope["error"]["code"] == "E_TOOL_LOOP"
+            })
+        });
+        assert!(!refused, "ten distinct reads are progress, not a halt");
+
+        let executed = fx
+            .sink
+            .names()
+            .iter()
+            .filter(|name| **name == "tool:started")
+            .count();
+        assert_eq!(
+            executed,
+            usize::try_from(past).expect("small"),
+            "every distinct round ran"
         );
     }
 
@@ -2119,54 +2168,45 @@ mod tests {
         fx.agent.skills = vec![name.to_owned()];
     }
 
-    /// A turn following a runbook gets the larger round cap (`IDEAS.md` § 11).
+    /// After a loop halt the model gets one wrap-up request, so it can
+    /// summarize instead of leaving the user to type continue (PLAN 7.16).
     #[tokio::test]
-    async fn a_turn_following_a_runbook_gets_the_larger_round_cap() {
-        let mut fx = Fixture::new();
-        grant_runbook(&mut fx, "inbox.triage");
+    async fn a_halt_gives_the_model_a_wrap_up_round() {
+        let fx = Fixture::new();
         std::fs::write(fx.workspace.join("a.txt"), "x").expect("write");
-        fx.say("triage it");
+        fx.say("keep reading");
 
-        // One round to open the run, then more reads than a turn outside one
-        // would be allowed.
-        let mut script = vec![tool_call_script(
-            "call_open",
-            tool::SKILL_RUN,
-            r#"{"name":"inbox.triage"}"#,
-        )];
-        script.extend((0..=MAX_TOOL_ROUNDS).map(|round| {
-            tool_call_script(
-                &format!("call_{round}"),
-                tool::FS_READ,
-                r#"{"path":"a.txt"}"#,
-            )
-        }));
+        let mut script: Vec<_> = (0..LOOP_STREAK)
+            .map(|round| {
+                tool_call_script(
+                    &format!("call_{round}"),
+                    tool::FS_READ,
+                    r#"{"path":"a.txt"}"#,
+                )
+            })
+            .collect();
+        script.push(vec![
+            ModelEvent::TextDelta {
+                text: "stopped; here is what I have".to_owned(),
+            },
+            ModelEvent::Finish {
+                reason: StopReason::Stop,
+                usage: None,
+            },
+        ]);
 
         let provider = FakeProvider::scripted(script);
         fx.turn(&provider)
             .run(&fx.plan(), &CancellationToken::new())
             .await;
 
-        let refused = fx.transcript().into_iter().any(|message| {
-            serde_json::from_str::<serde_json::Value>(&message.text)
-                .is_ok_and(|envelope| envelope["error"]["code"] == "E_TOO_MANY_TOOL_ROUNDS")
-        });
+        let transcript = fx.transcript();
+        let last = transcript.last().expect("a final assistant message");
+        assert_eq!(last.role, crate::store::Role::Assistant);
         assert!(
-            !refused,
-            "a turn inside a run is judged against {MAX_TOOL_ROUNDS_IN_SKILL}, not \
-             {MAX_TOOL_ROUNDS}"
-        );
-
-        let executed = fx
-            .sink
-            .names()
-            .iter()
-            .filter(|name| **name == "tool:started")
-            .count();
-        assert_eq!(
-            executed,
-            usize::try_from(MAX_TOOL_ROUNDS).expect("small") + 2,
-            "every scripted round ran"
+            last.text.contains("what I have"),
+            "the wrap-up round reached the transcript: {}",
+            last.text
         );
     }
 

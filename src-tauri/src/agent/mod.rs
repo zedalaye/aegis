@@ -18,6 +18,7 @@
 //! seeing HTTP or an `AppHandle`, so it runs in tests without network or window.
 
 pub mod event;
+pub mod guard;
 pub mod provider;
 pub mod registry;
 pub mod transcript;

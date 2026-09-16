@@ -96,7 +96,9 @@ next_owner:
 - A refused return leaves the run open for a corrected one.
 
 **Every audit line between `skill_run` and `skill_return` carries the skill's name**, which is what
-makes a run budgetable and replayable. A run may span up to four turns of a session, and a turn that
-is following a runbook may take up to 24 tool rounds instead of 8.
+makes a run budgetable and replayable. A run may span up to four turns of a session. A turn stops
+calling tools when it repeats the same calls three times, or after 64 rounds of tools — the same
+limit with or without a runbook. Hitting either gives the model one more round to finish; it is not
+asked to wait for you to type continue.
 
 Reasoning: `COS.md` *Skills*. Design: `PLAN.md` § 7.6 and § 7.13.

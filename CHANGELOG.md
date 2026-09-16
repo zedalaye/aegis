@@ -32,6 +32,16 @@ under an approval that did not describe it.
   `fs_write` and the working directory of `shell_exec` now refuse when the path no longer resolves to
   what was decided.
 
+### Changed
+
+- **A turn no longer stops after eight tool rounds and asks you to type continue.** Repeating the
+  same calls three times is a loop (`E_TOOL_LOOP`) and stops those calls; a progressing turn may run
+  up to 64 rounds, with or without a runbook. Hitting either guard gives the model one more round to
+  finish. The recovery is not a human "continue" (`PLAN.md` § 7.16).
+- **A session on a project with no `world/` is told what that word means.** One short paragraph:
+  `world/` is the constitution, `.aegis/` is the cabinet, founding is `world.draft`. It does not
+  grant the runbook, and it does not appear once a world exists (`PLAN.md` § 7.17).
+
 ### Fixed
 
 - The scope sentence of the handoff grant no longer has a run of spaces in the middle.

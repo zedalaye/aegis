@@ -35,8 +35,9 @@ struct Live {
 /// Most turns one skill run may span before it is dropped.
 ///
 /// Past this, a run without `skill_return` is dropped loudly rather than
-/// tagging later calls. Real runs span several turns (`IDEAS.md` § 10; see
-/// [`MAX_TOOL_ROUNDS_IN_SKILL`](super::turn::MAX_TOOL_ROUNDS_IN_SKILL)).
+/// tagging later calls. Real runs can still span several turns (`IDEAS.md`
+/// § 10); a halt inside one turn no longer asks the user to continue
+/// (PLAN 7.16).
 pub const MAX_RUN_TURNS: u32 = 4;
 
 /// A runbook a session is part-way through (PLAN 7.6).

@@ -46,6 +46,8 @@ pub enum ErrorCode {
     Cancelled,
     /// The turn loop hit its tool-round ceiling.
     TooManyToolRounds,
+    /// The turn repeated the same tool calls and was stopped as a loop.
+    ToolLoop,
     /// Screen capture is not permitted, or the session type forbids it.
     ScreenPermission,
     /// A settings value cannot be used, and the user has to change it.
@@ -74,6 +76,7 @@ impl ErrorCode {
             Self::KeyringUnavailable => "E_KEYRING_UNAVAILABLE",
             Self::Cancelled => "E_CANCELLED",
             Self::TooManyToolRounds => "E_TOO_MANY_TOOL_ROUNDS",
+            Self::ToolLoop => "E_TOOL_LOOP",
             Self::ScreenPermission => "E_SCREEN_PERMISSION",
             Self::InvalidSetting => "E_INVALID_SETTING",
             Self::Internal => "E_INTERNAL",
@@ -97,6 +100,7 @@ impl ErrorCode {
             | Self::KeyringUnavailable
             | Self::Cancelled
             | Self::TooManyToolRounds
+            | Self::ToolLoop
             | Self::ScreenPermission
             | Self::InvalidSetting
             | Self::Internal => false,
@@ -570,7 +574,7 @@ mod tests {
 
     #[test]
     fn codes_are_unique_and_prefixed() {
-        const ALL: [ErrorCode; 19] = [
+        const ALL: [ErrorCode; 20] = [
             ErrorCode::TurnBusy,
             ErrorCode::NoWorkspace,
             ErrorCode::PathOutsideWorkspace,
@@ -587,6 +591,7 @@ mod tests {
             ErrorCode::KeyringUnavailable,
             ErrorCode::Cancelled,
             ErrorCode::TooManyToolRounds,
+            ErrorCode::ToolLoop,
             ErrorCode::ScreenPermission,
             ErrorCode::InvalidSetting,
             ErrorCode::Internal,

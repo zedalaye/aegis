@@ -145,16 +145,18 @@ model its run is still open. Tests in `agent::registry`, `agent::turn` and `test
 
 **Open:** whether a run should survive an app restart (probably not).
 
-### 11. `MAX_TOOL_ROUNDS = 8` was never measured — landed (C)
+### 11. `MAX_TOOL_ROUNDS = 8` was never measured — landed (C), then replaced (PLAN 7.16)
 
-The round cap bounds runaway loops and cost; it is not a permission gate, and no grant moves it. A
-focused `review.diff` needs 20–25 rounds, and routines hit the same wall with nobody to say
-"continue".
+The round cap bounded runaway loops and cost with one number, so a `review.diff` of forty calls
+and a stuck `fs_read` were the same event: stop, ask the user to continue.
 
-*As built:* `MAX_TOOL_ROUNDS_IN_SKILL = 24`, chosen per round by `round_cap(skill)`.
+*As built now:* a loop is three identical round fingerprints (`E_TOOL_LOOP`); the bill ceiling is
+64 rounds for every turn (`E_TOO_MANY_TOOL_ROUNDS`); a halt wraps up in the same turn instead of
+waiting for "continue". `agent/guard.rs`.
 
-**Open:** a setting; a wall-clock budget for unattended runs; what a 24-round turn costs with caching
-(the board's ledger can answer); round counts for `deploy.draft` and `alert.draft`.
+**Open:** a setting; what a long progressing turn costs with caching (the board's ledger can
+answer); round counts for `deploy.draft` and `alert.draft`. Unattended already has
+`RUN_TIMEOUT` (15 minutes).
 
 ### 12. A model that judges how dangerous a call is
 

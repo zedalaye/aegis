@@ -3,7 +3,9 @@
 //! What the project *is*, at the root beside the `.aegis/` cabinet, because it
 //! belongs to the project rather than to Aegis.
 //!
-//! * **Opt-in.** Nothing creates it; a world exists once `world/essence.md` does.
+//! * **Opt-in.** Nothing creates it; a world exists once a constitution file
+//!   does. The absence is still named in the system message (PLAN 7.17), so a
+//!   first session can tell `world/` from `.aegis/` without a runbook.
 //! * **Specialists never write it.** A delegated run's write is refused
 //!   ([`matrix`](crate::policy::matrix)); otherwise it is asked at high risk with
 //!   a `world/`-only grant. The frame matches the run ([`FRAME_DELEGATED`] vs
@@ -112,6 +114,23 @@ and `world.draft` is the runbook for it. Every write into `world/` is put to \
 them for approval on its own, at high risk, so they see each file before it \
 lands; they may allow the rest of the session in one answer, which is theirs to \
 offer and not yours to ask for twice.";
+
+/// Named when there is no world, so a first session is not left to guess
+/// (PLAN 7.17). Vocabulary only: no file checklist, no procedure. Bound by
+/// [`the_absent_frame_stays_small`].
+///
+/// [`the_absent_frame_stays_small`]: self#tests
+const FRAME_ABSENT: &str = "\
+This workspace has no world. `world/` at the root is the constitution (what \
+the project *is*). `.aegis/` is the cabinet — in-flight work. To found a \
+world, load `world.draft` if you hold it; otherwise say so. Do not invent an \
+essence.";
+
+/// The same layers, without pointing a brief at a runbook it cannot finish.
+const FRAME_ABSENT_DELEGATED: &str = "\
+This workspace has no world. `world/` at the root is the constitution (what \
+the project *is*). `.aegis/` is the cabinet — in-flight work. A brief does \
+not found a world.";
 
 // ---------------------------------------------------------------------------
 // IPC payloads
@@ -465,12 +484,21 @@ fn declare(root: &Path, declared: &str) -> Result<Source, String> {
 // What reaches the model
 // ---------------------------------------------------------------------------
 
-/// The frame and the world's status for the system message, or `None` without
-/// a world: file names, declared sources, and only the drift a cheap [`glance`]
-/// sees. Never file contents (PLAN 7.1), and never a claim that nothing drifted
+/// The frame and the world's status for the system message.
+///
+/// Without a world this is the absence paragraph (PLAN 7.17), not `None`: the
+/// two layers and the runbook name, nothing else. With a world: file names,
+/// declared sources, and only the drift a cheap [`glance`] sees. Never file
+/// contents (PLAN 7.1), and never a claim that nothing drifted
 /// ([`World::drifted`] is the full measurement).
 pub fn block(root: &Path, delegated: bool) -> Option<String> {
-    let world = read(root)?;
+    let Some(world) = read(root) else {
+        return Some(String::from(if delegated {
+            FRAME_ABSENT_DELEGATED
+        } else {
+            FRAME_ABSENT
+        }));
+    };
     let mut out = String::from(FRAME);
 
     // The gate refuses a brief's write but asks about a session's.
@@ -733,13 +761,37 @@ mod tests {
             read(&root).is_none(),
             "sources alone are not a constitution"
         );
+        let absent = block(&root, false).expect("the absence is named");
         assert!(
-            block(&root, false).is_none(),
-            "and nothing reaches the model"
+            absent.contains("no world"),
+            "sources alone still have no constitution: {absent}"
+        );
+        assert!(
+            !absent.contains("This workspace has a world"),
+            "and must not wear the in-force frame: {absent}"
         );
 
         put(&root, "world/essence.md", "# Essence\n");
         assert!(read(&root).is_some(), "one file of the constitution is one");
+    }
+
+    #[test]
+    fn the_absent_frame_stays_small() {
+        for frame in [FRAME_ABSENT, FRAME_ABSENT_DELEGATED] {
+            assert!(
+                frame.chars().count() <= 400,
+                "absence is vocabulary, not a runbook: {} chars",
+                frame.chars().count()
+            );
+            assert!(frame.contains("`world/`"), "{frame}");
+            assert!(frame.contains("`.aegis/`"), "{frame}");
+            assert!(!frame.contains("oracle.md"), "no file checklist: {frame}");
+        }
+        assert!(FRAME_ABSENT.contains("world.draft"), "{FRAME_ABSENT}");
+        assert!(
+            !FRAME_ABSENT_DELEGATED.contains("world.draft"),
+            "a brief is not pointed at the runbook it may not finish: {FRAME_ABSENT_DELEGATED}"
+        );
     }
 
     #[test]
@@ -750,6 +802,10 @@ mod tests {
             let block = block(&root, delegated).expect("a world in force");
 
             assert!(block.contains("écart"), "{block}");
+            assert!(
+                !block.contains("This workspace has no world"),
+                "a founded world is not the absence paragraph: {block}"
+            );
             assert!(block.contains("`essence.md`"), "the file is named: {block}");
             assert!(
                 !block.contains("A thing."),
@@ -984,11 +1040,23 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_with_no_world_blocks_nothing_and_says_nothing() {
+    fn a_workspace_with_no_world_blocks_nothing_and_names_the_layers() {
         let (_dir, root) = workspace();
 
         assert!(blocking(&root, &[]).is_none());
-        assert!(block(&root, false).is_none());
+        let absent = block(&root, false).expect("the absence is named");
+        assert!(absent.contains("`world/`"), "{absent}");
+        assert!(absent.contains("`.aegis/`"), "{absent}");
+        assert!(absent.contains("world.draft"), "{absent}");
+        assert!(
+            !absent.contains("écart"),
+            "the in-force frame stays off: {absent}"
+        );
+        let brief = block(&root, true).expect("a brief is told too");
+        assert!(
+            !brief.contains("world.draft"),
+            "a brief is not pointed at the runbook: {brief}"
+        );
         assert!(perceived_source(&root, &root.join("anything")).is_none());
 
         let found = status(&root);

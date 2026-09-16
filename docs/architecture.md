@@ -19,7 +19,8 @@ src-tauri/
     state.rs        application-wide runtime state
     error.rs        the error type every command returns, with stable codes
     commands/       one module per IPC domain
-    agent/          turn loop, wire types, transcript projection, event sink, turn registry
+    agent/          turn loop, wire types, transcript projection, event sink, turn registry,
+                    turn guards (loop fingerprint and round ceiling)
       provider/     scripted provider, OpenAI-compatible SSE, motosan-ai dialects, model catalog
     oauth/          tokens written by the Claude Code, Codex and Grok CLIs
     policy/         path resolution and containment, the decision matrix, session grants

@@ -52,8 +52,9 @@ pub struct Context<'a> {
     /// The skill catalog (Phase 13): one line per granted runbook, never its
     /// steps.
     pub skills: Option<&'a str>,
-    /// The world's frame and status (PLAN 7.2), or `None` without a world. A
-    /// constraint injected by the harness, never `essence.md` itself.
+    /// The world's frame (PLAN 7.2), including the absence paragraph when
+    /// there is none (PLAN 7.17). A constraint injected by the harness, never
+    /// `essence.md` itself.
     pub world: Option<&'a str>,
     /// The shared-workspace digest (PLAN 7.3, Phase 11), or `None` for a folder
     /// that does not use the convention.

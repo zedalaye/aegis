@@ -559,7 +559,7 @@ pub fn returned(tool: &str, result: &ToolResult) -> Option<Returned> {
 /// Follows a skill run across tool calls: `skill_run` opens it, `skill_return`
 /// closes it.
 ///
-/// The name (not the body) carries across turns, since the round cap splits
+/// The name (not the body) carries across turns, since a halt can still split
 /// real runs (`IDEAS.md` § 10):
 /// [`TurnRegistry::carry_run`](crate::agent::registry::TurnRegistry::carry_run)
 /// seeds and stores it, and a cancel or
