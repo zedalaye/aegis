@@ -4,7 +4,7 @@
  * form. Deleting is on the form, where the row's key is.
  */
 
-import type { MaskedProvider } from "../../ipc/bindings";
+import type { AuthPreset, MaskedProvider } from "../../ipc/bindings";
 import {
   DEFAULT_PROVIDER_ID,
   NEW_ROW,
@@ -16,9 +16,13 @@ import {
 } from "../../state/settings";
 
 /** Where one row sends, in a line. */
-function Summary({ row }: { readonly row: MaskedProvider }) {
-  const presets = useSettings((s) => s.settings?.presets ?? []);
-
+function Summary({
+  row,
+  presets,
+}: {
+  readonly row: MaskedProvider;
+  readonly presets: ReadonlyArray<AuthPreset>;
+}) {
   if (!isConfigured(row)) {
     return (
       <p className="agent__role">
@@ -83,7 +87,7 @@ export default function ProviderList() {
                 )}
               </span>
             </div>
-            <Summary row={row} />
+            <Summary row={row} presets={settings.presets} />
           </li>
         ))}
       </ul>

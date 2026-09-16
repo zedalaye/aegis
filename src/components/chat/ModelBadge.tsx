@@ -138,7 +138,7 @@ function BindingPicker({
 export default function ModelBadge() {
   const answering = useSessions((s) => s.streaming?.model ?? null);
   const session = useSessions((s) => s.detail?.session ?? null);
-  const presets = useSettings((s) => s.settings?.presets ?? []);
+  const presets = useSettings((s) => s.settings?.presets);
   const binding = useBinding(session);
   const [open, setOpen] = useState(false);
 
@@ -159,10 +159,11 @@ export default function ModelBadge() {
   }
 
   // The runtime refuses a change while a turn runs.
-  const locked = session.state === "running" || session.state === "awaiting_approval";
+  const locked =
+    session.state === "running" || session.state === "awaiting_approval";
   const marker = binding.overridden ? " •" : "";
   const title = binding.configured
-    ? `Answers from ${providerName(binding.row)} at ${effectiveBaseUrl(binding.row, presets)}${
+    ? `Answers from ${providerName(binding.row)} at ${effectiveBaseUrl(binding.row, presets ?? [])}${
         binding.overridden ? ", overridden for this session" : ""
       }. Click to change.`
     : "This provider is not configured, so replies come from the built-in scripted provider. There is no model behind it. Click to change.";
