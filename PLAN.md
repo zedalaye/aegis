@@ -6,8 +6,8 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 (`§ 7.6 *Authoring*`): amend sections in place, and keep the numbers and lead-ins.
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
-open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.19,
-landed; § 7.20 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
+open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.20,
+landed), and three surfaces that are not scheduled (§ 7.7–7.9).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
 edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets and policy live
@@ -38,7 +38,8 @@ Commands are `domain_verb`, events are `domain:verb`. Payloads are Rust structs 
 | Domain | Commands | Decisions |
 | --- | --- | --- |
 | Projects | `project_pick_workspace`, `project_create`, `project_list`, `project_open`, `project_delete`, `project_list_exec_hosts`, `project_set_exec_host` | The folder dialog runs in Rust; the WebView holds no `dialog:` permission. A workspace path is canonicalized once, on the way in. Deleting a project forgets it and never touches the folder. Hosts: § 7.12 |
-| Sessions | `session_create` (`project_id`, `title?`, `agent_id?`, `provider_id?`, `model?`), `session_set_binding` (`session_id`, `provider_id?`, `model?`), `session_list`, `session_open`, `session_rename`, `session_delete`, `session_send`, `session_cancel`, `session_compact` | `session_send` returns a `TurnHandle` once the turn is registered; everything after is events. Sending while running is `E_TURN_BUSY`. The identity is fixed at creation; the provider and model are an override of the identity's pair, refused while a turn runs, and both omitted inherits (§ 7.19). `session_compact` always returns the detail (a session too short to fold is an answer) and is refused while a turn runs |
+| Sessions | `session_create` (`project_id`, `title?`, `agent_id?`, `provider_id?`, `model?`), `session_set_binding` (`session_id`, `provider_id?`, `model?`), `session_list`, `session_open`, `session_rename`, `session_delete`, `session_send` (`session_id`, `text`, `attachments?`), `session_cancel`, `session_compact` | `session_send` returns a `TurnHandle` once the turn is registered; everything after is events. Sending while running is `E_TURN_BUSY`. `attachments` are ids from the two commands below, never paths or bytes; an id the runtime did not mint refuses the whole send (§ 7.20). The identity is fixed at creation; the provider and model are an override of the identity's pair, refused while a turn runs, and both omitted inherits (§ 7.19). `session_compact` always returns the detail (a session too short to fold is an answer) and is refused while a turn runs |
+| Attachments | `attachment_pick`, `attachment_drop` (`drop_id`) | The image picker runs in Rust (no `dialog:` on the window). Both copy PNG, JPEG, GIF or WebP files up to 16 MiB, at most 8 per message, into the app's `attachments/` and return ids; per-file refusals are in the report. A drop onto the composer never becomes a brief. Not tools, no matrix row: the operator attached (§ 7.20) |
 | Approvals | `approval_list_pending`, `approval_resolve` (`allow_once` / `allow_session` / `deny`), `approval_grants`, `approval_revoke_grant` | An unknown or expired request is `E_APPROVAL_STALE` and the UI re-syncs. `allow_session` on a row offering no grant is `E_GRANT_NOT_ALLOWED`, enforced in Rust. Requests expire after five minutes as a denial |
 | Identities | `agent_list`, `agent_create`, `agent_update`, `agent_delete` | A refused field is `E_INVALID_SETTING` with `error.field`. `provider_id` must name a row on file; an empty `model` uses the row's. Deleting an identity that sessions or routines use is refused, never cascaded; its memories do cascade. The built-in identity is a constant and cannot be edited |
 | Roster | `roster_proposal`, `roster_apply` (`project_id`, `digest`) | Apply re-reads the file and refuses when the digest changed, the file does not parse, or any new entry would be refused. All or nothing; one `operator` audit line per identity; no routine, connector or world. Neither is a tool (§ 7.14) |
@@ -51,7 +52,7 @@ Commands are `domain_verb`, events are `domain:verb`. Payloads are Rust structs 
 | Explorer | `workspace_tree`, `workspace_preview`, `workspace_image`, `workspace_import_brief` | Contained to the open workspace. Import takes a drop id, never a path (§ 7.15) |
 | Settings / audit | `settings_get`, `settings_set`, `settings_add_provider`, `settings_delete_provider`, `settings_clear_key`, `settings_probe_provider`, `settings_list_models`, `settings_set_decision`, `settings_clear_decision_key`, `settings_probe_decision`, `audit_tail`, `audit_log_path` | Settings are a roster of masked rows: each key's source and last four characters. No command returns a key. `provider_id` defaults to `"default"`, which cannot be deleted; a row in use is not deleted (§ 7.19). The decision model is its own masked object and its own commands; `settings_set` never carries it (§ 7.18) |
 | Evals | `eval_list`, `eval_proposals` | Signed `eval.yml` and `PROPOSAL.yml` are two listings; a proposal is never offered as runnable (§ 7.18) |
-| Window / tray | `window_toggle`, `window_hide`, `window_has_tray`, `app_quit` | |
+| Window / tray | `window_toggle`, `window_hide`, `window_has_tray`, `open_url`, `app_quit` | `open_url` takes `http`/`https` only, with a host and no credentials, and hands the normalized URL to the OS handler as one argument. The click is the gate: no matrix row, no audit line, no opener permission (§ 7.20) |
 
 ### 2.2 Events (`emit` → main window)
 
@@ -272,6 +273,15 @@ enum ModelEvent {
 }
 ```
 
+**Images** (§ 7.20) ride on `WireMessage::User` and `::Tool` as a field serde skips. The transcript
+names files — the attachments of a user message, the capture a successful `screen_capture` answered
+with — and at most the 8 newest go on a request; a provider reads them just before it writes its
+body (`provider/image.rs`: downscaled past 2048 px, re-encoded past 3.75 MB, cached per file). Each
+dialect writes them: OpenAI-compatible `content` parts, Anthropic image blocks, Gemini `inlineData`.
+A tool result stays text in every dialect; a round's capture follows its results as one user turn.
+A file that is gone, or a dialect that carries none in this build (motosan's Codex), becomes a
+sentence in the text instead — never a failed turn, never a silent drop.
+
 Tool-call fragments accumulate per `index`, and arguments are parsed only at
 `Finish { reason: ToolCalls }`. A call whose arguments do not parse is not executed; it becomes a
 tool message with an error envelope, so the model can correct itself.
@@ -320,7 +330,8 @@ One shape for every tool, success or failure:
 Caps: `fs_read` 256 KB; `shell_exec` 64 KB of interleaved output (head and tail with an elision
 marker) and a 120 s hard timeout; `fs_list` 1,000 entries; connector text 64 KB. `screen_capture`
 never returns image bytes: it writes a PNG under the app data directory and returns
-`{ path, width, height, sha256 }`.
+`{ path, width, height, sha256 }`. The envelope stays that JSON on disk and over IPC; the pixels reach
+the model at request build, after the result (§ 4.1, § 7.20).
 
 A denial is an ordinary result (`ok: false`, `E_DENIED`); the turn continues.
 
@@ -384,9 +395,10 @@ User-facing symptoms and fixes are in `docs/troubleshooting.md`. These are the d
 - **Screenshots have the largest blast radius.** Never auto-allowed; no preview; path, SHA-256 and
   size in the audit, never the image; stored under app data, not the workspace; the dialog names the
   display.
-- **No image bytes over IPC.** Captures are rendered through the `asset:` protocol, scoped at startup
-  to the capture directory alone — and narrowed back after every file drop, which Tauri would
-  otherwise add to the scope.
+- **No image bytes over IPC.** Captures and attachments are rendered through the `asset:` protocol,
+  scoped at startup to those two directories alone — and narrowed back after every file drop, which
+  Tauri would otherwise add to the scope. Pixels sent to the model are read by the provider in Rust
+  and leave over HTTPS; they are never in an `invoke` payload, an event or `sessions.json` (§ 7.20).
 - **Backpressure.** Shell progress is coalesced and capped.
 - **Capabilities stay least-privilege**: no `fs:`, `shell:`, `dialog:` or opener permission in
   `capabilities/main.json`. Every privileged operation is a policy-gated Rust command; a plugin
@@ -1060,7 +1072,8 @@ markdown (now § 7.20); drops into `world/sources.yml`; "open in VS Code" as the
   is text.
 - **The sanitizer is a parser**: `src/lib/markdown.ts` builds a typed tree drawn as elements — no HTML
   strings. Raw HTML is text, images are alt text, web links are shown not followed, and a relative
-  link or backticked path opens the workspace file.
+  link or backticked path opens the workspace file. The transcript shares the drawing since § 7.20;
+  the preview still does not draw images or open web links.
 - **The drop**: the window event gives the runtime the paths; `lib.rs` holds them under an id for two
   minutes and emits `workspace:dropped` with names and position. The command takes the id — no source,
   no destination — and checks `.aegis/briefs/` before claiming the drop. Rows in `.aegis/artefacts/`,
@@ -1616,7 +1629,7 @@ provider; picking a provider from a messaging face.
 The operator adds a second provider in Settings, then binds an identity or overrides a session.
 Never a key in git, never in a fixture, never in chat.
 
-### 7.20 Transcript markdown and images on the wire — proposed
+### 7.20 Transcript markdown and images on the wire — landed
 
 Assistant text is a `<p>` with `white-space: pre-wrap` (`MessageBubble.tsx`). Fences, lists and
 headings stay punctuation (`IDEAS.md` § 14). The explorer already has the sanitizer this needs
@@ -1732,7 +1745,25 @@ traces.
 fetching remote images through Rust into a blob; image generation; a model-id table; putting
 attachments in the workspace; markdown in tool cards.
 
-When this lands, patch § 2.1 (`open_url`; `session_send` attachments), § 4.1 (content parts),
-§ 4.3 (the capture envelope stays JSON; pixels are a request-build concern), § 5.4 (pixels to
-the model are not IPC), § 7.15's explorer image rule if the shared renderer starts drawing
-relative ones, `IDEAS.md` § 14, and `docs/security.md` (links and images).
+*As landed* (`weblink.rs`, `attach.rs`, `agent/provider/image.rs`, `components/markdown/`):
+
+- **One renderer, two hosts.** `components/markdown/Markdown.tsx` draws the tree for the preview and
+  the bubble; the bubble passes `onOpenUrl` and `drawImage`, the preview neither. Parser tests run
+  with `pnpm test` (vitest), the first frontend tests in the repository.
+- **Links.** A web link is a button showing its address; the click calls `open_url`, which refuses
+  every scheme but `http`/`https`, an address with a user name or password, control characters and
+  anything over 4 KiB. Windows spawns `rundll32 url.dll,FileProtocolHandler <url>` — the shell's
+  handler without `cmd /c start`, whose parser would read `&`. A workspace link opens *Files* on
+  that file.
+- **Images in text.** A relative path is fetched with `workspace_image` into a `blob:`; an absolute
+  path is drawn through `asset:` only when it is a capture this session recorded. Anything else,
+  and every remote image, stays a label (a remote one opens in the browser on a click).
+- **Attachments** are copies in the app's `attachments/`, beside `captures/`, named
+  `<uuid>.<ext>`; the id is that name and is checked against that shape before the file is touched.
+  `Message.attachments` is omitted on disk when empty. The model badge's row and model hide
+  *Attach* only when the last models fetch for that row said the model takes no images; the flag
+  comes from OpenRouter's `architecture` and nowhere else.
+- **Pixels on the request**: § 4.1. A capture is on the next request and the ones after it, until
+  8 newer images push it out; the sentence "this build cannot read it back" is gone.
+- Not done, deliberately: an image preview in the approval dialog (§ 5.4 still holds); relative
+  images in the file preview; an `input_image` part for Codex, which waits on `motosan-ai`.

@@ -110,8 +110,23 @@ Only with a TypeSafe key set (*Settings → Decision model*); without one, nothi
 - **The window shows files; it does not write them.** *Files* uses the same containment, the window
   holds no filesystem or opener permission, and markdown is drawn as elements (no HTML, no remote
   images). The only write is a file you drop, copied by the runtime into `.aegis/briefs/`. Tauri
-  widens the `asset:` scope for dropped paths; Aegis narrows it back to the captures directory on
-  every drop.
+  widens the `asset:` scope for dropped paths; Aegis narrows it back to the captures and attachments
+  directories on every drop.
+- **Chat is markdown drawn by the same parser, and still never HTML.** A reply cannot add an element
+  the parser does not know: raw HTML stays text, and there is no `<a href>` anywhere, so nothing in a
+  reply can navigate the window.
+- **A web link opens in your browser only when you click it.** The address is shown next to the
+  label. The runtime opens `http` and `https` addresses only — `file:`, `javascript:`, `data:`,
+  `tauri:`, an address with a user name in it, and anything else are refused — and hands it to the
+  system as one argument, never a shell line. The window holds no opener permission.
+- **Images in a reply never come from the network.** A remote image is a link you can click, so a
+  reply cannot use one to tell a server you read it. A workspace image is read by the runtime; a
+  capture is shown only when this session made it.
+- **Images you attach, and captures, go to the model you chose.** An attached image is copied into
+  the app's data folder, never your workspace, and a capture is sent on the next request after you
+  approved it. The bytes go from the runtime to the provider over HTTPS; they are not written into
+  `sessions.json`, the audit log, or anything the window receives. A model that refuses images fails
+  the turn with the provider's message.
 - **Capabilities are least-privilege.** The window holds no plugin permission; every privileged
   operation is a policy-gated Rust command.
 

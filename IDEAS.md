@@ -213,7 +213,7 @@ cabinet, not by designing the table.
 
 ## Transcript display
 
-### 14. Markdown in the chat bubble, with a sanitizer — proposed (`PLAN.md` § 7.20)
+### 14. Markdown in the chat bubble, with a sanitizer — landed (`PLAN.md` § 7.20)
 
 **Gap.** Assistant text is a `<p>` with `white-space: pre-wrap`; fences, lists and headings stay
 punctuation. A capture is shown to the operator and withheld from the model.

@@ -49,8 +49,12 @@ Beside the documents:
   [Skills](skills.md).
 - **`captures/`** — the PNGs `screen_capture` writes, named
   `capture-<UTC timestamp>-<random>.png`. They are kept out of your workspace so a capture never
-  lands in a commit, and nothing deletes them. This is the only directory the window may read a file
-  from, through the `asset:` protocol scoped to it at startup.
+  lands in a commit, and nothing deletes them. The model sees a capture on the requests after it
+  was taken, up to the eight most recent images of a session.
+- **`attachments/`** — copies of the images you attach to a message, named `<uuid>.<ext>`. Your
+  original stays where it was; nothing deletes the copies. A session records each copy's path, never
+  its bytes. With `captures/`, this is the only directory the window may read a file from, through the
+  `asset:` protocol scoped to the two at startup.
 - **`audit.jsonl`** — one JSON line per tool call, allowed, refused or failed: the session, the
   identity, the skill run, the routine, the delegation, the tool, the policy's reason, the outcome,
   and the paths the call touched. Never file contents, and never tokens (those are counted per turn

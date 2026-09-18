@@ -50,6 +50,15 @@ under an approval that did not describe it.
   *Set up shared files* creates an empty `.aegis/evals/`. Without a key nothing changes
   (`PLAN.md` § 7.18).
 
+- **Markdown in the chat.** Replies and your messages render headings, lists, code blocks and tables,
+  with the parser the file preview already used: HTML stays text. A web link opens in your browser
+  when you click it, and a workspace link opens the file in *Files*. Relative images and this
+  session's captures are drawn; remote images are never loaded (`PLAN.md` § 7.20).
+- **The model sees images.** A screen capture you approve is sent to the model on the next request,
+  and *Attach* (or a drop on the message box) adds PNG, JPEG, GIF or WebP images to a message. Large
+  images are downscaled before they are sent. The Codex login does not carry images yet, and says so
+  to the model (`PLAN.md` § 7.20).
+
 ### Changed
 
 - **A turn no longer stops after eight tool rounds and asks you to type continue.** Repeating the

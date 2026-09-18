@@ -9,9 +9,9 @@ everything after the MVP (§ 7).
 src/                React app — presentation and typed IPC glue only
   ipc/              invoke() / listen() wrappers; bindings.ts is generated from the Rust types
   state/            zustand stores
-  lib/              formatting, errors, the markdown parser for previews, drop handling
-  components/       layout, chat, sessions, approvals, projects, agents, skills, memory,
-                    routines, connectors, board, explorer, settings, audit
+  lib/              formatting, errors, the markdown parser (preview and chat), drop handling
+  components/       layout, chat, markdown, sessions, approvals, projects, agents, skills,
+                    memory, routines, connectors, board, explorer, settings, audit
 src-tauri/
   capabilities/     the window's least-privilege permission set
   src/
@@ -21,7 +21,8 @@ src-tauri/
     commands/       one module per IPC domain
     agent/          turn loop, wire types, transcript projection, event sink, turn registry,
                     turn guards (loop fingerprint and round ceiling)
-      provider/     scripted provider, OpenAI-compatible SSE, motosan-ai dialects, model catalog
+      provider/     scripted provider, OpenAI-compatible SSE, motosan-ai dialects, model catalog,
+                    reading and fitting the images a request carries
       decision/     TypeSafe client, the tool_risk annotation, project evals (not a provider)
     oauth/          tokens written by the Claude Code, Codex and Grok CLIs
     policy/         path resolution and containment, the decision matrix, session grants
@@ -44,6 +45,8 @@ src-tauri/
     explorer.rs     read-only tree and preview of the workspace
     intake.rs       a dropped file, held by id and copied into .aegis/briefs/
     reveal.rs       open a contained path in the OS file manager
+    weblink.rs      open an http(s) link in the OS browser, on a click
+    attach.rs       images attached to a message: copied in, named by id
     tray.rs         tray icon and menu
     display.rs      Linux WebView display workarounds
   tests/            integration tests, one file per area

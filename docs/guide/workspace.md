@@ -116,6 +116,14 @@ commit needs a git identity; set it globally, or with `git config` under the sam
   and web links are shown but not followed. A link or backticked path to a workspace file opens that
   file. Images are shown; other files get their name, size, type and *Show in folder*. There is no
   Save.
+- **In a session**, replies and your own messages are drawn the same way. A web link shows its
+  address and opens in your browser when you click it; a link or backticked path to a workspace file
+  opens it here. A relative image, or a capture from this session, is drawn in the reply; a remote
+  image is not loaded.
+- **Attach images** to a message with *Attach* in the composer, or drop them on the message box: PNG,
+  JPEG, GIF or WebP, up to 16 MB, eight per message. They are copied into the app's data, not the
+  workspace, and a drop there never becomes a brief. *Attach* is hidden only when the provider's
+  model list says the model takes no images.
 - **Drop a file** on the Files panel, on `.aegis/briefs/` in the tree, or on a project row in the
   sidebar, and the runtime copies it into that project's `.aegis/briefs/`. The original stays where
   it is, and a taken name keeps both files. Drops onto `.aegis/artefacts/`, the rest of `.aegis/`, or
