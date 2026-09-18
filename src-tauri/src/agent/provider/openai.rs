@@ -369,7 +369,10 @@ impl Provider for OpenAiProvider {
 ///
 /// Ends with [`ModelEvent::Error`], [`ModelEvent::Finish`], or silently on a
 /// closed channel (cancelled).
-async fn run(ready: Ready, request: ModelRequest, tx: mpsc::Sender<ModelEvent>) {
+async fn run(ready: Ready, mut request: ModelRequest, tx: mpsc::Sender<ModelEvent>) {
+    // Pixels are read here, not in the transcript, and never cross IPC
+    // (PLAN 7.20).
+    super::image::load(&mut request).await;
     let authorization = match authorization(&ready.key) {
         Ok(header) => header,
         Err(reason) => {

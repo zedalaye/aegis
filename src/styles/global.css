@@ -1230,6 +1230,24 @@ body {
   font-size: 0.8rem;
 }
 
+/* Images the operator attached, drawn from the scoped `asset:` copy. */
+.bubble__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bubble__attachment {
+  display: block;
+  max-width: 16rem;
+  max-height: 12rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 /* The caret marks text that is still arriving. */
 .bubble__caret {
   display: inline-block;
@@ -1738,6 +1756,71 @@ body {
 .composer__hint {
   color: var(--muted);
   font-size: 0.75rem;
+}
+
+/* Images waiting to go with the next message (PLAN 7.20). */
+.composer__attached {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composer__chip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 16rem;
+  padding: 0.2rem 0.3rem 0.2rem 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 0.75rem;
+}
+
+.composer__thumb {
+  flex: none;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 3px;
+  object-fit: cover;
+  background: var(--panel);
+}
+
+.composer__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__size {
+  flex: none;
+  color: var(--muted);
+}
+
+.composer__remove {
+  flex: none;
+  padding: 0 0.2rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.composer__notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.composer__buttons {
+  display: flex;
+  gap: 0.4rem;
 }
 
 /* --- Settings ------------------------------------------------------------- */

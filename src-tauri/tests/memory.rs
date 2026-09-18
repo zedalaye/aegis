@@ -169,7 +169,7 @@ impl App {
             .messages
             .iter()
             .filter_map(|message| match message {
-                WireMessage::User { content } => Some(content.clone()),
+                WireMessage::User { content, .. } => Some(content.clone()),
                 WireMessage::Assistant { content, .. } => content.clone(),
                 _ => None,
             })

@@ -155,8 +155,8 @@ pub(crate) fn capture(display: &str, dir: &Path) -> Produced {
         tool::SCREEN_CAPTURE,
         summary,
         format!(
-            "Captured {label}: {} x {} pixels, written to {shown}. The image is not part of this \
-             result and this build cannot read it back.",
+            "Captured {label}: {} x {} pixels, written to {shown}. The picture itself is not \
+             in this result; it follows it.",
             capture.width, capture.height
         ),
         capture.bytes,

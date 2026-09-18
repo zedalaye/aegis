@@ -127,6 +127,28 @@ pub struct ToolCallRecord {
     pub thought_signature: Option<String>,
 }
 
+/// An image the operator attached to a message (PLAN 7.20).
+///
+/// The file lives under the app's own attachment directory, never the
+/// workspace; the window draws it through the scoped `asset:` protocol and the
+/// runtime sends its pixels to the model. Only the path is ever stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct Attachment {
+    /// Absolute path of the copy under the attachment directory.
+    pub path: String,
+    /// The type its bytes declare: `image/png`, `image/jpeg`, …
+    pub mime: String,
+    /// Width in pixels, when it was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub width: Option<u32>,
+    /// Height in pixels, when it was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub height: Option<u32>,
+}
+
 /// One message in a transcript.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
@@ -143,6 +165,11 @@ pub struct Message {
     /// Which call this message answers. `tool` messages only.
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// Images the operator attached. `user` messages only (PLAN 7.20); absent
+    /// on disk when there are none, so the document version stays 1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<Attachment>>")]
+    pub attachments: Vec<Attachment>,
     /// RFC3339, UTC.
     pub created_at: String,
 }
@@ -151,6 +178,14 @@ impl Message {
     /// A message from the person.
     pub fn user(text: impl Into<String>) -> Self {
         Self::new(Role::User, text.into())
+    }
+
+    /// A message from the person, with the images they attached.
+    pub fn user_with(text: impl Into<String>, attachments: Vec<Attachment>) -> Self {
+        Self {
+            attachments,
+            ..Self::new(Role::User, text.into())
+        }
     }
 
     /// A message from the model, with whatever calls it made.
@@ -177,13 +212,14 @@ impl Message {
             text,
             tool_calls: Vec::new(),
             tool_call_id: None,
+            attachments: Vec::new(),
             created_at: now(),
         }
     }
 
     /// Whether this message carries nothing, and so is not recorded.
     pub fn is_empty(&self) -> bool {
-        self.text.trim().is_empty() && self.tool_calls.is_empty()
+        self.text.trim().is_empty() && self.tool_calls.is_empty() && self.attachments.is_empty()
     }
 }
 

@@ -11,6 +11,7 @@
 
 pub mod catalog;
 pub mod fake;
+pub mod image;
 pub mod motosan;
 pub mod openai;
 

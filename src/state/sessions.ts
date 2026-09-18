@@ -13,6 +13,7 @@
 import { create } from "zustand";
 
 import type {
+  Attached,
   Message,
   SessionDetail,
   SessionSummary,
@@ -118,7 +119,8 @@ export type SessionsState = {
   /** Deletes a session. */
   remove: (sessionId: string) => Promise<void>;
   /** Sends a message in the open session. */
-  send: (text: string) => Promise<void>;
+  /** Sends text and any images already copied in by `attachmentPick`/`Drop`. */
+  send: (text: string, attached?: readonly Attached[]) => Promise<void>;
   /** Cancels the running turn, if there is one. */
   cancel: () => Promise<void>;
   /**
@@ -364,9 +366,9 @@ export const useSessions = create<SessionsState>((set, get) => {
       }
     },
 
-    send: async (text) => {
+    send: async (text, attached = []) => {
       const detail = get().detail;
-      if (detail === null || text.trim() === "") {
+      if (detail === null || (text.trim() === "" && attached.length === 0)) {
         return;
       }
       const sessionId = detail.session.id;
@@ -379,6 +381,7 @@ export const useSessions = create<SessionsState>((set, get) => {
         text,
         tool_calls: [],
         tool_call_id: null,
+        attachments: attached.map((item) => item.attachment),
         created_at: new Date().toISOString(),
       };
       set((state) =>
@@ -393,7 +396,11 @@ export const useSessions = create<SessionsState>((set, get) => {
       );
 
       const outcome = await guard("session_send", () =>
-        sessionSend(sessionId, text),
+        sessionSend(
+          sessionId,
+          text,
+          attached.map((item) => item.id),
+        ),
       );
 
       // A rejected send leaves the optimistic message stranded. Reconciling

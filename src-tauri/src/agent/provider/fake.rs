@@ -835,7 +835,7 @@ fn last_user_text(request: &ModelRequest) -> String {
         .iter()
         .rev()
         .find_map(|message| match message {
-            WireMessage::User { content } => Some(content.clone()),
+            WireMessage::User { content, .. } => Some(content.clone()),
             _ => None,
         })
         .unwrap_or_else(|| "(nothing)".to_owned())
@@ -1240,6 +1240,7 @@ mod tests {
         request.messages.push(WireMessage::Tool {
             tool_call_id: "call_1".to_owned(),
             content: r#"{"ok":true,"tool":"skill_run","meta":{"skill":"inbox.triage"}}"#.to_owned(),
+            images: Vec::new(),
         });
         let closed = call_of(&drain(&provider, request.clone()).await).expect("a call");
         assert_eq!(closed.0, crate::policy::tool::SKILL_RETURN);
@@ -1257,6 +1258,7 @@ mod tests {
             tool_call_id: "call_2".to_owned(),
             content: r#"{"ok":true,"tool":"skill_return","meta":{"skill":"inbox.triage"}}"#
                 .to_owned(),
+            images: Vec::new(),
         });
         let finished = drain(&provider, request).await;
         assert!(call_of(&finished).is_none(), "the loop ends in a word");
@@ -1287,6 +1289,7 @@ mod tests {
         request.messages.push(WireMessage::Tool {
             tool_call_id: "call_1".to_owned(),
             content: r#"{"ok":true}"#.to_owned(),
+            images: Vec::new(),
         });
 
         let events = drain(&FakeProvider::instant(), request).await;

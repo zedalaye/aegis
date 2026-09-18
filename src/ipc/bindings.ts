@@ -323,6 +323,65 @@ expires_at: string,
 annotation: RiskAnnotation | null, };
 
 /**
+ * What one pick or drop did.
+ */
+export type AttachReport = { 
+/**
+ * Copied in, in the order given.
+ */
+attached: Array<Attached>, 
+/**
+ * Refused, in the order given.
+ */
+refused: Array<NotAttached>, };
+
+/**
+ * One file copied in, as the composer shows it before the send.
+ */
+export type Attached = { 
+/**
+ * What `session_send` names it by: the copy's file name.
+ */
+id: string, 
+/**
+ * The original file's name, for the chip.
+ */
+name: string, 
+/**
+ * Size of the copy, in bytes.
+ */
+bytes: number, 
+/**
+ * What will be stored on the message.
+ */
+attachment: Attachment, };
+
+/**
+ * An image the operator attached to a message (PLAN 7.20).
+ *
+ * The file lives under the app's own attachment directory, never the
+ * workspace; the window draws it through the scoped `asset:` protocol and the
+ * runtime sends its pixels to the model. Only the path is ever stored.
+ */
+export type Attachment = { 
+/**
+ * Absolute path of the copy under the attachment directory.
+ */
+path: string, 
+/**
+ * The type its bytes declare: `image/png`, `image/jpeg`, …
+ */
+mime: string, 
+/**
+ * Width in pixels, when it was read.
+ */
+width?: number, 
+/**
+ * Height in pixels, when it was read.
+ */
+height?: number, };
+
+/**
  * A file a tool call left on disk, identified by path, digest and size —
  * never a copy (PLAN 5.4). Only `screen_capture` produces one today.
  */
@@ -1153,6 +1212,11 @@ tool_calls: Array<ToolCallRecord>,
  */
 tool_call_id: string | null, 
 /**
+ * Images the operator attached. `user` messages only (PLAN 7.20); absent
+ * on disk when there are none, so the document version stays 1.
+ */
+attachments?: Array<Attachment>, 
+/**
  * RFC3339, UTC.
  */
 created_at: string, };
@@ -1172,7 +1236,26 @@ live: boolean,
 /**
  * Empty on a live list. Otherwise why the fallback was used.
  */
-message: string, };
+message: string, 
+/**
+ * Whether a model takes images, for the models whose entry says so
+ * explicitly (PLAN 7.20) — OpenRouter's `architecture`. Absent is unknown,
+ * never "no": nothing is guessed from an id.
+ */
+vision: Record<string, boolean>, };
+
+/**
+ * A file that was not attached, and why.
+ */
+export type NotAttached = { 
+/**
+ * The original file's name.
+ */
+name: string, 
+/**
+ * Why, in words somebody can act on.
+ */
+reason: string, };
 
 /**
  * How a tool call ended (PLAN 2.1, `AuditEntry.outcome`).

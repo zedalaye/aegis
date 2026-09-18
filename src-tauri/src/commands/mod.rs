@@ -8,6 +8,7 @@
 
 pub mod agent;
 pub mod approval;
+pub mod attachment;
 pub mod audit;
 pub mod board;
 pub mod connector;

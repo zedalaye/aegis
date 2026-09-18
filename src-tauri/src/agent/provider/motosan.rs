@@ -14,7 +14,10 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::agent::wire::{ModelEvent, ModelRequest, StopReason, Usage, WireMessage, WireToolCall};
+use crate::agent::wire::{
+    with_notes, ModelEvent, ModelRequest, StopReason, Usage, WireImage, WireMessage, WireToolCall,
+    TOOL_IMAGES_LEAD,
+};
 use crate::error::ErrorCode;
 use crate::oauth::{self, Resolved};
 use crate::secrets::ApiKey;
@@ -110,12 +113,13 @@ async fn run(
     settings: ProviderSettings,
     key: Option<ApiKey>,
     http: Option<reqwest::Client>,
-    request: ModelRequest,
+    mut request: ModelRequest,
     tx: mpsc::Sender<ModelEvent>,
 ) {
     if tx.is_closed() {
         return;
     }
+    super::image::load(&mut request).await;
 
     let kind = settings.auth_kind;
     let base_url = settings.base_url.clone();
@@ -151,6 +155,12 @@ async fn run(
             access_token,
             account_id,
         } => {
+            // motosan's Codex dialect is text-only in this version: said to the
+            // model rather than silently dropped (PLAN 7.20).
+            super::image::refuse_all(
+                &mut request,
+                "this provider's dialect does not carry images in this build",
+            );
             stream_motosan(
                 motosan_ai::Provider::OpenAiChatGpt,
                 access_token.expose(),
@@ -622,11 +632,27 @@ fn gemini_body(request: &ModelRequest, max_tokens: Option<u32>) -> Value {
     let mut system: Vec<String> = Vec::new();
     let mut names: HashMap<String, String> = HashMap::new();
 
+    // A round's capture follows its function responses as a user turn, like
+    // the other dialects (PLAN 7.20).
+    let mut pending: Vec<Value> = Vec::new();
+
     for message in &request.messages {
+        if !matches!(message, WireMessage::Tool { .. }) {
+            flush_tool_images(&mut contents, &mut pending);
+        }
         match message {
             WireMessage::System { content } => system.push(content.clone()),
-            WireMessage::User { content } => {
-                contents.push(json!({"role": "user", "parts": [{"text": content}]}));
+            WireMessage::User { content, images } => {
+                let text = with_notes(content, images);
+                let mut parts = Vec::new();
+                if !text.is_empty() || images.is_empty() {
+                    parts.push(json!({"text": text}));
+                }
+                parts.extend(images.iter().filter_map(gemini_image));
+                if parts.is_empty() {
+                    parts.push(json!({"text": ""}));
+                }
+                contents.push(json!({"role": "user", "parts": parts}));
             }
             WireMessage::Assistant {
                 content,
@@ -665,20 +691,24 @@ fn gemini_body(request: &ModelRequest, max_tokens: Option<u32>) -> Value {
             WireMessage::Tool {
                 tool_call_id,
                 content,
+                images,
             } => {
                 let name = names
                     .get(tool_call_id)
                     .cloned()
                     .unwrap_or_else(|| tool_call_id.clone());
+                let content = with_notes(content, images);
                 let response: Value =
-                    serde_json::from_str(content).unwrap_or_else(|_| json!({"result": content}));
+                    serde_json::from_str(&content).unwrap_or_else(|_| json!({"result": content}));
                 contents.push(json!({
                     "role": "user",
                     "parts": [{"functionResponse": {"name": name, "response": response}}]
                 }));
+                pending.extend(images.iter().filter_map(gemini_image));
             }
         }
     }
+    flush_tool_images(&mut contents, &mut pending);
 
     let max_tokens = max_tokens.unwrap_or(8192);
     let mut body = json!({
@@ -707,6 +737,24 @@ fn gemini_body(request: &ModelRequest, max_tokens: Option<u32>) -> Value {
     }
 
     body
+}
+
+fn gemini_image(image: &WireImage) -> Option<Value> {
+    match image {
+        WireImage::Inline { mime, data } => {
+            Some(json!({"inlineData": {"mimeType": mime, "data": data}}))
+        }
+        WireImage::File { .. } | WireImage::Missing { .. } => None,
+    }
+}
+
+fn flush_tool_images(contents: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    if pending.is_empty() {
+        return;
+    }
+    let mut parts = vec![json!({"text": TOOL_IMAGES_LEAD})];
+    parts.append(pending);
+    contents.push(json!({"role": "user", "parts": parts}));
 }
 
 fn codex_provider(
@@ -967,8 +1015,14 @@ fn to_chat_request(
     // map is filled from assistant turns in this same request, which is
     // where the name still lives.
     let mut names: HashMap<String, String> = HashMap::new();
+    // A tool result carries text only here, so a round's capture follows the
+    // results as one user turn (PLAN 7.20).
+    let mut pending: Vec<motosan_ai::ContentBlock> = Vec::new();
 
     for message in &request.messages {
+        if !matches!(message, WireMessage::Tool { .. }) {
+            flush_motosan_images(&mut messages, &mut pending);
+        }
         match message {
             WireMessage::System { content } => system.push(content.clone()),
             WireMessage::Assistant { tool_calls, .. } => {
@@ -977,17 +1031,23 @@ fn to_chat_request(
                 }
                 messages.push(to_motosan_message(message, None)?);
             }
-            WireMessage::Tool { tool_call_id, .. } => {
+            WireMessage::Tool {
+                tool_call_id,
+                images,
+                ..
+            } => {
                 let mapped = if remap_tool_names {
                     names.get(tool_call_id).cloned()
                 } else {
                     None
                 };
                 messages.push(to_motosan_message(message, mapped.as_deref())?);
+                pending.extend(images.iter().filter_map(motosan_image));
             }
             other => messages.push(to_motosan_message(other, None)?),
         }
     }
+    flush_motosan_images(&mut messages, &mut pending);
 
     mark_cache_breakpoint(&mut messages);
 
@@ -1040,7 +1100,21 @@ fn to_motosan_message(
 ) -> Result<motosan_ai::Message, String> {
     match message {
         WireMessage::System { content } => Ok(motosan_ai::Message::system(content)),
-        WireMessage::User { content } => Ok(motosan_ai::Message::user(content)),
+        WireMessage::User { content, images } => {
+            let text = with_notes(content, images);
+            let blocks: Vec<motosan_ai::ContentBlock> =
+                images.iter().filter_map(motosan_image).collect();
+            if blocks.is_empty() {
+                return Ok(motosan_ai::Message::user(text));
+            }
+            // An empty text block is refused by Anthropic; an image alone is not.
+            let mut all = Vec::with_capacity(blocks.len() + 1);
+            if !text.is_empty() {
+                all.push(motosan_ai::ContentBlock::Text { text });
+            }
+            all.extend(blocks);
+            Ok(motosan_ai::Message::user_with_blocks(all))
+        }
         WireMessage::Assistant {
             content,
             tool_calls,
@@ -1059,11 +1133,38 @@ fn to_motosan_message(
         WireMessage::Tool {
             tool_call_id,
             content,
+            images,
         } => Ok(motosan_ai::Message::tool_result(
             tool_name.unwrap_or(tool_call_id),
-            content,
+            with_notes(content, images),
         )),
     }
+}
+
+fn motosan_image(image: &WireImage) -> Option<motosan_ai::ContentBlock> {
+    match image {
+        WireImage::Inline { mime, data } => Some(motosan_ai::ContentBlock::Image {
+            source: motosan_ai::ImageSource::Base64 {
+                media_type: mime.clone(),
+                data: data.clone(),
+            },
+        }),
+        WireImage::File { .. } | WireImage::Missing { .. } => None,
+    }
+}
+
+fn flush_motosan_images(
+    messages: &mut Vec<motosan_ai::Message>,
+    pending: &mut Vec<motosan_ai::ContentBlock>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let mut blocks = vec![motosan_ai::ContentBlock::Text {
+        text: TOOL_IMAGES_LEAD.to_owned(),
+    }];
+    blocks.append(pending);
+    messages.push(motosan_ai::Message::user_with_blocks(blocks));
 }
 
 fn to_motosan_tool_call(call: &WireToolCall) -> motosan_ai::ToolCall {
@@ -1275,6 +1376,7 @@ mod tests {
                     },
                     WireMessage::User {
                         content: "Read the PDF.".to_owned(),
+                        images: Vec::new(),
                     },
                 ],
                 vec![tool_schema("fs_read"), tool_schema("shell_exec")],
@@ -1307,6 +1409,7 @@ mod tests {
                 vec![
                     WireMessage::User {
                         content: "Read the PDF.".to_owned(),
+                        images: Vec::new(),
                     },
                     WireMessage::Assistant {
                         content: None,
@@ -1315,6 +1418,7 @@ mod tests {
                     WireMessage::Tool {
                         tool_call_id: "call-1".to_owned(),
                         content: "{\"ok\":true}".to_owned(),
+                        images: Vec::new(),
                     },
                 ],
                 Vec::new(),
@@ -1412,6 +1516,7 @@ mod tests {
                 vec![
                     WireMessage::User {
                         content: "Write it.".to_owned(),
+                        images: Vec::new(),
                     },
                     WireMessage::Assistant {
                         content: None,
@@ -1420,6 +1525,7 @@ mod tests {
                     WireMessage::Tool {
                         tool_call_id: "call_0".to_owned(),
                         content: "{\"ok\":true}".to_owned(),
+                        images: Vec::new(),
                     },
                 ],
                 Vec::new(),
@@ -1446,6 +1552,7 @@ mod tests {
                     WireMessage::Tool {
                         tool_call_id: "call_0".to_owned(),
                         content: "{\"ok\":true}".to_owned(),
+                        images: Vec::new(),
                     },
                 ],
                 Vec::new(),
@@ -1525,6 +1632,91 @@ mod tests {
         );
     }
 
+    fn inline() -> WireImage {
+        WireImage::Inline {
+            mime: "image/png".to_owned(),
+            data: "iVBOR".to_owned(),
+        }
+    }
+
+    /// A user image, then a capture answering a call, as a turn sends them.
+    fn with_images() -> ModelRequest {
+        request(
+            vec![
+                WireMessage::User {
+                    content: "what is on my screen?".to_owned(),
+                    images: vec![inline()],
+                },
+                WireMessage::Assistant {
+                    content: None,
+                    tool_calls: vec![WireToolCall::new("call_0", "screen_capture", "{}")],
+                },
+                WireMessage::Tool {
+                    tool_call_id: "call_0".to_owned(),
+                    content: "{\"ok\":true}".to_owned(),
+                    images: vec![inline()],
+                },
+            ],
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn anthropic_images_are_blocks_and_a_capture_follows_its_result() {
+        let chat = to_chat_request(&with_images(), "claude-sonnet-5", None, false)
+            .expect("the request converts");
+
+        let user = &chat.messages[0];
+        assert!(matches!(
+            user.content_blocks.as_slice(),
+            [
+                motosan_ai::ContentBlock::Text { .. },
+                motosan_ai::ContentBlock::Image { .. }
+            ]
+        ));
+
+        assert!(matches!(chat.messages[2].role, motosan_ai::Role::Tool));
+        assert_eq!(
+            chat.messages[2].content, "{\"ok\":true}",
+            "the envelope stays text"
+        );
+        let after = &chat.messages[3];
+        assert!(matches!(after.role, motosan_ai::Role::User));
+        assert!(matches!(
+            after.content_blocks.as_slice(),
+            [
+                motosan_ai::ContentBlock::Text { text },
+                motosan_ai::ContentBlock::Image { .. }
+            ] if text == TOOL_IMAGES_LEAD
+        ));
+    }
+
+    #[test]
+    fn gemini_images_are_inline_data() {
+        let body = gemini_body(&with_images(), None);
+        let contents = body["contents"].as_array().expect("contents");
+
+        assert_eq!(
+            contents[0]["parts"][1]["inlineData"]["mimeType"],
+            "image/png"
+        );
+        assert!(contents[2]["parts"][0].get("functionResponse").is_some());
+        assert_eq!(contents[3]["role"], "user");
+        assert_eq!(contents[3]["parts"][0]["text"], TOOL_IMAGES_LEAD);
+        assert_eq!(contents[3]["parts"][1]["inlineData"]["data"], "iVBOR");
+    }
+
+    #[test]
+    fn a_dialect_without_images_tells_the_model() {
+        let mut request = with_images();
+        super::super::image::refuse_all(&mut request, "no images here");
+        let chat = to_chat_request(&request, "gpt-5.5", None, false).expect("converts");
+
+        assert!(chat.messages[0].content_blocks.is_empty());
+        assert!(chat.messages[0].content.contains("no images here"));
+        assert_eq!(chat.messages.len(), 3, "no image turn after the result");
+    }
+
     #[test]
     fn gemini_echoes_a_thought_signature_on_the_function_call_part() {
         let mut call = WireToolCall::new("call_0", "fs_list", r#"{"path":"."}"#);
@@ -1534,6 +1726,7 @@ mod tests {
                 vec![
                     WireMessage::User {
                         content: "list".to_owned(),
+                        images: Vec::new(),
                     },
                     WireMessage::Assistant {
                         content: None,
@@ -1542,6 +1735,7 @@ mod tests {
                     WireMessage::Tool {
                         tool_call_id: "call_0".to_owned(),
                         content: "{\"ok\":true}".to_owned(),
+                        images: Vec::new(),
                     },
                 ],
                 vec![tool_schema("fs_list")],

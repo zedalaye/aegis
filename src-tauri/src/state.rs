@@ -72,6 +72,7 @@ pub struct AppState {
     http: Option<reqwest::Client>,
     self_exe: Option<PathBuf>,
     captures: PathBuf,
+    attachments: PathBuf,
     skills: PathBuf,
     /// The files the OS last dropped on the window, until the window names
     /// them (PLAN 7.15). In memory only: a drop is a gesture, not a record.
@@ -113,6 +114,9 @@ impl AppState {
             // Beside the stores (PLAN 5.4), created now so `lib.rs` can scope
             // the asset protocol to it.
             captures: prepare_captures(data_dir),
+            // Same rules as captures (PLAN 7.20): beside the stores, on the
+            // `asset:` scope from startup.
+            attachments: prepare_dir(data_dir, crate::attach::DIR),
             // Seeded once per name (`skills::seed`); ordinary files after that.
             skills: prepare_skills(data_dir),
             drops: crate::intake::Drops::new(),
@@ -942,6 +946,12 @@ impl AppState {
         &self.captures
     }
 
+    /// Where attached images are copied (PLAN 7.20): the window reads them
+    /// through the asset protocol, like captures, and never a workspace.
+    pub fn attachments(&self) -> &Path {
+        &self.attachments
+    }
+
     /// A project's sessions, most recently active first, with live states from
     /// the turn registry.
     pub fn session_list(&self, project_id: &str) -> Vec<SessionSummary> {
@@ -1071,14 +1081,19 @@ fn prepare_skills(data_dir: &Path) -> PathBuf {
 /// scope against canonical paths. A failure surfaces on the first capture, not
 /// at startup.
 fn prepare_captures(data_dir: &Path) -> PathBuf {
-    let captures = data_dir.join("captures");
+    prepare_dir(data_dir, "captures")
+}
 
-    if let Err(err) = std::fs::create_dir_all(&captures) {
-        tracing::warn!(%err, dir = %captures.display(), "could not create the capture directory");
-        return captures;
+/// Creates one of the window-readable directories, canonicalized.
+fn prepare_dir(data_dir: &Path, name: &str) -> PathBuf {
+    let dir = data_dir.join(name);
+
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(%err, dir = %dir.display(), "could not create a data directory");
+        return dir;
     }
 
-    dunce::canonicalize(&captures).unwrap_or(captures)
+    dunce::canonicalize(&dir).unwrap_or(dir)
 }
 
 #[cfg(test)]

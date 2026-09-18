@@ -71,6 +71,10 @@ sha2 = "0.10"
 # top of the WebKitGTK ones; see the README. `pkg-config` can succeed and
 # linking still fail if GBM/EGL/Wayland are missing (`-lgbm`).
 xcap = "0.9"
+# The same `image` as `xcap`'s, with the decoders an attachment needs (PLAN
+# 7.20): read its size when it is attached, and downscale or re-encode it at
+# send when a provider would refuse it as it is. No new version in the tree.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # The real provider speaks HTTP to an OpenAI-compatible endpoint (PLAN 4.1).
 # `reqwest` is already in the tree via Tauri, but with no TLS backend at all —
 # choosing one is this line's whole job. `native-tls` uses what the machine

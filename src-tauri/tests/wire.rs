@@ -256,6 +256,7 @@ fn request() -> ModelRequest {
             },
             WireMessage::User {
                 content: "hello".to_owned(),
+                images: Vec::new(),
             },
         ],
         tools: vec![json!({

@@ -363,6 +363,14 @@ pub enum AppError {
         reason: String,
     },
 
+    /// An attachment could not be used (PLAN 7.20): an id the window sent is
+    /// not a copy the runtime made, or the copy is gone.
+    #[error("the image cannot be attached: {reason}")]
+    Attach {
+        /// Why, in words somebody can act on.
+        reason: String,
+    },
+
     /// A whole drop could not become a brief (PLAN 7.15): no usable
     /// `.aegis/briefs/`, or the drop expired. Per-file refusals are in the report.
     #[error("the drop could not become a brief: {reason}")]
@@ -435,9 +443,10 @@ impl AppError {
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::ExecHost { .. } => ErrorCode::ExecHost,
             Self::RevealOutside { .. } => ErrorCode::PathOutsideWorkspace,
-            Self::RevealPath { .. } | Self::BriefImport { .. } | Self::OpenUrl { .. } => {
-                ErrorCode::PathInvalid
-            }
+            Self::RevealPath { .. }
+            | Self::BriefImport { .. }
+            | Self::OpenUrl { .. }
+            | Self::Attach { .. } => ErrorCode::PathInvalid,
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
             | Self::WorkspaceScaffold { .. }

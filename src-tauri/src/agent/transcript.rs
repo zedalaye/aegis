@@ -12,12 +12,15 @@
 //!   API rejects forever after. [`build`] synthesizes the missing answers and
 //!   tells the model the call never ran.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::store::{Agent, Message, Role, ToolCallRecord, ToolCallStatus};
 use crate::tools::READ_MAX_BYTES;
 
-use super::wire::{ModelRequest, WireMessage, WireToolCall};
+use super::wire::{ModelRequest, WireImage, WireMessage, WireToolCall};
+
+/// Most images one request carries (PLAN 7.20).
+pub const MAX_IMAGES: usize = 8;
 
 /// The standing instructions: what the model is, what the gate does, and how
 /// to take a refusal.
@@ -164,8 +167,16 @@ pub fn build(
             Role::System => {}
             Role::User => messages.push(WireMessage::User {
                 content: message.text.clone(),
+                images: message
+                    .attachments
+                    .iter()
+                    .map(|attachment| WireImage::File {
+                        path: PathBuf::from(&attachment.path),
+                    })
+                    .collect(),
             }),
             Role::Tool => messages.push(WireMessage::Tool {
+                images: capture_of(message, history).into_iter().collect(),
                 // An id-less `tool` message is rejected by the API; keep its
                 // content as plain text instead of dropping it.
                 tool_call_id: match &message.tool_call_id {
@@ -203,10 +214,49 @@ pub fn build(
         }
     }
 
+    keep_newest_images(&mut messages);
+
     ModelRequest {
         model: model.to_owned(),
         messages,
         tools,
+    }
+}
+
+/// The capture a tool message answers with, if its call made one (PLAN 7.20).
+fn capture_of(message: &Message, history: &[Message]) -> Option<WireImage> {
+    let id = message.tool_call_id.as_deref()?;
+    history
+        .iter()
+        .flat_map(|message| &message.tool_calls)
+        .find(|call| call.call_id == id)
+        .filter(|call| call.status == ToolCallStatus::Ok)
+        .and_then(|call| call.image_path.as_deref())
+        .map(|path| WireImage::File {
+            path: PathBuf::from(path),
+        })
+}
+
+/// Sends only the [`MAX_IMAGES`] newest images; older ones become a note, so
+/// a long session with many captures does not resend all of them every round.
+fn keep_newest_images(messages: &mut [WireMessage]) {
+    let mut seen = 0;
+    for message in messages.iter_mut().rev() {
+        let images = match message {
+            WireMessage::User { images, .. } | WireMessage::Tool { images, .. } => images,
+            WireMessage::System { .. } | WireMessage::Assistant { .. } => continue,
+        };
+        for image in images.iter_mut().rev() {
+            seen += 1;
+            if seen > MAX_IMAGES {
+                if let WireImage::File { path } = image {
+                    *image = WireImage::Missing {
+                        path: path.clone(),
+                        reason: format!("only the {MAX_IMAGES} most recent images are sent"),
+                    };
+                }
+            }
+        }
     }
 }
 
@@ -226,10 +276,7 @@ fn unanswered(message: &Message, history: &[Message]) -> Vec<WireMessage> {
                 status = ?call.status,
                 "answering a tool call the transcript left open"
             );
-            WireMessage::Tool {
-                tool_call_id: call.call_id.clone(),
-                content: UNANSWERED_ENVELOPE.to_owned(),
-            }
+            WireMessage::tool(&call.call_id, UNANSWERED_ENVELOPE)
         })
         .collect()
 }
@@ -553,6 +600,7 @@ mod tests {
                 WireMessage::Tool {
                     tool_call_id,
                     content,
+                    ..
                 } if tool_call_id == "call_2" => Some(content),
                 _ => None,
             })
@@ -604,6 +652,89 @@ mod tests {
             WireMessage::System { content } => assert!(content.contains("/new"), "{content}"),
             other => panic!("expected the system message first, got {other:?}"),
         }
+    }
+
+    fn images_of(message: &WireMessage) -> &[WireImage] {
+        match message {
+            WireMessage::User { images, .. } | WireMessage::Tool { images, .. } => images,
+            other => panic!("no images on {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attachments_and_a_capture_are_named_for_the_provider_to_read() {
+        let mut capture = call("cap");
+        capture.tool = crate::policy::tool::SCREEN_CAPTURE.to_owned();
+        capture.status = ToolCallStatus::Ok;
+        capture.image_path = Some("/data/captures/one.png".to_owned());
+        let mut refused = call("no");
+        refused.status = ToolCallStatus::Denied;
+        refused.image_path = Some("/data/captures/never.png".to_owned());
+
+        let history = vec![
+            Message::user_with(
+                "look",
+                vec![crate::store::Attachment {
+                    path: "/data/attachments/a.png".to_owned(),
+                    mime: "image/png".to_owned(),
+                    width: None,
+                    height: None,
+                }],
+            ),
+            Message::assistant("", vec![capture, refused]),
+            Message::tool("cap", "{}"),
+            Message::tool("no", "{}"),
+        ];
+        let request = build("m", &ctx(&assistant(), None), &history, Vec::new());
+
+        assert_eq!(
+            images_of(&request.messages[1]),
+            [WireImage::File {
+                path: PathBuf::from("/data/attachments/a.png")
+            }]
+        );
+        assert_eq!(
+            images_of(&request.messages[3]),
+            [WireImage::File {
+                path: PathBuf::from("/data/captures/one.png")
+            }]
+        );
+        assert!(
+            images_of(&request.messages[4]).is_empty(),
+            "a call that did not succeed sends no picture"
+        );
+    }
+
+    #[test]
+    fn only_the_newest_images_are_sent() {
+        let history: Vec<Message> = (0..MAX_IMAGES + 2)
+            .map(|index| {
+                Message::user_with(
+                    format!("image {index}"),
+                    vec![crate::store::Attachment {
+                        path: format!("/a/{index}.png"),
+                        mime: "image/png".to_owned(),
+                        width: None,
+                        height: None,
+                    }],
+                )
+            })
+            .collect();
+        let request = build("m", &ctx(&assistant(), None), &history, Vec::new());
+
+        let missing = request.messages[1..]
+            .iter()
+            .filter(|message| matches!(images_of(message), [WireImage::Missing { .. }]))
+            .count();
+        assert_eq!(missing, 2);
+        assert!(matches!(
+            images_of(&request.messages[1]),
+            [WireImage::Missing { .. }]
+        ));
+        assert!(matches!(
+            images_of(request.messages.last().expect("last")),
+            [WireImage::File { .. }]
+        ));
     }
 
     #[test]

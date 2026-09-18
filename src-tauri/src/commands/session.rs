@@ -108,6 +108,8 @@ pub fn session_delete(state: State<'_, AppState>, session_id: String) -> AppResu
 /// Sends a message and starts a turn.
 ///
 /// Returns once the turn is registered; the reply arrives as `turn:*` events.
+/// `attachments` are ids from `attachment_pick` / `attachment_drop`, never
+/// paths or bytes (PLAN 7.20).
 /// Sending into a session that is already running is refused with
 /// `E_TURN_BUSY`.
 #[tauri::command(rename_all = "snake_case")]
@@ -116,7 +118,11 @@ pub fn session_send(
     state: State<'_, AppState>,
     session_id: String,
     text: String,
+    attachments: Option<Vec<String>>,
 ) -> AppResult<TurnHandle> {
+    // Before the turn is registered: a refused id sends nothing (PLAN 7.20).
+    let attachments =
+        crate::attach::resolve(state.attachments(), &attachments.unwrap_or_default())?;
     let turn_id = uuid::Uuid::new_v4().to_string();
 
     // First, because this is what makes a second concurrent send impossible.
@@ -125,7 +131,11 @@ pub fn session_send(
     let sink = WindowSink::new(app.clone());
     let started = state
         .sessions()
-        .append(&session_id, Message::user(text), SessionState::Running)
+        .append(
+            &session_id,
+            Message::user_with(text, attachments),
+            SessionState::Running,
+        )
         .and_then(|summary| {
             sink.emit(Event::SessionUpdated(Box::new(summary)));
             state.workspace_of(&session_id)

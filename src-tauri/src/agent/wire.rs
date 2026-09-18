@@ -6,6 +6,11 @@
 //! * [`ToolCallAssembler`]: accumulates streamed call fragments per index and
 //!   parses once at the end; unparseable arguments are answered with an error,
 //!   not executed (PLAN 4.1).
+//! * [`WireImage`]: pixels for a user or tool message (PLAN 7.20). The
+//!   transcript names a file; the provider reads it and each dialect writes
+//!   it. Never an IPC payload.
+
+use std::path::PathBuf;
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -44,7 +49,7 @@ impl ModelRequest {
             "model": self.model,
             "stream": true,
             "stream_options": { "include_usage": true },
-            "messages": self.messages,
+            "messages": openai_messages(&self.messages),
         });
 
         if !self.tools.is_empty() {
@@ -74,6 +79,9 @@ pub enum WireMessage {
     User {
         /// The message text.
         content: String,
+        /// Images the person attached (PLAN 7.20); each dialect writes them.
+        #[serde(skip)]
+        images: Vec<WireImage>,
     },
     /// What the model said, and what it asked to run.
     Assistant {
@@ -89,7 +97,163 @@ pub enum WireMessage {
         tool_call_id: String,
         /// The `ToolResult` envelope, as JSON text.
         content: String,
+        /// Pixels the call produced — a capture (PLAN 7.20). The envelope
+        /// stays text; dialects that cannot put an image in a tool result send
+        /// it in a user turn right after the results.
+        #[serde(skip)]
+        images: Vec<WireImage>,
     },
+}
+
+impl WireMessage {
+    /// A user message with no image.
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::User {
+            content: content.into(),
+            images: Vec::new(),
+        }
+    }
+
+    /// A tool result with no image.
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self::Tool {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            images: Vec::new(),
+        }
+    }
+}
+
+/// An image on a request (PLAN 7.20).
+///
+/// Built as [`WireImage::File`] by the transcript, which reads no file; a
+/// provider turns it into [`WireImage::Inline`] or [`WireImage::Missing`] with
+/// [`image::load`](super::provider::image::load) before writing its body. A
+/// missing image never fails the turn: the text goes without it, and says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WireImage {
+    /// A file under the app's capture or attachment directory, not read yet.
+    File {
+        /// Absolute path.
+        path: PathBuf,
+    },
+    /// Read, fitted to what providers take, and base64-encoded.
+    Inline {
+        /// `image/png`, `image/jpeg`, …
+        mime: String,
+        /// Standard base64, no line breaks.
+        data: String,
+    },
+    /// Not sent. The reason is told to the model as text.
+    Missing {
+        /// Where the image was.
+        path: PathBuf,
+        /// Why it was not sent.
+        reason: String,
+    },
+}
+
+impl WireImage {
+    /// What the model is told in place of an image it does not get, or `None`
+    /// for one that is sent.
+    pub fn note(&self) -> Option<String> {
+        match self {
+            Self::Inline { .. } => None,
+            Self::File { path } => Some(format!(
+                "[The image at `{}` was not sent: it was not read.]",
+                path.display()
+            )),
+            Self::Missing { path, reason } => Some(format!(
+                "[The image at `{}` was not sent: {reason}.]",
+                path.display()
+            )),
+        }
+    }
+
+    /// The image as a data URL, when it is sent.
+    fn data_url(&self) -> Option<String> {
+        match self {
+            Self::Inline { mime, data } => Some(format!("data:{mime};base64,{data}")),
+            Self::File { .. } | Self::Missing { .. } => None,
+        }
+    }
+}
+
+/// `text` followed by the notes for the `images` that are not sent.
+pub fn with_notes(text: &str, images: &[WireImage]) -> String {
+    let mut out = text.to_owned();
+    for note in images.iter().filter_map(WireImage::note) {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&note);
+    }
+    out
+}
+
+/// The lead-in of the user turn that carries a round's tool images, for the
+/// dialects that cannot put an image inside a tool result.
+pub const TOOL_IMAGES_LEAD: &str = "The image returned by the tool call above.";
+
+/// The OpenAI-compatible `messages` array (PLAN 4.1, 7.20).
+///
+/// A user message with images becomes `content` parts. A tool message cannot
+/// carry one, so a round's tool images follow its results as one user message.
+fn openai_messages(messages: &[WireMessage]) -> Vec<Value> {
+    let mut out = Vec::with_capacity(messages.len());
+    let mut pending: Vec<Value> = Vec::new();
+
+    for message in messages {
+        if !matches!(message, WireMessage::Tool { .. }) && !pending.is_empty() {
+            out.push(tool_images_turn(&mut pending));
+        }
+        match message {
+            WireMessage::User { content, images } => {
+                let text = with_notes(content, images);
+                let parts: Vec<Value> = images.iter().filter_map(image_part).collect();
+                if parts.is_empty() {
+                    out.push(json!({ "role": "user", "content": text }));
+                } else {
+                    let mut content = Vec::with_capacity(parts.len() + 1);
+                    if !text.is_empty() {
+                        content.push(json!({ "type": "text", "text": text }));
+                    }
+                    content.extend(parts);
+                    out.push(json!({ "role": "user", "content": content }));
+                }
+            }
+            WireMessage::Tool {
+                tool_call_id,
+                content,
+                images,
+            } => {
+                out.push(json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": with_notes(content, images),
+                }));
+                pending.extend(images.iter().filter_map(image_part));
+            }
+            // A derived `Serialize` into a `Value` cannot fail.
+            other => out.push(serde_json::to_value(other).unwrap_or(Value::Null)),
+        }
+    }
+    if !pending.is_empty() {
+        out.push(tool_images_turn(&mut pending));
+    }
+    out
+}
+
+fn image_part(image: &WireImage) -> Option<Value> {
+    image
+        .data_url()
+        .map(|url| json!({ "type": "image_url", "image_url": { "url": url } }))
+}
+
+fn tool_images_turn(pending: &mut Vec<Value>) -> Value {
+    let mut content = vec![json!({ "type": "text", "text": TOOL_IMAGES_LEAD })];
+    content.append(pending);
+    json!({ "role": "user", "content": content })
 }
 
 /// One tool call in an assistant message.
@@ -390,9 +554,7 @@ mod tests {
                 WireMessage::System {
                     content: "rules".to_owned(),
                 },
-                WireMessage::User {
-                    content: "hello".to_owned(),
-                },
+                WireMessage::user("hello"),
                 WireMessage::Assistant {
                     content: None,
                     tool_calls: vec![WireToolCall::new(
@@ -401,10 +563,7 @@ mod tests {
                         r#"{"path":"src/main.rs"}"#,
                     )],
                 },
-                WireMessage::Tool {
-                    tool_call_id: "call_1".to_owned(),
-                    content: r#"{"ok":true}"#.to_owned(),
-                },
+                WireMessage::tool("call_1", r#"{"ok":true}"#),
             ],
             tools: vec![json!({ "type": "function" })],
         };
@@ -440,6 +599,91 @@ mod tests {
 
         assert_eq!(messages[3]["role"], "tool");
         assert_eq!(messages[3]["tool_call_id"], "call_1");
+    }
+
+    fn inline() -> WireImage {
+        WireImage::Inline {
+            mime: "image/png".to_owned(),
+            data: "iVBOR".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_user_image_becomes_a_content_part() {
+        let body = ModelRequest {
+            model: "m".to_owned(),
+            messages: vec![WireMessage::User {
+                content: "what is this?".to_owned(),
+                images: vec![inline()],
+            }],
+            tools: Vec::new(),
+        }
+        .to_body();
+
+        let content = &body["messages"][0]["content"];
+        assert_eq!(
+            content[0],
+            json!({ "type": "text", "text": "what is this?" })
+        );
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            "data:image/png;base64,iVBOR"
+        );
+    }
+
+    #[test]
+    fn tool_images_follow_the_round_as_one_user_turn() {
+        let body = ModelRequest {
+            model: "m".to_owned(),
+            messages: vec![
+                WireMessage::Assistant {
+                    content: None,
+                    tool_calls: vec![
+                        WireToolCall::new("a", "screen_capture", "{}"),
+                        WireToolCall::new("b", "fs_read", "{}"),
+                    ],
+                },
+                WireMessage::Tool {
+                    tool_call_id: "a".to_owned(),
+                    content: "{}".to_owned(),
+                    images: vec![inline()],
+                },
+                WireMessage::tool("b", "{}"),
+            ],
+            tools: Vec::new(),
+        }
+        .to_body();
+
+        let messages = body["messages"].as_array().expect("messages");
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|message| message["role"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(roles, ["assistant", "tool", "tool", "user"]);
+        assert_eq!(messages[1]["content"], "{}", "the envelope stays text");
+        assert_eq!(messages[3]["content"][0]["text"], TOOL_IMAGES_LEAD);
+        assert_eq!(messages[3]["content"][1]["type"], "image_url");
+    }
+
+    #[test]
+    fn a_missing_image_is_said_and_not_sent() {
+        let body = ModelRequest {
+            model: "m".to_owned(),
+            messages: vec![WireMessage::User {
+                content: "look".to_owned(),
+                images: vec![WireImage::Missing {
+                    path: PathBuf::from("/data/attachments/x.png"),
+                    reason: "it is no longer on disk".to_owned(),
+                }],
+            }],
+            tools: Vec::new(),
+        }
+        .to_body();
+
+        let content = body["messages"][0]["content"].as_str().expect("plain text");
+        assert!(content.starts_with("look\n\n[The image at"), "{content}");
+        assert!(content.contains("it is no longer on disk"), "{content}");
     }
 
     #[test]

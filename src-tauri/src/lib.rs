@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod approval;
+pub mod attach;
 pub mod audit;
 pub mod board;
 pub(crate) mod commands;
@@ -57,12 +58,12 @@ pub use secrets::{ApiKey, KeySource, SecretStore};
 pub use skills::{ProposalState, Reported, Returned, Skill, SkillCtx, SkillProposal, SkillScope};
 pub use state::AppState;
 pub use store::{
-    Agent, AgentDraft, AgentStore, AuthKind, AuthPreset, Compaction, Connector, ConnectorDraft,
-    ConnectorStore, Cost, LastRun, MaskedProvider, MaskedSettings, Memory, MemoryDraft, MemoryKind,
-    MemoryStore, Message, Project, ProjectDetail, ProviderEntry, ProviderSettings, Role, Routine,
-    RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled, SessionDetail, SessionState,
-    SessionStore, SessionSummary, SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnCost,
-    TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    Agent, AgentDraft, AgentStore, Attachment, AuthKind, AuthPreset, Compaction, Connector,
+    ConnectorDraft, ConnectorStore, Cost, LastRun, MaskedProvider, MaskedSettings, Memory,
+    MemoryDraft, MemoryKind, MemoryStore, Message, Project, ProjectDetail, ProviderEntry,
+    ProviderSettings, Role, Routine, RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled,
+    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+    ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
@@ -146,7 +147,11 @@ fn on_drop<R: tauri::Runtime>(
 
     let scope = window.asset_protocol_scope();
     for path in paths {
-        if path.starts_with(state.captures()) || state.captures().starts_with(path) {
+        let readable = [state.captures(), state.attachments()];
+        if readable
+            .iter()
+            .any(|dir| path.starts_with(dir) || dir.starts_with(path))
+        {
             continue;
         }
         let forbidden = if path.is_dir() {
@@ -225,6 +230,8 @@ pub fn run() {
             commands::session::session_rename,
             commands::session::session_delete,
             commands::session::session_send,
+            commands::attachment::attachment_pick,
+            commands::attachment::attachment_drop,
             commands::session::session_cancel,
             commands::session::session_compact,
             commands::approval::approval_list_pending,
@@ -280,13 +287,13 @@ pub fn run() {
             tracing::info!(dir = %data_dir.display(), "application data directory");
             let state = AppState::new(&data_dir);
 
-            // The only `asset:` scope (PLAN 5.4): captures, non-recursive. The
-            // scope is empty in `tauri.conf.json`.
-            if let Err(err) = app
-                .asset_protocol_scope()
-                .allow_directory(state.captures(), false)
-            {
-                tracing::warn!(%err, "captures will not be viewable in the transcript");
+            // The only `asset:` scope (PLAN 5.4, 7.20): captures and
+            // attachments, non-recursive. The scope is empty in
+            // `tauri.conf.json`.
+            for dir in [state.captures(), state.attachments()] {
+                if let Err(err) = app.asset_protocol_scope().allow_directory(dir, false) {
+                    tracing::warn!(%err, dir = %dir.display(), "images there will not be viewable in the transcript");
+                }
             }
 
             app.manage(state);

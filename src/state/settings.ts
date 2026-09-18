@@ -106,6 +106,11 @@ export type SettingsState = {
   readonly modelsMessage: string;
   /** True while a models fetch is in flight. */
   readonly modelsBusy: boolean;
+  /**
+   * Per saved row, the models whose catalog entry said whether they take
+   * images (PLAN 7.20). Absent is unknown: the composer still offers attach.
+   */
+  readonly vision: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
 
   /** Loads the roster and fills the form from the selected row. */
   load: () => Promise<void>;
@@ -283,6 +288,7 @@ export const useSettings = create<SettingsState>((set, get) => {
     modelsLive: false,
     modelsMessage: "",
     modelsBusy: false,
+    vision: {},
 
     load: async () => {
       set({ status: "loading" });
@@ -389,6 +395,9 @@ export const useSettings = create<SettingsState>((set, get) => {
           models: catalog.models,
           modelsLive: catalog.live,
           modelsMessage: catalog.message,
+          ...(selected === NEW_ROW
+            ? {}
+            : { vision: { ...get().vision, [selected]: catalog.vision } }),
           ...(nextModel === current
             ? {}
             : { draft: { ...get().draft, model: nextModel } }),

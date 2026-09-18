@@ -175,6 +175,25 @@ export default function MessageBubble({
         </p>
       )}
 
+      {message.attachments === undefined || message.attachments.length === 0 ? null : (
+        <ul className="bubble__attachments" aria-label="Attached images">
+          {message.attachments.map((attachment) => (
+            <li key={attachment.path}>
+              <AssetImage
+                className="bubble__attachment"
+                path={attachment.path}
+                alt="Attached image"
+                fallback={
+                  <span className="md__image" title={attachment.path}>
+                    [this attachment is no longer on disk]
+                  </span>
+                }
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
       {hasCalls ? (
         <ul className="bubble__tools" aria-label="Tool calls">
           {message.tool_calls.map((call) => (

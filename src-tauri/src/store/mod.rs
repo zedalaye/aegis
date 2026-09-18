@@ -29,7 +29,7 @@ pub use memories::{Memory, MemoryDraft, MemoryKind, MemoryStore};
 pub use projects::{canonical_workspace, Project, ProjectDetail, Store};
 pub use routines::{LastRun, Routine, RoutineDraft, RoutineStore, RunOutcome, Schedule};
 pub use sessions::{
-    Compaction, Cost, Delegated, Message, Role, Scheduled, SessionDetail, SessionState,
+    Attachment, Compaction, Cost, Delegated, Message, Role, Scheduled, SessionDetail, SessionState,
     SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle,
 };
 pub use settings::{

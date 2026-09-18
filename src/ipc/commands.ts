@@ -17,6 +17,7 @@ import type {
   Agent,
   AgentDraft,
   ApprovalRequest,
+  AttachReport,
   AuditEntry,
   AuthKind,
   Board,
@@ -253,8 +254,30 @@ export function sessionDelete(sessionId: string): Promise<void> {
 export function sessionSend(
   sessionId: string,
   text: string,
+  attachments: readonly string[] = [],
 ): Promise<TurnHandle> {
-  return call<TurnHandle>("session_send", { session_id: sessionId, text });
+  return call<TurnHandle>("session_send", {
+    session_id: sessionId,
+    text,
+    attachments: attachments.length === 0 ? null : attachments,
+  });
+}
+
+/**
+ * Opens the image picker (in Rust; the window has no `dialog:` permission) and
+ * copies what was chosen under the app's data (PLAN 7.20). Cancelled is an
+ * empty report. The ids go back with `sessionSend`.
+ */
+export function attachmentPick(): Promise<AttachReport> {
+  return call<AttachReport>("attachment_pick");
+}
+
+/**
+ * Copies the images of a drop onto the composer. `dropId` comes from
+ * `workspace:dropped`; such a drop never becomes a brief.
+ */
+export function attachmentDrop(dropId: string): Promise<AttachReport> {
+  return call<AttachReport>("attachment_drop", { drop_id: dropId });
 }
 
 /**

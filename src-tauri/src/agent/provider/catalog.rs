@@ -4,6 +4,8 @@
 //! fetch is not a command failure: the form still has a fallback list and a
 //! sentence saying why the live one did not arrive.
 
+use std::collections::BTreeMap;
+
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use reqwest::Client;
 use serde::Serialize;
@@ -24,6 +26,11 @@ pub struct ModelCatalog {
     pub live: bool,
     /// Empty on a live list. Otherwise why the fallback was used.
     pub message: String,
+    /// Whether a model takes images, for the models whose entry says so
+    /// explicitly (PLAN 7.20) — OpenRouter's `architecture`. Absent is unknown,
+    /// never "no": nothing is guessed from an id.
+    #[ts(type = "Record<string, boolean>")]
+    pub vision: BTreeMap<String, bool>,
 }
 
 /// Models used when the provider cannot be asked.
@@ -157,6 +164,7 @@ pub async fn list(
         models,
         live,
         message,
+        vision: BTreeMap::new(),
     };
 
     let Some(url) = models_url(kind, override_url) else {
@@ -237,7 +245,45 @@ pub async fn list(
 
     models.sort();
     models.dedup();
-    catalog(models, true, String::new())
+    ModelCatalog {
+        vision: vision_flags(&value),
+        ..catalog(models, true, String::new())
+    }
+}
+
+/// The models whose entry says whether they take images.
+///
+/// OpenRouter: `architecture.input_modalities` (a list), or the older
+/// `architecture.modality` (`"text+image->text"`). Anything else says nothing.
+fn vision_flags(value: &Value) -> BTreeMap<String, bool> {
+    let mut flags = BTreeMap::new();
+    let Some(items) = value.get("data").and_then(Value::as_array) else {
+        return flags;
+    };
+    for item in items {
+        let (Some(id), Some(architecture)) = (
+            item.get("id").and_then(Value::as_str),
+            item.get("architecture"),
+        ) else {
+            continue;
+        };
+        let takes = if let Some(inputs) = architecture
+            .get("input_modalities")
+            .and_then(Value::as_array)
+        {
+            Some(inputs.iter().any(|input| input.as_str() == Some("image")))
+        } else {
+            architecture
+                .get("modality")
+                .and_then(Value::as_str)
+                .and_then(|modality| modality.split("->").next())
+                .map(|inputs| inputs.split('+').any(|input| input.trim() == "image"))
+        };
+        if let Some(takes) = takes {
+            flags.insert(id.trim().to_owned(), takes);
+        }
+    }
+    flags
 }
 
 async fn authorized_get(
@@ -509,6 +555,24 @@ fn push_id(ids: &mut Vec<String>, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vision_is_read_only_where_the_entry_says_it() {
+        let value = serde_json::json!({ "data": [
+            { "id": "a/vision", "architecture": { "input_modalities": ["text", "image"] } },
+            { "id": "a/text", "architecture": { "input_modalities": ["text"] } },
+            { "id": "b/old", "architecture": { "modality": "text+image->text" } },
+            { "id": "b/old-text", "architecture": { "modality": "text->text" } },
+            { "id": "gpt-4o" },
+        ]});
+        let flags = vision_flags(&value);
+
+        assert_eq!(flags.get("a/vision"), Some(&true));
+        assert_eq!(flags.get("a/text"), Some(&false));
+        assert_eq!(flags.get("b/old"), Some(&true));
+        assert_eq!(flags.get("b/old-text"), Some(&false));
+        assert_eq!(flags.get("gpt-4o"), None, "never guessed from the id");
+    }
 
     #[test]
     fn an_empty_override_uses_the_kind_default() {

@@ -443,7 +443,7 @@ fn read_head(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 
 /// The type a file's first bytes declare, for the few types a preview treats
 /// differently from text.
-fn sniff(head: &[u8]) -> Option<&'static str> {
+pub(crate) fn sniff(head: &[u8]) -> Option<&'static str> {
     const SIGNATURES: [(&[u8], &str); 8] = [
         (b"\x89PNG\r\n\x1a\n", "image/png"),
         (b"\xFF\xD8\xFF", "image/jpeg"),
