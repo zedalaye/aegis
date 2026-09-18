@@ -7,7 +7,7 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
 open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.19,
-landed), and three surfaces that are not scheduled (§ 7.7–7.9).
+landed; § 7.20 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
 edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets and policy live
@@ -444,6 +444,7 @@ Constraints that still hold, not work to do.
 | **Tools** | special-case policy or the turn loop on built-in versus MCP |
 | **Policy** | offer "always allow forever", or a mutating path that skips the gate |
 | **Audit** | freeze the line schema (it grew `agent_id`, `skill`, `handoff`, `routine`) |
+| **WebView** | navigate the window, follow an `<a href>`, load remote HTML, or gain an opener / `fs:` / `shell:` permission (§ 7.20) |
 | **Process** | quit on last window close (it would kill the scheduler) |
 | **Settings / keys** | put keys in the WebView, or freeze the settings payload against a provider list |
 | **Project** | assume a project is a software repository. A finance or watch folder is a folder — versioned when its convention is laid down (§ 7.11), not therefore a codebase. Do not assume the UI host OS is the tool host OS (§ 7.12) |
@@ -538,7 +539,8 @@ like any runbook and granted like any runbook. There is no `world.amend` for spe
 ### 7.3 Post-MVP phase order
 
 Each phase ended runnable; none depended on a later one; domain work came last. The slices
-§ 7.10–7.19 are not steps in this list and did not delay it.
+§ 7.10–7.19 are not steps in this list and did not delay it. § 7.20 is proposed and is not a
+phase either.
 
 **Phase 11 — Workspace convention.** Shared memory as files a session reads at start and writes
 through the gate. Exit: a decision and a status filed without a new agent type.
@@ -754,7 +756,8 @@ no command, tool, matrix row, binding or UI change. What each settled:
   apply (§ 7.14).
 - A `settings.json` or `agents.json` under `.aegis/`. Conflicting grants across cabinets are a binding
   (`IDEAS.md` § 13), not a second settings file.
-- Inserting a slice (§ 7.10–7.19) into § 7.3 as a fractional phase, or delaying a phase for one.
+- Inserting a slice (§ 7.10–7.20) into § 7.3 as a fractional phase, or delaying a phase for one.
+- An in-app browser tab, or markdown drawn as HTML (§ 7.20).
 - Teaching the model to call `wsl.exe` or `bash -c`; falling back to Windows when WSL is missing.
 - `git init` on `project_create`, a nested repository, auto-committing writes, or a GitHub product in
   the runtime.
@@ -1039,7 +1042,7 @@ bar). The editor half of the old refusal was load-bearing; the explorer half was
 
 **In scope**: a tree of the open workspace; read-only preview; a drop that becomes a brief.
 **Out**: an editor, a cursor or a save path; `node_modules/` and `.git` in the default tree; chat
-markdown (`IDEAS.md` § 14); drops into `world/sources.yml`; "open in VS Code" as the default.
+markdown (now § 7.20); drops into `world/sources.yml`; "open in VS Code" as the default.
 
 *As landed*:
 
@@ -1612,3 +1615,124 @@ provider; picking a provider from a messaging face.
 
 The operator adds a second provider in Settings, then binds an identity or overrides a session.
 Never a key in git, never in a fixture, never in chat.
+
+### 7.20 Transcript markdown and images on the wire — proposed
+
+Assistant text is a `<p>` with `white-space: pre-wrap` (`MessageBubble.tsx`). Fences, lists and
+headings stay punctuation (`IDEAS.md` § 14). The explorer already has the sanitizer this needs
+(`src/lib/markdown.ts`, § 7.15): a typed tree drawn as elements, never `dangerouslySetInnerHTML`.
+Chat was out of that slice because model output is untrusted and the WebView is the whole UI.
+
+Two landings. The first is the bubble; the second is pixels on the request. Either is usable
+without the other; landing 2 without 1 would send images the operator cannot see in the
+transcript.
+
+#### Landing 1 — Transcript markdown
+
+**In scope**: render `Message.text` through the existing parser; local images in the bubble;
+http(s) links open in the OS browser on a click.
+**Out**: CommonMark completeness; remote images fetched into the WebView; an in-app tab;
+`dangerouslySetInnerHTML`; a plugin opener permission; markdown for tool envelopes.
+
+*Settles*:
+
+- **The parser is the sanitizer.** Reuse `parseMarkdown`. Extract drawing from `Markdown.tsx` so
+  the explorer and the bubble share nodes; the explorer keeps `onOpenPath`, the bubble adds
+  `onOpenUrl`. Raw HTML stays text. `Message.text` stays a plain string.
+- **Roles.** User and assistant text. A tool message is still the `ToolResult` envelope, not
+  markdown.
+- **Streaming.** Parse each painted frame (deltas already coalesce at ~50 ms). An unclosed fence
+  is already a code block in this parser. Do not wait for `Finish`. An unclosed emphasis may
+  flash; that is acceptable.
+- **Workspace links.** A relative href or a path-like code span opens the explorer preview, as
+  § 7.15 already does. It does not `reveal` and it does not navigate.
+- **Web links.** Shown with the href (the explorer already prints it next to the label). Click
+  invokes `open_url`. The node is a button, never an `<a href>`.
+- **`open_url` is a command, not a tool.** Window domain. `http` and `https` only; `file:`,
+  `tauri:`, `javascript:`, `data:` and anything else are refused. The OS URL handler is spawned
+  the way `workspace_reveal` spawns the file manager: the URL is one argument, not a shell
+  string, and the WebView gains no opener / `fs:` / `shell:` permission. The click is the gate.
+  No matrix row, no audit line, no `tauri-plugin-opener` in `capabilities/main.json`.
+- **Images in markdown.** A relative workspace path is drawn through `workspace_image` → `blob:`.
+  A capture path is drawn through the capture-scoped `asset:` protocol already used by
+  `ToolCallCard`. Do not widen `img-src` to `https:`. A remote `![](https://…)` is not fetched:
+  same control as a link (alt + URL, click → `open_url`). Tracking pixels stay out of the
+  WebView.
+- The explorer may start drawing relative images the same way. That is reuse, not the exit.
+
+*Refuses* (landing 1):
+
+- An `<a href>` in the WebView, `frame-src` other than `'none'`, an in-app tab or a second
+  WebView.
+- `tauri-plugin-opener` (or any opener permission) in `capabilities/main.json`.
+- Loading a remote markdown image into the bubble.
+- Parsing HTML. Raw tags stay text.
+
+*Exit* (landing 1): a fenced assistant reply renders as a code block while streaming and when
+finished; a list and a heading render as such; a workspace link opens the preview; an `https`
+link opens the OS browser and does not navigate the WebView; a relative workspace image or a
+capture path renders in the bubble; a remote image URL does not load in the window; parser tests
+cover the subset (they do not exist today).
+
+#### Landing 2 — Images on the wire
+
+The model cannot see a capture today: the envelope says so (`screenshot.rs`). The composer is
+text. `WireMessage::User` and `::Tool` are strings (§ 4.1). `ModelCatalog` is a list of ids;
+`output_cap` is the only extra field read.
+
+**In scope**: pixels on the HTTP request for captures and for operator attachments; a catalog
+flag when the provider actually sends one.
+**Out**: guessing vision from the model id; image generation; fetching a remote URL to send to
+the model; bytes over `invoke`; a `screen_capture` preview in the approval dialog (§ 5.4).
+
+*Settles*:
+
+- **Display and IPC stay § 5.4.** The WebView gets a path. Bytes travel to the model over HTTPS
+  from Rust, never across `invoke`, never in an event, never in `sessions.json`.
+- **On disk.** A user message may hold `attachments: [{ path, mime, width?, height? }]`,
+  `#[serde(default)]`. Session document version stays 1. A capture keeps today's `image_path` on
+  the tool call. Missing file at request-build: send the text without the image, and say so.
+- **Dialects stay in `agent/provider/`.** OpenAI-compatible user `content` parts; Anthropic
+  image blocks on `tool_result` / user; Gemini `inline_data`. The turn loop still sees JSON
+  envelopes and `ModelEvent::TextDelta`. The fake provider ignores parts. A dialect this build
+  does not yet speak is a provider bug, not a `turn.rs` branch.
+- **First consumer: `screen_capture`.** After a successful capture, the next request includes
+  the PNG. The ToolResult envelope on disk and over IPC is unchanged (`{ path, width, height,
+  sha256 }` in `meta`). Drop the sentence "this build cannot read it back." Approval stays ask,
+  with no image in the dialog.
+- **Attach.** The composer can attach images. The picker runs in Rust (same family as the
+  folder dialog: no `dialog:` on the WebView). A drop onto the composer attaches image types
+  and does not import a brief; § 7.15's drop stays the Files-mode path. Files live under app
+  data next to captures, in their own directory, scoped on `asset:` at startup and narrowed
+  after every drop. Cap 16 MiB at attach (the explorer's image cap). Downscale or compress at
+  send if still large; a server that still refuses fails the turn with that message.
+- **`session_send`** takes optional attachment ids the runtime already copied. Never raw bytes
+  on the command.
+- **Catalog.** `ModelCatalog` may grow an optional per-model vision flag when the JSON has one
+  (OpenRouter `architecture.modality`, or anything equally explicit). Absent means unknown.
+  Never infer from the id (`gpt-4o` vs `o4-mini`). The UI offers attach when unknown or true; a
+  server refusal is a visible turn error. `settings_list_models` stays usable for an unsaved
+  form.
+
+*Refuses* (landing 2):
+
+- Guessing vision from the model id, or a hardcoded allow-list of names.
+- Image bytes in `sessions.json`, in an event, or in an `invoke` payload.
+- Auto-fetching `https://…` from markdown or from a drop to feed the model (SSRF).
+- Widening `asset:` to the workspace, or to the dropped source paths.
+- A matrix row for attach (the operator attached). `screen_capture` stays **ask**.
+- Image generation, clipboard watching, computer-use, or a second browser.
+
+*Exit* (landing 2): a capture is on the next request in a dialect this build speaks; the
+operator can attach a PNG to a send and see it in the bubble; the fake provider still works; a
+model that refuses images fails the turn visibly; no image bytes in git, fixtures, or IPC
+traces.
+
+*Not this slice, deliberately*: CommonMark / GFM beyond the current subset; syntax highlighting;
+fetching remote images through Rust into a blob; image generation; a model-id table; putting
+attachments in the workspace; markdown in tool cards.
+
+When this lands, patch § 2.1 (`open_url`; `session_send` attachments), § 4.1 (content parts),
+§ 4.3 (the capture envelope stays JSON; pixels are a request-build concern), § 5.4 (pixels to
+the model are not IPC), § 7.15's explorer image rule if the shared renderer starts drawing
+relative ones, `IDEAS.md` § 14, and `docs/security.md` (links and images).

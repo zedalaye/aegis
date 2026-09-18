@@ -213,24 +213,26 @@ cabinet, not by designing the table.
 
 ## Transcript display
 
-### 14. Markdown in the chat bubble, with a sanitizer
+### 14. Markdown in the chat bubble, with a sanitizer — proposed (`PLAN.md` § 7.20)
 
 **Gap.** Assistant text is a `<p>` with `white-space: pre-wrap`; fences, lists and headings stay
-punctuation.
+punctuation. A capture is shown to the operator and withheld from the model.
 
 **Why not yet.** Model output is untrusted, and the WebView is the whole UI, approval dialog
-included.
+included. The explorer parser (`src/lib/markdown.ts`, § 7.15) is the sanitizer; chat was out of
+that slice.
 
-**Change.** A parser, not `dangerouslySetInnerHTML`: reuse the typed-tree approach of
-`src/lib/markdown.ts` (built for § 7.15). Raw HTML stays inert, remote images do not load, and links
-are text until a Rust command opens them in the OS browser. `Message.text` stays a plain string.
+**Change.** `PLAN.md` § 7.20, two landings: render through the typed tree (local images in the
+bubble, http(s) links open in the OS browser on click, never `<a href>`); then put capture and
+attached pixels on the HTTP request. Remote markdown images are not fetched into the WebView.
+`Message.text` stays a plain string.
 
-**Trips.** Streaming: an unclosed fence mid-stream looks broken if re-parsed on every token —
-debounce, or render it as `<pre>` until it closes. Links: an `<a href>` can navigate the app away or
-hit `tauri:` / `file:`.
+**Trips.** Streaming: an unclosed fence is already a code block in this parser; unclosed emphasis
+may flash. Links: an `<a href>` can navigate the app away or hit `tauri:` / `file:`. Vision: most
+`/models` payloads do not say whether a model takes images; do not guess from the id.
 
-**Unknown:** whether the sanitizer stays closed as CommonMark extensions are added. Start when a long
-fenced reply is genuinely unreadable, and ship the sanitizer in the same change.
+**Unknown:** whether the sanitizer stays closed as CommonMark extensions are added. Syntax
+highlighting and fetching remote images through Rust into a blob are not this slice.
 
 ## Seeing the workspace
 
