@@ -268,8 +268,13 @@ async fn a_workspace_without_a_world_is_untouched_by_one() {
         "the panel can still say what a world is without pretending there is one"
     );
 
+    // The absence is named (PLAN 7.17), but no frame claims a world exists,
+    // and asking about it created nothing.
     let prompt = app.next_system_message(false);
-    assert!(!prompt.contains("world"), "{prompt}");
+    assert!(prompt.contains("This workspace has no world"), "{prompt}");
+    assert!(!prompt.contains("This workspace has a world"), "{prompt}");
+    assert!(!prompt.contains("world/essence.md"), "{prompt}");
+    assert!(!app.workspace.join("world").exists(), "nothing was created");
 
     // And a dump nobody declared is an ordinary file in an ordinary folder.
     let sink = Recorder::default();
