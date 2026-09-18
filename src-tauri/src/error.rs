@@ -355,6 +355,14 @@ pub enum AppError {
         reason: String,
     },
 
+    /// A link the window asked to open in the browser was refused (PLAN
+    /// 7.20): not `http`/`https`, or not a web address at all.
+    #[error("that link was not opened: {reason}")]
+    OpenUrl {
+        /// Why, in words somebody can act on.
+        reason: String,
+    },
+
     /// A whole drop could not become a brief (PLAN 7.15): no usable
     /// `.aegis/briefs/`, or the drop expired. Per-file refusals are in the report.
     #[error("the drop could not become a brief: {reason}")]
@@ -427,7 +435,9 @@ impl AppError {
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::ExecHost { .. } => ErrorCode::ExecHost,
             Self::RevealOutside { .. } => ErrorCode::PathOutsideWorkspace,
-            Self::RevealPath { .. } | Self::BriefImport { .. } => ErrorCode::PathInvalid,
+            Self::RevealPath { .. } | Self::BriefImport { .. } | Self::OpenUrl { .. } => {
+                ErrorCode::PathInvalid
+            }
             Self::WindowUnavailable { .. }
             | Self::Runtime(_)
             | Self::WorkspaceScaffold { .. }

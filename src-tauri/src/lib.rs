@@ -29,6 +29,7 @@ mod state;
 pub mod store;
 pub mod tools;
 mod tray;
+pub mod weblink;
 pub mod workspace;
 pub mod world;
 
@@ -205,6 +206,7 @@ pub fn run() {
             commands::window::window_hide,
             commands::window::window_has_tray,
             commands::window::app_quit,
+            commands::window::open_url,
             commands::project::project_pick_workspace,
             commands::project::project_create,
             commands::project::project_list,

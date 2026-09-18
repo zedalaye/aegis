@@ -122,6 +122,15 @@ pub fn quit<R: Runtime>(app: &AppHandle<R>) {
     app.exit(0);
 }
 
+/// Opens an `http`/`https` link in the OS browser (PLAN 7.20).
+///
+/// The click in the transcript is the gate: no policy row, no audit line, and
+/// no opener permission on the WebView, which never navigates.
+#[tauri::command]
+pub fn open_url(url: String) -> AppResult<()> {
+    crate::weblink::open(&crate::weblink::target(&url)?)
+}
+
 /// Quits Aegis.
 #[tauri::command]
 pub fn app_quit(app: AppHandle) -> AppResult<()> {

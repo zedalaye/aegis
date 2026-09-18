@@ -1,15 +1,17 @@
 /**
- * A small markdown reader for the file preview (PLAN 7.15).
+ * A small markdown reader for the file preview and the transcript (PLAN 7.15,
+ * 7.20).
  *
  * Parses into a typed tree rendered as React elements and text nodes — no HTML
- * strings, so unknown constructs are just text.
+ * strings, so unknown constructs are just text. The parser is the sanitizer.
  *
  * - Raw HTML is shown as text.
- * - Images are not loaded; a relative one can be opened through the runtime.
- * - Links do not navigate; a workspace link opens that file in the preview.
+ * - Remote images are never loaded.
+ * - Links do not navigate; a workspace link opens that file in the preview, a
+ *   web link opens the OS browser through the runtime.
  *
- * A subset of Markdown for briefs, boards, decisions and runbooks — not
- * CommonMark, and not the chat renderer (IDEAS § 14).
+ * A subset of Markdown for briefs, boards, runbooks and replies — not
+ * CommonMark.
  */
 
 /** A run of text inside a block. */
@@ -647,6 +649,11 @@ export function isExternal(href: string): boolean {
     href.startsWith("/") ||
     href.startsWith("\\")
   );
+}
+
+/** The address when a destination is an `http`/`https` link, else `null`. */
+export function webUrl(href: string): string | null {
+  return /^https?:\/\/[^\s/?#]/i.test(href.trim()) ? href.trim() : null;
 }
 
 /**

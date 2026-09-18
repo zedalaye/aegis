@@ -1204,6 +1204,32 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Markdown in a bubble (PLAN 7.20): the explorer's elements, tighter. A single
+   line break inside a paragraph is kept, the way chat is written. */
+.bubble__md {
+  max-width: none;
+  margin-top: 0;
+}
+
+.bubble__md > :last-child {
+  margin-bottom: 0;
+}
+
+.bubble__md .md__p,
+.bubble__md .md__li {
+  white-space: pre-line;
+}
+
+.bubble__md .md__h {
+  margin-top: 0.8em;
+}
+
+.bubble__note {
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 /* The caret marks text that is still arriving. */
 .bubble__caret {
   display: inline-block;
@@ -3891,4 +3917,14 @@ body {
 
 .md__image {
   color: var(--muted);
+}
+
+/* A local image drawn in the text: a workspace blob or a scoped capture. */
+.md__img {
+  display: block;
+  max-width: 100%;
+  max-height: 24rem;
+  margin: 0.4em 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }

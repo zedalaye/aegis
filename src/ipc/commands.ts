@@ -85,6 +85,14 @@ export function windowHasTray(): Promise<boolean> {
   return call<boolean>("window_has_tray");
 }
 
+/**
+ * Opens an `http`/`https` link in the OS browser (PLAN 7.20). Anything else is
+ * refused (`E_PATH_INVALID`); the window itself never navigates.
+ */
+export function openUrl(url: string): Promise<void> {
+  return call<void>("open_url", { url });
+}
+
 /** Quits Aegis. On success the WebView is torn down before this settles. */
 export function appQuit(): Promise<void> {
   return call<void>("app_quit");

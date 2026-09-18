@@ -6,14 +6,15 @@
  * says so explicitly.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { FilePreview, Zone } from "../../ipc/bindings";
-import { workspaceImage, workspaceReveal } from "../../ipc/commands";
+import { workspaceReveal } from "../../ipc/commands";
 import { toIpcError } from "../../lib/errors";
 import { formatBytes, formatTimestamp } from "../../lib/format";
 import { useExplorer } from "../../state/explorer";
-import Markdown from "./Markdown";
+import { useWorkspaceImage } from "../markdown/Images";
+import Markdown from "../markdown/Markdown";
 
 /** A word about where the file sits, when there is one worth saying. */
 const ZONE_NOTE: Record<Zone, string | null> = {
@@ -40,47 +41,18 @@ function ImagePreview({
   readonly preview: FilePreview;
   readonly mime: string;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // `modified` so an image rewritten since it was opened is fetched again.
+  const load = useWorkspaceImage(projectId, preview.path, mime, preview.modified);
 
-  useEffect(() => {
-    let cancelled = false;
-    let created: string | null = null;
-    setUrl(null);
-    setError(null);
-
-    workspaceImage(projectId, preview.path)
-      .then((bytes) => {
-        if (cancelled) {
-          return;
-        }
-        created = URL.createObjectURL(new Blob([bytes], { type: mime }));
-        setUrl(created);
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled) {
-          setError(toIpcError(cause, "workspace_image").message);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      if (created !== null) {
-        URL.revokeObjectURL(created);
-      }
-    };
-    // `modified` so an image rewritten since it was opened is fetched again.
-  }, [projectId, preview.path, preview.modified, mime]);
-
-  if (error !== null) {
-    return <p className="preview__note">{error}</p>;
+  if (load.state === "error") {
+    return <p className="preview__note">{load.message}</p>;
   }
-  if (url === null) {
+  if (load.state === "loading") {
     return <p className="preview__note">Reading…</p>;
   }
   return (
     <div className="preview__imagewrap">
-      <img className="preview__image" src={url} alt={preview.name} />
+      <img className="preview__image" src={load.url} alt={preview.name} />
     </div>
   );
 }
@@ -93,6 +65,10 @@ export default function PreviewPane({ projectId }: { readonly projectId: string 
   const openPath = useExplorer((s) => s.openPath);
   const [source, setSource] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
+  const onOpenPath = useCallback(
+    (candidates: readonly string[]) => void openPath(candidates),
+    [openPath],
+  );
 
   // A new file opens rendered, whatever the last one was showing.
   useEffect(() => {
@@ -191,7 +167,7 @@ export default function PreviewPane({ projectId }: { readonly projectId: string 
             <Markdown
               source={body.text}
               base={folderOf(preview.path)}
-              onOpenPath={(candidates) => void openPath(candidates)}
+              onOpenPath={onOpenPath}
             />
           ) : (
             <pre className="preview__text">{body.text}</pre>
