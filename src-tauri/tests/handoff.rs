@@ -143,6 +143,7 @@ impl App {
             memories: &self.memories,
             connectors: aegis_lib::Connectors::none(),
             provider,
+            decision: None,
         }
     }
 
@@ -692,6 +693,7 @@ async fn an_ordinary_session_is_not_offered_the_tool_that_closes_a_brief() {
         connectors: aegis_lib::Connectors::none(),
         standing: Standing::Own(None),
         unattended: None,
+        decision: None,
     }
     .run(
         &TurnPlan {

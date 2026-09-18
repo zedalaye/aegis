@@ -33,8 +33,9 @@ pub use sessions::{
     SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle,
 };
 pub use settings::{
-    AuthKind, AuthPreset, Binding, BindingRequest, MaskedProvider, MaskedSettings, ProviderEntry,
-    ProviderSettings, RowDraft, SettingsStore, PROVIDERS_MAX,
+    AuthKind, AuthPreset, Binding, BindingRequest, DecisionSettings, MaskedDecision,
+    MaskedProvider, MaskedSettings, ProviderEntry, ProviderSettings, RowDraft, SettingsStore,
+    PROVIDERS_MAX,
 };
 
 /// Rename attempts before a failed save gives up: on Windows an antivirus or

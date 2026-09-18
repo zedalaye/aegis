@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 use tokio::time::{Duration, Instant};
 use ts_rs::TS;
 
+use crate::agent::decision::tool_risk::RiskAnnotation;
 use crate::error::{AppError, AppResult};
 use crate::policy::{ApprovalDetail, AskRequest, Grant, Risk};
 
@@ -104,6 +105,10 @@ pub struct ApprovalRequest {
     pub requested_at: String,
     /// When it stops being answerable.
     pub expires_at: String,
+    /// What the decision model said about this call (PLAN 7.18, `tool_risk`).
+    /// Arrives after the request, if at all; advisory, and the buttons do not
+    /// change with it.
+    pub annotation: Option<RiskAnnotation>,
 }
 
 /// An answer, on its way back to the turn that is waiting.
@@ -204,6 +209,7 @@ impl ApprovalRegistry {
             reason: ask.reason.clone(),
             requested_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
             expires_at: (now + ttl).to_rfc3339_opts(SecondsFormat::Millis, true),
+            annotation: None,
         };
 
         let (respond, answer) = oneshot::channel();
@@ -296,6 +302,18 @@ impl ApprovalRegistry {
             decision,
             granted,
         })
+    }
+
+    /// Attaches a risk annotation to a request still waiting. `false` when it
+    /// was answered or withdrawn first.
+    pub fn annotate(&self, request_id: &str, annotation: RiskAnnotation) -> bool {
+        match self.pending().get_mut(request_id) {
+            Some(entry) => {
+                entry.request.annotation = Some(annotation);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Everything still waiting, oldest first, optionally for one session.
@@ -548,6 +566,32 @@ mod tests {
 
         assert_eq!(registry.list(Some("s1")), Vec::new());
         assert_eq!(registry.list(Some("s2")).len(), 1);
+    }
+
+    /// An annotation changes what the dialog says, never what it offers.
+    #[test]
+    fn an_annotation_reaches_the_listed_request_and_nothing_else() {
+        let registry = ApprovalRegistry::new();
+        let ticket = registry.register("s1", "t1", "c1", &write_ask());
+        let annotation = RiskAnnotation {
+            destructive: 90,
+            exfil: 0,
+            git_history: 0,
+            undo: None,
+            bucket: None,
+            raised: true,
+            summary: "Jev: likely destroys something.".to_owned(),
+            model: "jev".to_owned(),
+        };
+
+        assert!(registry.annotate(&ticket.request.request_id, annotation.clone()));
+        let listed = registry.list(Some("s1"));
+        assert_eq!(listed[0].annotation.as_ref(), Some(&annotation));
+        assert!(listed[0].session_grant_allowed);
+        assert_eq!(listed[0].risk, ticket.request.risk);
+
+        registry.withdraw(&ticket.request.request_id);
+        assert!(!registry.annotate(&ticket.request.request_id, annotation));
     }
 
     /// The dialog is answered by `request_id`, and the transcript, the audit

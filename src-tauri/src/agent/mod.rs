@@ -17,6 +17,7 @@
 //! [`turn`] consumes [`wire::ModelEvent`] and emits [`event::Event`], never
 //! seeing HTTP or an `AppHandle`, so it runs in tests without network or window.
 
+pub mod decision;
 pub mod event;
 pub mod guard;
 pub mod provider;

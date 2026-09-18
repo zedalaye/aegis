@@ -502,6 +502,16 @@ pub fn scaffold(root: &Path) -> AppResult<ScaffoldReport> {
         created.push(rel_file);
     }
 
+    // Project evals (PLAN 7.18): a directory, and nothing seeded in it.
+    let rel_evals = format!("{CABINET_DIR}/{}/", crate::agent::decision::eval::EVALS_DIR);
+    let evals = contained(root, &rel_evals)?;
+    if evals.is_dir() {
+        kept.push(rel_evals);
+    } else {
+        fs::create_dir_all(&evals).map_err(|err| failed(&rel_evals, &err))?;
+        created.push(rel_evals);
+    }
+
     tracing::info!(
         root = %root.display(),
         created = created.len(),
@@ -691,9 +701,13 @@ mod tests {
                 ".aegis/artefacts/README.md",
                 ".aegis/decisions/DECISIONS.md",
                 ".aegis/skills/inbox.triage/SKILL.md",
+                ".aegis/evals/",
             ]
         );
         assert!(report.kept.is_empty());
+        let evals = root.join(".aegis/evals");
+        assert!(evals.is_dir());
+        assert_eq!(fs::read_dir(&evals).expect("listed").count(), 0, "no seed");
         assert!(layout(&root).complete);
         assert!(root.join(STATUS_FILE).is_file());
         assert!(root.join(DECISIONS_FILE).is_file());

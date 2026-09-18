@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::agent::decision::{self, DecisionClient};
 use crate::agent::provider::{catalog, motosan, openai};
 use crate::agent::{
     FakeProvider, ModelCatalog, OpenAiProvider, Provider, ProviderProbe, SubscriptionProvider,
@@ -26,9 +27,9 @@ use crate::schedule::runner::Scheduler;
 use crate::secrets::{self, key_hint, ApiKey, KeySource, SecretStore};
 use crate::store::{
     self, Agent, AgentDraft, AgentStore, AuthKind, Binding, BindingRequest, Connector,
-    ConnectorStore, MaskedProvider, MaskedSettings, Memory, MemoryDraft, MemoryStore,
-    ProviderEntry, Routine, RoutineStore, RowDraft, SessionDetail, SessionState, SessionStore,
-    SessionSummary, SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    ConnectorStore, MaskedDecision, MaskedProvider, MaskedSettings, Memory, MemoryDraft,
+    MemoryStore, ProviderEntry, Routine, RoutineStore, RowDraft, SessionDetail, SessionState,
+    SessionStore, SessionSummary, SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
 /// How many audit lines a board is folded from (Phase 17): the most
@@ -258,6 +259,75 @@ impl AppState {
             providers,
             keyring_available,
             presets: AuthKind::presets().to_vec(),
+            decision: self.masked_decision(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Decision model (PLAN 7.18)
+    // -----------------------------------------------------------------------
+
+    /// What the WebView may know about the decision client. One more platform
+    /// read, for `typesafe-api-key`.
+    fn masked_decision(&self) -> MaskedDecision {
+        let held = self.secrets.inspect_account(secrets::TYPESAFE_ACCOUNT);
+        let settings = self.settings.decision();
+        MaskedDecision {
+            key_source: held.source,
+            key_hint: held.key.as_ref().map(|key| key_hint(key.expose())),
+            model: settings.model,
+            base_url: settings.base_url,
+            annotate_approvals: settings.annotate_approvals,
+            default_model: store::settings::DECISION_DEFAULT_MODEL.to_owned(),
+            default_base_url: store::settings::DECISION_DEFAULT_BASE_URL.to_owned(),
+        }
+    }
+
+    /// The decision client as Settings stand now, or `None` without a key or
+    /// an HTTP client. Built per turn, like the provider, and never from the
+    /// chat key.
+    pub fn decision_client(&self) -> Option<DecisionClient> {
+        self.try_decision_client()
+            .inspect_err(|err| {
+                if *err != decision::DecisionError::NoKey {
+                    tracing::warn!(%err, "no decision client");
+                }
+            })
+            .ok()
+    }
+
+    fn try_decision_client(&self) -> Result<DecisionClient, decision::DecisionError> {
+        let key = self.secrets.inspect_account(secrets::TYPESAFE_ACCOUNT).key;
+        DecisionClient::new(self.http.clone(), key, &self.settings.decision())
+    }
+
+    /// Saves the decision settings, then the key when one is given. A blank
+    /// key keeps the stored one.
+    pub fn save_decision(
+        &self,
+        model: &str,
+        base_url: &str,
+        annotate_approvals: bool,
+        api_key: Option<&str>,
+    ) -> AppResult<()> {
+        self.settings
+            .set_decision(model, base_url, annotate_approvals)?;
+        match api_key.and_then(ApiKey::new) {
+            Some(key) => self.secrets.store_account(secrets::TYPESAFE_ACCOUNT, &key),
+            None => Ok(()),
+        }
+    }
+
+    /// Removes the stored TypeSafe key. `AEGIS_TYPESAFE_API_KEY` is untouched.
+    pub fn clear_decision_key(&self) -> AppResult<()> {
+        self.secrets.clear_account(secrets::TYPESAFE_ACCOUNT)
+    }
+
+    /// One cheap question to TypeSafe, reported like a chat probe.
+    pub async fn probe_decision(&self) -> ProviderProbe {
+        match self.try_decision_client() {
+            Ok(client) => client.probe().await,
+            Err(err) => decision::unusable_probe(&err),
         }
     }
 
@@ -1199,6 +1269,11 @@ mod tests {
             !rendered.contains("\"api_key\":"),
             "the payload must not have a key field: {rendered}"
         );
+
+        // PLAN 7.18: the decision half is masked the same way.
+        assert!(masked.decision.annotate_approvals);
+        assert_eq!(masked.decision.default_model, "jev-latest");
+        assert!(!rendered.contains("typesafe-api-key"), "{rendered}");
     }
 
     /// Grants and the audit log are per-process, not per-store: a second

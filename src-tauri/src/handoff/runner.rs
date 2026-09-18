@@ -75,6 +75,8 @@ pub struct Host<'a> {
     pub connectors: &'a Connectors,
     /// Which provider answers for an identity (per identity, PLAN 7.1).
     pub provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
+    /// The decision client (PLAN 7.18), or `None` without a TypeSafe key.
+    pub decision: Option<&'a crate::agent::decision::DecisionClient>,
 }
 
 /// One session's delegations, and the runs they have opened.
@@ -231,6 +233,7 @@ impl Delegating {
             skills: host.skills,
             memories: host.memories,
             connectors: host.connectors,
+            decision: host.decision,
             // What makes this a delegated run rather than a session: no bus, so
             // it cannot re-delegate, and a cell for the report it owes.
             standing: Standing::Delegated(&open),
@@ -349,6 +352,7 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
 
             let sink = WindowSink::new(self.app.clone());
             let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
+            let decision = state.decision_client();
             let host = Host {
                 agents: state.agents(),
                 sessions: state.sessions(),
@@ -363,6 +367,7 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
                 memories: state.memories(),
                 connectors: state.connectors(),
                 provider: &provider,
+                decision: decision.as_ref(),
             };
 
             self.inner.attempt(&host, slot, brief, filed, cancel).await

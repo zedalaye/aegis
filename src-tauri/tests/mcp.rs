@@ -416,6 +416,7 @@ impl App {
             connectors,
             standing: Standing::Own(None),
             unattended: None,
+            decision: None,
         };
         let running = turn.run(&plan, &cancel);
 

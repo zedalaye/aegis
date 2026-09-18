@@ -215,6 +215,7 @@ impl App {
                 Standing::Own(None)
             },
             unattended: None,
+            decision: None,
         }
         .run(&plan, &cancel)
         .await;

@@ -208,6 +208,7 @@ async fn run_turn<R: Runtime>(
     // turn whole, rather than halfway through one.
     let agent = state.agent_of(&plan.session_id);
     let provider = state.provider_for(&agent, &plan.session_id);
+    let decision = state.decision_client();
 
     // Per-turn delegation state (Phase 15); none without a workspace, since a
     // team needs shared files (`COS.md` *Memory*).
@@ -240,6 +241,7 @@ async fn run_turn<R: Runtime>(
         skills: state.skills(),
         memories: state.memories(),
         connectors: state.connectors(),
+        decision: decision.as_ref(),
         standing: Standing::Own(bus.as_ref()),
         unattended: None,
     }

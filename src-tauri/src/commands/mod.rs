@@ -11,6 +11,7 @@ pub mod approval;
 pub mod audit;
 pub mod board;
 pub mod connector;
+pub mod eval;
 pub mod explorer;
 pub mod memory;
 pub mod project;

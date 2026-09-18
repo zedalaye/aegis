@@ -42,6 +42,14 @@ pub enum Grant {
         /// The full tool name the dialog named.
         tool: String,
     },
+    /// One signed project eval by name (PLAN 7.18): its named input files go
+    /// to TypeSafe.
+    JevEval {
+        /// The eval's name.
+        name: String,
+    },
+    /// Model-written questions to TypeSafe (PLAN 7.18, the soupape).
+    JevAsk,
 }
 
 impl Grant {
@@ -67,6 +75,8 @@ impl Grant {
             Self::MemoryWrite => "memory_write",
             Self::HandoffDelegate => "handoff_delegate",
             Self::Connector { tool } => tool,
+            Self::JevEval { .. } => "jev_eval",
+            Self::JevAsk => "jev_ask",
         }
     }
 
@@ -119,6 +129,15 @@ impl Grant {
                      rest of this session — no other tool of that connector, and nothing it adds \
                      later"
                 )
+            }
+            Self::JevEval { name } => format!(
+                "run the signed eval `{name}`, sending its input files to TypeSafe, for the rest \
+                 of this session — no other eval"
+            ),
+            Self::JevAsk => {
+                "send model-written questions and state to TypeSafe, for the rest of this \
+                 session"
+                    .to_owned()
             }
         }
     }

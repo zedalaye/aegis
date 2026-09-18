@@ -205,6 +205,7 @@ impl App {
             connectors: aegis_lib::Connectors::none(),
             standing: Standing::Own(None),
             unattended: None,
+            decision: None,
         }
         .run(&plan, &cancel)
         .await;

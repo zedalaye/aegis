@@ -95,6 +95,7 @@ impl Fixture {
                 open: None,
             },
             routine: "",
+            decision: None,
         };
 
         match self.judge(args.clone()) {
@@ -147,6 +148,7 @@ impl Fixture {
                 open: None,
             },
             routine: "",
+            decision: None,
         };
 
         tools::refuse(

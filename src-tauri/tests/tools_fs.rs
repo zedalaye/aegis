@@ -118,6 +118,7 @@ impl Fixture {
                 open: None,
             },
             routine: "",
+            decision: None,
         };
 
         let decision = decide(&ctx, tool_name, args.clone());
@@ -555,6 +556,10 @@ fn the_tools_offered_to_the_model_are_the_ones_this_build_runs() {
             "memory_search",
             "handoff_delegate",
             "handoff_return",
+            // PLAN 7.18. Offered only while a TypeSafe key is set; see
+            // `turn::offered_tools`.
+            "jev_eval",
+            "jev_ask",
         ]
     );
 }

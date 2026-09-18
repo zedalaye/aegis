@@ -212,6 +212,7 @@ impl App {
             memories: &self.memories,
             connectors: aegis_lib::Connectors::none(),
             provider: &provider,
+            decision: None,
         };
 
         runner::fire(&host, routine_id).await;

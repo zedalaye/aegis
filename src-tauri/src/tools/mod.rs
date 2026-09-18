@@ -23,6 +23,7 @@
 pub mod connector;
 pub mod fs;
 pub mod handoff;
+pub mod jev;
 pub mod memory;
 pub mod screenshot;
 pub mod shell;
@@ -37,6 +38,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
+use crate::agent::decision::DecisionClient;
 use crate::audit::{AuditArtifact, AuditDecision, AuditEntry, AuditLog, AuditRecord, Outcome};
 use crate::error::ErrorCode;
 use crate::mcp::{self, Connectors};
@@ -432,6 +434,34 @@ pub fn registry() -> &'static [ToolSpec] {
                           `needs_you` needs at least one `open_questions` entry.",
             parameters: handoff::report_schema,
         },
+        ToolSpec {
+            name: tool::JEV_EVAL,
+            description: "Run a signed project eval: a judgement this workspace already wrote \
+                          down under `.aegis/evals/<name>/eval.yml`, with its own questions and \
+                          thresholds. You name the eval (and, if needed, other workspace files \
+                          for its declared inputs); the harness reads the files, asks the \
+                          decision model, and returns routes and escalations with the raw \
+                          answers. A route is a recommendation for you to act on through the \
+                          ordinary tools, never an action taken. A `PROPOSAL.yml` does not run \
+                          until a person applies it.",
+            parameters: jev::eval_schema,
+        },
+        ToolSpec {
+            name: tool::JEV_ASK,
+            description: "Ask the decision model (TypeSafe Jev) snap judgements the workspace \
+                          has no eval for yet — a draft, not the steady state. Rules: one \
+                          atomic judgement per question (`noul` for yes/no, `choice` among \
+                          named options, `score` on ordered levels); ask every question you \
+                          might need in one call; give `state` as a JSON object with named \
+                          fields and name the part each question judges with a backticked path \
+                          (`ticket.messages[0].text`); never paste a transcript. Answers are \
+                          probabilities: compose them yourself in the next step. Jev is for \
+                          judging unstructured text; a boolean, a number or a label you put in \
+                          `state` is already a fact — compose it in code instead of asking \
+                          about it. Never ask \"what should I do\". If a judgement recurs, draft \
+                          `.aegis/evals/<name>/PROPOSAL.yml` instead.",
+            parameters: jev::ask_schema,
+        },
     ]
 }
 
@@ -511,6 +541,9 @@ pub struct ToolCtx<'a> {
     /// The routine whose run this is, or empty (Phase 16), put on every audit
     /// line of the run.
     pub routine: &'a str,
+    /// The decision client (PLAN 7.18), for `jev_eval` and `jev_ask` only.
+    /// `None` without a TypeSafe key.
+    pub decision: Option<&'a DecisionClient>,
 }
 
 // By hand: `&dyn ProgressSink` has no `Debug`.
@@ -634,6 +667,12 @@ pub async fn run(
         ResolvedCall::Connector { name, args } => {
             connector::call(ctx.connectors, name, args, ctx.cancel).await
         }
+        ResolvedCall::JevEval { eval, inputs } => {
+            jev::run_eval(ctx.decision, eval, inputs, ctx.cancel).await
+        }
+        ResolvedCall::JevAsk { state, questions } => {
+            jev::run_ask(ctx.decision, state, questions, ctx.cancel).await
+        }
     };
 
     // `as` saturates at `u64::MAX` here, which is 584 million years: the cast
@@ -753,6 +792,8 @@ mod tests {
             tool::MEMORY_SEARCH,
             tool::HANDOFF_DELEGATE,
             tool::HANDOFF_RETURN,
+            tool::JEV_EVAL,
+            tool::JEV_ASK,
         ];
 
         for spec in registry() {

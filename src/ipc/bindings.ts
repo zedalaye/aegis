@@ -223,7 +223,35 @@ read_only_hint: boolean,
 /**
  * The arguments the model wrote, as indented JSON.
  */
-arguments: string, };
+arguments: string, } | { "kind": "jev_eval", 
+/**
+ * The eval's name.
+ */
+name: string, 
+/**
+ * `key: path` for every file that would be sent.
+ */
+inputs: Array<string>, 
+/**
+ * The question ids the file holds.
+ */
+questions: Array<string>, } | { "kind": "jev_ask", 
+/**
+ * The model the request would name, when a client is configured.
+ */
+model: string | null, 
+/**
+ * How many questions.
+ */
+question_count: number, 
+/**
+ * One line per question.
+ */
+questions: Array<string>, 
+/**
+ * The state, indented and capped.
+ */
+state_preview: string, };
 
 /**
  * One approval, as the dialog receives it (PLAN 2.1, `ApprovalRequest`).
@@ -286,7 +314,13 @@ requested_at: string,
 /**
  * When it stops being answerable.
  */
-expires_at: string, };
+expires_at: string, 
+/**
+ * What the decision model said about this call (PLAN 7.18, `tool_risk`).
+ * Arrives after the request, if at all; advisory, and the buttons do not
+ * change with it.
+ */
+annotation: RiskAnnotation | null, };
 
 /**
  * A file a tool call left on disk, identified by path, digest and size —
@@ -726,6 +760,68 @@ brief: string | null, };
 export type EntryKind = "dir" | "file" | "other";
 
 /**
+ * One signed eval, as Settings lists it.
+ */
+export type EvalEntry = { 
+/**
+ * Its name.
+ */
+name: string, 
+/**
+ * The catalog line. Empty when it will not parse.
+ */
+when: string, 
+/**
+ * Its input keys and paths, `key: path`.
+ */
+inputs: Array<string>, 
+/**
+ * Its question ids.
+ */
+questions: Array<string>, 
+/**
+ * The file.
+ */
+path: string, 
+/**
+ * Why it would not run.
+ */
+problem: string | null, };
+
+/**
+ * One `PROPOSAL.yml`, listed apart so it is never offered as runnable.
+ */
+export type EvalProposal = { 
+/**
+ * The name it would run under.
+ */
+name: string, 
+/**
+ * The catalog line, when it parses.
+ */
+when: string, 
+/**
+ * Its question ids.
+ */
+questions: Array<string>, 
+/**
+ * The proposal file.
+ */
+path: string, 
+/**
+ * The `eval.yml` applying it would write.
+ */
+target: string, 
+/**
+ * Where it stands.
+ */
+state: ProposalState, 
+/**
+ * Why it would not apply.
+ */
+problem: string | null, };
+
+/**
  * Where a project's commands run; stored as `Option<ExecHost>`, `None` being
  * this computer.
  */
@@ -800,7 +896,11 @@ program: string, } | { "kind": "screen_capture" } | { "kind": "memory_write" } |
 /**
  * The full tool name the dialog named.
  */
-tool: string, };
+tool: string, } | { "kind": "jev_eval", 
+/**
+ * The eval's name.
+ */
+name: string, } | { "kind": "jev_ask" };
 
 /**
  * One brief, as the approval dialog draws it.
@@ -871,6 +971,39 @@ outcome: RunOutcome,
 detail: string, };
 
 /**
+ * The TypeSafe decision client's settings, as the WebView may see them.
+ */
+export type MaskedDecision = { 
+/**
+ * Which store answered for `typesafe-api-key`.
+ */
+key_source: KeySource, 
+/**
+ * A few characters of the key, or `None` without one.
+ */
+key_hint: string | null, 
+/**
+ * The model as stored. Empty means [`DECISION_DEFAULT_MODEL`].
+ */
+model: string, 
+/**
+ * The origin as stored. Empty means [`DECISION_DEFAULT_BASE_URL`].
+ */
+base_url: string, 
+/**
+ * Whether a configured key annotates approval dialogs.
+ */
+annotate_approvals: boolean, 
+/**
+ * What an empty model resolves to.
+ */
+default_model: string, 
+/**
+ * What an empty base URL resolves to.
+ */
+default_base_url: string, };
+
+/**
  * One provider row, as the WebView may see it.
  */
 export type MaskedProvider = { 
@@ -931,7 +1064,11 @@ keyring_available: boolean,
  * Prefill values for every authentication kind, so switching in the form
  * can fill the matching URL and model without a second round trip.
  */
-presets: Array<AuthPreset>, };
+presets: Array<AuthPreset>, 
+/**
+ * The decision model (PLAN 7.18), which is not a provider row.
+ */
+decision: MaskedDecision, };
 
 /**
  * One memory, as the UI and the runtime see it.
@@ -1172,6 +1309,45 @@ export type ReturnFormat = "status" | "artefact" | "question";
  * whether something is asked about. Nothing downstream branches on it.
  */
 export type Risk = "low" | "medium" | "high";
+
+/**
+ * What Jev said about a pending call, composed. Probabilities are whole
+ * percentages so the payload stays exact.
+ */
+export type RiskAnnotation = { 
+/**
+ * How likely the call destroys or overwrites something, 0–100.
+ */
+destructive: number, 
+/**
+ * How likely it sends local content to a network service, 0–100.
+ */
+exfil: number, 
+/**
+ * How likely it changes git history or repository state, 0–100.
+ */
+git_history: number, 
+/**
+ * How hard to undo, 0 (revert the file) – 100 (likely gone); `None` when
+ * Jev was not confident.
+ */
+undo: number | null, 
+/**
+ * The kind of change; `None` when Jev was not confident.
+ */
+bucket: string | null, 
+/**
+ * Whether the dialog should read more cautiously.
+ */
+raised: boolean, 
+/**
+ * One line for the dialog.
+ */
+summary: string, 
+/**
+ * The model that answered.
+ */
+model: string, };
 
 /**
  * Who produced a message.
@@ -1793,6 +1969,23 @@ tool: string,
  * How many calls.
  */
 calls: number, };
+
+/**
+ * `tool:approval_annotated` — a pending approval gained a risk annotation.
+ */
+export type ToolApprovalAnnotated = { 
+/**
+ * The session.
+ */
+session_id: string, 
+/**
+ * The request it belongs to.
+ */
+request_id: string, 
+/**
+ * What the decision model said.
+ */
+annotation: RiskAnnotation, };
 
 /**
  * `tool:approval_resolved` — an approval stopped being pending.

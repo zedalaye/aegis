@@ -18,6 +18,7 @@ use super::{
     tool, ApprovalDetail, AskRequest, Decision, Grant, HandoffRow, PolicyCtx, ResolvedCall, Risk,
     ScreenGeometry, ToolCall,
 };
+use crate::agent::decision::eval::{self, EvalWrite, Loaded};
 use crate::error::ErrorCode;
 use crate::exec_host::{self, ExecHost, ExecTarget};
 use crate::handoff::{self, bus};
@@ -302,6 +303,58 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                             "this copies a proposal to `SKILL.md`, which makes `{name}` a runbook \
                              in this workspace's catalog. It grants it to no identity"
                         ),
+                    },
+                ));
+            }
+
+            // A runnable eval (PLAN 7.18): applying a proposal is asked every
+            // time, like a skill's; any other `eval.yml` write is too, since
+            // it would make questions live that nobody signed as a proposal.
+            let eval_write = target
+                .relative_to(workspace)
+                .and_then(|relative| eval::write_of(workspace, &relative, call_content(&call)));
+            if let Some(eval_write) = eval_write {
+                let (name, title, reason) = match eval_write {
+                    EvalWrite::Refused(reason) => {
+                        return Err(Decision::deny(ErrorCode::Denied, reason))
+                    }
+                    EvalWrite::Apply(name) => {
+                        let reason = format!(
+                            "this copies a proposal to `eval.yml`, which makes `{name}` an eval \
+                             `jev_eval` can run. Read the questions and thresholds: they are \
+                             what you sign. It grants it to no identity"
+                        );
+                        (name, "Apply an eval proposal", reason)
+                    }
+                    EvalWrite::Direct(name) => {
+                        let reason = format!(
+                            "this writes `{name}`'s `eval.yml` directly, not from a proposal: \
+                             whatever questions it holds become runnable"
+                        );
+                        (name, "Write a project eval", reason)
+                    }
+                };
+                if ctx.delegated {
+                    return Err(Decision::deny(
+                        ErrorCode::Denied,
+                        format!(
+                            "you are working on a brief, and a brief does not make an eval \
+                             runnable. Write `.aegis/evals/{name}/PROPOSAL.yml`, return it in \
+                             `artefacts`, and leave applying it to a person"
+                        ),
+                    ));
+                }
+                return Ok(ask(
+                    call,
+                    AskRequest {
+                        tool: tool::FS_WRITE.to_owned(),
+                        risk: Risk::High,
+                        title,
+                        summary,
+                        detail,
+                        grant: None,
+                        scope_label: scope_label(None),
+                        reason,
                     },
                 ));
             }
@@ -747,6 +800,136 @@ fn judge(ctx: &PolicyCtx<'_>, workspace: &Path, call: ToolCall) -> Result<Decisi
                 },
             ))
         }
+
+        // PLAN 7.18: the eval file owns the questions; the model names it and,
+        // at most, other files for its declared inputs.
+        ToolCall::JevEval { name, inputs } => {
+            let doc = match eval::load(workspace, &name) {
+                Loaded::Ready(doc) => doc,
+                Loaded::Missing { proposed: true } => {
+                    return Err(Decision::deny(
+                        ErrorCode::Denied,
+                        format!(
+                            "`{name}` is only proposed: `.aegis/evals/{name}/PROPOSAL.yml` has \
+                             not been applied, and a proposal does not run. A person applies it \
+                             by copying it onto `eval.yml`"
+                        ),
+                    ))
+                }
+                Loaded::Missing { proposed: false } => {
+                    return Err(Decision::deny(
+                        ErrorCode::ToolFailed,
+                        format!(
+                            "there is no signed eval `{name}` in this workspace \
+                             (`.aegis/evals/{name}/eval.yml`)"
+                        ),
+                    ))
+                }
+                Loaded::Broken(problem) => {
+                    return Err(Decision::deny(
+                        ErrorCode::ToolFailed,
+                        format!("the eval `{name}` cannot run: {problem}"),
+                    ))
+                }
+            };
+
+            if let Some(unknown) = inputs.keys().find(|key| !doc.inputs.contains_key(*key)) {
+                return Err(Decision::deny(
+                    ErrorCode::ToolFailed,
+                    format!(
+                        "`{unknown}` is not an input of `{name}`; it takes {}",
+                        doc.inputs.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                ));
+            }
+            let mut paths = doc.inputs.clone();
+            paths.extend(inputs);
+
+            let mut resolved = Vec::with_capacity(paths.len());
+            let mut shown = Vec::with_capacity(paths.len());
+            let mut sensitive = false;
+            for (key, raw) in &paths {
+                let target = resolve(workspace, raw)?;
+                if !target.inside {
+                    return Err(Decision::deny(
+                        ErrorCode::PathOutsideWorkspace,
+                        format!("input `{key}` (`{raw}`) is outside the workspace"),
+                    ));
+                }
+                sensitive |= is_sensitive(workspace, &target);
+                shown.push(format!("{key}: {}", relative_label(workspace, &target)));
+                resolved.push((key.clone(), target.path));
+            }
+
+            // A credential-shaped input is asked about each time.
+            let grant = (!sensitive).then(|| Grant::JevEval { name: name.clone() });
+            let detail = ApprovalDetail::JevEval {
+                name: name.clone(),
+                inputs: shown,
+                questions: doc.questions.iter().map(|q| q.id.clone()).collect(),
+            };
+            Ok(ask(
+                ResolvedCall::JevEval {
+                    eval: doc,
+                    inputs: resolved,
+                },
+                AskRequest {
+                    tool: tool::JEV_EVAL.to_owned(),
+                    risk: Risk::High,
+                    title: "Run a project eval",
+                    summary: format!("{name} · {} input file(s) to TypeSafe", paths.len()),
+                    detail,
+                    scope_label: scope_label(grant.as_ref()),
+                    grant,
+                    reason: if sensitive {
+                        "an input's name suggests it holds a credential, and its content would \
+                         leave this machine for TypeSafe"
+                            .to_owned()
+                    } else {
+                        "the named workspace files leave this machine for TypeSafe".to_owned()
+                    },
+                },
+            ))
+        }
+
+        // The soupape: always an ask, whatever the key (PLAN 7.18).
+        ToolCall::JevAsk { state, questions } => {
+            let count = questions.len();
+            let pretty = serde_json::to_string_pretty(&state).unwrap_or_default();
+            let grant = Grant::JevAsk;
+            let detail = ApprovalDetail::JevAsk {
+                model: ctx.decision_model.map(str::to_owned),
+                question_count: u32::try_from(count).unwrap_or(u32::MAX),
+                questions: questions.iter().map(|q| q.line()).collect(),
+                state_preview: preview(&pretty).unwrap_or_default(),
+            };
+            Ok(ask(
+                ResolvedCall::JevAsk { state, questions },
+                AskRequest {
+                    tool: tool::JEV_ASK.to_owned(),
+                    risk: Risk::High,
+                    title: "Ask the decision model",
+                    summary: format!(
+                        "{count} question{} to TypeSafe",
+                        if count == 1 { "" } else { "s" }
+                    ),
+                    detail,
+                    scope_label: scope_label(Some(&grant)),
+                    grant: Some(grant),
+                    reason: "the state below, written by the model, leaves this machine for \
+                             TypeSafe"
+                        .to_owned(),
+                },
+            ))
+        }
+    }
+}
+
+/// The content of a pending write, for recognizing what it is.
+fn call_content(call: &ResolvedCall) -> &str {
+    match call {
+        ResolvedCall::FsWrite { content, .. } => content,
+        _ => "",
     }
 }
 

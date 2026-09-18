@@ -50,9 +50,11 @@ use crate::tools::{self, NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcom
 use crate::workspace;
 use crate::world;
 
+use super::decision::{tool_risk, DecisionClient};
 use super::event::{
-    Event, EventSink, ToolApprovalResolved, ToolDrafting, ToolFinished, ToolProgress,
-    ToolRequested, ToolStarted, TurnDelta, TurnError, TurnFinished, TurnMessage, TurnStarted,
+    Event, EventSink, ToolApprovalAnnotated, ToolApprovalResolved, ToolDrafting, ToolFinished,
+    ToolProgress, ToolRequested, ToolStarted, TurnDelta, TurnError, TurnFinished, TurnMessage,
+    TurnStarted,
 };
 use super::guard::{self, Halt};
 use super::provider::Provider;
@@ -180,6 +182,21 @@ fn held(agent: &Agent, standing: &Standing<'_>, connectors: &mcp::Catalog) -> Ve
     held
 }
 
+/// The allow-list as shown to the model: without a decision client, the
+/// `jev_*` tools could only fail after a dialog, so they are left out.
+fn offered_tools(held: &[String], decision: bool) -> Vec<String> {
+    held.iter()
+        .filter(|name| {
+            decision
+                || !matches!(
+                    name.as_str(),
+                    policy::tool::JEV_EVAL | policy::tool::JEV_ASK
+                )
+        })
+        .cloned()
+        .collect()
+}
+
 /// What this turn offered the model: the allow-list and the connector catalog
 /// it was resolved against, settled together at the top of [`Turn::run`].
 #[derive(Clone, Copy)]
@@ -245,6 +262,10 @@ pub struct Turn<'a> {
     /// The running connectors (Phase 18). [`Connectors::new`] is an empty
     /// roster.
     pub connectors: &'a Connectors,
+    /// The decision client (PLAN 7.18), for `jev_*` calls and the approval
+    /// annotation. `None` without a TypeSafe key: those tools are then not
+    /// offered, and dialogs open unannotated.
+    pub decision: Option<&'a DecisionClient>,
 }
 
 /// The [`ProgressSink`] one tool call writes to. The turn, not the tool,
@@ -413,8 +434,9 @@ impl Turn<'_> {
                 },
                 raw,
                 // Only tools the identity holds are shown; policy still refuses
-                // a replayed call.
-                tools::schemas_for(&held, &connectors),
+                // a replayed call. The decision tools need a client to be
+                // worth a dialog.
+                tools::schemas_for(&offered_tools(&held, self.decision.is_some()), &connectors),
             );
 
             let stream = self.provider.stream(request);
@@ -833,6 +855,7 @@ impl Turn<'_> {
                 handoffs: self.standing.ctx(),
                 connectors: self.connectors,
                 routine: self.routine(),
+                decision: self.decision,
             };
 
             // Only a capture needs the display geometry, passed in so policy
@@ -846,6 +869,7 @@ impl Turn<'_> {
                     .with_exec_host(plan.exec_host.as_ref())
                     .with_screen(screen.as_ref())
                     .with_connectors(Some(connectors))
+                    .with_decision_model(self.decision.map(DecisionClient::model))
                     .with_identity(Identity {
                         name: &self.agent.name,
                         tools: held,
@@ -955,11 +979,37 @@ impl Turn<'_> {
         self.sink
             .emit(Event::ToolApprovalRequired(Box::new(ticket.request)));
 
-        // `biased`: a Stop that lands alongside an answer wins.
-        let answer = tokio::select! {
-            biased;
-            () = cancel.cancelled() => None,
-            answered = tokio::time::timeout(APPROVAL_TTL, ticket.answer) => match answered {
+        // PLAN 7.18: the dialog is already open; an annotation that arrives
+        // while it is still waiting is attached, one that does not is dropped.
+        // It never answers the request.
+        let answered = {
+            let annotate = self.annotate(&plan.session_id, &request_id, request);
+            let waiting = tokio::time::timeout(APPROVAL_TTL, ticket.answer);
+            tokio::pin!(annotate, waiting);
+            let mut annotating = self
+                .decision
+                .is_some_and(DecisionClient::annotates_approvals);
+
+            // `biased`: a Stop that lands alongside an answer wins.
+            let answered = loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break None,
+                    answered = &mut waiting => break Some(answered),
+                    () = &mut annotate, if annotating => annotating = false,
+                }
+            };
+            if annotating {
+                tracing::debug!(
+                    request_id = %request_id,
+                    "the approval was answered before its risk annotation arrived"
+                );
+            }
+            answered
+        };
+        let answer = match answered {
+            None => None,
+            Some(answered) => match answered {
                 Ok(Ok(answer)) => Some(answer),
                 // The sender was dropped without an answer: the session was
                 // deleted, or the registry was cleared under us.
@@ -1002,6 +1052,27 @@ impl Turn<'_> {
         self.session_changed(plan);
 
         answer
+    }
+
+    /// Runs `tool_risk` for one open request and attaches what it found.
+    async fn annotate(&self, session_id: &str, request_id: &str, request: &AskRequest) {
+        let Some(client) = self.decision.filter(|client| client.annotates_approvals()) else {
+            return;
+        };
+        let Some(annotation) = tool_risk::annotate(client, request).await else {
+            return;
+        };
+        let raised = annotation.raised;
+        if self.approvals.annotate(request_id, annotation.clone()) {
+            tracing::info!(request_id, raised, "an approval was annotated");
+            self.sink.emit(Event::ToolApprovalAnnotated(Box::new(
+                ToolApprovalAnnotated {
+                    session_id: session_id.to_owned(),
+                    request_id: request_id.to_owned(),
+                    annotation,
+                },
+            )));
+        }
     }
 
     /// Emits `tool:started` for a call that policy — or the user — cleared.
@@ -1062,6 +1133,7 @@ impl Turn<'_> {
                 memories: self.memories,
                 handoffs: self.standing.ctx(),
                 connectors: self.connectors,
+                decision: self.decision,
             };
             let outcome =
                 tools::refuse(&ctx, &call.name, AuditDecision::Deny, halt.code(), &reason);
@@ -1261,6 +1333,18 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    /// PLAN 7.18: without a TypeSafe key the decision tools are not shown,
+    /// and nothing else changes.
+    #[test]
+    fn decision_tools_are_offered_only_with_a_client() {
+        let held: Vec<String> = ["fs_read", "jev_eval", "jev_ask"]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(offered_tools(&held, false), ["fs_read"]);
+        assert_eq!(offered_tools(&held, true), held);
+    }
+
     use crate::agent::provider::FakeProvider;
     use crate::agent::wire::ModelEvent;
     use crate::approval::{ApprovalRequest, Decision as Answered};
@@ -1400,6 +1484,7 @@ mod tests {
                 connectors: &self.connectors,
                 standing: Standing::Own(None),
                 unattended: None,
+                decision: None,
             }
         }
 

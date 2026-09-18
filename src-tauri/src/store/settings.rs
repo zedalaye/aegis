@@ -148,6 +148,28 @@ pub struct MaskedSettings {
     /// Prefill values for every authentication kind, so switching in the form
     /// can fill the matching URL and model without a second round trip.
     pub presets: Vec<AuthPreset>,
+    /// The decision model (PLAN 7.18), which is not a provider row.
+    pub decision: MaskedDecision,
+}
+
+/// The TypeSafe decision client's settings, as the WebView may see them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct MaskedDecision {
+    /// Which store answered for `typesafe-api-key`.
+    pub key_source: KeySource,
+    /// A few characters of the key, or `None` without one.
+    pub key_hint: Option<String>,
+    /// The model as stored. Empty means [`DECISION_DEFAULT_MODEL`].
+    pub model: String,
+    /// The origin as stored. Empty means [`DECISION_DEFAULT_BASE_URL`].
+    pub base_url: String,
+    /// Whether a configured key annotates approval dialogs.
+    pub annotate_approvals: bool,
+    /// What an empty model resolves to.
+    pub default_model: String,
+    /// What an empty base URL resolves to.
+    pub default_base_url: String,
 }
 
 /// One provider row, as the WebView may see it.
@@ -193,8 +215,86 @@ struct SettingsFile {
     providers: Vec<ProviderEntry>,
     #[serde(default, skip_serializing)]
     provider: Option<ProviderSettings>,
+    #[serde(default)]
+    decision: DecisionSettings,
     #[serde(flatten)]
     rest: Map<String, Value>,
+}
+
+/// The model a decision request names when the setting is empty.
+pub const DECISION_DEFAULT_MODEL: &str = "jev-latest";
+
+/// The origin decision requests go to when the setting is empty.
+pub const DECISION_DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
+
+/// The path a decision base URL must not already include.
+const DECISION_ENDPOINT_SUFFIX: &str = "/v1/systemone";
+
+/// The decision client's settings (PLAN 7.18), persisted as `decision`.
+/// Empty strings resolve at use time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DecisionSettings {
+    /// The Jev model; empty is [`DECISION_DEFAULT_MODEL`].
+    pub model: String,
+    /// The origin; empty is [`DECISION_DEFAULT_BASE_URL`].
+    pub base_url: String,
+    /// Whether a configured key annotates approval dialogs (`tool_risk`).
+    pub annotate_approvals: bool,
+}
+
+impl Default for DecisionSettings {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            base_url: String::new(),
+            annotate_approvals: true,
+        }
+    }
+}
+
+impl DecisionSettings {
+    /// The model a request names.
+    pub fn resolved_model(&self) -> &str {
+        if self.model.is_empty() {
+            DECISION_DEFAULT_MODEL
+        } else {
+            &self.model
+        }
+    }
+
+    /// The origin a request goes to.
+    pub fn resolved_base_url(&self) -> &str {
+        if self.base_url.is_empty() {
+            DECISION_DEFAULT_BASE_URL
+        } else {
+            &self.base_url
+        }
+    }
+}
+
+/// Accepts a decision origin, or says what is wrong with it: the rules of
+/// [`normalize_base_url`], and the endpoint path is refused because the client
+/// appends it.
+pub fn normalize_decision_base_url(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    let refuse = |reason: String| AppError::Settings {
+        field: "decision base URL",
+        reason,
+    };
+    if trimmed.ends_with(DECISION_ENDPOINT_SUFFIX) {
+        return Err(refuse(
+            "it already ends in `/v1/systemone`. Aegis appends that itself — give the origin, \
+             like `https://api.typesafe.ai`"
+                .to_owned(),
+        ));
+    }
+    normalize_base_url(trimmed).map_err(|err| match err {
+        AppError::Settings { reason, .. } => {
+            refuse(reason.replace("https://api.openai.com/v1", DECISION_DEFAULT_BASE_URL))
+        }
+        other => other,
+    })
 }
 
 /// One row of the roster, as persisted.
@@ -455,10 +555,12 @@ impl RowDraft<'_> {
 // Store
 // ---------------------------------------------------------------------------
 
-/// What the store holds in memory: the rows, and the keys it does not own.
+/// What the store holds in memory: the rows, the decision settings, and the
+/// keys it does not own. Every save writes all three (PLAN 7.18, *Trap*).
 #[derive(Debug)]
 struct Document {
     providers: Vec<ProviderEntry>,
+    decision: DecisionSettings,
     rest: Map<String, Value>,
 }
 
@@ -466,6 +568,7 @@ impl Document {
     fn empty() -> Self {
         Self {
             providers: vec![ProviderEntry::unconfigured_default()],
+            decision: DecisionSettings::default(),
             rest: Map::new(),
         }
     }
@@ -501,6 +604,7 @@ impl Document {
 
         Self {
             providers,
+            decision: file.decision,
             rest: file.rest,
         }
     }
@@ -632,7 +736,7 @@ impl SettingsStore {
         }
         let updated = entry.clone();
 
-        self.save(&next, &document.rest)?;
+        self.save(&next, &document)?;
         document.providers = next;
         Ok(updated)
     }
@@ -658,7 +762,7 @@ impl SettingsStore {
         let mut next = document.providers.clone();
         next.push(entry.clone());
 
-        self.save(&next, &document.rest)?;
+        self.save(&next, &document)?;
         document.providers = next;
         tracing::info!(id = %entry.id, "provider row added");
         Ok(entry)
@@ -685,7 +789,7 @@ impl SettingsStore {
             return Err(AppError::ProviderNotFound { id: id.to_owned() });
         }
 
-        self.save(&next, &document.rest)?;
+        self.save(&next, &document)?;
         document.providers = next;
         tracing::info!(id, "provider row deleted");
         Ok(())
@@ -693,11 +797,23 @@ impl SettingsStore {
 
     /// Writes the document: the rows given, and every key this build does not
     /// own as it was read.
-    fn save(&self, providers: &[ProviderEntry], rest: &Map<String, Value>) -> AppResult<()> {
+    fn save(&self, providers: &[ProviderEntry], document: &Document) -> AppResult<()> {
+        self.write(providers, &document.decision, &document.rest)
+    }
+
+    /// Writes one whole document: rows, decision settings, and every key this
+    /// build does not own as it was read.
+    fn write(
+        &self,
+        providers: &[ProviderEntry],
+        decision: &DecisionSettings,
+        rest: &Map<String, Value>,
+    ) -> AppResult<()> {
         let file = SettingsFile {
             version: SCHEMA_VERSION,
             providers: providers.to_vec(),
             provider: None,
+            decision: decision.clone(),
             rest: rest.clone(),
         };
 
@@ -716,6 +832,31 @@ impl SettingsStore {
                 source: err,
             }
         })
+    }
+
+    /// The decision client's settings (PLAN 7.18).
+    pub fn decision(&self) -> DecisionSettings {
+        self.document().decision.clone()
+    }
+
+    /// Replaces the decision settings, validated first. The rows are written
+    /// back as they are.
+    pub fn set_decision(
+        &self,
+        model: &str,
+        base_url: &str,
+        annotate_approvals: bool,
+    ) -> AppResult<DecisionSettings> {
+        let next = DecisionSettings {
+            model: normalize_model(model)?,
+            base_url: normalize_decision_base_url(base_url)?,
+            annotate_approvals,
+        };
+
+        let mut document = self.document();
+        self.write(&document.providers, &next, &document.rest)?;
+        document.decision = next.clone();
+        Ok(next)
     }
 
     /// Where the document lives. For diagnostics and tests.
@@ -1218,5 +1359,68 @@ mod tests {
             Err(AppError::ProviderNotFound { .. })
         ));
         assert_eq!(SettingsStore::load(dir.path()).list().len(), 1);
+    }
+
+    /// PLAN 7.18: a document from before the decision half loads with the
+    /// toggle on and both strings empty, resolved at use time.
+    #[test]
+    fn a_document_without_a_decision_key_loads_with_defaults() {
+        let dir = TempDir::new().expect("temp dir");
+        fs::write(
+            dir.path().join(SETTINGS_FILE),
+            br#"{"version":1,"providers":[{"id":"default","model":"m"}]}"#,
+        )
+        .expect("write");
+
+        let decision = SettingsStore::load(dir.path()).decision();
+        assert_eq!(decision, DecisionSettings::default());
+        assert!(decision.annotate_approvals);
+        assert_eq!(decision.resolved_model(), "jev-latest");
+        assert_eq!(decision.resolved_base_url(), "https://api.typesafe.ai");
+    }
+
+    /// The trap: a decision save keeps every row, and a row save keeps the
+    /// decision settings.
+    #[test]
+    fn both_halves_survive_either_save() {
+        let dir = TempDir::new().expect("temp dir");
+        let store = SettingsStore::load(dir.path());
+        let local = store.add(&row("Local", "llama3")).expect("added");
+
+        store
+            .set_decision("jev-2", "http://127.0.0.1:9/", false)
+            .expect("saved");
+        store
+            .set("https://x.test/v1", "m2", AuthKind::ApiKey, None)
+            .expect("saved");
+
+        let reopened = SettingsStore::load(dir.path());
+        assert!(reopened.contains(&local.id));
+        assert_eq!(
+            reopened.decision(),
+            DecisionSettings {
+                model: "jev-2".to_owned(),
+                base_url: "http://127.0.0.1:9".to_owned(),
+                annotate_approvals: false,
+            }
+        );
+        let written = fs::read_to_string(store.path()).expect("the document");
+        assert!(!written.contains("\"provider\""), "{written}");
+    }
+
+    #[test]
+    fn a_decision_url_that_names_the_endpoint_is_refused() {
+        let dir = TempDir::new().expect("temp dir");
+        let store = SettingsStore::load(dir.path());
+
+        let err = store
+            .set_decision("", "https://api.typesafe.ai/v1/systemone", true)
+            .expect_err("refused");
+        assert!(err.to_string().contains("appends that itself"), "{err}");
+        assert!(normalize_decision_base_url("typesafe.ai")
+            .expect_err("no scheme")
+            .to_string()
+            .contains("api.typesafe.ai"));
+        assert_eq!(store.decision(), DecisionSettings::default());
     }
 }

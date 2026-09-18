@@ -18,11 +18,14 @@ pub mod grants;
 pub mod matrix;
 pub mod path;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::agent::decision::eval::EvalDoc;
+use crate::agent::decision::{self, Question};
 use crate::error::ErrorCode;
 use crate::exec_host::{ExecHost, ExecTarget};
 use crate::handoff;
@@ -58,6 +61,10 @@ pub mod tool {
     pub const HANDOFF_DELEGATE: &str = "handoff_delegate";
     /// Close a delegated run with the report it was briefed for.
     pub const HANDOFF_RETURN: &str = "handoff_return";
+    /// Run a signed project eval (PLAN 7.18).
+    pub const JEV_EVAL: &str = "jev_eval";
+    /// Ask the decision model questions the harness does not own yet.
+    pub const JEV_ASK: &str = "jev_ask";
 }
 
 /// How alarming a call should look in the approval dialog.
@@ -183,6 +190,26 @@ pub enum ApprovalDetail {
         read_only_hint: bool,
         /// The arguments the model wrote, as indented JSON.
         arguments: String,
+    },
+    /// Running a signed project eval (PLAN 7.18).
+    JevEval {
+        /// The eval's name.
+        name: String,
+        /// `key: path` for every file that would be sent.
+        inputs: Vec<String>,
+        /// The question ids the file holds.
+        questions: Vec<String>,
+    },
+    /// Sending model-written questions to TypeSafe (PLAN 7.18).
+    JevAsk {
+        /// The model the request would name, when a client is configured.
+        model: Option<String>,
+        /// How many questions.
+        question_count: u32,
+        /// One line per question.
+        questions: Vec<String>,
+        /// The state, indented and capped.
+        state_preview: String,
     },
 }
 
@@ -366,6 +393,21 @@ pub enum ResolvedCall {
         /// The arguments as the model wrote them.
         args: serde_json::Value,
     },
+    /// `jev_eval`: the eval as it was loaded when the call was judged, and
+    /// its input files resolved and contained.
+    JevEval {
+        /// The signed eval. What runs is what the dialog described.
+        eval: Box<EvalDoc>,
+        /// State key → resolved file.
+        inputs: Vec<(String, PathBuf)>,
+    },
+    /// `jev_ask`, with the state and questions checked.
+    JevAsk {
+        /// What the questions judge.
+        state: serde_json::Value,
+        /// The questions.
+        questions: Vec<Question>,
+    },
 }
 
 impl ResolvedCall {
@@ -384,6 +426,8 @@ impl ResolvedCall {
             Self::HandoffDelegate { .. } => tool::HANDOFF_DELEGATE,
             Self::HandoffReturn { .. } => tool::HANDOFF_RETURN,
             Self::Connector { name, .. } => name,
+            Self::JevEval { .. } => tool::JEV_EVAL,
+            Self::JevAsk { .. } => tool::JEV_ASK,
         }
     }
 }
@@ -478,6 +522,20 @@ pub enum ToolCall {
         /// The arguments, unread: their schema belongs to the server.
         args: serde_json::Value,
     },
+    /// `jev_eval`.
+    JevEval {
+        /// The eval's name.
+        name: String,
+        /// Paths overriding the file's declared inputs, by key.
+        inputs: BTreeMap<String, String>,
+    },
+    /// `jev_ask`.
+    JevAsk {
+        /// What the questions judge.
+        state: serde_json::Value,
+        /// The questions, parsed.
+        questions: Vec<Question>,
+    },
 }
 
 impl ToolCall {
@@ -496,6 +554,8 @@ impl ToolCall {
             Self::HandoffDelegate { .. } => tool::HANDOFF_DELEGATE,
             Self::HandoffReturn { .. } => tool::HANDOFF_RETURN,
             Self::Connector { name, .. } => name,
+            Self::JevEval { .. } => tool::JEV_EVAL,
+            Self::JevAsk { .. } => tool::JEV_ASK,
         }
     }
 
@@ -605,6 +665,28 @@ impl ToolCall {
                     query: a.query.unwrap_or_default(),
                 })
             }
+            // Before the connector arm, which would otherwise read these names.
+            tool::JEV_EVAL => {
+                let a: JevEvalArgs = convert(tool_name, args)?;
+                let name = a.name.trim();
+                if !crate::skills::is_name(name) {
+                    return Err(format!(
+                        "`{name}` is not an eval name. They look like `inbox.classify`"
+                    ));
+                }
+                Ok(Self::JevEval {
+                    name: name.to_owned(),
+                    inputs: a.inputs,
+                })
+            }
+            tool::JEV_ASK => {
+                let a: JevAskArgs = convert(tool_name, args)?;
+                decision::check_state(&a.state)?;
+                Ok(Self::JevAsk {
+                    state: a.state,
+                    questions: decision::parse_questions(a.questions)?,
+                })
+            }
             // Shaped like a connector tool. Its arguments follow the server's
             // schema, so they are only checked to be an object (`tools/call`).
             other => match connectors::split_tool_name(other) {
@@ -685,6 +767,22 @@ struct MemoryWriteArgs {
     text: String,
     #[serde(default)]
     source: Option<String>,
+}
+
+/// Wire shape of `jev_eval` arguments.
+#[derive(Debug, Deserialize)]
+struct JevEvalArgs {
+    name: String,
+    #[serde(default)]
+    inputs: BTreeMap<String, String>,
+}
+
+/// Wire shape of `jev_ask` arguments.
+#[derive(Debug, Deserialize)]
+struct JevAskArgs {
+    #[serde(default)]
+    state: serde_json::Value,
+    questions: Vec<decision::QuestionDraft>,
 }
 
 /// Wire shape of `memory_search` arguments.
@@ -875,6 +973,8 @@ pub struct PolicyCtx<'a> {
     /// The identity the call is made under. `None` applies no allow-list; only
     /// tests use it, since the turn loop always names one.
     pub identity: Option<Identity<'a>>,
+    /// The decision model a `jev_ask` would name, for the dialog (PLAN 7.18).
+    pub decision_model: Option<&'a str>,
 }
 
 impl<'a> PolicyCtx<'a> {
@@ -891,7 +991,15 @@ impl<'a> PolicyCtx<'a> {
             delegated: false,
             unattended: false,
             identity: None,
+            decision_model: None,
         }
+    }
+
+    /// Names the decision model a `jev_ask` dialog shows.
+    #[must_use]
+    pub const fn with_decision_model(mut self, model: Option<&'a str>) -> Self {
+        self.decision_model = model;
+        self
     }
 
     /// Marks this as a call made inside a delegated run.

@@ -688,6 +688,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         connectors: aegis_lib::Connectors::none(),
         standing: Standing::Own(None),
         unattended: None,
+        decision: None,
     }
     .run(&plan, &cancel)
     .await;

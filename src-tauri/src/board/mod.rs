@@ -511,6 +511,7 @@ _Nothing blocked._
             reason: "a write is a change to your files".to_owned(),
             requested_at: "2026-09-01T07:31:00.000Z".to_owned(),
             expires_at: "2026-09-01T07:36:00.000Z".to_owned(),
+            annotation: None,
         }
     }
 

@@ -111,6 +111,7 @@ ts-rs = "12"
 # negation, anchoring, a rule in a parent folder and `core.excludesFile` are
 # exactly where a second implementation would disagree with `git status`.
 ignore = "0.4"
+serde_yaml_ng = "0.10"
 
 # Console programs on Windows do not write UTF-8. `cmd`, `dir`, `ver` and most
 # of the built-in tooling emit the system OEM code page (437, 850, 932 …), so

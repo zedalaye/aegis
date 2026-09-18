@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use ts_rs::TS;
 
+use crate::agent::decision::tool_risk::RiskAnnotation;
 use crate::approval::{ApprovalRequest, Decision, ResolvedBy};
 use crate::audit::{AuditEntry, Outcome};
 use crate::mcp::ConnectorView;
@@ -36,6 +37,8 @@ pub mod name {
     pub const TOOL_REQUESTED: &str = "tool:requested";
     /// A tool call is blocked on a human.
     pub const TOOL_APPROVAL_REQUIRED: &str = "tool:approval_required";
+    /// The decision model annotated a pending approval (PLAN 7.18).
+    pub const TOOL_APPROVAL_ANNOTATED: &str = "tool:approval_annotated";
     /// An approval was answered, however it was answered.
     pub const TOOL_APPROVAL_RESOLVED: &str = "tool:approval_resolved";
     /// A tool began running.
@@ -255,6 +258,18 @@ pub struct ToolFinished {
     pub image_path: Option<String>,
 }
 
+/// `tool:approval_annotated` — a pending approval gained a risk annotation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct ToolApprovalAnnotated {
+    /// The session.
+    pub session_id: String,
+    /// The request it belongs to.
+    pub request_id: String,
+    /// What the decision model said.
+    pub annotation: RiskAnnotation,
+}
+
 /// One event, ready to emit.
 ///
 /// One enum, so [`EventSink`] has a single method.
@@ -274,6 +289,8 @@ pub enum Event {
     ToolRequested(ToolRequested),
     /// `tool:approval_required`.
     ToolApprovalRequired(Box<ApprovalRequest>),
+    /// `tool:approval_annotated`.
+    ToolApprovalAnnotated(Box<ToolApprovalAnnotated>),
     /// `tool:approval_resolved`.
     ToolApprovalResolved(ToolApprovalResolved),
     /// `tool:started`.
@@ -307,6 +324,7 @@ impl Event {
             Self::TurnError(_) => name::TURN_ERROR,
             Self::ToolRequested(_) => name::TOOL_REQUESTED,
             Self::ToolApprovalRequired(_) => name::TOOL_APPROVAL_REQUIRED,
+            Self::ToolApprovalAnnotated(_) => name::TOOL_APPROVAL_ANNOTATED,
             Self::ToolApprovalResolved(_) => name::TOOL_APPROVAL_RESOLVED,
             Self::ToolStarted(_) => name::TOOL_STARTED,
             Self::ToolDrafting(_) => name::TOOL_DRAFTING,
@@ -330,6 +348,7 @@ impl Event {
             Self::TurnError(payload) => &payload.session_id,
             Self::ToolRequested(payload) => &payload.session_id,
             Self::ToolApprovalRequired(payload) => &payload.session_id,
+            Self::ToolApprovalAnnotated(payload) => &payload.session_id,
             Self::ToolApprovalResolved(payload) => &payload.session_id,
             Self::ToolStarted(payload) => &payload.session_id,
             Self::ToolDrafting(payload) => &payload.session_id,
@@ -363,6 +382,7 @@ impl Event {
             Self::TurnError(payload) => serde_json::to_value(payload),
             Self::ToolRequested(payload) => serde_json::to_value(payload),
             Self::ToolApprovalRequired(payload) => serde_json::to_value(payload),
+            Self::ToolApprovalAnnotated(payload) => serde_json::to_value(payload),
             Self::ToolApprovalResolved(payload) => serde_json::to_value(payload),
             Self::ToolStarted(payload) => serde_json::to_value(payload),
             Self::ToolDrafting(payload) => serde_json::to_value(payload),

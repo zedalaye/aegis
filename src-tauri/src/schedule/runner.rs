@@ -79,6 +79,8 @@ pub struct Host<'a> {
     pub connectors: &'a Connectors,
     /// Which provider answers for an identity (PLAN 7.1, *Provider*).
     pub provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
+    /// The decision client (PLAN 7.18), or `None` without a TypeSafe key.
+    pub decision: Option<&'a crate::agent::decision::DecisionClient>,
 }
 
 /// Which routines are running now, in memory only. Shared by the tick and
@@ -317,6 +319,7 @@ async fn drive(
         skills: host.skills,
         memories: host.memories,
         connectors: host.connectors,
+        decision: host.decision,
         // No bus: a scheduled run does the work, it does not hand it out. See
         // the module note.
         standing: Standing::Own(None),
@@ -501,6 +504,7 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
 
     let sink = WindowSink::new(app.clone());
     let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
+    let decision = state.decision_client();
     let host = Host {
         projects: state.store(),
         routines: state.routines(),
@@ -517,6 +521,7 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
         memories: state.memories(),
         connectors: state.connectors(),
         provider: &provider,
+        decision: decision.as_ref(),
     };
 
     fire(&host, routine_id).await;

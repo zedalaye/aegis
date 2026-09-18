@@ -144,6 +144,40 @@ pub async fn settings_list_models(
         .await)
 }
 
+/// Saves the decision model's settings, and its key when one is given
+/// (PLAN 7.18). A `None` or blank `api_key` keeps the stored key. Never
+/// touches a provider row.
+#[tauri::command(rename_all = "snake_case")]
+pub fn settings_set_decision<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    model: String,
+    base_url: String,
+    annotate_approvals: bool,
+    api_key: Option<String>,
+) -> AppResult<MaskedSettings> {
+    state.save_decision(&model, &base_url, annotate_approvals, api_key.as_deref())?;
+
+    Ok(announce(&app, state.masked_settings()))
+}
+
+/// Removes the stored TypeSafe key.
+#[tauri::command(rename_all = "snake_case")]
+pub fn settings_clear_decision_key<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> AppResult<MaskedSettings> {
+    state.clear_decision_key()?;
+
+    Ok(announce(&app, state.masked_settings()))
+}
+
+/// Asks TypeSafe one cheap question. Every outcome is a [`ProviderProbe`].
+#[tauri::command(rename_all = "snake_case")]
+pub async fn settings_probe_decision(state: State<'_, AppState>) -> AppResult<ProviderProbe> {
+    Ok(state.probe_decision().await)
+}
+
 /// Emits `settings:changed` and hands the payload back to the caller.
 ///
 /// `emit_to` the main window (PLAN 2.2); an emit failure is only logged.
