@@ -40,6 +40,8 @@ const TOOL_SUMMARY: Record<string, string> = {
   memory_search: "look through what it remembers",
   handoff_delegate: "hand briefs to other identities and wait for them",
   handoff_return: "report back on a brief it was handed",
+  jev_eval: "run a signed project eval (questions the cabinet already holds)",
+  jev_ask: "draft typed questions the harness does not yet own",
 };
 
 /**

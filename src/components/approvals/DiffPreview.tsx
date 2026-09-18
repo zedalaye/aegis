@@ -312,5 +312,57 @@ export default function DiffPreview({
           </p>
         </>
       );
+
+    case "jev_eval":
+      return (
+        <>
+          <dl className="detail">
+            <Field label="Eval" mono>
+              .aegis/evals/{detail.name}/eval.yml
+            </Field>
+            <Field label="Files sent" mono>
+              {detail.inputs.length === 0 ? "none" : detail.inputs.join("\n")}
+            </Field>
+            <Field label="Questions" mono>
+              {detail.questions.join(", ")}
+            </Field>
+          </dl>
+          <p className="detail__note">
+            The questions and thresholds are the ones in the signed file; the
+            model only named the eval. The files above leave this machine for
+            TypeSafe. What comes back is routes and escalations — nothing is
+            done with them unless a later call, asked about on its own, does it.
+          </p>
+        </>
+      );
+
+    case "jev_ask":
+      return (
+        <>
+          <dl className="detail">
+            <Field label="Model" mono>
+              {detail.model ?? "TypeSafe"}
+            </Field>
+            <Field label="Questions">{detail.question_count}</Field>
+          </dl>
+          <figure className="preview">
+            <figcaption className="preview__caption">
+              What the model wants judged
+            </figcaption>
+            <pre className="preview__body">{detail.questions.join("\n")}</pre>
+          </figure>
+          <figure className="preview">
+            <figcaption className="preview__caption">
+              The state that would be sent (first 4 KB)
+            </figcaption>
+            <pre className="preview__body">{detail.state_preview}</pre>
+          </figure>
+          <p className="detail__note">
+            The model wrote both the questions and the state. Everything above
+            leaves this machine for TypeSafe; the answers are probabilities
+            the model composes itself.
+          </p>
+        </>
+      );
   }
 }

@@ -37,6 +37,10 @@ function scopeLabel(grant: Grant): string {
       // `git__status` approved `git__status`, not the `git` connector and not
       // whatever it offers next week.
       return `Call \`${grant.tool}\` with any arguments`;
+    case "jev_eval":
+      return `Run the signed eval \`${grant.name}\`, sending its input files to TypeSafe — no other eval`;
+    case "jev_ask":
+      return "Send model-written questions and state to TypeSafe";
   }
 }
 
@@ -49,6 +53,9 @@ function grantKey(grant: Grant): string {
   // would collapse them into one row.
   if (grant.kind === "connector") {
     return `connector:${grant.tool}`;
+  }
+  if (grant.kind === "jev_eval") {
+    return `jev_eval:${grant.name}`;
   }
   return grant.kind;
 }

@@ -29,6 +29,8 @@ import type {
   Grant,
   ImportReport,
   MaskedSettings,
+  EvalEntry,
+  EvalProposal,
   ModelCatalog,
   Memory,
   MemoryDraft,
@@ -447,6 +449,55 @@ export function settingsProbeProvider(
   return call<ProviderProbe>("settings_probe_provider", {
     provider_id: providerId,
   });
+}
+
+/** What the decision model's form saves (PLAN 7.18). */
+export type DecisionInput = {
+  /** Empty means `jev-latest`. */
+  readonly model: string;
+  /** An origin; empty means `https://api.typesafe.ai`. */
+  readonly baseUrl: string;
+  readonly annotateApprovals: boolean;
+  /** Empty keeps the stored key. */
+  readonly apiKey: string;
+};
+
+/**
+ * Saves the decision model's settings, and its key if one is passed. Never
+ * touches a provider row.
+ */
+export function settingsSetDecision(
+  input: DecisionInput,
+): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_set_decision", {
+    model: input.model,
+    base_url: input.baseUrl,
+    annotate_approvals: input.annotateApprovals,
+    api_key: input.apiKey.length === 0 ? null : input.apiKey,
+  });
+}
+
+/** Removes the stored TypeSafe key. `AEGIS_TYPESAFE_API_KEY` stays. */
+export function settingsClearDecisionKey(): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_clear_decision_key");
+}
+
+/** One cheap question to TypeSafe. Never rejects. */
+export function settingsProbeDecision(): Promise<ProviderProbe> {
+  return call<ProviderProbe>("settings_probe_decision");
+}
+
+/** Every signed `.aegis/evals/<name>/eval.yml` in a project's workspace. */
+export function evalList(projectId: string): Promise<EvalEntry[]> {
+  return call<EvalEntry[]>("eval_list", { project_id: projectId });
+}
+
+/**
+ * Every `PROPOSAL.yml` in a project's workspace. Kept apart from
+ * {@link evalList}: a proposal does not run until a person applies it.
+ */
+export function evalProposals(projectId: string): Promise<EvalProposal[]> {
+  return call<EvalProposal[]>("eval_proposals", { project_id: projectId });
 }
 
 /**

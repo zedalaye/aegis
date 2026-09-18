@@ -22,6 +22,7 @@ import ConnectorList from "../connectors/ConnectorList";
 import MemoryList from "../memory/MemoryList";
 import RoutineList from "../routines/RoutineList";
 import SkillList from "../skills/SkillList";
+import DecisionForm from "./DecisionForm";
 import ProviderForm from "./ProviderForm";
 import ProviderList from "./ProviderList";
 
@@ -100,6 +101,9 @@ export default function SettingsPanel() {
       <ProviderList />
       <ProviderForm />
 
+      <h2 className="settings__section">Decision model</h2>
+      <DecisionForm />
+
       <h2 className="settings__section">Identities</h2>
       <AgentList />
 
@@ -131,7 +135,8 @@ export default function SettingsPanel() {
         not: each goes to this machine's own credential store — Credential
         Manager, Keychain, or a Secret Service — under{" "}
         <code>provider-api-key</code> for the default provider and{" "}
-        <code>provider-api-key:&lt;id&gt;</code> for the others, and Aegis has
+        <code>provider-api-key:&lt;id&gt;</code> for the others, and{" "}
+        <code>typesafe-api-key</code> for the decision model, and Aegis has
         no command that can read one back out. Nothing in this
         window is ever given the key; it is attached to the request in the
         runtime, as a header, and it is never written to the audit log.

@@ -6,7 +6,11 @@
  * runtime offers a grant, labelled with its scope (enforced in Rust, PLAN 3.1).
  */
 
-import type { ApprovalRequest, Decision } from "../../ipc/bindings";
+import type {
+  ApprovalRequest,
+  Decision,
+  RiskAnnotation,
+} from "../../ipc/bindings";
 import { useApprovals } from "../../state/approvals";
 
 import DiffPreview from "./DiffPreview";
@@ -21,6 +25,36 @@ function Queue({ count }: { readonly count: number }) {
     <span className="approval__queue">
       {count} more waiting
     </span>
+  );
+}
+
+/**
+ * What the decision model said (PLAN 7.18). Advisory: it changes the words
+ * shown, never the buttons.
+ */
+function Annotation({ annotation }: { readonly annotation: RiskAnnotation }) {
+  const facts = [
+    `destructive ${annotation.destructive}%`,
+    `sends content out ${annotation.exfil}%`,
+    `changes git ${annotation.git_history}%`,
+  ];
+  if (annotation.undo !== null) {
+    facts.push(`hard to undo ${annotation.undo}%`);
+  }
+  if (annotation.bucket !== null) {
+    facts.push(annotation.bucket.replace(/_/g, " "));
+  }
+  return (
+    <p
+      className={`approval__annotation${annotation.raised ? " approval__annotation--raised" : ""}`}
+      role="note"
+    >
+      {annotation.summary}{" "}
+      <span className="approval__annotation-facts">
+        {facts.join(" · ")}
+        {annotation.model.length > 0 ? ` — ${annotation.model}` : ""}
+      </span>
+    </p>
   );
 }
 
@@ -60,6 +94,9 @@ export default function ApprovalDialog({
 
       <p className="approval__summary">{request.summary}</p>
       <p className="approval__reason">Aegis is asking because {request.reason}.</p>
+      {request.annotation === null ? null : (
+        <Annotation annotation={request.annotation} />
+      )}
 
       <DiffPreview detail={request.detail} />
 

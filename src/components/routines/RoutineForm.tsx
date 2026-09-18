@@ -23,6 +23,8 @@ const SIGNABLE: readonly Grant[] = [
   { kind: "screen_capture" },
   { kind: "memory_write" },
   { kind: "handoff_delegate" },
+  // PLAN 7.18: model-written questions to TypeSafe may be signed in advance.
+  { kind: "jev_ask" },
 ];
 
 /** The tool a grant can ever apply to. Mirrors `Grant::tool` in Rust. */
@@ -43,6 +45,10 @@ function toolOf(grant: Grant): string {
       return "handoff_delegate";
     case "connector":
       return grant.tool;
+    case "jev_eval":
+      return "jev_eval";
+    case "jev_ask":
+      return "jev_ask";
   }
 }
 
@@ -59,6 +65,9 @@ function same(one: Grant, other: Grant): boolean {
   if (one.kind === "connector") {
     return one.tool === (other as { tool: string }).tool;
   }
+  if (one.kind === "jev_eval") {
+    return one.name === (other as { name: string }).name;
+  }
   return true;
 }
 
@@ -69,6 +78,9 @@ function grantKey(grant: Grant): string {
   }
   if (grant.kind === "connector") {
     return `connector:${grant.tool}`;
+  }
+  if (grant.kind === "jev_eval") {
+    return `jev_eval:${grant.name}`;
   }
   return grant.kind;
 }

@@ -35,6 +35,10 @@ export function grantLabel(grant: Grant): string {
       // The whole tool name, not the connector's: a grant covers what the
       // dialog named and nothing the server adds afterwards.
       return `call ${grant.tool}`;
+    case "jev_eval":
+      return `run the eval ${grant.name} through TypeSafe`;
+    case "jev_ask":
+      return "send model-written questions to TypeSafe";
   }
 }
 

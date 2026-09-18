@@ -1456,6 +1456,22 @@ body {
   font-size: 0.75rem;
 }
 
+/* PLAN 7.18: advice from the decision model, never a button. */
+.approval__annotation {
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-left: 2px solid var(--border);
+  font-size: 0.75rem;
+}
+
+.approval__annotation--raised {
+  border-left-color: var(--danger);
+}
+
+.approval__annotation-facts {
+  color: var(--muted);
+}
+
 .approval__actions {
   display: flex;
   flex-wrap: wrap;

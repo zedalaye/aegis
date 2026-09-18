@@ -16,6 +16,7 @@ import type {
   MaskedSettings,
   Routine,
   SessionSummary,
+  ToolApprovalAnnotated,
   ToolApprovalResolved,
   ToolFinished,
   ToolDrafting,
@@ -52,6 +53,11 @@ export type EventPayloads = {
   "tool:requested": ToolRequested;
   /** A tool call is blocked on a human. The turn is parked until it is answered. */
   "tool:approval_required": ApprovalRequest;
+  /**
+   * The decision model annotated a pending approval (PLAN 7.18). Advisory;
+   * the buttons do not change.
+   */
+  "tool:approval_annotated": ToolApprovalAnnotated;
   /**
    * An approval stopped being pending, however it ended. May arrive twice;
    * handlers key on `request_id`.

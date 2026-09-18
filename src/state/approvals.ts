@@ -185,6 +185,20 @@ export function attachApprovalEvents(): Promise<() => void> {
       });
     },
 
+    // Arrives after the card, if at all; a card already answered is gone.
+    "tool:approval_annotated": ({ session_id, request_id, annotation }) => {
+      if (!isOpen(session_id)) {
+        return;
+      }
+      setState((state) => ({
+        pending: state.pending.map((request) =>
+          request.request_id === request_id
+            ? { ...request, annotation }
+            : request,
+        ),
+      }));
+    },
+
     // Fires for every ending, including the ones nobody clicked: a timeout, a
     // cancelled turn, a deleted session. Idempotent, because the click that
     // caused it has usually already removed the card.
