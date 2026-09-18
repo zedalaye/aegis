@@ -22,9 +22,10 @@ src-tauri/
     agent/          turn loop, wire types, transcript projection, event sink, turn registry,
                     turn guards (loop fingerprint and round ceiling)
       provider/     scripted provider, OpenAI-compatible SSE, motosan-ai dialects, model catalog
+      decision/     TypeSafe client, the tool_risk annotation, project evals (not a provider)
     oauth/          tokens written by the Claude Code, Codex and Grok CLIs
     policy/         path resolution and containment, the decision matrix, session grants
-    tools/          fs, shell, screenshot, skill, memory, handoff, connector — one ToolSpec registry
+    tools/          fs, shell, screenshot, skill, memory, handoff, connector, jev — one ToolSpec registry
     approval.rs     pending approvals: where a turn waits for your answer
     audit.rs        audit.jsonl: one line per tool call
     store/          projects, sessions, agents, memories, routines, connectors, settings documents

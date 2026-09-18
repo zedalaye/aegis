@@ -109,6 +109,19 @@ second one (up to 16), and **Edit** to change one.
 - A provider with no base URL (or no model) is not configured: sessions that answer from it get the
   scripted provider.
 
+**Decision model** (optional), under the providers, holds a [TypeSafe](https://docs.typesafe.ai)
+key for Jev, a model that answers typed questions with probabilities. It never writes a reply;
+the chat provider still answers every turn. With a key:
+
+- approval dialogs gain an advisory line (how likely the call destroys or sends out something, how
+  hard it is to undo). The buttons never change, and **Annotate approval dialogs** turns it off;
+- identities you grant `jev_eval` can run the signed evals in a workspace's `.aegis/evals/`, and
+  those granted `jev_ask` can draft their own questions. Both are asked every time.
+
+Without a key nothing changes: dialogs open as before and the `jev_*` tools are not offered. The key
+goes to the credential store as `typesafe-api-key`, or `AEGIS_TYPESAFE_API_KEY` in the environment;
+the chat key is never sent to TypeSafe. **Test connection** asks one cheap question.
+
 ## Build and test
 
 ```sh

@@ -6,8 +6,8 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 (`§ 7.6 *Authoring*`): amend sections in place, and keep the numbers and lead-ins.
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
-open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.17 and
-§ 7.19, landed; § 7.18 proposed), and three surfaces that are not scheduled (§ 7.7–7.9).
+open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.19,
+landed), and three surfaces that are not scheduled (§ 7.7–7.9).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
 edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets and policy live
@@ -49,7 +49,8 @@ Commands are `domain_verb`, events are `domain:verb`. Payloads are Rust structs 
 | Board | `board_read`, `board_trace` | Read-only (Phase 17) |
 | Workspace | `workspace_layout`, `workspace_scaffold`, `workspace_reveal`, `world_status` | Scaffold creates only what is missing and runs `git init` per § 7.11. Reveal accepts only a contained path (§ 7.10). `world_status` is the expensive read, for the panel |
 | Explorer | `workspace_tree`, `workspace_preview`, `workspace_image`, `workspace_import_brief` | Contained to the open workspace. Import takes a drop id, never a path (§ 7.15) |
-| Settings / audit | `settings_get`, `settings_set`, `settings_add_provider`, `settings_delete_provider`, `settings_clear_key`, `settings_probe_provider`, `settings_list_models`, `audit_tail`, `audit_log_path` | Settings are a roster of masked rows: each key's source and last four characters. No command returns a key. `provider_id` defaults to `"default"`, which cannot be deleted; a row in use is not deleted (§ 7.19) |
+| Settings / audit | `settings_get`, `settings_set`, `settings_add_provider`, `settings_delete_provider`, `settings_clear_key`, `settings_probe_provider`, `settings_list_models`, `settings_set_decision`, `settings_clear_decision_key`, `settings_probe_decision`, `audit_tail`, `audit_log_path` | Settings are a roster of masked rows: each key's source and last four characters. No command returns a key. `provider_id` defaults to `"default"`, which cannot be deleted; a row in use is not deleted (§ 7.19). The decision model is its own masked object and its own commands; `settings_set` never carries it (§ 7.18) |
+| Evals | `eval_list`, `eval_proposals` | Signed `eval.yml` and `PROPOSAL.yml` are two listings; a proposal is never offered as runnable (§ 7.18) |
 | Window / tray | `window_toggle`, `window_hide`, `window_has_tray`, `app_quit` | |
 
 ### 2.2 Events (`emit` → main window)
@@ -61,7 +62,7 @@ messaging face (§ 7.7) is another sink, not a second turn loop.
 | Event | Carries |
 | --- | --- |
 | `turn:started`, `turn:delta`, `turn:message`, `turn:finished`, `turn:error` | a turn's lifecycle: model, text deltas, the final message, stop reason and usage, errors |
-| `tool:requested`, `tool:drafting`, `tool:approval_required`, `tool:approval_resolved`, `tool:started`, `tool:progress`, `tool:finished` | a call's lifecycle: redacted arguments, arguments still streaming, the approval request and who resolved it, shell output chunks, outcome |
+| `tool:requested`, `tool:drafting`, `tool:approval_required`, `tool:approval_annotated`, `tool:approval_resolved`, `tool:started`, `tool:progress`, `tool:finished` | a call's lifecycle: redacted arguments, arguments still streaming, the approval request, the decision model's advisory annotation of it (§ 7.18), who resolved it, shell output chunks, outcome |
 | `session:updated` | a session summary, for list badges without a refetch |
 | `audit:appended` | a new audit line |
 | `settings:changed`, `connector:updated`, `routine:updated` | store changes |
@@ -98,6 +99,8 @@ session with no workspace is `E_NO_WORKSPACE`.
 | `fs_write` | under `world/`, session | **ask** | `WorldAmend` (none when unattended) | high |
 | `fs_write` | applies a skill proposal, session (§ 7.13) | **ask** | no | high |
 | `fs_write` | applies a proposal from a brief, or one that does not parse, or onto an existing `SKILL.md` | **deny** | — | — |
+| `fs_write` | applies an eval proposal, or writes an `eval.yml` directly, session (§ 7.18) | **ask** | no | high |
+| `fs_write` | writes an `eval.yml` from a brief, or applies a proposal that does not parse or onto an existing `eval.yml` | **deny** | — | — |
 | `fs_write` | any segment `.git` | **ask** | no | high |
 | `fs_write` | contained, otherwise | **ask** | `FsWrite` | medium; high on a sensitive name |
 | `shell_exec` | working directory outside | **ask** | no | high |
@@ -110,10 +113,14 @@ session with no workspace is `E_NO_WORKSPACE`.
 | `memory_search` | — | **auto** | — | — |
 | `handoff_delegate` | 1..`FAN_OUT_MAX` well-formed briefs, not from a delegated run | **ask** | `HandoffDelegate` | medium |
 | `<connector>__<tool>` | the connector is running and offers the tool | **ask** | `Connector { tool }` | high |
+| `jev_eval` | a signed `.aegis/evals/<name>/eval.yml`; inputs contained and declared | **ask** | `JevEval { name }`; none with a credential-shaped input | high |
+| `jev_eval` | only a `PROPOSAL.yml`, no such eval, one that does not parse, an undeclared or outside input | **deny** | — | — |
+| `jev_ask` | a non-empty state under 64 KiB, well-formed questions | **ask** | `JevAsk` | high |
 
 Order inside a tool matters: hard denials first, then containment, then the specific rows. A new
 tool is an ask by default (§ 7.2 row 7). In an unattended run every ask not covered by a held grant
-becomes a refusal (Phase 16).
+becomes a refusal (Phase 16). The decision model (§ 7.18) is never consulted by this table: its
+annotation arrives after an ask is raised and changes no row.
 
 **Sensitive names** (case-insensitive, every segment *below* the workspace root): `.env*`, `*.pem`,
 `*.key`, `*.p12`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `credentials`, `.aws`, `.ssh`,
@@ -147,6 +154,8 @@ A session grant is created by answering `allow_session`. It is:
   | `Shell { program }` | a bare name: the program name (basename; on Windows without its executable suffix, lower case). A name with a separator: its **resolved absolute path** (lower case on Windows), so `scripts\git.cmd` is not `git` |
   | `ScreenCapture`, `MemoryWrite`, `HandoffDelegate` | that call type |
   | `Connector { tool }` | the full tool name, never the connector: a server may add tools mid-session |
+  | `JevEval { name }` | one signed eval by name |
+  | `JevAsk` | model-written questions to TypeSafe; signable on a routine |
 
 - **Read-only for git.** A grant on `git` covers a line only when (a) the verb is one of `blame`,
   `cat-file`, `describe`, `diff`, `log`, `ls-files`, `ls-tree`, `rev-list`, `rev-parse`, `shortlog`,
@@ -249,6 +258,8 @@ memory_write     { kind, text, source? }
 memory_search    { query }
 handoff_delegate { plan }                                      // briefs, optional reviewer
 handoff_return   { report }
+jev_eval         { name, inputs? }                             // paths; the eval file owns the questions
+jev_ask          { state, questions[] }                        // offered only with a TypeSafe key
 <connector>__<tool>  { … }                                     // the server's own schema
 ```
 
@@ -463,7 +474,7 @@ instance is cheap and **re-perceiving** a project that already lives in `world/`
 unit of cost is a round-trip.
 
 **Cabinet and constitution.** The cabinet (`.aegis/briefs/`, `status/`, `artefacts/`, `decisions/`,
-`skills/`) is in-flight work, rewritten every turn. `world/` holds what the thing *is*: essence,
+`skills/`, `evals/`) is in-flight work, rewritten every turn. `world/` holds what the thing *is*: essence,
 perceived schema, behaviours (sins included), oracle, essence decisions, declared sources.
 Specialists read it and do not write it. `.aegis/decisions/DECISIONS.md` is operational;
 `world/decisions.md` is essence.
@@ -1107,7 +1118,7 @@ dumping `COS.md` into the system prompt; a file checklist.
   Assistant that does not hold it is told to say so.
 - **Briefs still launch.** `blocking` is unchanged: no constitution means no drift gate.
 
-### 7.18 Decision models (TypeSafe / Jev) — proposed
+### 7.18 Decision models (TypeSafe / Jev) — landed
 
 Jev (TypeSafe AI) is a System One model: typed questions against a state, values and probabilities
 out. It does not generate text, tool calls or explanations, and it does not choose the next
@@ -1323,7 +1334,8 @@ product; using confidence to skip the human gate; seeding evals into every works
 the eval. Packs may later ship example `eval.yml` the way they ship runbooks — still files, still
 signed, still not `turn.rs`.
 
-*Where it lands* (the map an implementing session follows; not coded yet):
+*Where it lands* (the map the implementing session followed; *As landed* below records where it
+differs):
 
 - **Tree.** `src-tauri/src/agent/decision/` is the client (`DecisionClient`, evaluate, probe),
   `tool_risk`, and the project-eval loader/composer (the closed vocabulary, not a scripting
@@ -1397,8 +1409,55 @@ signed, still not `turn.rs`.
   when the toggle is on; `jev_eval` sends the named input files; `jev_ask` sends the
   model-supplied `state`); `docs/guide/workspace.md` (`.aegis/evals/`).
 
-The operator pastes the TypeSafe key in Settings once the form exists. Never in git, never in a
-fixture, never in chat.
+*As landed*:
+
+- **Wire.** TypeSafe's question object is `{ type, instructions, criteria }`: a noul's criteria is
+  `{ "true", "false" }`, a choice's the option map, a score's the level list. `QuestionDraft`
+  accepts `yes` / `no` / `options` / `levels` (and `criteria` itself, never both) and converts in
+  `agent/decision/`. Answers are parsed per `type`; a score keeps its `legend` so a `jev_ask`
+  result names its levels. Two retries on
+  429 / 529 (0.5 s, 1.5 s); a request times out after 30 s, the probe after 10 s.
+- **Client.** `DecisionClient::new(http, key, &DecisionSettings)` fails closed (`NoKey`,
+  `NoClient`, `BadUrl`). `AppState::decision_client()` builds one per turn, next to
+  `provider_for`, from `typesafe-api-key` only; `secrets::env_for` maps that account to
+  `AEGIS_TYPESAFE_API_KEY`. `Turn`, `ToolCtx` and the handoff and schedule `Host`s carry
+  `decision: Option<&DecisionClient>`; a missing client is `E_NO_API_KEY` in the envelope.
+- **Not mandatory.** Without a client the turn leaves `jev_eval` / `jev_ask` out of the offered
+  schemas (`turn::offered_tools`); the allow-list and the table are unchanged, so a replayed call
+  is still judged and then answered `E_NO_API_KEY`. The built-in Assistant holds both through
+  `tools::names()`.
+- **Annotation.** `tool_risk` (`agent/decision/tool_risk.rs`) runs inside `Turn::ask`, raced in
+  the same `select!` as the answer and the cancel, after `tool:approval_required` is emitted, with
+  a 15 s deadline. It sends `{ tool, summary, reason, risk, detail }` (the detail dropped past
+  64 KiB). Thresholds: noul 0.7, confidence 0.6, `undo` ≥ 1.5 of 2. `RiskAnnotation` carries
+  whole percentages so `ApprovalRequest` stays `Eq`. `ApprovalRegistry::annotate` attaches it to a
+  request still open, and `tool:approval_annotated` tells the window; nothing is re-emitted as
+  `approval_required`. An attached annotation logs at info; one dropped because the dialog was
+  answered first logs at debug.
+- **Evals.** `serde_yaml_ng` parses `eval.yml` (`deny_unknown_fields`). Beyond the table in
+  *Settles*: `confidence` (default 0.6) is the floor for choices and scores; `weights` are named
+  sums of nouls; `compose` rules are `when` (one condition or a list, all must hold) with exactly
+  one of `route` (a skill-shaped label) or `escalate` (`needs_you` / `blocked`) plus `say` (one
+  line, 240 characters). Comparisons are `>=`, `>`, `<=`, `<`; a choice condition is
+  `choice <id> is <option>`. `name` must equal the directory; inputs are plain relative paths;
+  caps: 64 KiB file, 16 inputs, 64 rules. The tool result is the `Composed` object (routes,
+  escalations, confident choices, `uncertain`, weights, raw answers).
+- **`jev_eval` in policy.** The matrix loads the eval when it judges the call and carries the
+  parsed `EvalDoc` in `ResolvedCall::JevEval`, so what runs is what the dialog listed. `inputs`
+  may only replace declared keys. A credential-shaped input offers no grant. Input files are
+  re-checked with `path::unchanged` and capped at 64 KiB together at run time.
+- **Eval writes.** `eval::write_of` recognises any `fs_write` of `.aegis/evals/<name>/eval.yml`:
+  a byte-for-byte copy of the `PROPOSAL.yml` beside it is *Apply an eval proposal*; any other
+  content is *Write a project eval*. Both are high-risk asks with no grant, and both are refused
+  from a brief. A held `FsWrite` never makes an eval live.
+- **Scaffold.** `.aegis/evals/` is created empty and reported in `created` / `kept`; it is not a
+  `CONVENTION` slot, so the digest and the layout panel do not list it.
+- **UI.** `DecisionForm` under the providers (its own store, `state/decision.ts`, which hands the
+  returned settings to the roster store); `ApprovalDialog` shows the annotation under the reason;
+  `DiffPreview` draws `jev_eval` and `jev_ask`; the routine form can sign `JevAsk`. `eval_list` /
+  `eval_proposals` have IPC wrappers and no panel yet.
+
+The operator pastes the TypeSafe key in Settings. Never in git, never in a fixture, never in chat.
 
 ### 7.19 Provider roster — landed
 

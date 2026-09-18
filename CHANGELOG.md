@@ -40,6 +40,15 @@ under an approval that did not describe it.
   badge in a session's header overrides them for that session without changing its identity. A
   provider still in use cannot be deleted. An existing `settings.json` becomes the default provider
   (`PLAN.md` § 7.19).
+- **An optional decision model.** *Settings → Decision model* takes a TypeSafe key for Jev, which
+  answers typed questions with probabilities and never writes a reply. With it, approval dialogs
+  carry an advisory line on how destructive, outbound or irreversible a call looks — the buttons and
+  the policy do not change — and two tools become available to identities that are granted them:
+  `jev_eval` runs a signed `.aegis/evals/<name>/eval.yml` and returns routes and escalations, and
+  `jev_ask` sends model-written questions. Both are asked every time. Drafts are
+  `PROPOSAL.yml`, applied by copying them onto `eval.yml` under an ask with no session grant.
+  *Set up shared files* creates an empty `.aegis/evals/`. Without a key nothing changes
+  (`PLAN.md` § 7.18).
 
 ### Changed
 

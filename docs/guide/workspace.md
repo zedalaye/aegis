@@ -20,10 +20,49 @@ A workspace can hold two layers with opposite mutation rules:
 | `.aegis/artefacts/` | what was produced: a draft, a report, an export, a patch |
 | `.aegis/decisions/` | `DECISIONS.md`: one entry per decision, newest last |
 | `.aegis/skills/` | this project's own runbooks. Seeded with `inbox.triage` |
+| `.aegis/evals/` | recurring judgements the decision model makes for this project, one `<name>/eval.yml` each. Created empty |
 
 **Set up shared files** in the sidebar creates what is missing, with short templates, and never
 overwrites a file. Nothing is created until you press it. You can also create the directories
 yourself; the panel measures the folder rather than remembering what it did.
+
+### Evals
+
+An eval is a judgement this project makes again and again — classify a mail, does this invoice match
+its envelope — written down once so the decision model (*Settings → Decision model*) can make it.
+`.aegis/evals/<name>/eval.yml` names the input files, the questions, and a closed set of rules that
+turn answers into **routes** (a label for whoever called it) and **escalations** (`needs_you` or
+`blocked`, with one sentence). A route is advice; nothing acts on it by itself.
+
+```yaml
+name: inbox.classify
+when: Classify the newest inbound mail
+inputs:
+  mail: inbox/latest.md
+confidence: 0.6            # floor for choice and score answers
+questions:
+  is_invoice: { type: noul, instructions: "Does `mail` contain an invoice?" }
+  topic:
+    type: choice
+    instructions: What is `mail` about?
+    options: { billing: money owed, support: a problem to fix }
+weights:
+  urgency: { is_invoice: 0.4 }
+compose:
+  - when: noul is_invoice >= 0.8
+    route: billing
+  - when: [choice topic is support, weight urgency >= 0.3]
+    escalate: needs_you
+    say: A support mail that looks urgent.
+```
+
+Conditions are `noul <id> >= <t>`, `choice <id> is <option>`, `score <id> >= <t>` and
+`weight <name> >= <t>` (`>`, `<=` and `<` work too). Nothing else is accepted.
+
+An agent may draft `PROPOSAL.yml` beside it; a proposal never runs. **Applying** it is copying it
+byte for byte onto `eval.yml`, which is asked every time, never granted for a session, and refused
+from a brief or over an existing `eval.yml`. Any other write of an `eval.yml` is asked every time as
+well. Running one is the `jev_eval` tool, asked like a connector call.
 
 The dot is a tidiness convention, like `.github/`, not a hiding place. Two practical costs: Finder
 hides dot-directories until you press ⌘⇧., and `rg` needs `--hidden`.

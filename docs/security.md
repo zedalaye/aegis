@@ -89,6 +89,19 @@ Read this before pointing Aegis at anything you care about.
 - **CLI logins** (Claude Code, Codex, Grok) reuse that CLI's credentials and present Aegis as the
   CLI. That may be outside the provider's terms for your account; check before relying on it.
 
+## What reaches TypeSafe
+
+Only with a TypeSafe key set (*Settings → Decision model*); without one, nothing is sent.
+
+- **Approval annotations** send what the dialog shows — the tool, summary, reason and preview (a
+  write's first 4 KB, a command line, a connector's arguments) — once per dialog, while *annotate
+  approval dialogs* is on. Never the transcript or the system prompt. The answer is advice: it
+  cannot allow, deny or remove a button.
+- **`jev_eval`** sends the files an eval names as inputs, after you approve the call. The questions
+  come from the signed `eval.yml`, not the model; a `PROPOSAL.yml` never runs.
+- **`jev_ask`** sends the state and questions the model wrote, shown in full in the dialog.
+- The TypeSafe key is used only for TypeSafe, and the chat key is never sent there.
+
 ## Files, git and the window
 
 - **Nothing commits for you.** *Set up shared files* may run `git init`; the runtime never makes a

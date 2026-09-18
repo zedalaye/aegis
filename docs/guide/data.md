@@ -32,6 +32,11 @@ the account **provider-api-key**; every other provider's is `provider-api-key:<i
 id from `settings.json`. `AEGIS_API_KEY` in the environment fills the default provider only; the
 credential store wins when both are set. A CLI login stays in that CLI's own file.
 
+The optional TypeSafe key (*Settings → Decision model*) is a second credential, not a provider: the
+account **typesafe-api-key**, or `AEGIS_TYPESAFE_API_KEY` in the environment. Its model, origin and
+the *annotate approvals* toggle sit in `settings.json` under `decision`, beside `providers`; a save
+of either half writes the other back unchanged.
+
 A `settings.json` from before the roster (one `provider` object) is read as the default provider and
 rewritten as a `providers` list on the next save.
 
