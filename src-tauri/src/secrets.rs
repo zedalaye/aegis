@@ -29,10 +29,22 @@ pub const KEYRING_ACCOUNT: &str = "provider-api-key";
 /// [`ENV_API_KEY`]. Same string as the store's `DEFAULT_PROVIDER_ID`.
 const DEFAULT_ROW: &str = "default";
 
-/// Whether an account falls back to [`ENV_API_KEY`]: only the default row's.
-/// A second variable per row is refused (PLAN 7.19).
-fn reads_env(account: &str) -> bool {
-    account == KEYRING_ACCOUNT
+/// Account for the TypeSafe decision key (PLAN 7.18): a second credential,
+/// never a provider row, and never sent to a chat provider.
+pub const TYPESAFE_ACCOUNT: &str = "typesafe-api-key";
+
+/// The environment variable behind [`TYPESAFE_ACCOUNT`].
+pub const ENV_TYPESAFE_API_KEY: &str = "AEGIS_TYPESAFE_API_KEY";
+
+/// The environment variable an account falls back to: [`ENV_API_KEY`] for the
+/// default row, [`ENV_TYPESAFE_API_KEY`] for the decision key, none for any
+/// other row — a second variable per row is refused (PLAN 7.19).
+fn env_for(account: &str) -> Option<&'static str> {
+    match account {
+        KEYRING_ACCOUNT => Some(ENV_API_KEY),
+        TYPESAFE_ACCOUNT => Some(ENV_TYPESAFE_API_KEY),
+        _ => None,
+    }
 }
 
 /// The credential-store account a provider row's key is filed under:
@@ -183,8 +195,8 @@ impl SecretStore {
     /// is.
     ///
     /// The credential store wins over the environment. Store failures are
-    /// logged and fall through to [`ENV_API_KEY`] — for [`KEYRING_ACCOUNT`]
-    /// only: no other row reads the environment.
+    /// logged and fall through to the account's variable ([`env_for`]): no
+    /// other row reads the environment.
     pub fn inspect_account(&self, account: &str) -> Held {
         let (stored, keyring_available) = match Self::entry(account)
             .as_ref()
@@ -210,7 +222,7 @@ impl SecretStore {
             };
         }
 
-        match Self::env_key().filter(|_| reads_env(account)) {
+        match env_for(account).and_then(Self::env_key) {
             Some(key) => Held {
                 key: Some(key),
                 source: KeySource::Env,
@@ -258,9 +270,9 @@ impl SecretStore {
         keyring::Entry::new(KEYRING_SERVICE, account)
     }
 
-    /// The key in [`ENV_API_KEY`], if it is set to something.
-    fn env_key() -> Option<ApiKey> {
-        std::env::var(ENV_API_KEY).ok().and_then(ApiKey::new)
+    /// The key in `variable`, if it is set to something.
+    fn env_key(variable: &str) -> Option<ApiKey> {
+        std::env::var(variable).ok().and_then(ApiKey::new)
     }
 
     /// Turns any credential-store failure into the one code the UI branches
@@ -350,11 +362,18 @@ mod tests {
     }
 
     #[test]
-    fn only_the_default_row_reads_the_environment() {
-        assert!(reads_env(&account_for("default")));
-        assert!(!reads_env(&account_for(
-            "0b6f7c1e-9f8a-4c55-9d7e-2f1c3a4b5d6e"
-        )));
+    fn only_the_default_row_and_the_decision_key_read_the_environment() {
+        assert_eq!(env_for(&account_for("default")), Some(ENV_API_KEY));
+        assert_eq!(
+            env_for(&account_for("0b6f7c1e-9f8a-4c55-9d7e-2f1c3a4b5d6e")),
+            None
+        );
+        assert_eq!(env_for(TYPESAFE_ACCOUNT), Some(ENV_TYPESAFE_API_KEY));
+        assert_ne!(
+            TYPESAFE_ACCOUNT,
+            account_for("typesafe"),
+            "the decision key is not a provider row"
+        );
     }
 
     #[test]
