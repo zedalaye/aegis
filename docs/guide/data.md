@@ -2,7 +2,7 @@
 
 ## Where your data lives
 
-Aegis keeps its own records in seven JSON documents in the application-data directory:
+Aegis keeps its own records in eight JSON documents in the application-data directory:
 
 | Platform | Path |
 | --- | --- |
