@@ -555,3 +555,66 @@ fn a_refused_answer_closes_the_run_rather_than_writing() {
         "a refused call is not made again"
     );
 }
+
+/// The same rule in a session someone opened: a dialog that expired and was
+/// then allowed is the call a person read, made again as it was written
+/// (PLAN 7.22). There is no runbook here, so this is the whole turn.
+#[test]
+fn an_answered_session_makes_the_call_again_and_then_reports() {
+    use crate::agent::wire::WireToolCall;
+    use crate::policy::tool;
+
+    let parked = r##"{"path":"notes.md","content":"# notes\n"}"##;
+    let answered = |answers: Vec<WireMessage>| {
+        let mut messages = vec![
+            WireMessage::user("/write a file for me"),
+            WireMessage::Assistant {
+                content: None,
+                tool_calls: vec![WireToolCall::new("c1", tool::FS_WRITE, parked)],
+            },
+            WireMessage::tool(
+                "c1",
+                r#"{"ok":false,"tool":"fs_write","error":{"code":"E_PARKED"}}"#,
+            ),
+            WireMessage::user(
+                "A person has answered the `fs_write` call this run parked: it is allowed this \
+                 once. Make that call again now, unchanged.",
+            ),
+        ];
+        messages.extend(answers);
+        ModelRequest {
+            model: FAKE_MODEL.to_owned(),
+            tools: Vec::new(),
+            messages,
+        }
+    };
+
+    let events = improvise(&answered(Vec::new()));
+    assert_eq!(
+        events
+            .iter()
+            .find_map(|event| match event {
+                ModelEvent::ToolCallDelta {
+                    name, args_delta, ..
+                } if name.as_deref() == Some(tool::FS_WRITE) => Some(args_delta.clone()),
+                _ => None,
+            })
+            .expect("the allowed call is made"),
+        parked
+    );
+
+    // And once it has run, the turn says so rather than asking again.
+    let after = answered(vec![
+        WireMessage::Assistant {
+            content: None,
+            tool_calls: vec![WireToolCall::new("c2", tool::FS_WRITE, parked)],
+        },
+        WireMessage::tool("c2", r#"{"ok":true,"tool":"fs_write"}"#),
+    ]);
+    assert!(
+        !improvise(&after)
+            .iter()
+            .any(|event| matches!(event, ModelEvent::ToolCallDelta { .. })),
+        "a call a person allowed once is made once"
+    );
+}

@@ -169,6 +169,13 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         return routine_turn(request, &said);
     }
 
+    // A session picked up after its own dialog expired and was answered
+    // (PLAN 7.22). No runbook to follow: the one thing to do is the call a
+    // person allowed.
+    if said.contains(crate::park::RESUMED_MARKER) {
+        return resumed_turn(request, &said);
+    }
+
     // A run a brief opened answers with a `handoff_return` and nothing else,
     // whatever was typed into it: the only thing the identity that briefed it
     // will ever see is that call (PLAN 7.3, Phase 15).
@@ -477,15 +484,88 @@ fn routine_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
 fn write_the_status(request: &ModelRequest, name: &str, said: &str) -> Vec<ModelEvent> {
     let arguments = said
         .contains(crate::park::RESUMED_MARKER)
-        .then(|| repeat_call(request, crate::policy::tool::FS_WRITE))
+        .then(|| parked_call(request))
         .flatten()
+        .filter(|(tool, _)| tool == crate::policy::tool::FS_WRITE)
+        .map(|(_, arguments)| arguments)
         .unwrap_or_else(|| fresh_status(name));
 
+    call_for(crate::policy::tool::FS_WRITE, arguments)
+}
+
+/// What a session does when a person has answered a call it parked
+/// (PLAN 7.22): that same call, unchanged — the answer matches one exact call
+/// — unless the answer was a refusal, or it has already been made.
+fn resumed_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
+    if said.contains(crate::park::REFUSED_CLAUSE) {
+        return say(
+            "That call was refused, so I have not made it again and I am not looking for another \
+             way to do the same thing.",
+        );
+    }
+    if already_answered(request) {
+        return say("Done — the call a person allowed has run, and its result is above.");
+    }
+
+    match parked_call(request) {
+        Some((tool, arguments)) => call_for_owned(tool, arguments),
+        None => say(
+            "There is nothing in this conversation to make again: the call that was parked is not \
+             in what I was sent.",
+        ),
+    }
+}
+
+/// The call this transcript parked, as it was written the first time: the last
+/// one whose answer was an `E_PARKED` envelope.
+///
+/// Keyed on the envelope rather than on "the last call", because a run that
+/// parked a write still closed itself with a `skill_return` afterwards.
+fn parked_call(request: &ModelRequest) -> Option<(String, String)> {
+    let mut asked: Vec<(&str, &str, &str)> = Vec::new();
+    let mut parked: Option<&str> = None;
+
+    for message in &request.messages {
+        match message {
+            WireMessage::Assistant { tool_calls, .. } => {
+                asked.extend(tool_calls.iter().map(|call| {
+                    (
+                        call.id.as_str(),
+                        call.function.name.as_str(),
+                        call.function.arguments.as_str(),
+                    )
+                }));
+            }
+            WireMessage::Tool {
+                tool_call_id,
+                content,
+                ..
+            } if content.contains(crate::error::ErrorCode::Parked.as_str()) => {
+                parked = Some(tool_call_id.as_str());
+            }
+            _ => {}
+        }
+    }
+
+    let parked = parked?;
+    asked
+        .iter()
+        .find(|(id, _, _)| *id == parked)
+        .map(|(_, tool, arguments)| ((*tool).to_owned(), (*arguments).to_owned()))
+}
+
+/// One tool call, ready to stream.
+fn call_for(tool: &str, arguments: String) -> Vec<ModelEvent> {
+    call_for_owned(tool.to_owned(), arguments)
+}
+
+/// [`call_for`], for a tool name the caller already owns.
+fn call_for_owned(tool: String, arguments: String) -> Vec<ModelEvent> {
     vec![
         ModelEvent::ToolCallDelta {
             index: 0,
             id: Some(format!("call_{}", uuid::Uuid::new_v4())),
-            name: Some(crate::policy::tool::FS_WRITE.to_owned()),
+            name: Some(tool),
             args_delta: arguments,
             thought_signature: None,
         },
@@ -494,23 +574,6 @@ fn write_the_status(request: &ModelRequest, name: &str, said: &str) -> Vec<Model
             usage: None,
         },
     ]
-}
-
-/// The arguments of the last call to `tool` in this transcript, as they were
-/// written the first time.
-fn repeat_call(request: &ModelRequest, tool: &str) -> Option<String> {
-    request
-        .messages
-        .iter()
-        .rev()
-        .find_map(|message| match message {
-            WireMessage::Assistant { tool_calls, .. } => tool_calls
-                .iter()
-                .rev()
-                .find(|call| call.function.name == tool)
-                .map(|call| call.function.arguments.clone()),
-            _ => None,
-        })
 }
 
 /// A status file written now, for a run that has not written one yet.
