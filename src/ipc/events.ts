@@ -14,6 +14,8 @@ import type {
   AuditEntry,
   ConnectorView,
   MaskedSettings,
+  ParkedAsk,
+  ParkedResolved,
   Routine,
   SessionSummary,
   ToolApprovalAnnotated,
@@ -85,6 +87,16 @@ export type EventPayloads = {
   "settings:changed": MaskedSettings;
   /** A routine's row changed: a run ended or it paused itself (Phase 16). */
   "routine:updated": Routine;
+  /**
+   * A call was parked for a person (PLAN 7.22): the run has ended and the
+   * question is on the board until somebody answers it.
+   */
+  "parked:updated": ParkedAsk;
+  /**
+   * A parked ask stopped being open — answered, or out of time. Handlers key
+   * on `id`.
+   */
+  "parked:resolved": ParkedResolved;
   /** A connector's row changed: up, new tools, or exited (Phase 18). */
   "connector:updated": ConnectorView;
   /**

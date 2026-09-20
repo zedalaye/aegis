@@ -55,7 +55,7 @@ The WebView renders UI only. The agent loop and tool execution live in Rust.
 ## State
 
 The MVP (Phases 0–10) is done. The post-MVP phases of `PLAN.md` § 7.3 (11–19) have landed, and so
-have the slices § 7.10–7.20, and `world/` (§ 7.2). New work is proposed as a section of
+have the slices § 7.10–7.22, and `world/` (§ 7.2). New work is proposed as a section of
 `PLAN.md` § 7 before it is coded: what it settles, what it refuses, its exit.
 
 ## Out of scope (do not start, even as a head start)
@@ -111,6 +111,9 @@ Do not expose the runtime on the public internet.
 - Reads inside the workspace: auto-allow, except credential-shaped names.
 - Paths outside the workspace: always ask, never granted for a session.
 - Session grants are narrow, session-lifetime and revocable (`PLAN.md` § 3.1).
+- An ask nobody can answer is **parked**, never run and never silently dropped: the call does not
+  happen, the question is filed outside the workspace, and a person answers it later
+  (`PLAN.md` § 7.22). Parking is not a way past the gate — `world/` is refused outright.
 - Never expose secrets to the WebView beyond masked settings. No API keys in `localStorage`.
 - Capabilities JSON stays least-privilege; a plugin permission there is a review flag.
 - Irreversible actions (send, pay, merge, publish, deploy, trade) stay behind a human gate. Later

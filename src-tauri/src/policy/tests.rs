@@ -289,12 +289,14 @@ fn an_ordinary_write_grant_does_not_reach_the_world() {
     ));
 }
 
-/// `COS.md`: amending the world is a *human* decision. A scheduled run is
-/// the one run with no human in it, so it is offered nothing to sign and
-/// refused — the second of two places, the first being the door in
+/// `COS.md`: amending the world is a *human* decision, and PLAN 7.21 keeps it
+/// one at every rung of the ladder. A scheduled run is the one run with no
+/// human in it, so it is offered nothing to sign and refused outright — not
+/// even parked (PLAN 7.22), which would be an agent applying an amendment a
+/// person waved through. The first of the two places is the door in
 /// `schedule::check` when the routine is saved.
 #[test]
-fn a_routine_is_offered_nothing_to_sign_for_the_world() {
+fn a_routine_is_never_offered_the_world_to_sign_or_to_park() {
     let (_dir, root) = with_a_world();
     let grants = GrantStore::new();
     let ctx = PolicyCtx::new("s1", Some(&root), &grants).unattended(true);
@@ -307,6 +309,7 @@ fn a_routine_is_offered_nothing_to_sign_for_the_world() {
         Decision::Deny { code, reason } => {
             assert_eq!(code, ErrorCode::Denied);
             assert!(reason.contains("nobody is watching"), "{reason}");
+            assert!(reason.contains("not parked"), "{reason}");
         }
         other => panic!("expected a refusal, got {other:?}"),
     }

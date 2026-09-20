@@ -23,6 +23,9 @@ pub enum ErrorCode {
     PathInvalid,
     /// The user, or policy, refused the tool call.
     Denied,
+    /// Nobody could answer, so the call was parked for a person (PLAN 7.22).
+    /// Not a refusal: the question survives the run.
+    Parked,
     /// This tool may never be granted for a whole session.
     GrantNotAllowed,
     /// The approval request is unknown, already resolved, or expired.
@@ -65,6 +68,7 @@ impl ErrorCode {
             Self::PathOutsideWorkspace => "E_PATH_OUTSIDE_WORKSPACE",
             Self::PathInvalid => "E_PATH_INVALID",
             Self::Denied => "E_DENIED",
+            Self::Parked => "E_PARKED",
             Self::GrantNotAllowed => "E_GRANT_NOT_ALLOWED",
             Self::ApprovalStale => "E_APPROVAL_STALE",
             Self::Timeout => "E_TIMEOUT",
@@ -92,6 +96,7 @@ impl ErrorCode {
             | Self::PathOutsideWorkspace
             | Self::PathInvalid
             | Self::Denied
+            | Self::Parked
             | Self::GrantNotAllowed
             | Self::ApprovalStale
             | Self::ToolFailed
@@ -196,6 +201,23 @@ pub enum AppError {
     GrantNotAllowed {
         /// The tool that was asked about.
         tool: String,
+    },
+
+    /// The parked ask being answered is unknown: answered already, or expired
+    /// (PLAN 7.22). The board re-syncs through `parked_list`.
+    #[error("that parked request is no longer open")]
+    ParkedNotFound {
+        /// The id that was answered. Logged, not shown.
+        id: String,
+    },
+
+    /// A run tried to park more than
+    /// [`MAX_PARKS_PER_RUN`](crate::store::parked::MAX_PARKS_PER_RUN) calls.
+    /// Never reaches the WebView: the turn refuses the call instead.
+    #[error("this run has already parked {most} calls")]
+    ParkBudget {
+        /// The ceiling, for the message.
+        most: usize,
     },
 
     /// A settings value was refused; `field` lets the panel mark the input.
@@ -432,7 +454,10 @@ impl AppError {
         match self {
             Self::WorkspacePath { .. } => ErrorCode::PathInvalid,
             Self::TurnBusy { .. } => ErrorCode::TurnBusy,
-            Self::ApprovalStale { .. } => ErrorCode::ApprovalStale,
+            // A park that is no longer open is the same fact as an approval
+            // that is no longer open, and the window re-syncs the same way.
+            Self::ApprovalStale { .. } | Self::ParkedNotFound { .. } => ErrorCode::ApprovalStale,
+            Self::ParkBudget { .. } => ErrorCode::Denied,
             Self::GrantNotAllowed { .. } => ErrorCode::GrantNotAllowed,
             Self::Settings { .. }
             | Self::Agent { .. }

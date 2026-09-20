@@ -106,13 +106,16 @@ pub enum RunOutcome {
     Blocked,
     /// It returned `needs_you`: a person has to decide.
     NeedsYou,
+    /// It parked a call for a person (PLAN 7.22). An answer, not a silence:
+    /// the run stopped at the gate rather than at nothing.
+    Parked,
     /// It ended without returning at all, or it never started.
     Failed,
 }
 
 impl RunOutcome {
     /// Whether this counts against [`FAILURES_BEFORE_PAUSE`]: only silence;
-    /// `blocked` is a valid answer.
+    /// `blocked` and `parked` are both answers.
     pub const fn is_failure(self) -> bool {
         matches!(self, Self::Failed)
     }
@@ -123,6 +126,7 @@ impl RunOutcome {
             Self::Done => "done",
             Self::Blocked => "blocked",
             Self::NeedsYou => "needs_you",
+            Self::Parked => "parked",
             Self::Failed => "failed",
         }
     }
@@ -575,6 +579,53 @@ impl RoutineStore {
         let updated = stored.to_routine(&today);
         self.save(&routines)?;
         Ok(updated)
+    }
+
+    /// Signs one more standing approval onto a routine — an *allow standing*
+    /// answer to a parked ask (PLAN 7.22).
+    ///
+    /// The door ([`schedule::check`](crate::schedule::check)) is re-run by the
+    /// caller against the draft this would produce; nothing is checked here
+    /// beyond not signing the same scope twice.
+    pub fn sign(&self, id: &str, grant: &Grant) -> AppResult<Routine> {
+        let today = today();
+        let mut routines = self.routines();
+        let stored = Self::find_mut(&mut routines, id)?;
+
+        if !stored.grants.contains(grant) {
+            stored.grants.push(grant.clone());
+            stored.updated_at = now();
+        }
+        let updated = stored.to_routine(&today);
+
+        self.save(&routines)?;
+        tracing::info!(id, tool = grant.tool(), "a standing approval was signed");
+        Ok(updated)
+    }
+
+    /// Closes the ledger row of a run that parked and was never answered
+    /// (PLAN 7.22): `blocked`, because the question expired rather than the
+    /// run failing.
+    ///
+    /// Only the row of that same session, so a routine that has run since is
+    /// not rewritten.
+    pub fn close_parked(&self, id: &str, session_id: &str, detail: &str) -> Option<Routine> {
+        let today = today();
+        let mut routines = self.routines();
+        let stored = Self::find_mut(&mut routines, id).ok()?;
+
+        let last = stored.last.as_mut()?;
+        if last.session_id != session_id || last.outcome != RunOutcome::Parked {
+            return None;
+        }
+        last.outcome = RunOutcome::Blocked;
+        last.detail = detail.to_owned();
+        let updated = stored.to_routine(&today);
+
+        if let Err(err) = self.save(&routines) {
+            tracing::warn!(%err, id, "an expired park could not be recorded on its routine");
+        }
+        Some(updated)
     }
 
     /// The watermark a [`Schedule::OnChange`] routine last saw.

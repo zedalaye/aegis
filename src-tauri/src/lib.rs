@@ -19,7 +19,9 @@ pub mod git;
 pub mod handoff;
 pub mod intake;
 pub mod mcp;
+pub mod notify;
 pub mod oauth;
+pub mod park;
 pub mod policy;
 pub mod reveal;
 pub mod roster;
@@ -52,6 +54,8 @@ pub use git::{Versioning, WorkTree};
 pub use handoff::runner::{Delegating, Host as HandoffHost};
 pub use handoff::{Brief, Plan as HandoffPlan, Priority, ReturnFormat};
 pub use mcp::{Catalog as ConnectorCatalog, ConnectorView, Connectors, State as ConnectorState};
+pub use notify::{Note, Notifier, Quiet};
+pub use park::{Parking, Parks};
 pub use policy::{Decision, Grant, GrantStore, Identity, PolicyCtx, ResolvedCall, ToolCall};
 pub use schedule::runner::Scheduler;
 pub use secrets::{ApiKey, KeySource, SecretStore};
@@ -60,10 +64,11 @@ pub use state::AppState;
 pub use store::{
     Agent, AgentDraft, AgentStore, Attachment, AuthKind, AuthPreset, Compaction, Connector,
     ConnectorDraft, ConnectorStore, Cost, LastRun, MaskedProvider, MaskedSettings, Memory,
-    MemoryDraft, MemoryKind, MemoryStore, Message, Project, ProjectDetail, ProviderEntry,
-    ProviderSettings, Role, Routine, RoutineDraft, RoutineStore, RunOutcome, Schedule, Scheduled,
-    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
-    ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    MemoryDraft, MemoryKind, MemoryStore, Message, ParkCause, ParkedAsk, ParkedStore, Project,
+    ProjectDetail, ProviderEntry, ProviderSettings, Role, Routine, RoutineDraft, RoutineStore,
+    RunOutcome, Schedule, Scheduled, SessionDetail, SessionState, SessionStore, SessionSummary,
+    SettingsStore, Store, ToolCallRecord, ToolCallStatus, TurnCost, TurnHandle, DEFAULT_AGENT_ID,
+    DEFAULT_PROVIDER_ID,
 };
 pub use tools::handoff::HandoffCtx;
 pub use tools::{NullProgress, ProgressSink, Stream, ToolCtx, ToolOutcome, ToolResult, ToolSpec};
@@ -206,6 +211,9 @@ pub fn run() {
         // by `project_pick_workspace`, and `capabilities/main.json` grants the
         // WebView no `dialog:` permission of its own.
         .plugin(tauri_plugin_dialog::init())
+        // Called from Rust only (PLAN 7.22): `capabilities/main.json` grants the
+        // window nothing, so the WebView cannot raise a notification itself.
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::window::window_toggle,
             commands::window::window_hide,
@@ -242,6 +250,8 @@ pub fn run() {
             commands::audit::audit_log_path,
             commands::board::board_read,
             commands::board::board_trace,
+            commands::parked::parked_list,
+            commands::parked::parked_answer,
             commands::settings::settings_get,
             commands::settings::settings_set,
             commands::settings::settings_add_provider,

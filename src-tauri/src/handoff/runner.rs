@@ -30,6 +30,7 @@ use crate::commands::session::WindowSink;
 use crate::exec_host::ExecHost;
 use crate::handoff::{self, bus, Brief};
 use crate::mcp::Connectors;
+use crate::park::{Parking, Parks};
 use crate::policy::GrantStore;
 use crate::state::AppState;
 use crate::store::{
@@ -77,6 +78,11 @@ pub struct Host<'a> {
     pub provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
     /// The decision client (PLAN 7.18), or `None` without a TypeSafe key.
     pub decision: Option<&'a crate::agent::decision::DecisionClient>,
+    /// Where a dialog nobody answers is filed (PLAN 7.22). A brief is watched
+    /// like any session, so only an expiry parks here.
+    pub parked: &'a crate::store::ParkedStore,
+    /// Who is told when a specialist's dialog goes unanswered.
+    pub notifier: &'a dyn crate::notify::Notifier,
 }
 
 /// One session's delegations, and the runs they have opened.
@@ -211,6 +217,16 @@ impl Delegating {
         }
 
         let open = handoff::Open::new(slot.handoff);
+        let parks = Parks::new();
+        let parking = Parking {
+            store: host.parked,
+            notifier: host.notifier,
+            project_id: &self.project_id,
+            routine_id: "",
+            routine_name: "",
+            skill: "",
+            parks: &parks,
+        };
         let provider = (host.provider)(&agent, &session_id);
         let plan = TurnPlan {
             session_id: session_id.clone(),
@@ -238,6 +254,7 @@ impl Delegating {
             // it cannot re-delegate, and a cell for the report it owes.
             standing: Standing::Delegated(&open),
             unattended: None,
+            parking: Some(&parking),
         }
         .run(&plan, &own_cancel)
         .await;
@@ -351,10 +368,13 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
             };
 
             let sink = WindowSink::new(self.app.clone());
+            let notifier = crate::notify::Desktop::new(self.app.clone(), state.coalescer());
             let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
             let decision = state.decision_client();
             let host = Host {
                 agents: state.agents(),
+                parked: state.parked(),
+                notifier: &notifier,
                 sessions: state.sessions(),
                 turns: state.turns(),
                 grants: state.grants(),

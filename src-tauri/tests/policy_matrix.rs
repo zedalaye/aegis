@@ -1129,9 +1129,11 @@ fn a_proposal_is_never_applied_over_a_runbook_or_from_a_broken_file() {
 }
 
 /// A brief hands a proposal back; it does not apply it. And a routine has
-/// nobody in it to sign one, so no standing approval reaches the row.
+/// nobody in it to sign one: a held `FsWrite` does not reach the row, so the
+/// run parks the question for a person instead (PLAN 7.22) — which is still a
+/// person reading the runbook before it goes live.
 #[test]
-fn neither_a_brief_nor_a_routine_can_apply_a_proposal() {
+fn neither_a_brief_nor_a_routine_applies_a_proposal_on_its_own() {
     let fixture = Fixture::new();
     fixture.file(
         ".aegis/skills/brief.digest/PROPOSAL.md",
@@ -1155,8 +1157,11 @@ fn neither_a_brief_nor_a_routine_can_apply_a_proposal() {
     fixture.grants.insert("session-1", Grant::FsWrite);
     let mut routine = fixture.ctx();
     routine.unattended = true;
-    assert_eq!(
-        denied(decide(&routine, tool::FS_WRITE, apply)),
-        ErrorCode::Denied
-    );
+    match decide(&routine, tool::FS_WRITE, apply) {
+        Decision::Park { request } => {
+            assert_eq!(request.grant, None, "nothing here can be signed in advance");
+            assert!(request.reason.contains("catalog"), "{}", request.reason);
+        }
+        other => panic!("expected a park, got {other:?}"),
+    }
 }

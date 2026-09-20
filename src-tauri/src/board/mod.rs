@@ -61,6 +61,8 @@ pub enum Source {
     Routine,
     /// A run, folded from the audit log.
     Run,
+    /// A call a run parked for a person (PLAN 7.22).
+    Parked,
 }
 
 /// One line of the board.
@@ -83,6 +85,9 @@ pub struct Item {
     pub session_id: String,
     /// The routine this is about. Empty when it is not about one.
     pub routine_id: String,
+    /// The parked ask this line is, when it is one (PLAN 7.22): what
+    /// `parked_answer` is called with.
+    pub parked_id: String,
     /// The run to trace, when this line has one.
     pub run: Option<trace::RunRef>,
 }
@@ -97,6 +102,7 @@ impl Item {
             at: String::new(),
             session_id: String::new(),
             routine_id: String::new(),
+            parked_id: String::new(),
             run: None,
         }
     }
@@ -168,6 +174,8 @@ pub struct Facts<'a> {
     pub routines: &'a [Routine],
     /// Approvals waiting to be answered, in this project's sessions.
     pub approvals: &'a [ApprovalRequest],
+    /// The calls this project's runs parked for a person (PLAN 7.22).
+    pub parked: &'a [crate::store::ParkedAsk],
     /// The runs folded out of the audit log, newest first.
     pub runs: Vec<trace::Run>,
 }
@@ -285,6 +293,7 @@ pub fn assemble(facts: Facts<'_>) -> Board {
         sessions,
         routines,
         approvals,
+        parked,
         runs,
     } = facts;
 
@@ -313,6 +322,19 @@ pub fn assemble(facts: Facts<'_>) -> Board {
             .session(&request.session_id)
             .at(&request.requested_at),
         );
+    }
+
+    // A call a run stopped at (PLAN 7.22). Unlike an approval, nothing is
+    // waiting on a channel: the run has already ended, and answering it starts
+    // it again.
+    for ask in parked {
+        let mut item = Item::plain(Source::Parked, format!("{} is parked", ask.title))
+            .detail(ask.summary.clone())
+            .session(&ask.session_id)
+            .at(&ask.parked_at);
+        item.parked_id = ask.id.clone();
+        item.routine_id = ask.routine_id.clone();
+        board.attention.push(item);
     }
 
     // A routine the *scheduler* stopped, which `COS.md` reaches only after two
@@ -515,6 +537,39 @@ _Nothing blocked._
         }
     }
 
+    /// One parked ask, as a run leaves it (PLAN 7.22).
+    fn parked(id: &str) -> crate::store::ParkedAsk {
+        crate::store::ParkedAsk {
+            id: id.to_owned(),
+            project_id: "p1".to_owned(),
+            session_id: "s1".to_owned(),
+            agent_id: "a1".to_owned(),
+            routine_id: "r1".to_owned(),
+            routine_name: "Morning watch".to_owned(),
+            skill: "watch.digest".to_owned(),
+            turn_id: "t1".to_owned(),
+            call_id: "c1".to_owned(),
+            tool: "fs_write".to_owned(),
+            fingerprint: "fs_write:abc".to_owned(),
+            cause: crate::store::ParkCause::Unattended,
+            risk: crate::policy::Risk::Medium,
+            title: "Write file".to_owned(),
+            summary: "notes.md (12 B, new file)".to_owned(),
+            detail: crate::policy::ApprovalDetail::FsWrite {
+                path: "/w/notes.md".to_owned(),
+                bytes: 12,
+                exists: false,
+                preview: None,
+                applies: None,
+            },
+            reason: "this creates a file in the workspace".to_owned(),
+            grant: Some(crate::policy::Grant::FsWrite),
+            scope_label: crate::policy::Grant::FsWrite.scope_label(),
+            parked_at: "2026-09-01T07:31:00.000Z".to_owned(),
+            expires_at: "2026-09-08T07:31:00.000Z".to_owned(),
+        }
+    }
+
     fn facts<'a>(
         status: Option<&'a str>,
         sessions: &'a [SessionSummary],
@@ -528,6 +583,7 @@ _Nothing blocked._
             sessions,
             routines,
             approvals,
+            parked: &[],
             runs,
         }
     }
@@ -654,6 +710,25 @@ _Nothing blocked._
 
         assert_eq!(board.in_flight.len(), 1);
         assert_eq!(board.in_flight[0].detail, "waiting on an approval");
+    }
+
+    /// PLAN 7.22: a parked call is a question waiting for a person, so it is
+    /// *Attention* — and the line carries what answering it needs.
+    #[test]
+    fn a_parked_call_is_attention_and_carries_what_answers_it() {
+        let waiting = [parked("park-1")];
+        let board = assemble(Facts {
+            parked: &waiting,
+            ..facts(Some(SEEDED), &[], &[], &[], Vec::new())
+        });
+
+        assert_eq!(board.attention.len(), 1);
+        assert_eq!(board.attention[0].source, Source::Parked);
+        assert_eq!(board.attention[0].parked_id, "park-1");
+        assert_eq!(board.attention[0].session_id, "s1");
+        assert_eq!(board.attention[0].routine_id, "r1");
+        assert!(board.attention[0].text.contains("Write file"));
+        assert_eq!(board.attention[0].detail, "notes.md (12 B, new file)");
     }
 
     #[test]

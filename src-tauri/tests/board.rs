@@ -108,6 +108,10 @@ struct App {
     audit: AuditLog,
     captures: PathBuf,
     memories: MemoryStore,
+    /// Where an ask nobody can answer is filed (PLAN 7.22).
+    parked: aegis_lib::ParkedStore,
+    /// What is told to somebody who is not at the window.
+    notifier: aegis_lib::Quiet,
 }
 
 impl App {
@@ -151,6 +155,8 @@ impl App {
             audit: AuditLog::new(&data),
             captures: data.join("captures"),
             memories: MemoryStore::load(&data),
+            parked: aegis_lib::ParkedStore::load(&data),
+            notifier: aegis_lib::Quiet,
         }
     }
 
@@ -199,6 +205,8 @@ impl App {
         let host = runner::Host {
             projects: &self.projects,
             routines: &self.routines,
+            parked: &self.parked,
+            notifier: &self.notifier,
             agents: &self.agents,
             sessions: &self.sessions,
             turns: &self.turns,
@@ -397,6 +405,7 @@ async fn a_run_that_was_refused_says_so_and_lands_in_the_blocked_column() {
         sessions: &app.sessions.list(&app.project_id, &app.turns.lookup()),
         routines: &[],
         approvals: &[],
+        parked: &[],
         runs: runs.clone(),
     });
 
@@ -437,6 +446,7 @@ async fn the_board_is_the_file_and_the_runtime_together() {
         sessions: &app.sessions.list(&app.project_id, &app.turns.lookup()),
         routines: &[],
         approvals: &[],
+        parked: &[],
         runs: app.runs(),
     });
 

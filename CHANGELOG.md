@@ -50,6 +50,20 @@ under an approval that did not describe it.
   *Set up shared files* creates an empty `.aegis/evals/`. Without a key nothing changes
   (`PLAN.md` § 7.18).
 
+- **A call nobody could answer is parked, not thrown away.** A scheduled run that needs something it
+  was not signed for stops at that call, keeps what it has already done, and leaves the question on
+  the board under *Parked* — with the path, the diff or the command line the dialog would have
+  shown. An approval left unanswered for five minutes parks the same way instead of being refused,
+  so walking away from the screen no longer costs the turn. Answering *allow once* runs that exact
+  call and nothing else, *allow standing* signs the approval onto the routine (through the same
+  checks as saving one), *deny* records the refusal; all three pick the run up in the session it
+  stopped in. A run may park three calls, and a question nobody answers for a week closes itself.
+  Amending `world/` is never parked (`PLAN.md` § 7.22).
+- **Aegis can tell you something is waiting while the window is hidden.** An OS notification for a
+  parked call, a run that returned `needs_you` and a routine that stopped itself — the routine's
+  name and one sentence, never a path, a command line or an amount, and at most one per routine per
+  hour. Clicking it opens the window; nothing is approved from a notification (`PLAN.md` § 7.22).
+
 - **Markdown in the chat.** Replies and your messages render headings, lists, code blocks and tables,
   with the parser the file preview already used: HTML stays text. A web link opens in your browser
   when you click it, and a workspace link opens the file in *Files*. Relative images and this
@@ -81,7 +95,8 @@ under an approval that did not describe it.
   in force, with its section numbers unchanged; `IDEAS.md`, `COS.md` and `CONTROL.md` are tightened.
 - `PLAN.md` § 7.21–7.30 propose the autonomy ladder: parked asks and notifications, narrow standing
   grants, run checkpoints, gates run by the harness, budgets (allocated or earned), the CoS on a
-  clock, ingestion, and mandates for irreversible acts. Proposed, not built.
+  clock, ingestion, and mandates for irreversible acts. The first of them, § 7.22, has landed; the
+  rest are proposed, not built.
 
 ### Internal
 

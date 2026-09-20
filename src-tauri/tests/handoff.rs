@@ -54,6 +54,10 @@ struct App {
     approvals: ApprovalRegistry,
     audit: AuditLog,
     memories: MemoryStore,
+    /// Where an ask nobody can answer is filed (PLAN 7.22).
+    parked: aegis_lib::ParkedStore,
+    /// What is told to somebody who is not at the window.
+    notifier: aegis_lib::Quiet,
     sink: Recorder,
 }
 
@@ -84,6 +88,8 @@ impl App {
             approvals: ApprovalRegistry::new(),
             audit: AuditLog::new(&data),
             memories: MemoryStore::load(&data),
+            parked: aegis_lib::ParkedStore::load(&data),
+            notifier: aegis_lib::Quiet,
             sink: Recorder::default(),
             _dir: dir,
         }
@@ -131,6 +137,8 @@ impl App {
     ) -> HandoffHost<'a> {
         HandoffHost {
             agents: &self.agents,
+            parked: &self.parked,
+            notifier: &self.notifier,
             sessions: &self.sessions,
             turns: &self.turns,
             grants: &self.grants,
@@ -693,6 +701,7 @@ async fn an_ordinary_session_is_not_offered_the_tool_that_closes_a_brief() {
         connectors: aegis_lib::Connectors::none(),
         standing: Standing::Own(None),
         unattended: None,
+        parking: None,
         decision: None,
     }
     .run(

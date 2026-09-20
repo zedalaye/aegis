@@ -17,6 +17,7 @@ Aegis keeps its own records in seven JSON documents in the application-data dire
 | `agents.json` | the identities you made. The built-in Assistant is a constant in the runtime, not a row |
 | `memories.json` | what each identity remembers. Deleting an identity deletes its memories |
 | `routines.json` | what is on a clock, its standing approvals, and today's run count |
+| `parked.json` | the calls runs stopped at, waiting for an answer: what the dialog would have shown, and which run to pick up. Never in a workspace |
 | `connectors.json` | external MCP servers: id, program, arguments, and the *names* of the environment variables they need |
 | `settings.json` | the provider roster: for each provider an id, a label, the authentication kind, base URL and model id |
 

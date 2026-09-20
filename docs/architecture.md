@@ -28,8 +28,11 @@ src-tauri/
     policy/         path resolution and containment, the decision matrix, session grants
     tools/          fs, shell, screenshot, skill, memory, handoff, connector, jev — one ToolSpec registry
     approval.rs     pending approvals: where a turn waits for your answer
+    park.rs         asks nobody could answer: filing one, and what the run is told
+    notify.rs       OS notifications, raised from Rust and coalesced per routine
     audit.rs        audit.jsonl: one line per tool call
-    store/          projects, sessions, agents, memories, routines, connectors, settings documents
+    store/          projects, sessions, agents, memories, routines, parked asks, connectors,
+                    settings documents
     secrets.rs      OS credential store, environment fallback, masking
     skills/         the runbook format, the catalog, the seeded library (`seed/*.md`), proposals
     handoff/        briefs and reports, the bus (parallel, bounded, two attempts), the runner

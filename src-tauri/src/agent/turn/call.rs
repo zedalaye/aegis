@@ -3,6 +3,8 @@
 
 use super::*;
 
+use crate::store::parked::ParkCause;
+
 impl Turn<'_> {
     /// Runs one round of tool calls in order, one at a time, because a person
     /// approves them one at a time. `async` for [`Turn::ask`] and `shell_exec`.
@@ -84,8 +86,13 @@ impl Turn<'_> {
             let screen = (call.name == policy::tool::SCREEN_CAPTURE)
                 .then(tools::screenshot::geometry)
                 .flatten();
+            // What an answer to a parked ask matches (PLAN 7.22): this tool
+            // with exactly these arguments, digested the way the audit line
+            // digests them.
+            let fingerprint = crate::audit::fingerprint(&call.name, &args);
             let policy_ctx =
                 PolicyCtx::new(&plan.session_id, plan.workspace.as_deref(), self.grants)
+                    .with_fingerprint(Some(&fingerprint))
                     .with_self_exe(self.self_exe)
                     .with_exec_host(plan.exec_host.as_ref())
                     .with_screen(screen.as_ref())
@@ -111,6 +118,17 @@ impl Turn<'_> {
                     self.starting(plan, call);
                     Some(tools::run(&ctx, AuditDecision::Auto, reason, &resolved).await)
                 }
+
+                // Nobody could answer, so the question is kept rather than
+                // thrown away (PLAN 7.22). Nothing runs either way.
+                Decision::Park { request } => Some(self.park(
+                    &ctx,
+                    plan,
+                    call,
+                    &request,
+                    &fingerprint,
+                    ParkCause::Unattended,
+                )),
 
                 // A hard denial (PLAN 3.2). Never offered to the user, because
                 // approving it could not mean anything.
@@ -139,6 +157,18 @@ impl Turn<'_> {
                                 .await,
                         )
                     }
+                    // Five minutes with nobody at the screen used to throw the
+                    // expensive part away (`IDEAS.md` § 5). It parks instead:
+                    // the turn ends as it does on a denial, and the question
+                    // keeps the arguments.
+                    Some(answer) if answer.resolved_by == ResolvedBy::Timeout => Some(self.park(
+                        &ctx,
+                        plan,
+                        call,
+                        &request,
+                        &fingerprint,
+                        ParkCause::Expired,
+                    )),
                     Some(answer) => Some(tools::refuse(
                         &ctx,
                         &call.name,
@@ -175,6 +205,48 @@ impl Turn<'_> {
                 _ => ToolCallStatus::Error,
             };
             self.finish_call(plan, call, &outcome, status);
+        }
+    }
+
+    /// Files one call for a person to answer later (PLAN 7.22), and gives the
+    /// model the envelope that says so.
+    ///
+    /// Always a refusal on the wire: a parked call did not run. The code is
+    /// `E_PARKED` rather than `E_DENIED`, because the question is still open.
+    pub(super) fn park(
+        &self,
+        ctx: &ToolCtx<'_>,
+        plan: &TurnPlan,
+        call: &AssembledCall,
+        request: &AskRequest,
+        fingerprint: &str,
+        cause: ParkCause,
+    ) -> ToolOutcome {
+        let refuse = |code: ErrorCode, reason: &str| {
+            tools::refuse(ctx, &call.name, AuditDecision::Deny, code, reason)
+        };
+
+        let Some(parking) = self.parking else {
+            return refuse(ErrorCode::Denied, &park::unsigned(request));
+        };
+
+        let parked = park::park(
+            parking,
+            park::Call {
+                session_id: &plan.session_id,
+                agent_id: &self.agent.id,
+                turn_id: &plan.turn_id,
+                call_id: &call.call_id,
+                fingerprint,
+                cause,
+            },
+            request,
+            self.sink,
+        );
+
+        match parked {
+            park::Outcome::Held(ask) => refuse(ErrorCode::Parked, &park::envelope(&ask)),
+            park::Outcome::Refused(reason) => refuse(ErrorCode::Denied, &reason),
         }
     }
 

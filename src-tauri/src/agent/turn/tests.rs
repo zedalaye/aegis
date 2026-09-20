@@ -89,6 +89,11 @@ struct Fixture {
     /// An empty memory store.
     memories: MemoryStore,
     connectors: Connectors,
+    /// Where an ask nobody answers is filed (PLAN 7.22). Only the turns built
+    /// by [`Fixture::parking`] reach it.
+    parked: crate::store::ParkedStore,
+    /// Notifications this fixture drops on the floor.
+    notifier: crate::notify::Quiet,
     /// The built-in identity, which holds every tool.
     agent: Agent,
 }
@@ -126,7 +131,23 @@ impl Fixture {
             library: data.join("skills"),
             memories: MemoryStore::load(&data),
             connectors: Connectors::new(),
+            parked: crate::store::ParkedStore::load(&data),
+            notifier: crate::notify::Quiet,
             agent: Agent::builtin(),
+        }
+    }
+
+    /// Somewhere for this session's turns to park (PLAN 7.22). No routine: a
+    /// session someone opened parks only when a dialog expires.
+    fn parking<'a>(&'a self, parks: &'a crate::park::Parks) -> Parking<'a> {
+        Parking {
+            store: &self.parked,
+            notifier: &self.notifier,
+            project_id: "p1",
+            routine_id: "",
+            routine_name: "",
+            skill: "",
+            parks,
         }
     }
 
@@ -156,6 +177,7 @@ impl Fixture {
             connectors: &self.connectors,
             standing: Standing::Own(None),
             unattended: None,
+            parking: None,
             decision: None,
         }
     }
@@ -610,6 +632,56 @@ async fn an_unanswered_approval_expires_and_the_turn_carries_on() {
         resolved.expect("the dialog was closed").resolved_by,
         ResolvedBy::Timeout
     );
+}
+
+/// `IDEAS.md` § 5: five minutes with nobody at the screen threw the expensive
+/// part away. With somewhere to park (PLAN 7.22) the dialog still expires, but
+/// the question — and the arguments the model spent its turn writing — survive
+/// it, and the model is told the difference.
+#[tokio::test(start_paused = true)]
+async fn an_expired_approval_parks_rather_than_being_thrown_away() {
+    let fx = Fixture::new();
+    fx.say("write a file");
+    let parks = crate::park::Parks::new();
+    let parking = fx.parking(&parks);
+
+    let provider = FakeProvider::scripted(vec![tool_call_script(
+        "call_1",
+        tool::FS_WRITE,
+        r#"{"path":"new.txt","content":"x"}"#,
+    )]);
+
+    let reason = Turn {
+        parking: Some(&parking),
+        ..fx.turn(&provider)
+    }
+    .run(&fx.plan(), &CancellationToken::new())
+    .await;
+
+    assert_eq!(reason, StopReason::Stop, "the turn ends cleanly");
+    assert!(
+        !fx.workspace.join("new.txt").exists(),
+        "a parked call has not run"
+    );
+    assert!(fx.approvals.is_empty(), "the dialog was withdrawn");
+
+    let envelope: serde_json::Value =
+        serde_json::from_str(&fx.transcript()[2].text).expect("an envelope");
+    assert_eq!(
+        envelope["error"]["code"], "E_PARKED",
+        "a parked call is not a refused one"
+    );
+
+    let waiting = fx.parked.list(None);
+    assert_eq!(waiting.len(), 1, "the question is on the board");
+    assert_eq!(waiting[0].cause, crate::store::ParkCause::Expired);
+    assert_eq!(waiting[0].tool, tool::FS_WRITE);
+    assert_eq!(
+        waiting[0].grant,
+        Some(Grant::FsWrite),
+        "answering it standing is still on offer"
+    );
+    assert_eq!(parks.ids().len(), 1);
 }
 
 /// While a dialog is open the session is not "working" — it is waiting for

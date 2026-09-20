@@ -83,7 +83,7 @@ There is no message field: a routine names a runbook, never a prompt.
 
 Write the runbook, run it once and watch, then put it on a clock.
 
-**Nobody is watching**, so a scheduled run never asks: policy refuses instead. What it may do beyond
+**Nobody is watching**, so a scheduled run never asks: it *parks* instead. What it may do beyond
 reading is the list of standing approvals you ticked when saving — the same grants the dialog
 creates, checked at save time against what the runbook declares and what the identity holds. Nothing
 outside the workspace, under `.git/` or in `world/` can be signed for. A scheduled run cannot
@@ -92,7 +92,12 @@ delegate. **Run now** takes exactly the unattended path.
 - **Budgets.** Each routine and each identity has a daily ceiling, spent before a run opens its
   session, under the store's lock.
 - **Silence.** A run that ends without returning is a silence. Two in a row pause the routine, with
-  the reason on its row. `blocked` is an answer, not a silence.
+  the reason on its row. `blocked` and `parked` are answers, not silences.
+- **Parked.** A call the routine was not signed for does not run and is not thrown away: it is kept
+  on the board with everything a dialog would have shown, the run is told to stop and say what it
+  needed, and its row reads *parked*. A run may park three calls, and a question nobody answers for
+  a week closes itself as `blocked`. The same call parked by a later run of the same routine is the
+  same question, not a second row.
 - **Bounds.** A run is cut off after 15 minutes. At most two scheduled runs are in flight.
 - **Trace.** Each run is an ordinary session with a `routine` badge, and every audit line it writes
   carries the routine id.
@@ -109,14 +114,23 @@ fail.*
 
 | Column | Holds |
 | --- | --- |
-| **Attention** | someone must act: an approval on screen, a run that returned `needs_you`, a routine that gave up |
+| **Attention** | someone must act: an approval on screen, a parked call, a run that returned `needs_you`, a routine that gave up |
 | **In flight** | running now |
 | **Blocked** | stopped short and not waiting on a person: a missing source, a routine that cannot fire, a failed run |
 
 Each line says where it came from: **your `.aegis/status/STATUS.md`**, read structurally (the three
 headings and the lines under them; indented examples and whole-line italics are ignored), or **what
-the runtime sees** (running turns, pending dialogs, paused routines). Nothing on the board writes
-`STATUS.md`: correct it in your editor or through an approved write.
+the runtime sees** (running turns, pending dialogs, parked calls, paused routines). Nothing on the
+board writes `STATUS.md`: correct it in your editor or through an approved write.
+
+**Parked** sits under the columns: one card per question, reading like the approval prompt because
+it is the same question asked later. *Allow once* runs that exact call, with the arguments in front
+of you, and nothing else — a run that comes back with different arguments asks again. *Allow
+standing* signs the approval onto the routine, through the same checks as saving one. *Deny*
+records the refusal. All three pick the run up in the session it stopped in, so what it had already
+done is not repeated. Aegis can also notify you while the window is hidden: the routine's name and
+one sentence, never the path or the command line, and the click opens the window rather than
+answering anything.
 
 **Runs** are folded from the tail of `audit.jsonl`, using the widest id on each line:
 

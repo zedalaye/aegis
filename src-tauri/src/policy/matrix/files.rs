@@ -198,12 +198,26 @@ pub(super) fn write(
             ));
         }
 
+        // Amending the world is a human decision at every rung of the
+        // ladder (PLAN 7.21, *Human forever*), so a run with nobody in
+        // it is refused outright rather than parked (PLAN 7.22): an
+        // answered park would still be an agent applying the amendment.
+        if ctx.unattended {
+            return Err(Decision::deny(
+                ErrorCode::Denied,
+                "`world/` is this workspace's constitution, and nobody is watching this \
+                 run. Amending it is a human decision — it is not signed onto a routine, \
+                 and it is not parked for somebody to wave through either. Write what \
+                 would have to change as an ordinary file, and return `needs_you` naming \
+                 it",
+            ));
+        }
+
         // In a session it is a human decision, so a dialog — with a
         // grant of its own, never `FsWrite`'s, so founding a world is
-        // not six identical prompts. Unattended there is no grant, so
-        // `decide_call` refuses; `schedule::check` also refuses to store
-        // one on a routine.
-        let grant = (!ctx.unattended).then_some(Grant::WorldAmend);
+        // not six identical prompts. `schedule::check` also refuses to
+        // store one on a routine.
+        let grant = Some(Grant::WorldAmend);
         return Ok(ask(
             call,
             AskRequest {
@@ -223,7 +237,8 @@ pub(super) fn write(
 
     // Applying a skill proposal (PLAN 7.13): asked every time with no
     // grant, so a held `FsWrite` never makes a runbook live unseen. A
-    // brief hands the proposal back instead; a routine is refused.
+    // brief hands the proposal back instead; a routine parks it, which
+    // is still a person reading the runbook before it goes live.
     if let Some(apply) = apply {
         let name = apply.map_err(|reason| Decision::deny(ErrorCode::Denied, reason))?;
         if ctx.delegated {

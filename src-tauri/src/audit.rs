@@ -371,6 +371,15 @@ impl AuditLog {
     }
 }
 
+/// The key an answer to a parked ask matches (PLAN 7.22): the tool and the
+/// digest of exactly the arguments the person read.
+///
+/// Here rather than in [`policy`](crate::policy) because it must be the same
+/// digest the audit line carries: one answer, one line, one call.
+pub fn fingerprint(tool: &str, args: &serde_json::Value) -> String {
+    format!("{tool}:{}", digest(args))
+}
+
 /// SHA-256 of the arguments, hex. `serde_json::Value` objects serialize
 /// key-sorted, so key order does not change the digest.
 fn digest(args: &serde_json::Value) -> String {

@@ -93,6 +93,7 @@ impl AppState {
             .map(|(path, text)| (path.display().to_string(), text));
 
         let runs = trace::fold(&self.audit_window(), &self.ledger(&sessions));
+        let parked = self.parked.list(Some(project_id));
 
         board::assemble(board::Facts {
             project_id,
@@ -102,6 +103,7 @@ impl AppState {
             sessions: &sessions,
             routines: &routines,
             approvals: &approvals,
+            parked: &parked,
             runs,
         })
     }

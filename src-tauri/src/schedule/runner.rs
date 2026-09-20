@@ -28,9 +28,12 @@ use crate::commands::session::WindowSink;
 use crate::error::{AppError, AppResult};
 use crate::exec_host::ExecHost;
 use crate::mcp::Connectors;
+use crate::notify::{Note, Notifier};
+use crate::park::{Parking, Parks};
 use crate::policy::GrantStore;
 use crate::skills::{self, Reported};
 use crate::state::AppState;
+use crate::store::parked::{ParkedAsk, ParkedStore};
 use crate::store::routines::{Routine, RoutineStore, RunOutcome, Schedule};
 use crate::store::{
     Agent, AgentStore, MemoryStore, Message, Scheduled, SessionState, SessionStore,
@@ -51,6 +54,10 @@ pub struct Host<'a> {
     pub projects: &'a crate::store::Store,
     /// The ledger: what fired, what it spent, how it ended.
     pub routines: &'a RoutineStore,
+    /// Where an ask nobody can answer is filed (PLAN 7.22).
+    pub parked: &'a ParkedStore,
+    /// Who is told when a run wants something and nobody is at the window.
+    pub notifier: &'a dyn Notifier,
     /// Where the routine's identity is looked up.
     pub agents: &'a AgentStore,
     /// Where the run's session is created and its transcript kept.
@@ -152,10 +159,19 @@ struct Ready {
     skill: crate::skills::Skill,
 }
 
+/// Whether the day's budget still has to hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Budget {
+    /// A fire: the run has not been charged yet, and the ceiling decides.
+    Enforced,
+    /// A resume (PLAN 7.22): this run was charged when it started.
+    Spent,
+}
+
 /// Resolves everything a run needs, or says why it cannot happen.
 ///
 /// Re-asks [`inspect`](super::inspect)'s questions at firing time.
-fn ready(host: &Host<'_>, routine: &Routine) -> Result<Ready, String> {
+fn ready(host: &Host<'_>, routine: &Routine, budget: Budget) -> Result<Ready, String> {
     let agent = host
         .agents
         .get(&routine.agent_id)
@@ -175,13 +191,25 @@ fn ready(host: &Host<'_>, routine: &Routine) -> Result<Ready, String> {
         .cloned()
         .ok_or_else(|| format!("`{}` is not in the library or the workspace", routine.skill))?;
 
-    if let Some(problem) = super::inspect(
-        routine,
-        Some(&agent),
-        Some(&workspace),
-        Some(&skill),
-        host.routines.runs_today_for_agent(&routine.agent_id),
-    ) {
+    // A resume is asked everything a fire is asked except the day's ceilings,
+    // which it was charged against when it started: refusing to finish work a
+    // person has just approved because the count is spent would strand the
+    // half-done tree the park was protecting.
+    let problem = match budget {
+        Budget::Enforced => super::inspect(
+            routine,
+            Some(&agent),
+            Some(&workspace),
+            Some(&skill),
+            host.routines.runs_today_for_agent(&routine.agent_id),
+        ),
+        Budget::Spent => {
+            let mut resumed = routine.clone();
+            resumed.runs_today = 0;
+            super::inspect(&resumed, Some(&agent), Some(&workspace), Some(&skill), 0)
+        }
+    };
+    if let Some(problem) = problem {
         return Err(problem);
     }
 
@@ -206,7 +234,7 @@ pub async fn fire(host: &Host<'_>, routine_id: &str) {
         }
     };
 
-    let ready = match ready(host, &routine) {
+    let ready = match ready(host, &routine, Budget::Enforced) {
         Ok(ready) => ready,
         Err(reason) => {
             tracing::info!(routine = %routine.name, %reason, "a routine did not run");
@@ -255,18 +283,75 @@ pub async fn fire(host: &Host<'_>, routine_id: &str) {
         host.grants.insert(&session.id, grant.clone());
     }
 
-    let outcome = drive(host, &routine, &ready, &session.id).await;
+    let outcome = drive(
+        host,
+        &routine,
+        &ready,
+        &session.id,
+        super::opening(&routine, &ready.skill),
+    )
+    .await;
 
     host.grants.clear(&session.id);
     finish(host, &routine, &session.id, outcome.0, &outcome.1);
 }
 
+/// Picks a run up where a parked ask left it (PLAN 7.22).
+///
+/// The same session, a new turn, still unattended: the routine's standing
+/// approvals are seeded again, and an *allow once* answer is already in the
+/// grant store as a one-shot on that exact call.
+pub async fn resume(host: &Host<'_>, ask: &ParkedAsk, decision: crate::approval::Decision) {
+    let routine = match host.routines.get(&ask.routine_id) {
+        Ok(routine) => routine,
+        Err(err) => {
+            tracing::warn!(%err, "a parked ask was answered for a routine that is gone");
+            return;
+        }
+    };
+
+    let ready = match ready(host, &routine, Budget::Spent) {
+        Ok(ready) => ready,
+        Err(reason) => {
+            tracing::info!(routine = %routine.name, %reason, "a parked run could not be resumed");
+            finish(
+                host,
+                &routine,
+                &ask.session_id,
+                RunOutcome::Failed,
+                &format!("it could not be resumed: {reason}"),
+            );
+            return;
+        }
+    };
+
+    for grant in &routine.grants {
+        host.grants.insert(&ask.session_id, grant.clone());
+    }
+
+    let outcome = drive(
+        host,
+        &routine,
+        &ready,
+        &ask.session_id,
+        crate::park::resumption(ask, decision),
+    )
+    .await;
+
+    host.grants.clear(&ask.session_id);
+    finish(host, &routine, &ask.session_id, outcome.0, &outcome.1);
+}
+
 /// Opens the turn, runs it under the deadline, and reads the report out.
+///
+/// `opening` is the one message the run is given: the runbook for a fire, the
+/// answer for a resume.
 async fn drive(
     host: &Host<'_>,
     routine: &Routine,
     ready: &Ready,
     session_id: &str,
+    opening: String,
 ) -> (RunOutcome, String) {
     let turn_id = uuid::Uuid::new_v4().to_string();
 
@@ -275,7 +360,6 @@ async fn drive(
         Err(err) => return (RunOutcome::Failed, err.to_string()),
     };
 
-    let opening = super::opening(routine, &ready.skill);
     if let Err(err) =
         host.sessions
             .append(session_id, Message::user(opening), SessionState::Running)
@@ -297,6 +381,16 @@ async fn drive(
     });
 
     let reported = Reported::new();
+    let parks = Parks::new();
+    let parking = Parking {
+        store: host.parked,
+        notifier: host.notifier,
+        project_id: &routine.project_id,
+        routine_id: &routine.id,
+        routine_name: &routine.name,
+        skill: &routine.skill,
+        parks: &parks,
+    };
     let provider = (host.provider)(&ready.agent, session_id);
     let plan = TurnPlan {
         session_id: session_id.to_owned(),
@@ -327,6 +421,7 @@ async fn drive(
             routine: &routine.id,
             reported: &reported,
         }),
+        parking: Some(&parking),
     }
     .run(&plan, &cancel)
     .await;
@@ -338,7 +433,7 @@ async fn drive(
         host.sink.emit(Event::SessionUpdated(Box::new(summary)));
     }
 
-    match reported.take() {
+    let ended = match reported.take() {
         Some(returned) => (outcome_of(&returned.status), returned.summary),
         // The one thing a run owes is a return. Anything else — a turn that
         // stopped talking, a deadline, a provider that failed — is a silence,
@@ -356,10 +451,26 @@ async fn drive(
                 _ => "it finished without calling `skill_return`, so there is no report".to_owned(),
             },
         ),
+    };
+
+    // A park outranks whatever else the run said about itself: something is
+    // waiting for a person, and that is what the ledger and the board should
+    // say (PLAN 7.22). It is an answer, so it never counts as a silence.
+    if parks.any() {
+        let parked = parks.ids().len();
+        let word = if parked == 1 { "call" } else { "calls" };
+        return (
+            RunOutcome::Parked,
+            format!("{parked} {word} parked for you to answer. {}", ended.1)
+                .trim_end()
+                .to_owned(),
+        );
     }
+    ended
 }
 
-/// The routine's row after a run, written and announced.
+/// The routine's row after a run, written, announced, and — when it wants
+/// somebody — notified (PLAN 7.22).
 fn finish(host: &Host<'_>, routine: &Routine, session_id: &str, outcome: RunOutcome, detail: &str) {
     match host
         .routines
@@ -372,10 +483,29 @@ fn finish(host: &Host<'_>, routine: &Routine, session_id: &str, outcome: RunOutc
                 paused = updated.paused,
                 "a scheduled run ended"
             );
+            notify(host, &updated, outcome, detail);
             host.sink.emit(Event::RoutineUpdated(Box::new(updated)));
         }
         Err(err) => tracing::warn!(%err, routine = %routine.name, "could not record a run"),
     }
+}
+
+/// Tells whoever is not at the window that this run wants them.
+///
+/// A routine that stopped itself, and a run that returned `needs_you`. Not a
+/// park, which is notified as it happens; not a `done`, which is the machine
+/// doing its job.
+fn notify(host: &Host<'_>, routine: &Routine, outcome: RunOutcome, detail: &str) {
+    let body = match outcome {
+        _ if routine.paused && !routine.paused_reason.is_empty() => {
+            format!("This routine stopped itself. {}", routine.paused_reason)
+        }
+        RunOutcome::NeedsYou => detail.to_owned(),
+        _ => return,
+    };
+
+    host.notifier
+        .post(Note::new(routine.id.clone(), routine.name.clone(), body));
 }
 
 /// A returned status, as the ledger records it.
@@ -420,6 +550,7 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let now = chrono::Utc::now();
+    expire_parks(app, &state, now);
 
     for routine in state.routines().list() {
         if routine.paused || state.scheduler().is_running(&routine.id) {
@@ -453,6 +584,47 @@ fn tick<R: Runtime>(app: &AppHandle<R>) {
             state.routines().mark_seen(&routine.id, newest);
         }
         start(app.clone(), routine.id.clone());
+    }
+}
+
+/// Closes the parked asks nobody answered in time (PLAN 7.22).
+///
+/// On the scheduler's tick because that is the one thing in this process that
+/// wakes up whether or not a window is open. The run they belonged to ends as
+/// `blocked`: the question was asked and went unanswered, which is an answer.
+fn expire_parks<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    let expired = state.parked().prune(now);
+    if expired.is_empty() {
+        return;
+    }
+
+    let sink = WindowSink::new(app.clone());
+    for ask in expired {
+        sink.emit(Event::ParkedResolved(crate::agent::event::ParkedResolved {
+            id: ask.id.clone(),
+            session_id: ask.session_id.clone(),
+            answer: "expired".to_owned(),
+        }));
+
+        if ask.routine_id.is_empty() {
+            continue;
+        }
+        let detail = format!(
+            "it parked `{}` for you and nobody answered within {} days",
+            ask.tool,
+            crate::store::parked::PARK_TTL_DAYS
+        );
+        if let Some(updated) =
+            state
+                .routines()
+                .close_parked(&ask.routine_id, &ask.session_id, &detail)
+        {
+            sink.emit(Event::RoutineUpdated(Box::new(updated)));
+        }
     }
 }
 
@@ -493,6 +665,82 @@ fn start<R: Runtime>(app: AppHandle<R>, routine_id: String) {
     });
 }
 
+/// Spawns the resumption of a parked run, and gives its slot back however it
+/// ends (PLAN 7.22).
+fn start_resume<R: Runtime>(
+    app: AppHandle<R>,
+    ask: ParkedAsk,
+    decision: crate::approval::Decision,
+) {
+    tauri::async_runtime::spawn(async move {
+        resume_in(&app, &ask, decision).await;
+
+        if let Some(state) = app.try_state::<AppState>() {
+            state.scheduler().release(&ask.routine_id);
+        }
+    });
+}
+
+/// Assembles the host from a running application and resumes one parked run.
+async fn resume_in<R: Runtime>(
+    app: &AppHandle<R>,
+    ask: &ParkedAsk,
+    decision: crate::approval::Decision,
+) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+
+    let sink = WindowSink::new(app.clone());
+    let notifier = crate::notify::Desktop::new(app.clone(), state.coalescer());
+    let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
+    let decision_client = state.decision_client();
+    let host = Host {
+        projects: state.store(),
+        routines: state.routines(),
+        parked: state.parked(),
+        notifier: &notifier,
+        agents: state.agents(),
+        sessions: state.sessions(),
+        turns: state.turns(),
+        grants: state.grants(),
+        approvals: state.approvals(),
+        audit: state.audit(),
+        sink: &sink,
+        self_exe: state.self_exe(),
+        captures: state.captures(),
+        skills: state.skills(),
+        memories: state.memories(),
+        connectors: state.connectors(),
+        provider: &provider,
+        decision: decision_client.as_ref(),
+    };
+
+    resume(&host, ask, decision).await;
+}
+
+/// Takes the slot a resumed run will need, before its answer is recorded
+/// (PLAN 7.22).
+///
+/// Given back with [`Scheduler::release`] if the answer does not happen, and
+/// by [`resume_claimed`] when the run ends.
+pub fn claim_resume(state: &AppState, ask: &ParkedAsk) -> AppResult<()> {
+    state.scheduler().claim(&ask.routine_id)
+}
+
+/// Picks up a run whose slot is already claimed, on somebody's say-so.
+///
+/// The answer itself is recorded by
+/// [`AppState::answer_parked`](crate::AppState::answer_parked); this is the
+/// run. Everything after this is events.
+pub fn resume_claimed<R: Runtime>(
+    app: &AppHandle<R>,
+    ask: &ParkedAsk,
+    decision: crate::approval::Decision,
+) {
+    start_resume(app.clone(), ask.clone(), decision);
+}
+
 /// Assembles the host from a running application and fires one routine.
 ///
 /// State is looked up from the handle, since a `State` borrow cannot outlive
@@ -503,11 +751,14 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
     };
 
     let sink = WindowSink::new(app.clone());
+    let notifier = crate::notify::Desktop::new(app.clone(), state.coalescer());
     let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
     let decision = state.decision_client();
     let host = Host {
         projects: state.store(),
         routines: state.routines(),
+        parked: state.parked(),
+        notifier: &notifier,
         agents: state.agents(),
         sessions: state.sessions(),
         turns: state.turns(),

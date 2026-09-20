@@ -116,6 +116,12 @@ ts-rs = "12"
 # exactly where a second implementation would disagree with `git status`.
 ignore = "0.4"
 serde_yaml_ng = "0.10"
+# OS notifications (PLAN 7.22), raised from Rust like the folder picker: the
+# plugin is registered on the builder and granted to no window, so
+# `capabilities/main.json` still carries no plugin permission and the WebView
+# cannot notify on its own. It is the one way out of this process that does not
+# need a window to be open.
+tauri-plugin-notification = "2"
 
 # Console programs on Windows do not write UTF-8. `cmd`, `dir`, `ver` and most
 # of the built-in tooling emit the system OEM code page (437, 850, 932 …), so

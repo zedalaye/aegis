@@ -215,6 +215,7 @@ impl App {
                 Standing::Own(None)
             },
             unattended: None,
+            parking: None,
             decision: None,
         }
         .run(&plan, &cancel)

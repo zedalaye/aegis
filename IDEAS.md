@@ -78,15 +78,17 @@ only if the session continues. Short sessions have a lower ceiling. Below 1,024 
   pieces or generation in place.
 - **Derivable content** is cheaper as a script run through `shell_exec`.
 
-### 5. An expired approval throws away the expensive part
+### 5. An expired approval throws away the expensive part — landed (`PLAN.md` § 7.22)
 
 `APPROVAL_TTL` (`src-tauri/src/approval.rs`) is five minutes from the request, which comes after the
 arguments were generated. A turn can spend minutes and 40,000 output tokens on a file and lose them
 because nobody was at the screen (observed: asked 06:38:48, refused 06:43:48, never seen).
 
-The lever is making a pending approval hard to miss: a tray notification, a TTL that pauses while
-the window is unfocused, or different treatment for expensive calls (the runtime already counts
-argument size for `tool:drafting`). **Unknown:** which.
+**Settled:** none of the three levers guessed at here. The deadline still expires — a dialog nobody
+is looking at should not stay open for ever — but what it produces is a *park* rather than a
+denial: the arguments are kept with everything the dialog showed, and the question is answerable
+from the board afterwards. The notification came too, as a way of noticing rather than as a way of
+extending the window.
 
 ## motosan-ai backends Aegis does not use
 

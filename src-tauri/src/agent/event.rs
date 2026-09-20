@@ -55,6 +55,10 @@ pub mod name {
     pub const AUDIT_APPENDED: &str = "audit:appended";
     /// A routine's row changed.
     pub const ROUTINE_UPDATED: &str = "routine:updated";
+    /// A call was parked for a person (PLAN 7.22).
+    pub const PARKED_UPDATED: &str = "parked:updated";
+    /// A parked ask stopped being open: answered, or out of time.
+    pub const PARKED_RESOLVED: &str = "parked:resolved";
     /// A connector's row changed.
     pub const CONNECTOR_UPDATED: &str = "connector:updated";
     /// The OS dropped files on the window.
@@ -258,6 +262,18 @@ pub struct ToolFinished {
     pub image_path: Option<String>,
 }
 
+/// `parked:resolved` — a parked ask is no longer open (PLAN 7.22).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "bindings.ts")]
+pub struct ParkedResolved {
+    /// The park that closed.
+    pub id: String,
+    /// The session its run was in, so the board can route it.
+    pub session_id: String,
+    /// The answer, or `expired` when nobody gave one in time.
+    pub answer: String,
+}
+
 /// `tool:approval_annotated` — a pending approval gained a risk annotation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
@@ -306,6 +322,10 @@ pub enum Event {
     AuditAppended(Box<AuditEntry>),
     /// `routine:updated` (Phase 16): a routine's row changed, e.g. a run ended.
     RoutineUpdated(Box<Routine>),
+    /// `parked:updated` (PLAN 7.22): a call was parked for a person.
+    ParkedUpdated(Box<crate::store::ParkedAsk>),
+    /// `parked:resolved` (PLAN 7.22): a parked ask closed.
+    ParkedResolved(ParkedResolved),
     /// `connector:updated` (Phase 18): a connector's state changed.
     ConnectorUpdated(Box<ConnectorView>),
     /// `workspace:dropped` (PLAN 7.15): a drop is held under an id; paths stay
@@ -333,6 +353,8 @@ impl Event {
             Self::SessionUpdated(_) => name::SESSION_UPDATED,
             Self::AuditAppended(_) => name::AUDIT_APPENDED,
             Self::RoutineUpdated(_) => name::ROUTINE_UPDATED,
+            Self::ParkedUpdated(_) => name::PARKED_UPDATED,
+            Self::ParkedResolved(_) => name::PARKED_RESOLVED,
             Self::ConnectorUpdated(_) => name::CONNECTOR_UPDATED,
             Self::WorkspaceDropped(_) => name::WORKSPACE_DROPPED,
         }
@@ -361,6 +383,8 @@ impl Event {
                 .last
                 .as_ref()
                 .map_or("", |last| last.session_id.as_str()),
+            Self::ParkedUpdated(payload) => &payload.session_id,
+            Self::ParkedResolved(payload) => &payload.session_id,
             // A connector belongs to the installation, not to a session. The
             // empty id matches nothing, which is what a sink filtering by
             // session should do with it.
@@ -391,6 +415,8 @@ impl Event {
             Self::SessionUpdated(payload) => serde_json::to_value(payload),
             Self::AuditAppended(payload) => serde_json::to_value(payload),
             Self::RoutineUpdated(payload) => serde_json::to_value(payload),
+            Self::ParkedUpdated(payload) => serde_json::to_value(payload),
+            Self::ParkedResolved(payload) => serde_json::to_value(payload),
             Self::ConnectorUpdated(payload) => serde_json::to_value(payload),
             Self::WorkspaceDropped(payload) => serde_json::to_value(payload),
         };

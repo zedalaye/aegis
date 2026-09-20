@@ -410,3 +410,72 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* --- Parked (PLAN 7.22) ---------------------------------------------------- */
+
+/*
+ * A card per question, laid out like the approval dialog so the same reading
+ * habits work — details above, buttons below. Wider than one column, because
+ * what is being answered is a diff or a command line, not a line of prose.
+ */
+.board__parked {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.parked {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--warning);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.parked--high {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.parked__header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.parked__title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.parked__at {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.parked__summary {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.parked__reason,
+.parked__scope {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.parked__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

@@ -6,7 +6,7 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 (`§ 7.6 *Authoring*`): amend sections in place, and keep the numbers and lead-ins.
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
-open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.20,
+open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.22,
 landed), three surfaces that are not scheduled (§ 7.7–7.9), and the autonomy ladder (§ 7.21–7.30,
 proposed).
 
@@ -41,7 +41,7 @@ Commands are `domain_verb`, events are `domain:verb`. Payloads are Rust structs 
 | Projects | `project_pick_workspace`, `project_create`, `project_list`, `project_open`, `project_delete`, `project_list_exec_hosts`, `project_set_exec_host` | The folder dialog runs in Rust; the WebView holds no `dialog:` permission. A workspace path is canonicalized once, on the way in. Deleting a project forgets it and never touches the folder. Hosts: § 7.12 |
 | Sessions | `session_create` (`project_id`, `title?`, `agent_id?`, `provider_id?`, `model?`), `session_set_binding` (`session_id`, `provider_id?`, `model?`), `session_list`, `session_open`, `session_rename`, `session_delete`, `session_send` (`session_id`, `text`, `attachments?`), `session_cancel`, `session_compact` | `session_send` returns a `TurnHandle` once the turn is registered; everything after is events. Sending while running is `E_TURN_BUSY`. `attachments` are ids from the two commands below, never paths or bytes; an id the runtime did not mint refuses the whole send (§ 7.20). The identity is fixed at creation; the provider and model are an override of the identity's pair, refused while a turn runs, and both omitted inherits (§ 7.19). `session_compact` always returns the detail (a session too short to fold is an answer) and is refused while a turn runs |
 | Attachments | `attachment_pick`, `attachment_drop` (`drop_id`) | The image picker runs in Rust (no `dialog:` on the window). Both copy PNG, JPEG, GIF or WebP files up to 16 MiB, at most 8 per message, into the app's `attachments/` and return ids; per-file refusals are in the report. A drop onto the composer never becomes a brief. Not tools, no matrix row: the operator attached (§ 7.20) |
-| Approvals | `approval_list_pending`, `approval_resolve` (`allow_once` / `allow_session` / `deny`), `approval_grants`, `approval_revoke_grant` | An unknown or expired request is `E_APPROVAL_STALE` and the UI re-syncs. `allow_session` on a row offering no grant is `E_GRANT_NOT_ALLOWED`, enforced in Rust. Requests expire after five minutes as a denial |
+| Approvals | `approval_list_pending`, `approval_resolve` (`allow_once` / `allow_session` / `deny`), `approval_grants`, `approval_revoke_grant` | An unknown or expired request is `E_APPROVAL_STALE` and the UI re-syncs. `allow_session` on a row offering no grant is `E_GRANT_NOT_ALLOWED`, enforced in Rust. A request unanswered after five minutes stops being a dialog and becomes a parked ask (§ 7.22), answerable from the board afterwards |
 | Identities | `agent_list`, `agent_create`, `agent_update`, `agent_delete` | A refused field is `E_INVALID_SETTING` with `error.field`. `provider_id` must name a row on file; an empty `model` uses the row's. Deleting an identity that sessions or routines use is refused, never cascaded; its memories do cascade. The built-in identity is a constant and cannot be edited |
 | Roster | `roster_proposal`, `roster_apply` (`project_id`, `digest`) | Apply re-reads the file and refuses when the digest changed, the file does not parse, or any new entry would be refused. All or nothing; one `operator` audit line per identity; no routine, connector or world. Neither is a tool (§ 7.14) |
 | Memory | `memory_list`, `memory_save`, `memory_forget` | Saving text already held touches that memory. Forgetting another identity's memory is *not found*, not refused |
@@ -49,6 +49,7 @@ Commands are `domain_verb`, events are `domain:verb`. Payloads are Rust structs 
 | Routines | `routine_list`, `routine_save`, `routine_delete`, `routine_set_paused`, `routine_run_now` | Saving runs the door (Phase 16). Run now takes the unattended path |
 | Connectors | `connector_list`, `connector_save`, `connector_delete`, `connector_set_enabled`, `connector_reconnect` | No tool installs a connector (Phase 18) |
 | Board | `board_read`, `board_trace` | Read-only (Phase 17) |
+| Parked | `parked_list` (`project_id?`), `parked_answer` (`parked_id`, `allow_once` / `allow_session` / `deny`) | The asks nobody could answer (§ 7.22). An answer records first and resumes second: `allow_once` mints a one-shot on that exact call, `allow_session` signs a standing approval through Phase 16's door, `deny` writes the refusal. All three pick the run up. `E_APPROVAL_STALE` when it was answered already or expired, `E_GRANT_NOT_ALLOWED` for a row offering no grant, `E_INVALID_SETTING` / `E_TURN_BUSY` when the run cannot start now |
 | Workspace | `workspace_layout`, `workspace_scaffold`, `workspace_reveal`, `world_status` | Scaffold creates only what is missing and runs `git init` per § 7.11. Reveal accepts only a contained path (§ 7.10). `world_status` is the expensive read, for the panel |
 | Explorer | `workspace_tree`, `workspace_preview`, `workspace_image`, `workspace_import_brief` | Contained to the open workspace. Import takes a drop id, never a path (§ 7.15) |
 | Settings / audit | `settings_get`, `settings_set`, `settings_add_provider`, `settings_delete_provider`, `settings_clear_key`, `settings_probe_provider`, `settings_list_models`, `settings_set_decision`, `settings_clear_decision_key`, `settings_probe_decision`, `audit_tail`, `audit_log_path` | Settings are a roster of masked rows: each key's source and last four characters. No command returns a key. `provider_id` defaults to `"default"`, which cannot be deleted; a row in use is not deleted (§ 7.19). The decision model is its own masked object and its own commands; `settings_set` never carries it (§ 7.18) |
@@ -68,6 +69,7 @@ messaging face (§ 7.7) is another sink, not a second turn loop.
 | `session:updated` | a session summary, for list badges without a refetch |
 | `audit:appended` | a new audit line |
 | `settings:changed`, `connector:updated`, `routine:updated` | store changes |
+| `parked:updated`, `parked:resolved` | a call was parked for a person, and a park that closed — answered, or out of time (§ 7.22) |
 | `workspace:dropped` | files dropped on the window: a drop id, names and position (§ 7.15) |
 | `tray:activate` | a tray action |
 
@@ -98,7 +100,8 @@ session with no workspace is `E_NO_WORKSPACE`.
 | `fs_read` | outside | **ask** | no | high |
 | `fs_write` | outside | **ask** | no | high |
 | `fs_write` | under `world/`, delegated run | **deny** | — | — |
-| `fs_write` | under `world/`, session | **ask** | `WorldAmend` (none when unattended) | high |
+| `fs_write` | under `world/`, unattended run | **deny** | — | — |
+| `fs_write` | under `world/`, session | **ask** | `WorldAmend` | high |
 | `fs_write` | applies a skill proposal, session (§ 7.13) | **ask** | no | high |
 | `fs_write` | applies a proposal from a brief, or one that does not parse, or onto an existing `SKILL.md` | **deny** | — | — |
 | `fs_write` | applies an eval proposal, or writes an `eval.yml` directly, session (§ 7.18) | **ask** | no | high |
@@ -121,8 +124,9 @@ session with no workspace is `E_NO_WORKSPACE`.
 
 Order inside a tool matters: hard denials first, then containment, then the specific rows. A new
 tool is an ask by default (§ 7.2 row 7). In an unattended run every ask not covered by a held grant
-becomes a refusal (Phase 16). The decision model (§ 7.18) is never consulted by this table: its
-annotation arrives after an ask is raised and changes no row.
+is **parked** rather than run or forgotten (§ 7.22): nothing happens, the question is filed for a
+person, and the run ends with an answer. The decision model (§ 7.18) is never consulted by this
+table: its annotation arrives after an ask is raised and changes no row.
 
 **Sensitive names** (case-insensitive, every segment *below* the workspace root): `.env*`, `*.pem`,
 `*.key`, `*.p12`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `credentials`, `.aws`, `.ssh`,
@@ -176,7 +180,12 @@ A session grant is created by answering `allow_session`. It is:
   `.git/`" holds without a second rule.
 
 A routine's standing approvals are these same values, signed on the routine and seeded into its runs
-(Phase 16).
+(Phase 16), and *allow standing* on a parked ask adds one through the same door (§ 7.22).
+
+An answer to a parked ask that is *allow once* is **not** a grant and is not in that store's scope
+map: it is keyed on the call's fingerprint (the tool plus the audit log's digest of the arguments a
+person read), it matches that call and nothing else, and it is consumed before the call runs. A
+model that regenerates different arguments asks again.
 
 ### 3.2 Hard denials (no prompt)
 
@@ -552,8 +561,8 @@ like any runbook and granted like any runbook. There is no `world.amend` for spe
 ### 7.3 Post-MVP phase order
 
 Each phase ended runnable; none depended on a later one; domain work came last. The slices
-§ 7.10–7.20 are not steps in this list and did not delay it; neither are the proposed
-§ 7.21–7.30.
+§ 7.10–7.22 are not steps in this list and did not delay it; neither are the proposed
+§ 7.21 and § 7.23–7.30.
 
 **Phase 11 — Workspace convention.** Shared memory as files a session reads at start and writes
 through the gate. Exit: a decision and a status filed without a new agent type.
@@ -628,10 +637,10 @@ the skill says so.
   granted, already run under watch at least once — checked by `AuditLog::witnessed`, a
   `skill_return` by that identity for that skill. It is the one place the runtime reads its own log to
   decide something, and it is not enforced in the UI.
-- A run is unattended as a policy fact: `PolicyCtx::unattended` turns every ask into a refusal, and
-  what a run may do beyond reading is the `Grant` list signed on the routine, bounded at save time by
-  the runbook's declared tools and the identity's allow-list. **Run now** takes the same path. A
-  scheduled run does not delegate.
+- A run is unattended as a policy fact: `PolicyCtx::unattended` turns every ask into a park
+  (§ 7.22; a refusal before it), and what a run may do beyond reading is the `Grant` list signed on
+  the routine, bounded at save time by the runbook's declared tools and the identity's allow-list.
+  **Run now** takes the same path. A scheduled run does not delegate.
 - The run is an ordinary session with a `routine` badge; the audit line grows `routine`.
 - Budgets are persisted and charged under the store's lock before the session opens, per routine and
   per identity. Two silent runs in a row pause the routine; `blocked` is an answer. Runs are cut at 15
@@ -770,7 +779,7 @@ no command, tool, matrix row, binding or UI change. What each settled:
   apply (§ 7.14).
 - A `settings.json` or `agents.json` under `.aegis/`. Conflicting grants across cabinets are a binding
   (`IDEAS.md` § 13), not a second settings file.
-- Inserting a slice (§ 7.10–7.20) into § 7.3 as a fractional phase, or delaying a phase for one.
+- Inserting a slice (§ 7.10–7.22) into § 7.3 as a fractional phase, or delaying a phase for one.
 - An in-app browser tab, or markdown drawn as HTML (§ 7.20).
 - Teaching the model to call `wsl.exe` or `bash -c`; falling back to Windows when WSL is missing.
 - `git init` on `project_create`, a nested repository, auto-committing writes, or a GitHub product in
@@ -1413,8 +1422,8 @@ differs):
   structured state kept as JSON, 200 / 401 / 422, cancel. `tool_risk` composition: high
   `destructive` raises the wording; low `bucket` confidence omits the bucket; a 5xx leaves the
   ask unannotated and still an ask. Matrix for `jev_ask`: asks, offers `JevAsk`, high risk; a
-  held grant collapses the ask; unattended without grant denies. Parse refusals (empty state,
-  duplicate ids, `choice` without options). Settings load without a `decision` key.
+  held grant collapses the ask; unattended without grant parks (§ 7.22). Parse refusals (empty
+  state, duplicate ids, `choice` without options). Settings load without a `decision` key.
   `MaskedSettings` still carries no key. `tests/agents.rs` already asserts the builtin list
   equals `tools::names()`.
 - **Order.** Secrets → settings document (both halves survive a save) → `agent/decision/` +
@@ -1792,7 +1801,7 @@ and the ledger, never on a claim. Demotion is automatic; promotion is a human ac
 | Level | What runs without a person | Needs | Promotion evidence |
 | --- | --- | --- | --- |
 | L0 — propose | nothing; every mutation is asked | today | — |
-| L1 — unattended files | a routine, narrow standing grants | § 7.22, § 7.23 | one watched run (Phase 16's door) |
+| L1 — unattended files | a routine, narrow standing grants | § 7.22 (landed), § 7.23 | one watched run (Phase 16's door) |
 | L2 — verified | L1, every run checked by a gate, checkpointed | § 7.24, § 7.25, § 7.26 | *N* consecutive runs passing the gate (default 5) |
 | L3 — orchestrated | the CoS on a clock, delegating with grants that narrow | § 7.27, § 7.28 | L2 on every runbook it routes to |
 | L4 — mandated | irreversible acts under a mandate | § 7.29 | L3, a gate on the act, a budget in force |
@@ -1803,8 +1812,8 @@ recipient, instrument); raising a cap; installing a connector; anything outside 
 the kill switch. An agent may *propose* each of these as a file (§ 7.13's pattern); it never
 applies one.
 
-**Order.** § 7.22 → § 7.23 → § 7.24 → § 7.26 → § 7.25 → § 7.30 → § 7.28 → § 7.27 → § 7.29. Each
-slice is usable alone; § 7.29 depends on all the others and lands last.
+**Order.** § 7.22 (landed) → § 7.23 → § 7.24 → § 7.26 → § 7.25 → § 7.30 → § 7.28 → § 7.27 →
+§ 7.29. Each slice is usable alone; § 7.29 depends on all the others and lands last.
 
 **Amends on landing** (not before): § 7.1 *Policy* (a mandate is a gate, not a skipped one);
 § 7.4 bullets 2 and 6 and § 7.5 *Auto-sending…* (irreversible acts: human, or a mandate);
@@ -1813,7 +1822,7 @@ branch, § 7.24); § 7.3 Phase 16 (a scheduled run may delegate, § 7.27); `AGEN
 *Permissions* and *North star* (revenue experiments may execute under a mandate); `COS.md`
 *Loop* (trust order).
 
-### 7.22 Parked asks and notifications — proposed
+### 7.22 Parked asks and notifications — landed
 
 An ask with nobody there is refused, and the run's work is lost until the next fire; an attended
 ask expires after five minutes as a denial (`IDEAS.md` § 5). And nothing tells a person anything
@@ -1855,6 +1864,42 @@ workspace; a notification that quotes a secret-shaped argument; one notification
 *Exit*: a routine that needs an unsigned write parks instead of failing, a notification appears
 with the window hidden, *allow once* resumes the run in its session and the write lands once; an
 attended ask left for ten minutes is answerable after.
+
+*As landed* (`park.rs`, `notify.rs`, `store/parked.rs`, `commands/parked.rs`,
+`components/board/ParkedCard.tsx`):
+
+- **Policy has a third answer.** `Decision::Park` carries the request and no resolved call: a
+  parked call is never run later from a held plan — the answer resumes the run and the model
+  re-issues it. The turn files it and answers the model with `E_PARKED`, which is a refusal on the
+  wire (nothing ran) and not a denial in the log's words.
+- **The fingerprint** is `<tool>:<sha256 of the canonical arguments>`, built by
+  `audit::fingerprint` so the answer and the audit line agree on what "the same call" means. An
+  *allow once* answer lives in `GrantStore`'s second map, not among the scopes, and
+  `policy::decide_call` spends it before the call runs.
+- **One question, one row.** A park is deduplicated on the fingerprint — within a session, and
+  across a routine's runs, so a clock that fires every five minutes does not ask the same thing all
+  day. What comes back is the first run's park, which is the session holding the half-done work.
+- **`world/` is not parked.** § 7.21 keeps amending the constitution human forever, so an
+  unattended write under `world/` is refused in the matrix rather than offered to somebody to wave
+  through; `schedule::check` still refuses to sign `WorldAmend` on a routine.
+- **Resuming** is the scheduler's own path (`runner::resume`), not a second loop: the same session,
+  a new turn, still unattended, the routine's standing approvals seeded again, under `RUN_TIMEOUT`.
+  It does not charge the day's budget — that run was charged when it started — and the ledger row
+  it updates is its own. An expired *dialog* resumes as an ordinary turn in the session it was
+  raised in.
+- **Standing answers go through the door.** `parked_answer` builds the routine's draft with the new
+  grant and runs `schedule::check` on it, so a grant the runbook never declared, or a tool the
+  identity does not hold, is refused with the question still on the board. `Grant::standing_label`
+  says "on every run of this routine" where `scope_label` says "for the rest of this session".
+- **Claim, record, resume**, in that order: the scheduler slot (or the turn registration) is taken
+  before the answer is recorded and given back if recording fails, so the board and the runtime
+  cannot disagree about whether an answer happened.
+- **Notifications** carry the routine's name and one sentence, never the summary — which is the
+  path, the command line or the amount. One per key per hour (`notify::Coalescer`), counting what
+  it held into the next one. The plugin is registered on the builder and granted to no window.
+- Not done, deliberately: a notification action that answers (the click opens the window, § 7.22
+  *Refuses*); the messaging face (§ 7.7, which this makes cheap); the budget and mandate notes of
+  § 7.26 and § 7.29, which have nothing to announce yet.
 
 ### 7.23 Narrow standing grants — proposed
 

@@ -592,6 +592,11 @@ session_id: string,
  */
 routine_id: string, 
 /**
+ * The parked ask this line is, when it is one (PLAN 7.22): what
+ * `parked_answer` is called with.
+ */
+parked_id: string, 
+/**
  * The run to trace, when this line has one.
  */
 run: RunRef | null, };
@@ -601,7 +606,7 @@ run: RunRef | null, };
  *
  * On every item, since the file and the runtime are not equally current.
  */
-export type BoardSource = "status" | "approval" | "session" | "routine" | "run";
+export type BoardSource = "status" | "approval" | "session" | "routine" | "run" | "parked";
 
 /**
  * One file that arrived.
@@ -1263,6 +1268,125 @@ reason: string, };
 export type Outcome = "ok" | "error" | "denied" | "cancelled";
 
 /**
+ * Why this call was parked rather than asked.
+ */
+export type ParkCause = "unattended" | "expired";
+
+/**
+ * One parked ask, as the board draws it and `parked_answer` resolves it.
+ *
+ * Everything the dialog had, plus where the run that asked can be picked up
+ * again.
+ */
+export type ParkedAsk = { 
+/**
+ * UUID v4. What `parked_answer` is called with.
+ */
+id: string, 
+/**
+ * The project whose board shows it.
+ */
+project_id: string, 
+/**
+ * The session whose run asked, and where an answer resumes it.
+ */
+session_id: string, 
+/**
+ * The identity the call was made as.
+ */
+agent_id: string, 
+/**
+ * The routine whose run parked, empty for an expired dialog.
+ */
+routine_id: string, 
+/**
+ * Its name, so a notification and the board can say it without a lookup.
+ */
+routine_name: string, 
+/**
+ * The runbook that was running, when one was.
+ */
+skill: string, 
+/**
+ * The turn the call belonged to. Recorded, never resumed into: an answer
+ * opens a new turn.
+ */
+turn_id: string, 
+/**
+ * The model's own id for the call, so the audit line of a refusal keys on
+ * the same call as the rest of the run.
+ */
+call_id: string, 
+/**
+ * The tool that was asked about.
+ */
+tool: string, 
+/**
+ * `<tool>:<args digest>` — what an *allow once* answer matches
+ * ([`fingerprint`](crate::audit::fingerprint)).
+ */
+fingerprint: string, 
+/**
+ * Why it was parked.
+ */
+cause: ParkCause, 
+/**
+ * The badge. Advisory only (PLAN 3.3).
+ */
+risk: Risk, 
+/**
+ * The dialog's title: "Write file", "Run shell command".
+ */
+title: string, 
+/**
+ * One line naming the thing.
+ */
+summary: string, 
+/**
+ * The structured detail the card draws.
+ */
+detail: ApprovalDetail, 
+/**
+ * Why policy was asking.
+ */
+reason: string, 
+/**
+ * The grant an *allow standing* answer would sign onto the routine.
+ * `None` is a row no routine can be signed for in advance (PLAN 3.1).
+ */
+grant: Grant | null, 
+/**
+ * What signing it would cover, in words — on every run of the routine
+ * when there is one, for the rest of the session when there is not.
+ */
+scope_label: string, 
+/**
+ * When it was parked, RFC3339 UTC.
+ */
+parked_at: string, 
+/**
+ * When it stops being answerable and closes as `blocked`.
+ */
+expires_at: string, };
+
+/**
+ * `parked:resolved` — a parked ask is no longer open (PLAN 7.22).
+ */
+export type ParkedResolved = { 
+/**
+ * The park that closed.
+ */
+id: string, 
+/**
+ * The session its run was in, so the board can route it.
+ */
+session_id: string, 
+/**
+ * The answer, or `expired` when nobody gave one in time.
+ */
+answer: string, };
+
+/**
  * What a preview shows.
  */
 export type PreviewBody = { "kind": "text", 
@@ -1719,7 +1843,7 @@ export type RunKind = "handoff" | "routine" | "skill" | "session";
 /**
  * How a run ended: the three `skill_return` statuses, or no return at all.
  */
-export type RunOutcome = "done" | "blocked" | "needs_you" | "failed";
+export type RunOutcome = "done" | "blocked" | "needs_you" | "parked" | "failed";
 
 /**
  * What ties a set of audit lines into one run.

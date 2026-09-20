@@ -382,6 +382,7 @@ impl App {
             connectors: aegis_lib::Connectors::none(),
             standing: Standing::Own(None),
             unattended: None,
+            parking: None,
             decision: client,
         };
         let running = runtime.run(&plan, &cancel);
@@ -621,11 +622,13 @@ async fn jev_ask_always_asks_offers_its_grant_and_is_high_risk() {
         Decision::Auto { .. }
     ));
 
+    // Unsigned and unattended: the question is kept for a person rather than
+    // thrown away (PLAN 7.22), and nothing is sent to TypeSafe meanwhile.
     let fresh = GrantStore::new();
     let unattended = PolicyCtx::new("s1", Some(&fx.workspace), &fresh).unattended(true);
     assert!(matches!(
         decide(&unattended, tool::JEV_ASK, ask_args()),
-        Decision::Deny { .. }
+        Decision::Park { .. }
     ));
 }
 

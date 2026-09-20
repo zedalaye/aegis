@@ -35,6 +35,7 @@ import type {
   ModelCatalog,
   Memory,
   MemoryDraft,
+  ParkedAsk,
   Project,
   ProjectDetail,
   ProviderProbe,
@@ -377,6 +378,34 @@ export function boardTrace(
   run: RunRef,
 ): Promise<RunTrace> {
   return call<RunTrace>("board_trace", { project_id: projectId, run });
+}
+
+/**
+ * The calls this project's runs parked for a person, oldest first (PLAN 7.22).
+ * Omitting the project asks for every one of them.
+ */
+export function parkedList(projectId?: string): Promise<ParkedAsk[]> {
+  return call<ParkedAsk[]>("parked_list", { project_id: projectId ?? null });
+}
+
+/**
+ * Answers one parked ask and picks its run up where it stopped.
+ *
+ * `allow_once` covers that exact call, `allow_session` signs a standing
+ * approval onto the routine, `deny` records the refusal — and all three resume
+ * the run. Rejects with `E_APPROVAL_STALE` when it was answered already or has
+ * expired (refetch), `E_GRANT_NOT_ALLOWED` when no standing approval is on
+ * offer, and `E_INVALID_SETTING` or `E_TURN_BUSY` when the run cannot be picked
+ * up right now.
+ */
+export function parkedAnswer(
+  parkedId: string,
+  decision: Decision,
+): Promise<void> {
+  return call<void>("parked_answer", {
+    parked_id: parkedId,
+    decision,
+  });
 }
 
 /**

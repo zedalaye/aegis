@@ -12,10 +12,12 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::agent::event::{Event, EventSink};
 use crate::agent::turn::{self, Standing, Turn, TurnPlan};
+use crate::approval::Decision;
 use crate::handoff::bus;
 use crate::handoff::runner::AppRunner;
+use crate::park::{Parking, Parks};
 use crate::state::AppState;
-use crate::store::{Message, SessionDetail, SessionState, SessionSummary, TurnHandle};
+use crate::store::{Message, ParkedAsk, SessionDetail, SessionState, SessionSummary, TurnHandle};
 
 use crate::error::AppResult;
 
@@ -237,6 +239,25 @@ async fn run_turn<R: Runtime>(
                 )) as Arc<dyn bus::Runner>
             });
 
+    // Where an approval nobody answers is filed (PLAN 7.22). A session someone
+    // opened has no routine behind it, so the park carries the session alone —
+    // which is also what the notification is coalesced on.
+    let notifier = crate::notify::Desktop::new(app.clone(), state.coalescer());
+    let parks = Parks::new();
+    let project_id = state
+        .sessions()
+        .project_of(&plan.session_id)
+        .unwrap_or_default();
+    let parking = Parking {
+        store: state.parked(),
+        notifier: &notifier,
+        project_id: &project_id,
+        routine_id: "",
+        routine_name: "",
+        skill: "",
+        parks: &parks,
+    };
+
     let reason = Turn {
         agent: &agent,
         sessions: state.sessions(),
@@ -254,6 +275,7 @@ async fn run_turn<R: Runtime>(
         decision: decision.as_ref(),
         standing: Standing::Own(bus.as_ref()),
         unattended: None,
+        parking: Some(&parking),
     }
     .run(&plan, &cancel)
     .await;
@@ -266,6 +288,59 @@ async fn run_turn<R: Runtime>(
     if let Some(summary) = turn::summarize(state.sessions(), &plan.session_id, resting) {
         sink.emit(Event::SessionUpdated(Box::new(summary)));
     }
+}
+
+/// Picks a session up where an expired dialog left it (PLAN 7.22).
+///
+/// The turn is already registered by the caller, which is what makes a second
+/// concurrent send impossible; this appends the one sentence naming the answer
+/// and drives it. Never fails: a session that went away between the claim and
+/// here leaves the registration retired and nothing else.
+pub fn resume_parked<R: Runtime>(
+    app: AppHandle<R>,
+    ask: &ParkedAsk,
+    turn_id: String,
+    cancel: tokio_util::sync::CancellationToken,
+    decision: Decision,
+) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+
+    let sink = WindowSink::new(app.clone());
+    let started = state
+        .sessions()
+        .append(
+            &ask.session_id,
+            Message::user(crate::park::resumption(ask, decision)),
+            SessionState::Running,
+        )
+        .and_then(|summary| {
+            sink.emit(Event::SessionUpdated(Box::new(summary)));
+            state.workspace_of(&ask.session_id)
+        });
+
+    let workspace = match started {
+        Ok(workspace) => workspace,
+        Err(err) => {
+            tracing::warn!(%err, "an answered dialog could not be resumed");
+            state
+                .turns()
+                .finish(&ask.session_id, &turn_id, SessionState::Idle);
+            return;
+        }
+    };
+
+    let plan = TurnPlan {
+        session_id: ask.session_id.clone(),
+        turn_id,
+        workspace,
+        exec_host: state.exec_host_of(&ask.session_id),
+    };
+
+    tauri::async_runtime::spawn(async move {
+        run_turn(app, plan, cancel).await;
+    });
 }
 
 /// An [`EventSink`] that emits to the main window.

@@ -15,6 +15,7 @@ const SOURCE: Record<BoardSource, string> = {
   session: "session",
   routine: "routine",
   run: "run",
+  parked: "parked",
 };
 
 export default function BoardColumn({

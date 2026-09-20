@@ -12,11 +12,14 @@
 //!
 //! * **Cancellation is checked at every await**; text already streamed is kept.
 //! * **Deltas are coalesced** into ~50 ms frames opened by the first token.
-//! * **A denial is a result**: refusals, unanswered approvals, unparsed
-//!   arguments and a loop or round-ceiling halt become `tool` messages, and the
-//!   turn continues (PLAN 4.3). Only cancellation and provider failure end it
-//!   early. A halt gives the model one wrap-up round to finish; it is not told
-//!   to ask the user to continue (PLAN 7.16).
+//! * **A denial is a result**: refusals, unparsed arguments and a loop or
+//!   round-ceiling halt become `tool` messages, and the turn continues
+//!   (PLAN 4.3). Only cancellation and provider failure end it early. A halt
+//!   gives the model one wrap-up round to finish; it is not told to ask the
+//!   user to continue (PLAN 7.16).
+//! * **A call nobody can answer is parked**, not refused: an unattended run's
+//!   ungranted call, and a dialog past its deadline, are filed for a person
+//!   and the model is told so (`E_PARKED`, PLAN 7.22).
 //! * **Waiting for a person is a state**: the session reads `awaiting_approval`,
 //!   inside the same `select!` as cancel and under a five-minute deadline.
 //! * [`Standing`] (Phase 15) and [`Unattended`] (Phase 16) are the only ways a
@@ -38,6 +41,7 @@ use crate::error::ErrorCode;
 use crate::exec_host::{self, ExecHost};
 use crate::handoff::{self, bus};
 use crate::mcp::{self, Connectors};
+use crate::park::{self, Parking};
 use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
 use crate::skills::{self, SkillCtx};
 use crate::store::memories::{self, MemoryStore};
@@ -262,6 +266,10 @@ pub struct Turn<'a> {
     /// The routine this turn runs for (Phase 16). `None` is a session with a
     /// person in front of it.
     pub unattended: Option<Unattended<'a>>,
+    /// Where an ask nobody can answer is filed (PLAN 7.22). `None` is a
+    /// runtime with nowhere to park — only a test — and every such ask is
+    /// refused the way Phase 16 refused it.
+    pub parking: Option<&'a Parking<'a>>,
     /// The running connectors (Phase 18). [`Connectors::new`] is an empty
     /// roster.
     pub connectors: &'a Connectors,

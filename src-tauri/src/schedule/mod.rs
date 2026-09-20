@@ -426,15 +426,17 @@ pub fn opening(routine: &Routine, skill: &Skill) -> String {
 
     out.push_str(
         "Three things are different from a session someone is typing into.\n\n\
-         No dialog can be answered while this runs, so any call that would ask is refused \
-         outright rather than queued. That is not a fault to work around: if you need something \
-         you were not approved for, return `blocked` and name it.\n\n",
+         No dialog can be answered while this runs, so a call that would ask is parked instead: \
+         it does not run, and the question is kept for a person to answer afterwards. That is not \
+         a fault to work around. Keep what you have already done, do what you can without the \
+         call, and finish with `skill_return` `blocked` naming what is parked — if it is allowed, \
+         this run is picked up again with the answer.\n\n",
     );
 
     if routine.grants.is_empty() {
         out.push_str(
             "This routine was signed for nothing beyond reading, so a write or a command will be \
-             refused.\n\n",
+             parked rather than done.\n\n",
         );
     } else {
         out.push_str("This routine was signed for exactly this, and nothing else:\n");

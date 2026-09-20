@@ -34,12 +34,21 @@ Read this before pointing Aegis at anything you care about.
 - **A program allowed for the session can do whatever that program does.** Allowing `pnpm` allows
   its scripts; allowing workspace writes and a build tool lets a session change what the build runs.
   Grant a program the way you would hand over a terminal.
-- **An unanswered prompt is a refusal** after five minutes, as is a prompt whose turn you stop. The
-  model is told, and the turn carries on.
+- **An unanswered prompt is parked**, not run and not thrown away. After five minutes the dialog
+  closes, the call is kept on the board with everything the dialog showed, and the turn carries on
+  having been told so. A prompt whose turn you stop is a refusal, as before.
 - **A routine's standing approvals are the one grant that outlives a session**, and you sign them
-  when saving the routine. They cannot exceed what the runbook declares or the identity holds, and
-  cannot cover anything outside the workspace, under `.git/` or in `world/`. Every other call a
-  scheduled run makes is refused, not queued.
+  when saving the routine — or when you answer *allow standing* on something it parked, which goes
+  through the same checks. They cannot exceed what the runbook declares or the identity holds, and
+  cannot cover anything outside the workspace, under `.git/` or in `world/`.
+- **A scheduled run parks what it was not signed for.** Nothing runs, the run ends saying so, and
+  the question waits on the board until you answer it — *allow once* covers that exact call and
+  nothing else, *allow standing* signs it onto the routine, *deny* refuses it. Answering picks the
+  run up in its own session. A run may park three calls; a question nobody answers for a week
+  closes itself. Amending `world/` is never parked: it is a decision you make in a session.
+- **A notification is not a dialog.** Aegis can tell you something is waiting while the window is
+  hidden; the notification carries the routine's name and one sentence, never a path, a command
+  line or an amount, and nothing is approved by clicking it — the click opens the window.
 
 ## Tools
 

@@ -22,7 +22,7 @@ pub mod path;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::agent::decision::eval::EvalDoc;
@@ -72,7 +72,7 @@ pub mod tool {
 ///
 /// Advisory only: the risk badge changes the wording and the colour, never
 /// whether something is asked about. Nothing downstream branches on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export, export_to = "bindings.ts")]
 pub enum Risk {
@@ -86,7 +86,7 @@ pub enum Risk {
 
 /// What the approval dialog draws: one variant per tool, so the user reads a
 /// path or a command line rather than JSON (PLAN 2.1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export, export_to = "bindings.ts")]
 pub enum ApprovalDetail {
@@ -215,7 +215,7 @@ pub enum ApprovalDetail {
 }
 
 /// One brief, as the approval dialog draws it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct HandoffRow {
     /// What is to be achieved.
@@ -270,6 +270,15 @@ pub enum Decision {
         /// The call to execute if they allow it.
         call: ResolvedCall,
         /// What to ask.
+        request: Box<AskRequest>,
+    },
+    /// Park it for a person (PLAN 7.22): an ask raised where no dialog can be
+    /// answered. Nothing runs, the question is kept, and the turn is told so.
+    /// The call itself is deliberately absent — a parked call is never run
+    /// later from a held plan: the answer resumes the run, and the model
+    /// re-issues it.
+    Park {
+        /// What would have been asked.
         request: Box<AskRequest>,
     },
     /// Refuse without offering an approval (PLAN 3.2): calls nobody could
@@ -636,6 +645,10 @@ pub struct PolicyCtx<'a> {
     pub identity: Option<Identity<'a>>,
     /// The decision model a `jev_ask` would name, for the dialog (PLAN 7.18).
     pub decision_model: Option<&'a str>,
+    /// This call's fingerprint (PLAN 7.22), so an *allow once* answer to a
+    /// parked ask can match it. `None` — every test that does not name one —
+    /// matches no answer.
+    pub fingerprint: Option<&'a str>,
 }
 
 impl<'a> PolicyCtx<'a> {
@@ -653,7 +666,16 @@ impl<'a> PolicyCtx<'a> {
             unattended: false,
             identity: None,
             decision_model: None,
+            fingerprint: None,
         }
+    }
+
+    /// Names this call, so an answer to a parked ask can be spent on it
+    /// (PLAN 7.22).
+    #[must_use]
+    pub const fn with_fingerprint(mut self, fingerprint: Option<&'a str>) -> Self {
+        self.fingerprint = fingerprint;
+        self
     }
 
     /// Names the decision model a `jev_ask` dialog shows.
@@ -809,30 +831,25 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
                 },
             }
         }
+        // An answer to a parked ask (PLAN 7.22), keyed on this exact call and
+        // spent here, before it runs. After the session grants, because a held
+        // grant costs nothing to match and this is consumed.
+        _ if ctx
+            .fingerprint
+            .is_some_and(|fingerprint| ctx.grants.take_once(ctx.session_id, fingerprint)) =>
+        {
+            tracing::info!(tool = tool_name, "covered by an answer to a parked ask");
+            Decision::Auto {
+                call,
+                reason: "allowed once, by an answer to the ask this run parked",
+            }
+        }
         // Nobody can answer (Phase 16). Checked last, so only a call that would
-        // have opened a dialog is refused, and the refusal names the fix.
+        // have opened a dialog is parked; what the run has already done is kept,
+        // and the question survives the run (PLAN 7.22).
         _ if ctx.unattended => {
             tracing::info!(tool = tool_name, "an unattended run asked to ask");
-            Decision::deny(
-                ErrorCode::Denied,
-                match &request.grant {
-                    // The routine could have been signed for this.
-                    Some(_) => format!(
-                        "nobody is watching this run, and this routine was not signed for \
-                         `{tool_name}` ({}). Do what you can without it, then return `blocked` \
-                         and say what you needed",
-                        request.summary
-                    ),
-                    // Nothing can be signed for this in advance (PLAN 3.1), so
-                    // the model should stop looking for a way through.
-                    None => format!(
-                        "nobody is watching this run, and `{tool_name}` here is put to a person \
-                         every time it is asked ({}), which no routine can be signed for in \
-                         advance. Return `blocked` and say what you needed",
-                        request.reason
-                    ),
-                },
-            )
+            Decision::Park { request }
         }
         _ => Decision::Ask { call, request },
     }

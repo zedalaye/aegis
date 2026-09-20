@@ -1,9 +1,11 @@
 /**
- * The status board, and the runs underneath it (PLAN 7.3, Phase 17).
+ * The status board, what is parked, and the runs underneath (PLAN 7.3,
+ * Phase 17; PLAN 7.22).
  *
  * Takes over the work area. The board's three columns come from `STATUS.md`
- * and runtime state; below, runs newest first, each opening to its raw audit
- * lines. Read-only: corrections go through `STATUS.md`.
+ * and runtime state; under them, the calls runs stopped at, each with the
+ * three answers; then runs newest first, each opening to its raw audit lines.
+ * Corrections to the file itself still go through `STATUS.md`.
  */
 
 import { useEffect } from "react";
@@ -16,6 +18,7 @@ import { formatCost } from "../../lib/format";
 
 import AuditRow from "../audit/AuditRow";
 import BoardColumn from "./BoardColumn";
+import ParkedCard from "./ParkedCard";
 import RunRow from "./RunRow";
 
 /** What each column is for, in the one line that goes under its heading. */
@@ -78,6 +81,9 @@ function Trace() {
 export default function BoardPanel() {
   const close = useBoard((s) => s.closePanel);
   const board = useBoard((s) => s.board);
+  const parked = useBoard((s) => s.parked);
+  const answering = useBoard((s) => s.answering);
+  const answer = useBoard((s) => s.answer);
   const status = useBoard((s) => s.status);
   const trace = useBoard((s) => s.trace);
   const refresh = useBoard((s) => s.refresh);
@@ -173,6 +179,35 @@ export default function BoardPanel() {
               onTrace={traceItem}
             />
           </div>
+
+          {parked.length === 0 ? null : (
+            <>
+              <h2 className="board__section">
+                Parked
+                <span className="board__total">
+                  {parked.length} waiting for you
+                </span>
+              </h2>
+              <p className="board__lede">
+                Calls a run stopped at because nobody could be asked at the
+                time. Nothing ran, and nothing is waiting on a channel: an
+                answer picks the run up in its own session. One left unanswered
+                for a week closes itself.
+              </p>
+              <div className="board__parked">
+                {parked.map((ask) => (
+                  <ParkedCard
+                    key={ask.id}
+                    ask={ask}
+                    busy={answering.includes(ask.id)}
+                    onAnswer={(parkedId, decision) => {
+                      void answer(parkedId, decision);
+                    }}
+                  />
+                ))}
+              </div>
+            </>
+          )}
 
           <h2 className="board__section">
             Runs

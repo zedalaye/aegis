@@ -50,7 +50,7 @@ pub enum ExecHostOption {
 ///
 /// Built by policy and used by both the dialog and the tool, so what the user
 /// reads is what runs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "bindings.ts")]
 pub struct ExecTarget {
     /// The distribution the command runs in.

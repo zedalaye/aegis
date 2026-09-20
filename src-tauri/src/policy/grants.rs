@@ -80,6 +80,23 @@ impl Grant {
         }
     }
 
+    /// The clause every [`Grant::scope_label`] ends on, and the one thing that
+    /// is not true of a grant signed onto a routine.
+    const SESSION_CLAUSE: &'static str = "for the rest of this session";
+
+    /// What the grant covers when it is signed onto a routine (PLAN 7.22)
+    /// rather than held by one session: the same scope, on every run.
+    ///
+    /// The scope is written once, in [`Grant::scope_label`]; only the clause
+    /// about how long it lasts differs, and
+    /// [`every_scope_says_how_long_it_lasts`] keeps that substitution honest.
+    ///
+    /// [`every_scope_says_how_long_it_lasts`]: self::tests::every_scope_says_how_long_it_lasts
+    pub fn standing_label(&self) -> String {
+        self.scope_label()
+            .replace(Self::SESSION_CLAUSE, "on every run of this routine")
+    }
+
     /// What the grant covers, in words: the request's `scope_label`, and the
     /// text beside Revoke.
     pub fn scope_label(&self) -> String {
@@ -186,9 +203,15 @@ pub fn program_name(program: &str) -> String {
 /// The live grants of every open session, held in
 /// [`AppState`](crate::AppState). Sessions never share grants, even on one
 /// workspace.
+///
+/// Two maps, because they are two different promises. A [`Grant`] is a scope
+/// that lasts the session; a **one-shot** is an answer to one parked ask
+/// (PLAN 7.22), keyed on that call's fingerprint and gone the moment it is
+/// used.
 #[derive(Debug, Default)]
 pub struct GrantStore {
     sessions: Mutex<HashMap<String, HashSet<Grant>>>,
+    once: Mutex<HashMap<String, HashSet<String>>>,
 }
 
 impl GrantStore {
@@ -252,17 +275,103 @@ impl GrantStore {
         grants
     }
 
-    /// Drops everything a session held. Called when the session closes.
+    /// Drops everything a session held, one-shots included. Called when the
+    /// session closes.
     pub fn clear(&self, session: &str) {
         if self.sessions().remove(session).is_some() {
             tracing::debug!(session, "session grants dropped");
         }
+        self.once().remove(session);
+    }
+
+    /// Locks the one-shot map, recovering from poison.
+    fn once(&self) -> MutexGuard<'_, HashMap<String, HashSet<String>>> {
+        self.once
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Records an *allow once* answer to a parked ask (PLAN 7.22).
+    ///
+    /// `fingerprint` is [`audit::fingerprint`](crate::audit::fingerprint): the
+    /// tool and the digest of the arguments a person read. Nothing else
+    /// matches it, so a model that regenerates different arguments asks again.
+    pub fn allow_once(&self, session: &str, fingerprint: &str) -> bool {
+        let added = self
+            .once()
+            .entry(session.to_owned())
+            .or_default()
+            .insert(fingerprint.to_owned());
+        if added {
+            tracing::info!(session, "a parked call was allowed once");
+        }
+        added
+    }
+
+    /// Spends a one-shot answer, if this exact call has one. It is consumed
+    /// here, before the tool runs, so a repeated call asks again.
+    pub fn take_once(&self, session: &str, fingerprint: &str) -> bool {
+        let mut once = self.once();
+        let Some(held) = once.get_mut(session) else {
+            return false;
+        };
+        let spent = held.remove(fingerprint);
+        if held.is_empty() {
+            once.remove(session);
+        }
+        if spent {
+            tracing::info!(session, "a one-shot answer was spent");
+        }
+        spent
+    }
+
+    /// How many one-shot answers a session is holding. Diagnostics and tests.
+    pub fn once_held(&self, session: &str) -> usize {
+        self.once().get(session).map_or(0, HashSet::len)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every scope says how long it lasts, which is what
+    /// [`Grant::standing_label`] rewrites for a routine (PLAN 7.22). A variant
+    /// that stopped saying it would silently sign a session-shaped promise
+    /// onto a clock.
+    #[test]
+    fn every_scope_says_how_long_it_lasts() {
+        let every = [
+            Grant::FsReadLarge,
+            Grant::FsWrite,
+            Grant::WorldAmend,
+            Grant::shell("git"),
+            Grant::shell("cargo"),
+            Grant::ScreenCapture,
+            Grant::MemoryWrite,
+            Grant::HandoffDelegate,
+            Grant::Connector {
+                tool: "git__status".to_owned(),
+            },
+            Grant::JevEval {
+                name: "invoice".to_owned(),
+            },
+            Grant::JevAsk,
+        ];
+
+        for grant in every {
+            let scope = grant.scope_label();
+            assert!(
+                scope.contains(Grant::SESSION_CLAUSE),
+                "{scope}: every scope says how long it holds"
+            );
+            let standing = grant.standing_label();
+            assert!(
+                standing.contains("on every run of this routine") && standing != scope,
+                "{standing}: a signed routine is not a session"
+            );
+        }
+    }
 
     #[test]
     fn a_grant_is_held_only_by_the_session_that_made_it() {
@@ -341,15 +450,34 @@ mod tests {
         assert_eq!(once.len(), 3);
     }
 
+    /// PLAN 7.22: an answer to a parked ask covers that one call.
+    #[test]
+    fn a_one_shot_answer_is_spent_the_first_time_it_matches() {
+        let store = GrantStore::new();
+        store.allow_once("s1", "fs_write:abc");
+
+        assert!(!store.take_once("s1", "fs_write:def"), "another call");
+        assert!(!store.take_once("s2", "fs_write:abc"), "another session");
+        assert!(store.take_once("s1", "fs_write:abc"));
+        assert!(
+            !store.take_once("s1", "fs_write:abc"),
+            "the same call a second time asks again"
+        );
+        assert_eq!(store.once_held("s1"), 0);
+    }
+
     #[test]
     fn closing_a_session_drops_its_grants() {
         let store = GrantStore::new();
         store.insert("s1", Grant::FsWrite);
         store.insert("s2", Grant::FsWrite);
 
+        store.allow_once("s1", "fs_write:abc");
+
         store.clear("s1");
 
         assert!(!store.holds("s1", &Grant::FsWrite));
+        assert!(!store.take_once("s1", "fs_write:abc"));
         assert!(
             store.holds("s2", &Grant::FsWrite),
             "only one session closed"

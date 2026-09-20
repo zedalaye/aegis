@@ -21,6 +21,7 @@ use crate::board::{self, trace};
 use crate::error::{AppError, AppResult};
 use crate::exec_host::ExecHost;
 use crate::mcp::{ConnectorView, Connectors};
+use crate::notify::Coalescer;
 use crate::oauth;
 use crate::policy::GrantStore;
 use crate::schedule::runner::Scheduler;
@@ -28,10 +29,12 @@ use crate::secrets::{self, key_hint, ApiKey, KeySource, SecretStore};
 use crate::store::{
     self, Agent, AgentDraft, AgentStore, AuthKind, Binding, BindingRequest, Connector,
     ConnectorStore, MaskedDecision, MaskedProvider, MaskedSettings, Memory, MemoryDraft,
-    MemoryStore, ProviderEntry, Routine, RoutineStore, RowDraft, SessionDetail, SessionState,
-    SessionStore, SessionSummary, SettingsStore, Store, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
+    MemoryStore, ParkedAsk, ParkedStore, ProviderEntry, Routine, RoutineStore, RowDraft,
+    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+    DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
+mod parked;
 mod providers;
 mod routines;
 
@@ -55,6 +58,11 @@ pub struct AppState {
     agents: AgentStore,
     memories: MemoryStore,
     routines: RoutineStore,
+    /// The asks nobody could answer (PLAN 7.22), kept beside the other stores
+    /// and never in a workspace.
+    parked: ParkedStore,
+    /// One notification per routine per hour, process-wide (PLAN 7.22).
+    coalescer: Coalescer,
     /// Which routines are running now, so nothing fires twice (Phase 16). In
     /// memory only: nothing is running after a crash.
     scheduler: Scheduler,
@@ -95,6 +103,8 @@ impl AppState {
             agents: AgentStore::load(data_dir),
             memories: MemoryStore::load(data_dir),
             routines: RoutineStore::load(data_dir),
+            parked: ParkedStore::load(data_dir),
+            coalescer: Coalescer::new(),
             scheduler: Scheduler::new(),
             settings: SettingsStore::load(data_dir),
             connector_store: ConnectorStore::load(data_dir),
@@ -433,11 +443,28 @@ impl AppState {
 
     /// Forgets a session, in order: cancel its turn, withdraw its approvals
     /// (releasing a parked turn), then clear its grants — so a running turn
-    /// cannot re-create what was cleared.
+    /// cannot re-create what was cleared. Its parked asks go with it: an
+    /// answer resumes a run, and there is nothing left to resume.
     pub fn close_session(&self, session_id: &str) {
         self.turns.forget(session_id);
         self.approvals.withdraw_session(session_id);
         self.grants.clear(session_id);
+        self.parked.forget_session(session_id);
+    }
+
+    /// The asks waiting for a person (PLAN 7.22).
+    pub fn parked(&self) -> &ParkedStore {
+        &self.parked
+    }
+
+    /// What every notification is coalesced through.
+    pub fn coalescer(&self) -> &Coalescer {
+        &self.coalescer
+    }
+
+    /// One project's parked asks, oldest first.
+    pub fn parked_list(&self, project_id: Option<&str>) -> Vec<ParkedAsk> {
+        self.parked.list(project_id)
     }
 
     /// The workspace a session's tools may touch. `Ok(None)` means the folder is

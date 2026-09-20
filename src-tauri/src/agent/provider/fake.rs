@@ -160,8 +160,12 @@ fn improvise(request: &ModelRequest) -> Vec<ModelEvent> {
         return skill_turn(request);
     }
 
-    // A scheduled run follows its runbook, whatever the message (Phase 16).
-    if said.contains(crate::schedule::OPENING_MARKER) {
+    // A scheduled run follows its runbook, whatever the message (Phase 16) —
+    // and so does one a person has just answered a parked ask for (PLAN 7.22),
+    // which names the same runbook.
+    if said.contains(crate::schedule::OPENING_MARKER)
+        || (said.contains(crate::park::RESUMED_MARKER) && skill_named(&said).is_some())
+    {
         return routine_turn(request, &said);
     }
 

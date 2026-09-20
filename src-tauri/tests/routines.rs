@@ -4,7 +4,8 @@
 //!
 //! 1. The door holds (PLAN 7.13).
 //! 2. A signed run writes its status file without a dialog and returns `done`.
-//! 3. An unsigned write is refused, not asked, and the run returns `blocked`.
+//! 3. An unsigned write is parked, not asked and not lost, and an answer
+//!    picks the run up where it stopped (PLAN 7.22).
 //! 4. Budget, pause-after-two-silences and `routine` audit tags hold.
 //!
 //! Commands need a Tauri app; everything below them runs here on temp files.
@@ -20,10 +21,14 @@ use aegis_lib::schedule::{self, runner};
 use aegis_lib::skills;
 use aegis_lib::store::routines::{RoutineDraft, RunOutcome, Schedule, RUNS_PER_DAY_MAX};
 use aegis_lib::{
-    Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditDecision, AuditEntry, AuditLog,
-    AuditRecord, Event, FakeProvider, Grant, GrantStore, MemoryStore, Outcome, Provider,
-    RoutineStore, SessionStore, Store, TurnRegistry, DEFAULT_PROVIDER_ID,
+    Agent, AgentDraft, AgentStore, ApprovalDecision, ApprovalRegistry, AuditDecision, AuditEntry,
+    AuditLog, AuditRecord, Event, FakeProvider, Grant, GrantStore, MemoryStore, ModelEvent,
+    Outcome, ParkedAsk, Provider, RoutineStore, SessionStore, StopReason, Store, TurnRegistry,
+    DEFAULT_PROVIDER_ID,
 };
+
+/// One scripted run: the rounds a provider replays, one per request.
+type Rounds = Vec<Vec<ModelEvent>>;
 
 /// The runbook the routine fires.
 ///
@@ -87,6 +92,30 @@ impl EventSink for Recorder {
     }
 }
 
+/// Keeps what a run tried to tell somebody who was not at the window.
+#[derive(Debug, Default)]
+struct Heard {
+    notes: Mutex<Vec<aegis_lib::Note>>,
+}
+
+impl Heard {
+    fn notes(&self) -> Vec<aegis_lib::Note> {
+        self.notes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+impl aegis_lib::Notifier for Heard {
+    fn post(&self, note: aegis_lib::Note) {
+        self.notes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(note);
+    }
+}
+
 /// A data directory, a scaffolded workspace holding the watch runbook, and
 /// every store a scheduled run touches.
 struct App {
@@ -105,6 +134,10 @@ struct App {
     audit: AuditLog,
     captures: PathBuf,
     memories: MemoryStore,
+    /// Where an ask nobody can answer is filed (PLAN 7.22).
+    parked: aegis_lib::ParkedStore,
+    /// What is told to somebody who is not at the window.
+    notifier: Heard,
 }
 
 impl App {
@@ -150,6 +183,8 @@ impl App {
             audit: AuditLog::new(&data),
             captures: data.join("captures"),
             memories: MemoryStore::load(&data),
+            parked: aegis_lib::ParkedStore::load(&data),
+            notifier: Heard::default(),
         }
     }
 
@@ -222,14 +257,17 @@ impl App {
         });
     }
 
-    /// Fires one routine the way the scheduler fires it.
-    ///
-    /// Through [`runner::fire`] itself, not a copy.
-    async fn fire(&self, routine_id: &str, sink: &Recorder) {
-        let provider = |_: &Agent, _: &str| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
-        let host = runner::Host {
+    /// What a run borrows, with a provider the test chooses.
+    fn host<'a>(
+        &'a self,
+        sink: &'a Recorder,
+        provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
+    ) -> runner::Host<'a> {
+        runner::Host {
             projects: &self.projects,
             routines: &self.routines,
+            parked: &self.parked,
+            notifier: &self.notifier,
             agents: &self.agents,
             sessions: &self.sessions,
             turns: &self.turns,
@@ -242,11 +280,44 @@ impl App {
             skills: &self.library,
             memories: &self.memories,
             connectors: aegis_lib::Connectors::none(),
-            provider: &provider,
+            provider,
             decision: None,
-        };
+        }
+    }
 
-        runner::fire(&host, routine_id).await;
+    /// Fires one routine the way the scheduler fires it.
+    ///
+    /// Through [`runner::fire`] itself, not a copy.
+    async fn fire(&self, routine_id: &str, sink: &Recorder) {
+        let provider = |_: &Agent, _: &str| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
+        runner::fire(&self.host(sink, &provider), routine_id).await;
+    }
+
+    /// Fires one routine with the rounds spelled out.
+    ///
+    /// An answer to a parked ask matches one exact call (PLAN 7.22), so a run
+    /// that is going to be resumed is scripted rather than improvised: a
+    /// timestamp in the arguments would be a different question the second
+    /// time round, which is true of a real model too.
+    async fn fire_scripted(&self, routine_id: &str, sink: &Recorder, rounds: Rounds) {
+        let provider = move |_: &Agent, _: &str| {
+            Box::new(FakeProvider::scripted(rounds.clone())) as Box<dyn Provider>
+        };
+        runner::fire(&self.host(sink, &provider), routine_id).await;
+    }
+
+    /// Picks a parked run up, the way answering it from the board does.
+    async fn resume_scripted(
+        &self,
+        ask: &ParkedAsk,
+        decision: ApprovalDecision,
+        sink: &Recorder,
+        rounds: Rounds,
+    ) {
+        let provider = move |_: &Agent, _: &str| {
+            Box::new(FakeProvider::scripted(rounds.clone())) as Box<dyn Provider>
+        };
+        runner::resume(&self.host(sink, &provider), ask, decision).await;
     }
 
     /// Every audit line, newest first.
@@ -445,11 +516,66 @@ async fn a_scheduled_run_writes_its_status_without_asking_anyone() {
     assert!(app.audit.witnessed(&agent.id, WATCH_SKILL));
 }
 
-/// The same run, signed for nothing. The write is refused outright rather than
-/// parked on a dialog nobody can answer, and the routine reports `blocked` —
-/// which is a runbook doing its job, not a failure.
+/// Where a scripted run writes its status. Fixed, so the same call twice is
+/// the same call.
+const STATUS_PATH: &str = ".aegis/status/watch.digest.md";
+
+/// What it writes there.
+const STATUS_TEXT: &str = "# watch.digest\n\nNothing has changed.\n";
+
+/// One tool call, as a provider streams it.
+fn call(id: &str, name: &str, arguments: serde_json::Value) -> Vec<ModelEvent> {
+    vec![
+        ModelEvent::ToolCallDelta {
+            index: 0,
+            id: Some(id.to_owned()),
+            name: Some(name.to_owned()),
+            args_delta: arguments.to_string(),
+            thought_signature: None,
+        },
+        ModelEvent::Finish {
+            reason: StopReason::ToolCalls,
+            usage: None,
+        },
+    ]
+}
+
+/// A run that loads the runbook, writes its status and closes itself.
+///
+/// `id` distinguishes the two runs' call ids; the write's arguments are the
+/// same in both, which is the point: an *allow once* answer matches one call.
+fn watch_rounds(id: &str, status: &str) -> Rounds {
+    vec![
+        call(
+            &format!("{id}-load"),
+            tool::SKILL_RUN,
+            serde_json::json!({ "name": WATCH_SKILL }),
+        ),
+        call(
+            &format!("{id}-write"),
+            tool::FS_WRITE,
+            serde_json::json!({
+                "path": STATUS_PATH,
+                "content": STATUS_TEXT,
+                "create_dirs": true,
+            }),
+        ),
+        call(
+            &format!("{id}-return"),
+            tool::SKILL_RETURN,
+            serde_json::json!({
+                "status": status,
+                "summary": format!("Ran {WATCH_SKILL} and left the status {status}."),
+            }),
+        ),
+    ]
+}
+
+/// The same run, signed for nothing. The write is neither done nor thrown
+/// away: it is parked for a person, the run says so, and the ledger records an
+/// answer rather than a silence (PLAN 7.22).
 #[tokio::test]
-async fn an_unsigned_run_is_refused_rather_than_left_waiting() {
+async fn an_unsigned_run_parks_its_write_instead_of_losing_it() {
     let app = App::new();
     let agent = app.watcher();
     app.witness(&agent, WATCH_SKILL);
@@ -470,16 +596,20 @@ async fn an_unsigned_run_is_refused_rather_than_left_waiting() {
         .expect("the run is on the row");
     assert_eq!(
         last.outcome,
-        RunOutcome::Blocked,
-        "a runbook that says what it needed has answered ({})",
+        RunOutcome::Parked,
+        "a run that left a question behind has answered ({})",
         last.detail
     );
     assert!(
-        !app.workspace
-            .join(format!(".aegis/status/{WATCH_SKILL}.md"))
-            .exists(),
-        "an unsigned run must not reach the disk"
+        !app.workspace.join(STATUS_PATH).exists()
+            && !app
+                .workspace
+                .join(format!(".aegis/status/{WATCH_SKILL}.md"))
+                .exists(),
+        "a parked call must not reach the disk"
     );
+
+    // Nobody was asked, because nobody could have answered.
     assert!(
         !sink.names().contains(&"tool:approval_required"),
         "a prompt nobody can see is a turn parked until it times out: {:?}",
@@ -489,18 +619,118 @@ async fn an_unsigned_run_is_refused_rather_than_left_waiting() {
         app.approvals.list(None).is_empty(),
         "nothing is left waiting for an answer"
     );
+    assert!(
+        sink.names().contains(&"parked:updated"),
+        "the board is told the moment something is waiting: {:?}",
+        sink.names()
+    );
+
+    // The question itself, with everything the dialog would have shown.
+    let waiting = app.parked.list(Some(&app.project_id));
+    assert_eq!(waiting.len(), 1);
+    let ask = &waiting[0];
+    assert_eq!(ask.tool, tool::FS_WRITE);
+    assert_eq!(ask.routine_id, routine.id);
+    assert_eq!(ask.skill, WATCH_SKILL);
+    assert_eq!(ask.grant, Some(Grant::FsWrite), "this one can be signed");
+    assert_eq!(ask.session_id, last.session_id);
+
+    // And somebody who is not at the window is told — without the path.
+    let notes = app.notifier.notes();
+    assert_eq!(notes.len(), 1, "one run, one notification");
+    assert_eq!(notes[0].title, routine.name);
+    assert!(
+        !notes[0].body.contains(".aegis"),
+        "{}: a notification never quotes an argument",
+        notes[0].body
+    );
 
     let lines = app.audit_lines();
-    let refused = lines
+    let parked = lines
         .iter()
         .find(|entry| entry.tool == tool::FS_WRITE)
-        .expect("the refusal is on the log");
-    assert_eq!(refused.decision, AuditDecision::Deny);
-    assert_eq!(refused.outcome, Outcome::Denied);
+        .expect("the parked call is on the log");
+    assert_eq!(parked.decision, AuditDecision::Deny, "nothing ran");
+    assert_eq!(parked.outcome, Outcome::Denied);
+    assert_eq!(parked.error_code.as_deref(), Some("E_PARKED"));
     assert!(
-        refused.policy_reason.contains("nobody is watching"),
+        parked.policy_reason.contains("parked"),
         "{}: the reason has to be readable a week later",
-        refused.policy_reason
+        parked.policy_reason
+    );
+}
+
+/// PLAN 7.22's exit: answering *allow once* resumes the run in its own
+/// session, and the write lands exactly once.
+#[tokio::test]
+async fn an_answer_resumes_the_run_and_the_write_lands_once() {
+    let app = App::new();
+    let agent = app.watcher();
+    app.witness(&agent, WATCH_SKILL);
+
+    let routine = app
+        .routines
+        .create(&app.draft(&agent, Vec::new()))
+        .expect("the routine is stored");
+
+    let sink = Recorder::default();
+    app.fire_scripted(&routine.id, &sink, watch_rounds("first", "blocked"))
+        .await;
+
+    let ask = app
+        .parked
+        .list(None)
+        .first()
+        .cloned()
+        .expect("the write is waiting for somebody");
+    let status = app.workspace.join(STATUS_PATH);
+    assert!(!status.exists(), "nothing has been written yet");
+
+    // What answering it from the board does: the one-shot is minted on that
+    // exact call, and the question comes off the list before anything runs.
+    app.grants.allow_once(&ask.session_id, &ask.fingerprint);
+    let answered = app.parked.take(&ask.id).expect("it was still open");
+
+    app.resume_scripted(
+        &answered,
+        ApprovalDecision::AllowOnce,
+        &sink,
+        watch_rounds("second", "done"),
+    )
+    .await;
+
+    assert_eq!(
+        std::fs::read_to_string(&status).expect("the write landed"),
+        STATUS_TEXT
+    );
+    let wrote: Vec<_> = app
+        .audit_lines()
+        .into_iter()
+        .filter(|entry| entry.tool == tool::FS_WRITE && entry.outcome == Outcome::Ok)
+        .collect();
+    assert_eq!(wrote.len(), 1, "the call a person allowed once ran once");
+    assert!(
+        wrote[0].policy_reason.contains("parked"),
+        "{}: the log says which answer let it through",
+        wrote[0].policy_reason
+    );
+
+    // The run finished in the session it started in, and the ledger says so.
+    let last = app
+        .routines
+        .get(&routine.id)
+        .expect("still on file")
+        .last
+        .expect("a run on the row");
+    assert_eq!(last.outcome, RunOutcome::Done, "{}", last.detail);
+    assert_eq!(last.session_id, answered.session_id);
+    assert!(app.parked.list(None).is_empty(), "nothing is still waiting");
+
+    // And the one-shot was spent: the same call again would ask again.
+    assert!(
+        !app.grants
+            .take_once(&answered.session_id, &answered.fingerprint),
+        "an answer covers one call, not a session"
     );
 }
 

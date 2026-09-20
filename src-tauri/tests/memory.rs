@@ -252,6 +252,7 @@ impl App {
             connectors: aegis_lib::Connectors::none(),
             standing: Standing::Own(None),
             unattended: None,
+            parking: None,
             decision: None,
         };
         let running = turn.run(&plan, &cancel);

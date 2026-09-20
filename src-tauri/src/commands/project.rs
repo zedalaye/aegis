@@ -140,7 +140,7 @@ pub async fn project_set_exec_host(
     state.store().set_exec_host(&project_id, host)
 }
 
-/// Forgets a project, and its sessions and routines with it.
+/// Forgets a project, and its sessions, routines and parked asks with it.
 ///
 /// The folder is never touched. Sessions (turns cancelled first) and routines
 /// cascade, since neither can outlive the project. The project goes first, so a
@@ -159,5 +159,7 @@ pub fn project_delete(state: State<'_, AppState>, project_id: String) -> AppResu
     if let Err(err) = state.routines().delete_for_project(&project_id) {
         tracing::warn!(%err, project_id, "the project is gone but its routines remain");
     }
+    // The runs those parks would resume are gone with the sessions (PLAN 7.22).
+    state.parked().forget_project(&project_id);
     Ok(())
 }

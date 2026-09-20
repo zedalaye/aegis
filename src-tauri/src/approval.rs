@@ -6,7 +6,9 @@
 //! * **A rendezvous**: one [`oneshot`] sender per request, consumed by the
 //!   answer, so nothing is answered twice.
 //! * **No reaper**: the waiting turn enforces the deadline; the registry keeps
-//!   `expires_at` only to refuse late answers as stale.
+//!   `expires_at` only to refuse late answers as stale. What outlives the
+//!   deadline is the question, not the dialog — the turn files it in
+//!   [`park`](crate::park) (PLAN 7.22).
 //! * **`allow_session` is enforced here** ([`AppError::GrantNotAllowed`],
 //!   PLAN 3.1), not trusted to the WebView.
 
@@ -25,7 +27,8 @@ use crate::policy::{ApprovalDetail, AskRequest, Grant, Risk};
 
 /// How long a request stays answerable (PLAN 4.2).
 ///
-/// Expiry resolves as a denial, and the turn carries on.
+/// Expiry closes the dialog and the turn carries on; the call itself is parked
+/// rather than refused (PLAN 7.22), so it is still answerable afterwards.
 pub const APPROVAL_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// What the user answered (PLAN 2.1, `Decision`).

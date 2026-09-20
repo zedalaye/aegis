@@ -169,6 +169,8 @@ impl Fixture {
             Decision::Ask { call, request } => {
                 tools::run(&ctx, AuditDecision::AllowOnce, &request.reason, &call).await
             }
+            // Nothing here is unattended, so nothing parks (PLAN 7.22).
+            Decision::Park { request } => panic!("unexpected park: {}", request.summary),
             Decision::Deny { code, reason } => {
                 tools::refuse(&ctx, tool::SHELL_EXEC, AuditDecision::Deny, code, &reason)
             }

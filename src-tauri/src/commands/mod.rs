@@ -15,6 +15,7 @@ pub mod connector;
 pub mod eval;
 pub mod explorer;
 pub mod memory;
+pub mod parked;
 pub mod project;
 pub mod roster;
 pub mod routine;
