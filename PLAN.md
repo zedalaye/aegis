@@ -7,7 +7,8 @@ guide. Code comments cite sections of this file by number (`PLAN 7.13`) and by t
 
 § 1–6 describe the MVP (Phases 0–10, landed). § 7 is what came after it: the seams the MVP kept
 open, the post-MVP phases (11–19, landed), the slices that are not phases (§ 7.10–7.20,
-landed), and three surfaces that are not scheduled (§ 7.7–7.9).
+landed), three surfaces that are not scheduled (§ 7.7–7.9), and the autonomy ladder (§ 7.21–7.30,
+proposed).
 
 Stack is fixed: Tauri 2 + TypeScript + React + Vite, a Rust runtime in `src-tauri`, pnpm, Rust
 edition 2021. The WebView renders UI only — the agent loop, tool execution, secrets and policy live
@@ -23,7 +24,7 @@ The layout is in `docs/architecture.md`. Three structural decisions:
   source of truth for IPC shapes; the TS side never hand-writes one.
 - Tools are name-keyed behind one `ToolSpec` registry, so an MCP client registers external tools into
   the same registry without touching the turn loop or the policy layer (Phase 18 did exactly that).
-- `agent/turn.rs` talks to a `Provider` trait and to the registry. One loop, not one per agent,
+- `agent/turn/` talks to a `Provider` trait and to the registry. One loop, not one per agent,
   provider or domain.
 
 ---
@@ -551,8 +552,8 @@ like any runbook and granted like any runbook. There is no `world.amend` for spe
 ### 7.3 Post-MVP phase order
 
 Each phase ended runnable; none depended on a later one; domain work came last. The slices
-§ 7.10–7.19 are not steps in this list and did not delay it. § 7.20 is proposed and is not a
-phase either.
+§ 7.10–7.20 are not steps in this list and did not delay it; neither are the proposed
+§ 7.21–7.30.
 
 **Phase 11 — Workspace convention.** Shared memory as files a session reads at start and writes
 through the gate. Exit: a decision and a status filed without a new agent type.
@@ -658,7 +659,7 @@ external server callable under the same dialog as `fs_write`.
 
 - `mcp/client.rs` is one stdio connection; `mcp/mod.rs` the roster and catalog;
   `store/connectors.rs` the record; `tools/connector.rs` the envelope.
-- `agent/turn.rs` gained a catalog snapshot per turn and no branch: `tools::schemas_for` appends the
+- `agent/turn/` gained a catalog snapshot per turn and no branch: `tools::schemas_for` appends the
   catalog's schemas. No `if connector` in policy, dispatch or audit.
 - `ResolvedCall::Connector` carries the model's JSON and nothing more, because it cannot be resolved,
   so **the row always asks**. `readOnlyHint` is shown, attributed, and never acted on.
@@ -674,7 +675,7 @@ external server callable under the same dialog as `fs_write`.
 
 **Phase 19 — Domain packs as skills, not runtime.** One pack at a time — a workspace, skills, the MCP
 servers it needs and a specialist identity — each allowed to fail without blocking the next. Never
-add a domain by growing `agent/turn.rs`.
+add a domain by growing `agent/turn/`.
 
 1. **Client delivery** — repositories, deploy drafts, alert drafts. Destructive deploys stay gated.
 2. **Client intake** — mail first: read and draft, never send.
@@ -719,7 +720,7 @@ no command, tool, matrix row, binding or UI change. What each settled:
   a thesis reads neither the wish list nor the position, and the pipeline links no proposal to a goal.
   A wrong thesis is appended to, never deleted. A goal is a file, not a memory
   (`a_goal_is_a_file_and_not_something_an_identity_remembers`).
-- **The whole.** Six domains arrived as eighteen files, and `agent/turn.rs` was never opened. The
+- **The whole.** Six domains arrived as eighteen files, and `agent/turn/` was never opened. The
   catalog of the 24 seeded runbooks measured 5,556 characters against a bound of 7,424 derived from the
   per-line cap (`a_library_holding_every_pack_still_costs_a_bounded_block`).
 
@@ -728,7 +729,8 @@ no command, tool, matrix row, binding or UI change. What each settled:
 - Do not expose the runtime on the public internet. Remote access is the same process over a private
   network, or it does not exist.
 - Send, pay, merge, publish, deploy, trade: human gate. A verifier (agent or CI) can raise confidence;
-  it cannot flip the default to auto.
+  it cannot flip the default to auto. *Proposed amendment*: or a mandate — a signed act, a gate the
+  harness runs, a budget it enforces (§ 7.29). Confidence alone still flips nothing.
 - The CoS may *see* state. It may not merge or send unless that identity was granted those tools.
 - Two failures → human, not twelve creative retries.
 - A messaging surface is not an agent.
@@ -1149,7 +1151,7 @@ harness-owned eval whose questions live in Rust; project evals as cabinet files,
 signed like a skill proposal; a probe in Settings; `jev_ask` as a soupape, not the north star.
 **Out**: wrapping Jev as OpenAI `chat/completions`; using it as `provider_id`; a gate that
 auto-allows or denies from a probability; mining transcripts for questions; a composition language
-that can send, pay or trade; growing `agent/turn.rs` with Jev-specific or domain-specific branches;
+that can send, pay or trade; growing `agent/turn/` with Jev-specific or domain-specific branches;
 shipping TypeSafe as an MCP connector instead of first-class; putting the key in the WebView.
 
 *Settles*:
@@ -1218,7 +1220,7 @@ shipping TypeSafe as an MCP connector instead of first-class; putting the key in
   map an answer onto Auto. The annotation is advisory. PLAN 3 still decides.
 - **Project evals live in the cabinet.** Recurring judgments of *this* workspace — classify a mail,
   does this invoice match the named envelope, does this thesis still hold given these files — are
-  files under `.aegis/evals/`, not chat, not `world/`, not `agent/turn.rs`. `.aegis/decisions/` is
+  files under `.aegis/evals/`, not chat, not `world/`, not `agent/turn/`. `.aegis/decisions/` is
   the log of decisions *taken*; an eval is *how this project will judge* the next one. Essence
   ("we never trade") stays in `world/decisions.md` and is a human amend. A domain pack may *ship*
   example evals the way it ships runbooks; it still does not grow the turn loop (Phase 19).
@@ -1313,7 +1315,7 @@ shipping TypeSafe as an MCP connector instead of first-class; putting the key in
 - Dumping the transcript, the system prompt or `world/` as state. An eval may *name* a world path
   as an input (specialists read `world/`); it does not write it.
 - A composition form that shells out, writes files, or calls anything but TypeSafe.
-- Growing `agent/turn.rs` past passing a `DecisionClient` into `ToolCtx`. `tool_risk` runs from
+- Growing `agent/turn/` past passing a `DecisionClient` into `ToolCtx`. `tool_risk` runs from
   the approval path; `jev_eval` is dispatch in `tools::run`. Domain questions never land in
   `turn.rs` (Phase 19).
 - A live TypeSafe key in CI, in the repo, or in a test fixture.
@@ -1767,3 +1769,355 @@ attachments in the workspace; markdown in tool cards.
   8 newer images push it out; the sentence "this build cannot read it back" is gone.
 - Not done, deliberately: an image preview in the approval dialog (§ 5.4 still holds); relative
   images in the file preview; an `input_image` part for Codex, which waits on `motosan-ai`.
+
+### 7.21 Autonomy ladder — proposed
+
+The goal is automations wired into projects that run mostly on their own. Today the unattended
+path is a degraded attended one: every ask becomes a refusal (`policy/mod.rs`), the only grants
+are wide (`FsWrite` is the whole subtree, `Shell` any arguments), nothing reaches a person who is
+not at the window, the CoS never runs on a clock, a scheduled run cannot delegate, and none of the
+seeded runbooks can acquire material. What such a routine can do is transform files a human
+dropped, silently.
+
+The operator's position (2026-09-19): an agent **may** commit, push, deploy, pay or trade, when
+the rules on the code side hold — tests, coverage, dependencies current, security first, business
+first — and when a budget is either **earned by the project itself** or **allocated and enforced
+to the unit**. § 7.4's "human gate" becomes the default, not an absolute. What replaces the human
+there is not a model's confidence: it is a program that passes, a budget that holds, and a signed
+mandate that names the act. § 7.18's rule stands — a probability never flips a gate.
+
+**The ladder.** A routine or a project climbs one rung at a time, on evidence read from the audit
+and the ledger, never on a claim. Demotion is automatic; promotion is a human act.
+
+| Level | What runs without a person | Needs | Promotion evidence |
+| --- | --- | --- | --- |
+| L0 — propose | nothing; every mutation is asked | today | — |
+| L1 — unattended files | a routine, narrow standing grants | § 7.22, § 7.23 | one watched run (Phase 16's door) |
+| L2 — verified | L1, every run checked by a gate, checkpointed | § 7.24, § 7.25, § 7.26 | *N* consecutive runs passing the gate (default 5) |
+| L3 — orchestrated | the CoS on a clock, delegating with grants that narrow | § 7.27, § 7.28 | L2 on every runbook it routes to |
+| L4 — mandated | irreversible acts under a mandate | § 7.29 | L3, a gate on the act, a budget in force |
+
+**Human forever**, at every level, not configurable: amending `world/`; creating, widening or
+renewing a mandate, a budget, a standing grant or a destination (payee, remote, environment,
+recipient, instrument); raising a cap; installing a connector; anything outside the workspace;
+the kill switch. An agent may *propose* each of these as a file (§ 7.13's pattern); it never
+applies one.
+
+**Order.** § 7.22 → § 7.23 → § 7.24 → § 7.26 → § 7.25 → § 7.30 → § 7.28 → § 7.27 → § 7.29. Each
+slice is usable alone; § 7.29 depends on all the others and lands last.
+
+**Amends on landing** (not before): § 7.1 *Policy* (a mandate is a gate, not a skipped one);
+§ 7.4 bullets 2 and 6 and § 7.5 *Auto-sending…* (irreversible acts: human, or a mandate);
+§ 7.11 and § 7.5 *auto-committing* (a harness checkpoint on a side ref is not a commit on a
+branch, § 7.24); § 7.3 Phase 16 (a scheduled run may delegate, § 7.27); `AGENTS.md`
+*Permissions* and *North star* (revenue experiments may execute under a mandate); `COS.md`
+*Loop* (trust order).
+
+### 7.22 Parked asks and notifications — proposed
+
+An ask with nobody there is refused, and the run's work is lost until the next fire; an attended
+ask expires after five minutes as a denial (`IDEAS.md` § 5). And nothing tells a person anything
+unless the window is open: there is no notification in the tree.
+
+**In scope**: a third answer to an ask — *parked*; a durable queue of parked asks; OS
+notifications from Rust; a routine that resumes when its ask is answered.
+**Out**: a messaging face (§ 7.7, next); an inbound listener; approving from a notification's
+button (the click opens the window).
+
+*Settles*:
+
+- **Park, don't refuse.** In an unattended run, an ask not covered by a held grant is *parked*:
+  persisted in the app data (`parked.json`, never the workspace) with the call's fingerprint (tool
+  plus the audit's argument digest), its dialog detail, the run and the session. The model gets an
+  envelope saying the call is parked and why, and is told to `skill_return` `blocked` naming it.
+  The run ends as a new `RunOutcome::Parked` — an answer, not a silence: it does not count toward
+  `FAILURES_BEFORE_PAUSE`.
+- **Expiry parks too.** An attended ask past `APPROVAL_TTL` is parked rather than denied; the turn
+  ends as it does on a denial, and the expensive arguments are kept.
+- **Answering.** A parked ask is resolved from the board: *allow once* mints a one-shot grant keyed
+  on the fingerprint — it matches that exact call and is consumed on first use; *allow standing*
+  proposes the grant onto the routine through `schedule::check`; *deny* records the refusal. An
+  answer resumes the run: a new turn in the same session, under `RUN_TIMEOUT`, opening with one
+  sentence naming the answer. A model that regenerates different arguments asks again. At most
+  three parks per run; a park unanswered for seven days closes as `blocked`.
+- **Notifications** (`tauri-plugin-notification`, called from Rust; `capabilities/main.json`
+  unchanged): a parked ask, a `needs_you` return, a routine that paused itself, a budget at 80 %
+  and exhausted (§ 7.26), and every act done under a mandate (§ 7.29). Coalesced per routine per
+  hour into one line. Content is the routine's name and the run's one sentence — never arguments,
+  paths or amounts: a lock screen is not the dialog.
+- **The face comes next.** § 7.7 is re-scoped in two steps: first notify-only over an outbound
+  channel carrying these same events, then the control verbs. Headless operation (§ 7.30) is not
+  usable without it.
+
+*Refuses*: approving from the notification itself; a TTL that denies silently; parked asks in the
+workspace; a notification that quotes a secret-shaped argument; one notification per tool call.
+
+*Exit*: a routine that needs an unsigned write parks instead of failing, a notification appears
+with the window hidden, *allow once* resumes the run in its session and the write lands once; an
+attended ask left for ten minutes is answerable after.
+
+### 7.23 Narrow standing grants — proposed
+
+A standing grant is only as safe as its scope. `FsWrite` covers the workspace minus `.git/` and
+`world/`; `Shell { program }` covers every argument of that program. Signing either on a routine
+is signing almost everything, so an operator signs nothing — and the routine stays useless.
+
+*Settles*:
+
+- **Write scopes.** `Grant::FsWriteUnder { prefix }`: a workspace-relative directory prefix,
+  compared component-wise after § 3's resolution, never matching `.git/` or `world/`. A runbook
+  may declare `writes:` in its front matter (paths or one trailing `*` per segment); signing a
+  routine offers exactly those prefixes by default and `FsWrite` only as an explicit widening.
+- **Command shapes.** `Grant::ShellShape { program, args }`: the program key of § 3.1 plus a
+  closed argument pattern — literal tokens, `<path>` (one contained path), `…` (any tail, only
+  last). `cargo test …` is a shape; `cargo …` is `Shell { program }` and says so. The git
+  read-only rules of § 3.1 still apply under any shape. The dialog and the routine form show the
+  shape in words.
+- **Stated plainly**: a shape narrows *intent*, not power — `cargo test` runs `build.rs`, and
+  `pnpm test` runs whatever `package.json` says. A shape over a program that executes workspace
+  code is a high-risk grant whatever its pattern; the badge says so. `IDEAS.md` § 12's
+  per-project read-only shapes (`ls`, `rg`) land here as auto-allowed shapes.
+
+*Exit*: `watch.sweep` on a clock signs `fs_write` under `.aegis/artefacts/` only, and a write
+elsewhere parks; a `cargo test …` shape does not cover `cargo install`.
+
+### 7.24 Run checkpoints — proposed
+
+Autonomous writes accumulate in the working tree with no point to return to; the audit says which
+run wrote a path, not what the tree was before. A commit is never grantable unattended (§ 3.1),
+and § 7.11 refuses auto-commit. Reversibility is what makes autonomy defensible.
+
+*Settles*:
+
+- **The harness snapshots, the agent does not commit.** Before and after every unattended or
+  delegated run that may write, the runtime records the working tree on a side ref,
+  `refs/aegis/runs/<run-id>/{before,after}`, using a temporary index (`GIT_INDEX_FILE`),
+  `write-tree`, `commit-tree` with `HEAD` as parent and `update-ref`. The operator's index,
+  `HEAD`, branches and stash are untouched. Spawned like § 7.11's `git init`, on the execution
+  host.
+- **What it is not.** Not a commit on a branch, not pushed by anything in this runtime (the default
+  refspec does not carry `refs/aegis/`), not a git identity written for the user (the ref's
+  author is `Aegis <aegis@localhost>` on the command line only). Ignored files are not captured,
+  and the board says so.
+- **Restore** is an operator act on the board: the `after` tree of a run diffed against its
+  `before`, and a button that restores the `before` tree of the paths that run wrote.
+- **Retention**: 30 days or 200 runs per project, pruned by the runtime.
+- **L2 requires it.** A workspace that is not a work tree can run at L1, never above.
+
+*Exit*: a routine writes three files, the board shows its diff, *Restore* returns them, `git
+status` and `git log` of the operator's branch are unchanged.
+
+### 7.25 Gates: verification as a program — proposed
+
+`COS.md` says the CoS verifies against the oracle *as a program*. As landed, `world.verify` is a
+runbook in which the model reads `oracle.md`, chooses what to run and writes its own verdict; and
+Phase 16's door is one watched run, while `COS.md`'s trust order asks for "a verifier that already
+rejects slop".
+
+*Settles*:
+
+- **A gate is a list of checks the harness runs**, never the model, in the workspace on the
+  execution host, after `skill_return` (for a run) or before an act (§ 7.29). A closed vocabulary,
+  interpreted in Rust like § 7.18's `compose`:
+
+  | Check | Passes when |
+  | --- | --- |
+  | `exit { program, args }` | exit code 0 within its timeout |
+  | `number { program, args, pattern, op, value }` | the first capture of `pattern` in the output compares true (coverage ≥ 80) |
+  | `eval { name, route }` | the signed `jev_eval` returns that route, confident |
+  | `oracle` | every clause of `world/oracle.yml` (below) passes |
+  | `clean { paths }` | the run wrote none of these paths |
+
+- **Order is the operator's priorities**: security, then business, then tests, coverage and
+  freshness — the first failure stops the gate. A typical delivery gate: `cargo audit` / `pnpm
+  audit --audit-level high` (security); `oracle` and an `eval` on the change's intent (business);
+  `cargo test`, `pnpm test` (tests); a `number` on the coverage report (coverage); `cargo outdated
+  --exit-code 1` or its equivalent (dependencies current).
+- **A gate cannot be edited by what it gates.** The gate and its thresholds live on the routine or
+  the mandate (app data, signed), not in the repository. A run that wrote a path the gate reads —
+  test directories, CI and coverage configuration, lockfile policy, `world/oracle.yml`, declared in
+  `protected` on the gate — is never self-verified: its outcome is `needs_you`, whatever the checks
+  say. Lowering a threshold is a human act.
+- **Machine oracle.** `world/oracle.yml` beside `oracle.md`: clauses, each with an id, the prose
+  claim and one check from the table. Written like the rest of `world/` (a session, `WorldAmend`).
+  `world.verify` becomes the runbook that drafts it and explains failures; the verdict is the
+  harness's.
+- **Outcome.** A gate that fails turns a `done` into `rejected` (a new `RunOutcome`, counted as a
+  failure); a pass is recorded on the ledger as `verified`. The run's own status cannot override
+  the gate.
+- **Promotion by evidence.** L2 requires *N* consecutive `verified` runs (default 5, per routine,
+  read from the ledger). Two `rejected` in a row pause the routine and demote it to L1.
+
+*Refuses*: the model choosing which checks run; a threshold read from the repository; a gate
+passing on a run that edited its gate's inputs; Jev confidence as a check that can pass alone on
+an irreversible act.
+
+*Exit*: a routine whose gate runs the tests is `rejected` when a test fails and paused after the
+second; a run that edits the coverage configuration returns `needs_you` although the gate passed.
+
+### 7.26 Budgets — proposed
+
+Routines are bounded by runs per day and 15 minutes; not by tokens or money, although
+`TurnCost` is recorded per turn. And any act that spends (§ 7.29) needs an envelope the model
+cannot write.
+
+*Settles*:
+
+- **One ledger, harness-owned** (`ledger.json` in the app data, per project). Nothing in the
+  workspace is a budget; a `STATUS.md` line about money is prose.
+- **Two sources of an envelope**, per project, per currency, per period (day, week, month):
+  - **Allocated** — an amount the operator enters in Settings. No carry-over unless signed.
+  - **Earned** — money the project brought in, read by the harness from a source of truth (a
+    read-only connector tool or an ingested statement, § 7.28, named on the envelope with the
+    field to read), **settled** amounts only, never projected; times a signed reinvestment share
+    (e.g. 30 %). Losses and refunds debit it. A source that cannot be read freezes the earned
+    envelope at its last settled value; it never grows on a failure.
+- **Reserve, then settle**, under the store's lock before the act, like `runs_per_day`: the
+  maximum an act could cost is reserved; the actual amount settles; the rest is released. An act
+  whose maximum does not fit is not attempted: it parks (§ 7.22). No overdraft, no "just this
+  once".
+- **Model spend is a budget too.** A price per model on each provider row (operator-entered);
+  per-run and per-day caps on each routine and identity. Unknown usage counts at the request's
+  `max_output_tokens` plus its input estimate, so enforcement errs toward stopping. Past a cap the
+  turn halts like § 7.16's ceiling: one wrap-up round.
+- **Visible.** The board shows each envelope: allocated or earned, reserved, spent, remaining, and
+  where the earned figure was read and when. 80 % and exhaustion notify (§ 7.22).
+
+*Refuses*: an agent setting, raising or moving a budget; an earned figure a model wrote; spend
+counted after the fact only; an envelope shared across projects.
+
+*Exit*: a routine with a $0.50 per-run cap halts with a wrap-up round when it passes it; an act
+costing more than the remaining envelope parks; the earned envelope moves only when its source
+shows a settled amount.
+
+### 7.27 The CoS on a clock — proposed
+
+An autonomous project is an autonomous loop, and the loop cannot run unattended: `cabinet.found`
+proposes the CoS with `runs_per_day: 0`, and a scheduled run has no bus (`Standing::Own(None)`).
+Delegation from a session is the least autonomous path of all: each specialist's ask opens a
+dialog while `ATTEMPT_TIMEOUT` (300 s, wall clock) runs, equal to `APPROVAL_TTL`, so a specialist
+waiting on a person is cancelled while it waits.
+
+*Settles*:
+
+- **Grants flow down and narrow.** A routine may sign `HandoffDelegate` with an **envelope**: per
+  owner identity, the grants its briefs may carry — each a subset of that identity's allow-list
+  and of the routine's own grants. A brief gains `grants:`; `check_brief` refuses one outside the
+  envelope. The specialist's session is seeded with exactly those, and is unattended: its asks
+  park (§ 7.22). Depth stays one.
+- **Charged upward.** Specialist runs are charged to the routine's model budget (§ 7.26) and to
+  each owner's `runs_per_day`; each is checkpointed (§ 7.24) and gated by its runbook's gate when
+  it has one (§ 7.25).
+- **Waiting is not working.** `ATTEMPT_TIMEOUT` counts time outside an open ask; a parked ask ends
+  the attempt as `needs_you` naming it, not as a timeout.
+- **Founding** may propose the CoS with a clock when the operator says something should run
+  unattended; still a proposal, applied in Settings (§ 7.14).
+
+*Refuses*: a specialist receiving a grant the routine did not sign; grants widening down the
+chain; a second level of delegation; the CoS executing an act itself.
+
+*Exit*: a `cos.loop` routine fires, routes two briefs with narrowed grants, one specialist parks
+a write and the other returns, and the board shows both without a window open.
+
+### 7.28 Ingestion — proposed
+
+None of the seeded runbooks acquires anything (`watch.sweep`: "nothing in this run reaches the
+network"). A watch fed by hand is not a watch; an earned budget (§ 7.26) needs a figure read from
+somewhere.
+
+*Settles*:
+
+- **Code fetches, the model reads.** A routine may declare sources in a closed vocabulary —
+  `rss { url }`, `http_get { url }`, `connector { tool, args }` (a read-only tool, called by the
+  harness), later `imap { account, folder }` — fetched by the runtime before the run. The model
+  never chooses a URL, a host or a query.
+- Output lands under `.aegis/inbox/<source>/<stamp>.<ext>` (a new cabinet directory), capped per
+  item and per fetch, text only: no scripts executed, no cookies, credentials only by a named
+  keyring account on the source. An `OnChange` routine watches its inbox like any folder.
+- **Fetched text is tainted.** A run that read a path under `.aegis/inbox/` cannot perform a
+  mandated act (§ 7.29) in the same run, and its identity should not hold `shell_exec` — the
+  Intake rule (Phase 19) generalized. The act, if any, is a later run over the *artefact*, after a
+  gate.
+
+*Refuses*: a `fetch` tool the model calls with arbitrary URLs (SSRF, exfiltration); JavaScript
+rendering; a scraping farm (`AGENTS.md`); an inbox under `world/`.
+
+*Exit*: a watch routine's RSS source fills its inbox overnight, `watch.sweep` writes entries from
+it, and nothing in the run touched the network itself.
+
+### 7.29 Mandates: irreversible acts under a gate and a budget — proposed
+
+The operator's rule of § 7.21: commit, push, deploy, publish, send, pay, trade may be done by an
+agent when the code-side rules hold and a budget holds. A **mandate** is the signed object that
+says which act, where, how much, until when, and under which gate. Without one, § 7.4 stands as
+written: a human decides.
+
+*Settles*:
+
+- **Act classes**: `commit` (to a named branch pattern, never the protected ones), `push` (remote
+  and branch patterns), `merge` (into a named branch), `deploy` (environment), `publish` /
+  `send` (channels, recipients), `pay` (payees), `trade` (instruments). Each act is a declared
+  call: a `ShellShape` (`git push origin agent/*`) or a connector tool with an **act descriptor**
+  on the mandate — which argument is the amount, the currency, the destination (JSON pointers). An
+  act whose amount or destination the harness cannot read is not mandated: it asks.
+- **A mandate is** `{ project, identity, act, destinations[], caps, budget, gate, expires }`:
+  - `destinations`: an allow-list; a new payee, remote, environment or recipient is always human;
+  - `caps`: per act, per period, and count per period (e.g. 2 deploys a day);
+  - `budget`: an envelope of § 7.26, allocated or earned — required for `pay` and `trade`, and
+    for any act with a cost;
+  - `gate`: § 7.25's checks, run by the harness **on the exact artefact acted on** (the commit
+    being pushed, the build being deployed) in the same run, immediately before the act;
+  - `expires`: at most 30 days; renewal is human. No mandate is forever (§ 3.1's spirit).
+- **Signed like a roster.** An agent may write `.aegis/mandates/<name>/PROPOSAL.yml`; the operator
+  applies it in Settings by digest (§ 7.14's mechanism); the live mandate lives in the app data
+  (`mandates.json`), never in the workspace, where the agent could write it.
+- **At the act**, all of these, in the runtime, or the call asks (parks when unattended): the
+  mandate is in force and not paused; the run is at L4 for this routine; the gate passed on this
+  artefact; the budget reserve succeeded; the destination is allowed; the caps hold; the run is
+  not tainted (§ 7.28); a checkpoint exists (§ 7.24). The decision is a new matrix outcome,
+  `Mandated { mandate }`, audited with the mandate id, the gate's results and the amount.
+- **Per class**:
+  - `deploy` needs a signed `rollback` shape and a `health` check; a failed health check runs the
+    rollback and pauses the mandate.
+  - `trade` needs a maximum position, a maximum loss per period and an instrument list; reaching
+    the loss pauses the mandate. Revenue experiments stop being "never execute" only here.
+  - `pay` needs a per-payment maximum and never a new payee.
+  - `send` / `publish` need the draft to pass a gate that includes the verifier runbook
+    (`never-send-without-review` as a program: its checklist as `eval` or `exit` checks).
+- **Pause and revoke.** A mandate pauses itself on a failed gate after an act, a failed health
+  check, a budget breach attempt, two rejected runs, drift in `world/sources.yml`, or a second
+  refusal by the destination. Pausing is immediate; resuming is human. Revoke is one button.
+- **Every act notifies** after the fact (§ 7.22) and is listed on the board with its gate, its
+  checkpoint and its amount.
+
+*Refuses*:
+
+- A mandate living in, or read from, the workspace; an agent applying, widening or renewing one.
+- An act mandated on a model's confidence, a Jev probability, or a gate the run could edit.
+- A mandate without an expiry, without destinations, or — for `pay` and `trade` — without a
+  budget.
+- Acting on fetched text in the same run; a second level of delegation carrying a mandate.
+- Any act on the operator's personal accounts outside the destinations; speaking as the operator
+  on a public account unless that channel is a signed destination.
+
+*Exit*: a delivery mandate lets a scheduled run push `agent/*` and deploy to staging after
+`cargo audit`, the oracle, the tests and a coverage floor pass on that commit; a failed health
+check rolls back and pauses it; a `pay` over the remaining envelope parks; an expired mandate
+asks.
+
+### 7.30 Unattended resilience — proposed
+
+*Settles*:
+
+- **Transient is not silent.** A provider error marked `retryable` (429, 529, a dropped stream) is
+  retried inside the turn — three attempts, honouring `Retry-After`, else 2 s, 10 s, 30 s. Still
+  failing, the run ends as `Deferred`: not counted toward `FAILURES_BEFORE_PAUSE`, re-fired on
+  the next tick past the backoff, notified after three in a row. Today two overnight 429s pause a
+  routine (`RoutineStore::end_run`).
+- **Headless.** The same binary with `--headless`: stores, scheduler, connectors and turn loop, no
+  window and no tray, for a machine that stays on (a home server, a WSL distribution). Not a
+  second runtime (§ 7.8): the same process code, no listener. Approvals are parked and answered
+  through the face of § 7.22 — which is why headless waits for it.
+
+*Exit*: a routine survives two rate-limited nights without pausing; `aegis --headless` runs a
+routine with no display.

@@ -79,6 +79,20 @@ under an approval that did not describe it.
   `docs/troubleshooting.md` and `docs/architecture.md`.
 - `AGENTS.md` states the current scope instead of the MVP's; `PLAN.md` is condensed to the decisions
   in force, with its section numbers unchanged; `IDEAS.md`, `COS.md` and `CONTROL.md` are tightened.
+- `PLAN.md` § 7.21–7.30 propose the autonomy ladder: parked asks and notifications, narrow standing
+  grants, run checkpoints, gates run by the harness, budgets (allocated or earned), the CoS on a
+  clock, ingestion, and mandates for irreversible acts. Proposed, not built.
+
+### Internal
+
+- The 26 seeded runbooks are Markdown files (`src-tauri/src/skills/seed/`), embedded at build time,
+  instead of string literals in Rust.
+- Large modules are split without changing behaviour: the turn loop (`agent/turn/`), the policy
+  table by tool family (`policy/matrix/`), tool-call parsing (`policy/parse.rs`), Gemini
+  (`agent/provider/motosan/gemini.rs`), `shell_exec`'s output and program lookup, session payloads,
+  and `AppState` by domain. Inline test modules over 300 lines moved to sibling `tests.rs` files.
+- The stylesheet is eleven files imported in cascade order from `src/styles/global.css`.
+- The OAuth refresh paths no longer `expect` a client.
 
 ## 0.1.0
 
