@@ -31,7 +31,7 @@ src-tauri/
     audit.rs        audit.jsonl: one line per tool call
     store/          projects, sessions, agents, memories, routines, connectors, settings documents
     secrets.rs      OS credential store, environment fallback, masking
-    skills/         the runbook format, the catalog, the seeded library, proposals
+    skills/         the runbook format, the catalog, the seeded library (`seed/*.md`), proposals
     handoff/        briefs and reports, the bus (parallel, bounded, two attempts), the runner
     schedule/       routines: the door, due times, the unattended runner
     board/          the structured read of STATUS.md, and runs folded from the audit log

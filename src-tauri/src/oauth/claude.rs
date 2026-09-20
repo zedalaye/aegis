@@ -50,11 +50,14 @@ pub async fn resolve(client: Option<&reqwest::Client>) -> Result<Resolved, Missi
                     .to_owned(),
         })?;
 
-    let owned = match client {
-        Some(_) => None,
-        None => Some(refresh::client()?),
+    let owned;
+    let http = match client {
+        Some(client) => client,
+        None => {
+            owned = refresh::client()?;
+            &owned
+        }
     };
-    let http = client.or(owned.as_ref()).expect("a client");
 
     let bundle = refresh::claude(http, refresh_token)
         .await

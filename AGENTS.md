@@ -71,7 +71,7 @@ have the slices § 7.10–7.20, and `world/` (§ 7.2). New work is proposed as a
 - A Python sidecar; auto-update, signing, installers beyond `tauri build`; mobile.
 - An in-app editor or any save path from the WebView.
 - A domain as a runtime feature. A domain is a pack: workspace + skills + connectors + an
-  identity. A domain never grows `agent/turn.rs`.
+  identity. A domain never grows `agent/turn/`.
 
 ## North star
 

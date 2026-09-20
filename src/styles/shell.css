@@ -1,0 +1,689 @@
+/* --- Shell ---------------------------------------------------------------- */
+
+.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* The panes scroll, the frame does not. */
+  overflow: hidden;
+}
+
+.shell__body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.shell__main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* The chat pane scrolls its transcript and pins its composer, so the frame
+     must not scroll on its behalf; panes that do scroll say so themselves. */
+  overflow: hidden;
+}
+
+/* --- Title bar ------------------------------------------------------------ */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.titlebar__identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.titlebar__name {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.titlebar__project {
+  padding-left: 0.6rem;
+  border-left: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.titlebar__hint {
+  color: var(--muted);
+}
+
+.titlebar__workspace {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.titlebar__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+/* --- Sidebar -------------------------------------------------------------- */
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.75rem;
+  gap: 0.5rem;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sidebar__heading {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.sidebar__empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.sidebar__list {
+  /* Capped rather than flexible: the project list is the thing a user changes
+     rarely, so it yields its space to the sessions below it. */
+  max-height: 32vh;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar__item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.project {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project:hover:enabled {
+  background: var(--bg);
+}
+
+.project--open {
+  background: var(--selected);
+  border-color: var(--border);
+}
+
+/* A drag over a project row (PLAN 7.15). An outline, so nothing moves while
+   the drop is being aimed. */
+.project--drop {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* What a drop onto a project did. Arrived is the app's "ok" — the accent, as
+   on a finished tool call or a probe that answered — and refused is the same
+   warning the Files panel uses. Both are boxed, so neither reads as the
+   running prose of the rail. */
+.shared__note.rail__drop {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.shared__note.rail__drop--arrived {
+  border-color: var(--accent);
+  background: var(--selected);
+  color: var(--fg);
+}
+
+.shared__note.rail__drop--refused {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.project:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.project__name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project__remove {
+  flex-shrink: 0;
+  width: 1.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.project__remove:hover:enabled {
+  color: var(--danger);
+  border-color: var(--border);
+}
+
+.project__remove:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- Workspace badge ------------------------------------------------------ */
+
+.workspace {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.workspace--missing {
+  color: var(--warning);
+}
+
+.workspace__icon {
+  flex-shrink: 0;
+}
+
+.workspace__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace__note {
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+}
+
+/* --- Project picker ------------------------------------------------------- */
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.picker__label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.picker__input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+.picker__actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.picker__actions .button {
+  flex: 1;
+}
+
+/* --- Shared workspace files ----------------------------------------------- */
+
+/*
+ * The convention in the rail (PLAN 7.3, Phase 11). Sized to disappear once it
+ * is set up: four short rows while something is missing, one sentence after.
+ * A panel about files nobody has to touch should not compete with the session
+ * list underneath it.
+ */
+/* --- Rail sections -------------------------------------------------------- */
+
+/*
+ * Each of the rail's four stacks is a disclosure. The section owns the rule
+ * above it and the row that toggles it; the body owns the column the contents
+ * sit in, so collapsing one leaves the heading exactly where it was.
+ */
+.rail__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.rail__head {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+/* The title is the target: a caret alone is too small to hit in a rail this
+   narrow. It grows so the empty space after the word still folds the section,
+   and the "+" stays a sibling at the end of the row. */
+.rail__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.1rem 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail__toggle:hover .sidebar__heading {
+  color: var(--fg);
+}
+
+.rail__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.rail__caret {
+  flex-shrink: 0;
+  width: 0.75em;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* What a collapsed section can still say. After the title, before the "+". */
+.rail__count {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.rail__action {
+  flex-shrink: 0;
+  position: relative;
+}
+
+.rail__addwrap {
+  position: relative;
+}
+
+.rail__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rail__add:hover:enabled {
+  color: var(--fg);
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+.rail__add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rail__add[aria-expanded="true"] {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--selected);
+}
+
+.rail__menu {
+  position: absolute;
+  top: calc(100% + 0.2rem);
+  right: 0;
+  z-index: 8;
+  min-width: 11rem;
+  max-width: 16rem;
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.rail__menuitem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail__menuitem:hover,
+.rail__menuitem:focus-visible {
+  background: var(--selected);
+}
+
+.rail__menuname {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail__menuhint {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.rail__count--attention {
+  color: var(--warning);
+}
+
+.rail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 0;
+}
+
+/* The sessions list is the one that grows: it takes the leftover height of the
+   rail, so its body has to be allowed to as well. Collapsed it claims nothing —
+   a folded section holding the rail's spare height, with a heading alone in it,
+   is the one way this could look broken. */
+.sessions:not(.rail__section--collapsed) {
+  flex: 1;
+  min-height: 0;
+}
+
+.sessions > .rail__body {
+  flex: 1;
+  gap: 0.4rem;
+}
+
+/*
+ * Where this project's commands run (PLAN 7.12).
+ *
+ * A label, a picker and one sentence. The sentence is the part that earns its
+ * space: a control that silently rerouted every `shell_exec` to another
+ * operating system with nothing beside it saying so would be the most
+ * consequential unlabelled switch in the application.
+ */
+.host__label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.host__select {
+  width: 100%;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.host__select:disabled {
+  opacity: 0.6;
+}
+
+.host__note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.host__note code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* A project pointing at a distribution this machine no longer has. Every
+   command will be refused until somebody changes it, so it is not a hint. */
+.host__note--warn {
+  color: var(--warning);
+}
+
+.shared__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.shared__entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.shared__entry--missing {
+  color: var(--muted);
+}
+
+.shared__mark {
+  flex-shrink: 0;
+  width: 0.9em;
+  color: var(--accent);
+}
+
+.shared__entry--missing .shared__mark {
+  color: var(--muted);
+}
+
+.shared__dir {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* The file name yields first: which directory is missing is the useful half. */
+.shared__file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.shared__state {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.shared__note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.shared__note code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/*
+ * A declared source that has moved since the world was perceived from it. It is
+ * the one row in either panel that is *waiting on somebody*: until that delta is
+ * perceived, every brief that is not about it is held. Marked with the warning
+ * colour rather than only a word, because it is the answer to "why is nothing
+ * going out".
+ */
+.world__entry--drifted .shared__mark,
+.world__entry--drifted .shared__state {
+  color: var(--warning);
+}
+
+/* --- Work area ------------------------------------------------------------ */
+
+.work {
+  max-width: 46rem;
+  padding: 1.5rem;
+  overflow: auto;
+}
+
+.work--empty {
+  color: var(--muted);
+}
+
+.work__title {
+  margin: 0 0 1rem;
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+.work__body {
+  margin: 0;
+  color: var(--muted);
+  max-width: 34rem;
+}
+
+.work__warning {
+  margin: 1rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.facts__path {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  /* Long paths wrap rather than widen the pane; the break stays at a
+     separator so each line is still a readable fragment of the path. */
+  overflow-wrap: anywhere;
+}
+
+/* --- Error banner --------------------------------------------------------- */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.banner__message {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner__hint {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.banner__code {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+.banner__dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}

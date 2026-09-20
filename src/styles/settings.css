@@ -1,0 +1,514 @@
+/* --- Settings ------------------------------------------------------------- */
+
+/*
+ * The panel takes over the work area rather than floating over it, so it is
+ * laid out like the work area: one readable column, scrolling on its own.
+ */
+.settings {
+  max-width: 46rem;
+  padding: 1.5rem 2rem 3rem;
+  overflow-y: auto;
+}
+
+.settings__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.settings__title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.settings__lede {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+}
+
+.settings__section {
+  margin: 2rem 0 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.settings__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* --- Provider form -------------------------------------------------------- */
+
+.provider {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.field__label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.field__input {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+.field__input:disabled {
+  opacity: 0.6;
+}
+
+/* An instruction block is prose, so it wraps and does not stretch sideways. */
+.field__input--area {
+  resize: vertical;
+  min-height: 4.5rem;
+  line-height: 1.45;
+}
+
+.field__input--bad {
+  border-color: var(--danger);
+}
+
+.field__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/*
+ * A refusal sits under the input it is about — the runtime says which field it
+ * meant — rather than in the banner at the top of the window, which is where
+ * failures that belong to no particular control go.
+ */
+.field__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.provider__note {
+  margin: -0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.provider__note--warning {
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.provider__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.provider__probe {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.provider__probe--ok {
+  border-color: var(--accent);
+}
+
+.provider__probe--bad {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.provider__latency {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/*
+ * A button that reads as text, for an action that belongs inside a sentence —
+ * "Remove it" after the sentence saying what is stored.
+ */
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Identities ----------------------------------------------------------- */
+
+/*
+ * The identity list and its form, inside the settings panel. Each row states
+ * what the identity is for and what it may touch, because those are the two
+ * facts that decide whether you would open a session as it — and the tools are
+ * spelled out rather than counted, since "3 tools" does not answer "may this
+ * write to my repo".
+ */
+.agent__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.agent__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.agent__name {
+  font-weight: 600;
+}
+
+.agent__badge {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.agent__actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
+.agent__role {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.agent__tools,
+.agent__skills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.agent__tools code,
+.agent__skills code {
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+/*
+ * An identity that holds nothing. Not marked as a warning: it is a perfectly
+ * reasonable thing to want, and the sentence already says what it means.
+ */
+.agent__tools--none {
+  font-style: italic;
+}
+
+/*
+ * The runbooks the runtime found, offered as things to grant. A chip toggles
+ * a name in the field below it rather than replacing that field: a workspace
+ * runbook is only discoverable while its project is open, and an identity has
+ * to be grantable a skill that is not in front of you right now.
+ */
+.agentform__skillpicks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+}
+
+.chip--on {
+  border-color: var(--accent);
+  background: var(--panel);
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------------------
+ * Skills (PLAN 7.3, Phase 13)
+ *
+ * A list of runbooks, not an editor. Every row is read-only and carries its
+ * path, because the thing you do with a skill you want to change is open the
+ * file.
+ * ------------------------------------------------------------------------ */
+
+.skill__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0 0 0.8rem;
+  padding: 0;
+  list-style: none;
+}
+
+.skill {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+/*
+ * A runbook that will not parse. Marked, and still listed: the author is the
+ * only person who can fix it, and one that vanished would say nothing.
+ */
+.skill--broken {
+  border-color: var(--warning);
+}
+
+.skill__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.skill__name {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.skill__scope,
+.skill__version {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.skill__badge {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.skill__summary {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.skill__problem {
+  margin: 0;
+  color: var(--warning);
+  font-size: 0.78rem;
+}
+
+.skill__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.skill__tools code {
+  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.skill__path {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.skill__note {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Roster proposal (PLAN 7.14)
+ *
+ * Drawn with the identity rows' own classes, because what it previews is those
+ * rows before they exist. Only what differs is here: an entry that blocks the
+ * apply, and one that apply will skip.
+ * ------------------------------------------------------------------------ */
+
+.roster {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.roster__entry--broken {
+  border-color: var(--warning);
+}
+
+.roster__entry--skipped {
+  opacity: 0.75;
+}
+
+.roster__title {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.roster__items {
+  margin: 0.2rem 0;
+  padding-left: 1.2rem;
+  font-size: 0.8rem;
+}
+
+.roster__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.roster__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.agentform {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.agentform__tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agentform__toollist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agentform__tool {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.agentform__tool code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.78rem;
+}
+
+.agentform__toolnote {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.agentform__actions {
+  display: flex;
+  gap: 0.5rem;
+}

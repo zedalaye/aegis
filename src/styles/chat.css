@@ -1,0 +1,614 @@
+/* --- Sessions ------------------------------------------------------------- */
+
+.sessions__list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session {
+  display: flex;
+  align-items: stretch;
+  gap: 0.2rem;
+}
+
+.session__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session__open:hover {
+  background: var(--bg);
+}
+
+.session--open .session__open {
+  background: var(--selected);
+  border-color: var(--border);
+}
+
+.session__title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.session__badge {
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+}
+
+.session__badge--running,
+.session__badge--awaiting_approval {
+  color: var(--accent);
+}
+
+.session__badge--error {
+  color: var(--danger);
+}
+
+/*
+ * A session a brief opened (PLAN 7.3, Phase 15). Quieter than the live-state
+ * badges beside it: those say what a row is doing now and want to be noticed,
+ * this one says where the row came from and only has to be readable.
+ */
+.session__badge--delegated {
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.session--delegated .session__title {
+  font-style: italic;
+}
+
+/*
+ * A run nobody started by typing. Same badge shape as a brief's, because it is
+ * the same kind of fact — this session exists because the machine opened it —
+ * and the same italic title, so the rail reads at a glance as "things I did"
+ * against "things that happened".
+ */
+.session__badge--scheduled {
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.session--scheduled .session__title {
+  font-style: italic;
+}
+
+.session__action {
+  flex-shrink: 0;
+  width: 1.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session__action:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.session__action:last-child:hover {
+  color: var(--danger);
+}
+
+.session--editing {
+  padding: 0.1rem 0;
+}
+
+.session__input {
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+/* --- Chat pane ------------------------------------------------------------ */
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat--empty {
+  padding: 1.5rem;
+  max-width: 46rem;
+  gap: 1rem;
+  align-items: flex-start;
+  overflow: auto;
+}
+
+.chat__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The right-hand side of the header: what is answering, and what it is doing. */
+.chat__meta {
+  display: flex;
+  align-items: baseline;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat__status {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/*
+ * Which model answers this session. Monospace because it is an identifier the
+ * user typed and may need to compare character by character against what their
+ * provider calls it.
+ */
+.model {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+/*
+ * No model behind the reply. Marked in the warning colour rather than left to
+ * read as an ordinary provider name: a scripted answer that looked like a real
+ * one would be the single most misleading thing this window could show.
+ */
+.model--fake {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+/*
+ * The model badge is also the session's binding picker (PLAN 7.19). A dot
+ * after the id marks an override of the identity's pair.
+ */
+.model--button {
+  cursor: pointer;
+  background: transparent;
+}
+
+.model--button:disabled {
+  cursor: default;
+}
+
+.bindingbadge {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+.bindingpicker {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: min(22rem, 80vw);
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.bindingpicker__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/*
+ * Which identity a session runs as. Beside the model badge, and deliberately
+ * quieter than it: the model is the thing that changes between two messages,
+ * the identity is fixed for the life of the session. Not monospace, because
+ * unlike a model id it is a name someone chose, not an identifier to compare
+ * character by character.
+ */
+.agentbadge {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--selected);
+  color: var(--fg);
+  font-size: 0.72rem;
+}
+
+/*
+ * A session bound to an identity that is no longer on file. It holds no tools
+ * at all, so this is marked like the scripted provider is: something the user
+ * has to be able to notice without reading a tooltip.
+ */
+.agentbadge--unknown {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.chat__status--running {
+  color: var(--accent);
+}
+
+.chat__status--awaiting {
+  color: var(--warning);
+}
+
+.chat__status--error {
+  color: var(--danger);
+}
+
+.chat .work__warning {
+  margin: 0.75rem 1rem 0;
+}
+
+/* --- Transcript ----------------------------------------------------------- */
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.messages__empty {
+  margin: auto;
+  max-width: 30rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.messages__thinking {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.bubble {
+  max-width: 46rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.bubble--user {
+  align-self: flex-end;
+  background: var(--selected);
+}
+
+.bubble--assistant {
+  align-self: flex-start;
+}
+
+.bubble__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.bubble__speaker {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bubble__text {
+  margin: 0;
+  /* Model output is untrusted text, never markup. `pre-wrap` is what keeps its
+     paragraphs and indentation readable without rendering any of it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Markdown in a bubble (PLAN 7.20): the explorer's elements, tighter. A single
+   line break inside a paragraph is kept, the way chat is written. */
+.bubble__md {
+  max-width: none;
+  margin-top: 0;
+}
+
+.bubble__md > :last-child {
+  margin-bottom: 0;
+}
+
+.bubble__md .md__p,
+.bubble__md .md__li {
+  white-space: pre-line;
+}
+
+.bubble__md .md__h {
+  margin-top: 0.8em;
+}
+
+.bubble__note {
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Images the operator attached, drawn from the scoped `asset:` copy. */
+.bubble__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bubble__attachment {
+  display: block;
+  max-width: 16rem;
+  max-height: 12rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* The caret marks text that is still arriving. */
+.bubble__caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 0.1em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret 1s steps(2, start) infinite;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble__caret {
+    animation: none;
+  }
+}
+
+/* --- Tool calls in the transcript ----------------------------------------- */
+
+.bubble__tools {
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.toolcall {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.toolcall__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The call a dialog is currently asking about, so the prompt and the line in
+   the transcript can be seen to be the same thing. */
+.toolcall--awaiting {
+  border-left: 2px solid var(--warning);
+  padding-left: 0.5rem;
+  margin-left: -0.5rem;
+}
+
+.toolcall__toggle {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.7rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.toolcall__toggle:hover {
+  color: var(--fg);
+}
+
+.toolcall__args {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.toolcall__tool {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.toolcall__status {
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.toolcall--ok .toolcall__status {
+  color: var(--accent);
+}
+
+.toolcall--awaiting .toolcall__status {
+  color: var(--warning);
+}
+
+.toolcall--denied .toolcall__status,
+.toolcall--error .toolcall__status {
+  color: var(--danger);
+}
+
+.toolcall__summary {
+  margin: 0;
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* What a running command has printed. Taller than the argument pane and
+   scrolled to the bottom, because this one is watched rather than consulted. */
+.toolcall__output {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
+.toolcall__stderr {
+  color: var(--danger);
+}
+
+.toolcall__elision {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* A capture, at a size that belongs in a transcript. Bounded by width and by
+   height, because a portrait display would otherwise push the rest of the
+   conversation off the screen. Clicking grows it in place; the element is a
+   button rather than a link because nothing here should navigate. */
+.toolcall__capture {
+  display: block;
+  align-self: flex-start;
+  max-width: min(100%, 24rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+  line-height: 0;
+  cursor: zoom-in;
+}
+
+.toolcall__capture:hover,
+.toolcall__capture:focus-visible {
+  border-color: var(--accent);
+}
+
+.toolcall__capture--large {
+  max-width: 100%;
+  cursor: zoom-out;
+}
+
+.toolcall__thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 14rem;
+  /* The capture is the physical framebuffer of a display that may be scaled,
+     so it is almost never shown at its own size. `contain` keeps the aspect
+     ratio a viewer would recognize. */
+  object-fit: contain;
+}
+
+.toolcall__capture--large .toolcall__thumb {
+  max-height: none;
+}
+
+.toolcall__missing {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+}

@@ -1,0 +1,432 @@
+/* --- Files (PLAN 7.15) ---------------------------------------------------- */
+
+/*
+ * A mode of the work area, like the board, and borrowing its header. Unlike
+ * the board it does not scroll as a whole: the tree and the preview each
+ * scroll on their own, so a long file does not carry the folder off screen.
+ */
+.explorer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  padding: 1.5rem 2rem 1rem;
+  border: 2px solid transparent;
+}
+
+.explorer--accept {
+  border-color: var(--accent);
+}
+
+.explorer--refuse {
+  border-color: var(--danger);
+}
+
+.explorer__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.explorer__hint,
+.explorer__report {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  margin: 0.75rem 0 0;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--selected);
+  font-size: 0.85rem;
+}
+
+/*
+ * The drag hint floats over the header rather than taking a line of its own:
+ * anything that appears in the flow while a drag is in progress moves the
+ * rows the drop is aimed at. `pointer-events: none` keeps it out of the
+ * hit-test that finds the row under the cursor.
+ */
+.explorer__hint {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  z-index: 2;
+  max-width: calc(100% - 4rem);
+  margin: 0;
+  transform: translateX(-50%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
+/* A drop that arrived, or a drag that would be taken: the app's "ok". */
+.explorer__hint,
+.explorer__report {
+  border-color: var(--accent);
+}
+
+.explorer__hint--refuse,
+.explorer__report--refused {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.explorer__refused {
+  color: var(--warning);
+}
+
+.explorer__actions {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
+/*
+ * Tree beside preview, and stacked below that when the window is narrow —
+ * the preview is the half worth the width.
+ */
+.explorer__body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(14rem, 22rem) minmax(0, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+@media (max-width: 900px) {
+  .explorer__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(8rem, 40%) minmax(0, 1fr);
+  }
+}
+
+.explorer__tree {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 0.35rem 0;
+}
+
+.tree,
+.tree__group {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree__row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  width: 100%;
+  padding-top: 0.15rem;
+  padding-bottom: 0.15rem;
+  padding-right: 0.6rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree__row:hover:enabled {
+  background: var(--bg);
+}
+
+.tree__row:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.tree__row--selected,
+.tree__row--selected:hover:enabled {
+  background: var(--selected);
+}
+
+.tree__row--ignored {
+  opacity: 0.55;
+}
+
+/* The cabinet is the working surface: marked, not segregated. */
+.tree__row--cabinet .tree__name,
+.tree__row--briefs .tree__name,
+.tree__row--artefacts .tree__name {
+  color: var(--accent);
+}
+
+.tree__row--world .tree__name {
+  font-style: italic;
+}
+
+.tree__caret {
+  flex-shrink: 0;
+  width: 0.75rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.tree__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__tag {
+  flex-shrink: 0;
+  padding: 0 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.tree__size {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tree__note {
+  padding-top: 0.1rem;
+  padding-bottom: 0.1rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.preview {
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 0.9rem 1.1rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.preview--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.preview__heading {
+  min-width: 0;
+}
+
+.preview__title {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.preview__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.9rem;
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.preview__path {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.preview__controls {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.preview__zone,
+.preview__note {
+  max-width: 46rem;
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.preview__text {
+  margin: 1rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preview__imagewrap {
+  margin-top: 1rem;
+}
+
+.preview__image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+}
+
+/* Markdown, drawn as elements. Readable, not a publishing stylesheet. */
+.md {
+  max-width: 46rem;
+  margin-top: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md__h {
+  margin: 1.2em 0 0.4em;
+  line-height: 1.3;
+}
+
+.md__h1 {
+  font-size: 1.35rem;
+}
+
+.md__h2 {
+  font-size: 1.15rem;
+}
+
+.md__h3 {
+  font-size: 1rem;
+}
+
+.md__h4,
+.md__h5,
+.md__h6 {
+  font-size: 0.9rem;
+}
+
+.md__p {
+  margin: 0.6em 0;
+}
+
+.md__list {
+  margin: 0.6em 0;
+  padding-left: 1.5rem;
+}
+
+.md__li > .md__p:first-child {
+  margin-top: 0;
+}
+
+.md__quote {
+  margin: 0.6em 0;
+  padding: 0.1em 0 0.1em 0.9rem;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.md__rule {
+  margin: 1.2em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.md__pre,
+.md__code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+}
+
+.md__pre {
+  margin: 0.8em 0;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--bg);
+  white-space: pre;
+}
+
+.md__code {
+  padding: 0 0.2em;
+  border-radius: 3px;
+  background: var(--bg);
+}
+
+.md__pre .md__code {
+  padding: 0;
+  background: none;
+}
+
+.md__tablewrap {
+  margin: 0.8em 0;
+  overflow-x: auto;
+}
+
+.md__table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.md__table th,
+.md__table td {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md__link {
+  text-decoration: underline dotted;
+}
+
+.md__url {
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
+/* A path the file names, which opens in this preview rather than navigating. */
+.md__path {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.md__image {
+  color: var(--muted);
+}
+
+/* A local image drawn in the text: a workspace blob or a scoped capture. */
+.md__img {
+  display: block;
+  max-width: 100%;
+  max-height: 24rem;
+  margin: 0.4em 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}

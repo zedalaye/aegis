@@ -118,11 +118,14 @@ pub async fn resolve(
             .to_owned(),
     })?;
 
-    let owned = match client {
-        Some(_) => None,
-        None => Some(refresh::client()?),
+    let owned;
+    let http = match client {
+        Some(client) => client,
+        None => {
+            owned = refresh::client()?;
+            &owned
+        }
     };
-    let http = client.or(owned.as_ref()).expect("a client");
 
     let bundle = refresh::grok(http, &refresh_token, &found.client_id, None)
         .await

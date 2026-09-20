@@ -1,0 +1,480 @@
+/* --- Audit drawer --------------------------------------------------------- */
+
+/*
+ * A column beside the work area, not a sheet over it. The record and the
+ * transcript are worth reading against each other, which a panel that covered
+ * one to show the other would prevent. It is the only pane besides the
+ * transcript that scrolls its own contents.
+ */
+.drawer {
+  flex: none;
+  width: 26rem;
+  max-width: 45vw;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer__title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.drawer__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Two mutually exclusive choices, drawn as one control so they read as one
+   question rather than as two independent buttons. The corners are rounded on
+   the end segments rather than by clipping the group: `overflow: hidden` here
+   would cut the focus ring off the buttons inside it. */
+.drawer__scopes {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.drawer__scope {
+  padding: 0.25rem 0.6rem;
+  border: 0;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.drawer__scope:first-child {
+  border-radius: calc(var(--radius) - 1px) 0 0 calc(var(--radius) - 1px);
+}
+
+.drawer__scope:last-child {
+  border-radius: 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0;
+}
+
+.drawer__scope + .drawer__scope {
+  border-left: 1px solid var(--border);
+}
+
+.drawer__scope:hover {
+  color: var(--fg);
+}
+
+.drawer__scope--on {
+  background: var(--selected);
+  color: var(--fg);
+}
+
+.drawer__error {
+  margin: 0;
+  padding: 0.5rem 1rem;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+/* Grows into the space the list would have taken, so the footer stays at the
+   bottom of the drawer rather than riding up under one paragraph. */
+.drawer__empty {
+  flex: 1;
+  margin: 0;
+  padding: 1.25rem 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.drawer__list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.drawer__footer {
+  border-top: 1px solid var(--border);
+  padding: 0.6rem 1rem;
+}
+
+/* The path is the point of the footer: the log is readable without Aegis, and
+   this is where a user finds it. Wrapped rather than elided — a path that has
+   been cut is a path that cannot be copied. */
+.drawer__path {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.drawer__note {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+/* --- One audited call ----------------------------------------------------- */
+
+.auditrow {
+  padding: 0.55rem 1rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* A refused or failed call is the one a reader is scanning for, so it is
+   marked down the edge as well as in words. */
+.auditrow--denied,
+.auditrow--error {
+  border-left: 3px solid var(--danger);
+  padding-left: calc(1rem - 3px);
+}
+
+.auditrow--cancelled {
+  border-left: 3px solid var(--border);
+  padding-left: calc(1rem - 3px);
+}
+
+.auditrow__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.auditrow__time {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+}
+
+.auditrow__tool {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/*
+ * The skill a call was part of, beside the tool name rather than in the
+ * chips: it says what the call *is* — a step of a procedure — and the chips
+ * say how it went, which is a different question.
+ */
+.auditrow__skill {
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.auditrow__chips {
+  margin-left: auto;
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.auditrow__chip {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
+.auditrow__chip--deny,
+.auditrow__chip--error {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.auditrow__chip--cancelled {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+/* The arguments the model sent, redacted by the runtime. One line here — the
+   whole thing is behind the disclosure — and never rendered as anything but
+   text. */
+.auditrow__args {
+  margin: 0.25rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auditrow__reason {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.auditrow__meta {
+  margin-top: 0.3rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.auditrow__code {
+  color: var(--danger);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.auditrow__more {
+  margin-left: auto;
+  font-size: 0.7rem;
+}
+
+.auditrow__detail {
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+/* The fact list is shared with the approval dialog, which is a full-width
+   pane; in a 26rem drawer it has to come down a size. */
+.auditrow__detail .facts dt,
+.auditrow__detail .facts dd,
+.auditrow__detail .facts__path {
+  font-size: 0.7rem;
+}
+
+.auditrow__json {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.auditrow__note {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------------------
+ * Memory (PLAN 7.3, Phase 14)
+ * ------------------------------------------------------------------------ */
+
+.memory__picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 22rem;
+  margin-bottom: 0.8rem;
+}
+
+.memory__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0 0 0.8rem;
+  padding: 0;
+  list-style: none;
+}
+
+.memory {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.memory__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.memory__kind {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.68rem;
+}
+
+/*
+ * An exception overrides the usual rule, so it is the one that has to be
+ * legible at a glance in a list of twenty. The other two are ordinary.
+ */
+.memory__kind--exception {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.memory__at {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.memory__text {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.memory__source {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A memory with nothing behind it is a hypothesis, and reads like one. */
+.memory__source--none {
+  font-family: inherit;
+  font-style: italic;
+  font-size: 0.72rem;
+}
+
+.memory__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.memory__confirm {
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.memory__foot {
+  margin-bottom: 0.8rem;
+}
+
+.memory__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.memory__kinds {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.memory__kindChoice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+
+.memory__formActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * The fold marker in the transcript (PLAN 7.3, Phase 14)
+ * ------------------------------------------------------------------------ */
+
+/*
+ * Deliberately quiet. Nothing has gone wrong and nothing has been deleted —
+ * this is a boundary in what the model carries, not a warning — so it reads as
+ * a rule across the pane rather than as a banner.
+ */
+.fold {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.6rem 0;
+  padding: 0.5rem 0.6rem;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+}
+
+.fold__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.fold__label,
+.fold__note {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.fold__note {
+  margin: 0;
+}
+
+.fold__state {
+  margin: 0.2rem 0 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  line-height: 1.6;
+  max-height: 16rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat__compact {
+  font-size: 0.75rem;
+}
