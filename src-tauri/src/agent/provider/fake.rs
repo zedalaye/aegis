@@ -454,28 +454,32 @@ fn routine_turn(request: &ModelRequest, said: &str) -> Vec<ModelEvent> {
         .rev()
         .find(|body| body.contains(r#""tool":"skill_run""#))
     {
-        Some(body) if body.contains(r#""ok":true"#) => write_the_status(&name),
+        // A person refused what this run parked (PLAN 7.22). There is nothing
+        // left to try: the run says so and closes.
+        Some(body)
+            if body.contains(r#""ok":true"#) && said.contains(crate::park::REFUSED_CLAUSE) =>
+        {
+            close_the_run(&name, false)
+        }
+        Some(body) if body.contains(r#""ok":true"#) => write_the_status(request, &name, said),
         Some(_) => close_the_run(&name, false),
         None => ask_to_load(&name),
     }
 }
 
 /// The write a watch routine exists to make.
-fn write_the_status(name: &str) -> Vec<ModelEvent> {
-    let stamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let arguments = serde_json::json!({
-        "path": format!("{}/status/{name}.md", crate::workspace::CABINET_DIR),
-        "content": format!(
-            "# {name}
-
-Last scheduled run: {stamp}
-
-There is no model behind this run —              the scripted provider wrote this line to show that a routine can reach the disk              while the window is shut, and only as far as it was signed for.
-"
-        ),
-        "create_dirs": true,
-    })
-    .to_string();
+///
+/// A run picked up after a parked ask was allowed makes that call **again,
+/// unchanged** (PLAN 7.22): the answer matches one exact call, so composing a
+/// second, slightly different one — a fresh timestamp — would be asking a new
+/// question. The arguments are already in the transcript; a real model reads
+/// the same instruction in the opening message.
+fn write_the_status(request: &ModelRequest, name: &str, said: &str) -> Vec<ModelEvent> {
+    let arguments = said
+        .contains(crate::park::RESUMED_MARKER)
+        .then(|| repeat_call(request, crate::policy::tool::FS_WRITE))
+        .flatten()
+        .unwrap_or_else(|| fresh_status(name));
 
     vec![
         ModelEvent::ToolCallDelta {
@@ -492,6 +496,41 @@ There is no model behind this run —              the scripted provider wrote t
     ]
 }
 
+/// The arguments of the last call to `tool` in this transcript, as they were
+/// written the first time.
+fn repeat_call(request: &ModelRequest, tool: &str) -> Option<String> {
+    request
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            WireMessage::Assistant { tool_calls, .. } => tool_calls
+                .iter()
+                .rev()
+                .find(|call| call.function.name == tool)
+                .map(|call| call.function.arguments.clone()),
+            _ => None,
+        })
+}
+
+/// A status file written now, for a run that has not written one yet.
+fn fresh_status(name: &str) -> String {
+    let stamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    serde_json::json!({
+        "path": format!("{}/status/{name}.md", crate::workspace::CABINET_DIR),
+        "content": format!(
+            "# {name}
+
+Last scheduled run: {stamp}
+
+There is no model behind this run —              the scripted provider wrote this line to show that a routine can reach the disk              while the window is shut, and only as far as it was signed for.
+"
+        ),
+        "create_dirs": true,
+    })
+    .to_string()
+}
+
 /// The return a scheduled run finishes with, whichever way the write went.
 fn close_the_run(name: &str, wrote: bool) -> Vec<ModelEvent> {
     let arguments = if wrote {
@@ -504,8 +543,8 @@ fn close_the_run(name: &str, wrote: bool) -> Vec<ModelEvent> {
         serde_json::json!({
             "status": "blocked",
             "summary": format!(
-                "Ran {name} on its schedule. The status file could not be written — nobody is \
-                 watching this run, so the write was refused rather than put to anyone."
+                "Ran {name} on its schedule. The status file was not written — nobody is \
+                 watching this run, so the write is parked for a person rather than done."
             ),
             "open_questions": ["Should this routine be signed for writes inside the workspace?"],
         })

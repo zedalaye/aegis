@@ -435,3 +435,123 @@ async fn the_model_id_is_what_the_turn_reports() {
     assert_eq!(request.model, FAKE_MODEL);
     assert!(matches!(request.messages[0], WireMessage::System { .. }));
 }
+
+/// The arguments of the one `fs_write` a set of events asks for.
+fn write_arguments(events: &[ModelEvent]) -> String {
+    events
+        .iter()
+        .find_map(|event| match event {
+            ModelEvent::ToolCallDelta {
+                name, args_delta, ..
+            } if name.as_deref() == Some(crate::policy::tool::FS_WRITE) => Some(args_delta.clone()),
+            _ => None,
+        })
+        .expect("the run asks to write")
+}
+
+/// The transcript of a run that parked its write and was then answered: the
+/// call, the `E_PARKED` envelope, the sentence a person's answer opens with,
+/// and the runbook loaded again.
+fn resumed(parked: &str, answer: crate::approval::Decision) -> ModelRequest {
+    use crate::agent::wire::WireToolCall;
+    use crate::policy::tool;
+
+    let ask = crate::store::ParkedAsk {
+        id: "park-1".to_owned(),
+        project_id: "p1".to_owned(),
+        session_id: "s1".to_owned(),
+        agent_id: "a1".to_owned(),
+        routine_id: "r1".to_owned(),
+        routine_name: "Morning watch".to_owned(),
+        skill: "watch.digest".to_owned(),
+        turn_id: "t1".to_owned(),
+        call_id: "c1".to_owned(),
+        tool: tool::FS_WRITE.to_owned(),
+        fingerprint: "fs_write:abc".to_owned(),
+        cause: crate::store::ParkCause::Unattended,
+        risk: crate::policy::Risk::Medium,
+        title: "Write file".to_owned(),
+        summary: "watch.digest.md (32 B, new file)".to_owned(),
+        detail: crate::policy::ApprovalDetail::FsWrite {
+            path: "/w/.aegis/status/watch.digest.md".to_owned(),
+            bytes: 32,
+            exists: false,
+            preview: None,
+            applies: None,
+        },
+        reason: "this creates a file in the workspace".to_owned(),
+        grant: Some(crate::policy::Grant::FsWrite),
+        scope_label: crate::policy::Grant::FsWrite.standing_label(),
+        parked_at: "2026-09-20T07:00:00.000Z".to_owned(),
+        expires_at: "2026-09-27T07:00:00.000Z".to_owned(),
+    };
+
+    ModelRequest {
+        model: FAKE_MODEL.to_owned(),
+        tools: Vec::new(),
+        messages: vec![
+            WireMessage::user("This is a scheduled run. Run `skill:watch.digest` now."),
+            WireMessage::Assistant {
+                content: None,
+                tool_calls: vec![WireToolCall::new("c1", tool::FS_WRITE, parked)],
+            },
+            WireMessage::tool(
+                "c1",
+                r#"{"ok":false,"tool":"fs_write","error":{"code":"E_PARKED"}}"#,
+            ),
+            WireMessage::user(crate::park::resumption(&ask, answer)),
+            WireMessage::Assistant {
+                content: None,
+                tool_calls: vec![WireToolCall::new("c2", tool::SKILL_RUN, "{}")],
+            },
+            WireMessage::tool("c2", r#"{"ok":true,"tool":"skill_run"}"#),
+        ],
+    }
+}
+
+/// PLAN 7.22: an answer matches one exact call, so a run picked up after one
+/// makes that call again *unchanged*. Composing a second, slightly different
+/// one — this runbook's write carries a timestamp — would be a new question,
+/// and the one-shot would not cover it.
+#[test]
+fn a_resumed_run_makes_the_parked_call_again_unchanged() {
+    let parked = r##"{"path":".aegis/status/watch.digest.md","content":"# watch.digest\n","create_dirs":true}"##;
+
+    let events = improvise(&resumed(parked, crate::approval::Decision::AllowOnce));
+
+    assert_eq!(
+        write_arguments(&events),
+        parked,
+        "the call a person read is the call that runs"
+    );
+}
+
+/// A refusal is not a puzzle: the run closes instead of asking the same thing
+/// a second way.
+#[test]
+fn a_refused_answer_closes_the_run_rather_than_writing() {
+    let parked = r##"{"path":".aegis/status/watch.digest.md","content":"# watch.digest\n","create_dirs":true}"##;
+
+    let events = improvise(&resumed(parked, crate::approval::Decision::Deny));
+
+    let returned = events
+        .iter()
+        .find_map(|event| match event {
+            ModelEvent::ToolCallDelta {
+                name, args_delta, ..
+            } if name.as_deref() == Some(crate::policy::tool::SKILL_RETURN) => {
+                Some(args_delta.clone())
+            }
+            _ => None,
+        })
+        .expect("the run closes itself");
+    assert!(returned.contains("blocked"), "{returned}");
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            ModelEvent::ToolCallDelta { name, .. }
+                if name.as_deref() == Some(crate::policy::tool::FS_WRITE)
+        )),
+        "a refused call is not made again"
+    );
+}

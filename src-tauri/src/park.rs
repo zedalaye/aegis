@@ -248,6 +248,11 @@ fn note(ask: &ParkedAsk) -> Note {
 /// [`OPENING_MARKER`](crate::schedule::OPENING_MARKER).
 pub const RESUMED_MARKER: &str = "A person has answered";
 
+/// The clause a refused answer carries, matched by the scripted provider for
+/// the same reason as [`RESUMED_MARKER`]. A refusal is not a puzzle: the run
+/// closes rather than asking the same thing a second way.
+pub const REFUSED_CLAUSE: &str = "it is refused";
+
 /// The sentence a resumed run opens with (PLAN 7.22).
 ///
 /// One line naming the answer, and which runbook it is inside. The call itself
@@ -265,7 +270,7 @@ pub fn resumption(ask: &ParkedAsk, decision: Decision) -> String {
             ask.tool, ask.summary
         ),
         Decision::Deny => format!(
-            "{RESUMED_MARKER} the `{}` call this run parked (\"{}\"): it is refused. Do not \
+            "{RESUMED_MARKER} the `{}` call this run parked (\"{}\"): {REFUSED_CLAUSE}. Do not \
              repeat it, and do not look for another way to do the same thing.",
             ask.tool, ask.summary
         ),
