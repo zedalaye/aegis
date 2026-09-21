@@ -1,6 +1,7 @@
 //! The OpenAI-compatible provider (PLAN 4.1).
 //!
-//! One streamed `POST {base_url}/chat/completions` per round, decoded into
+//! One streamed `POST {base_url}/chat/completions` per round, or
+//! `POST {base_url}/responses` for a Grok CLI login, decoded into
 //! [`ModelEvent`]s; the wire format stays in this file.
 //!
 //! * **Construction never fails**: a missing key, bad URL or missing client
@@ -31,6 +32,9 @@ use super::{Provider, STREAM_BUFFER};
 
 /// Path appended to the base URL for a completion.
 const CHAT_PATH: &str = "/chat/completions";
+
+/// Path the Grok CLI proxy samples on. Chat Completions is the legacy route.
+const RESPONSES_PATH: &str = "/responses";
 
 /// Output tokens [`probe`] asks for: not degenerate, nearly free.
 const PROBE_MAX_TOKENS: u32 = 16;
@@ -100,6 +104,16 @@ pub async fn probe(
     probe_with_headers(client, settings, key, &[]).await
 }
 
+/// As [`probe_with_headers`], against the Responses API.
+pub async fn probe_responses(
+    client: Option<&Client>,
+    settings: &ProviderSettings,
+    key: Option<&ApiKey>,
+    extra_headers: &[(String, String)],
+) -> ProviderProbe {
+    probe_at(client, settings, key, extra_headers, RESPONSES_PATH).await
+}
+
 /// As [`probe`], with extra headers (the Grok CLI proxy wants an identity
 /// header on top of the bearer token).
 pub async fn probe_with_headers(
@@ -107,6 +121,16 @@ pub async fn probe_with_headers(
     settings: &ProviderSettings,
     key: Option<&ApiKey>,
     extra_headers: &[(String, String)],
+) -> ProviderProbe {
+    probe_at(client, settings, key, extra_headers, CHAT_PATH).await
+}
+
+async fn probe_at(
+    client: Option<&Client>,
+    settings: &ProviderSettings,
+    key: Option<&ApiKey>,
+    extra_headers: &[(String, String)],
+    path: &str,
 ) -> ProviderProbe {
     let unreachable = |message: String| ProviderProbe {
         ok: false,
@@ -132,9 +156,24 @@ pub async fn probe_with_headers(
             "Aegis has no HTTP client on this machine, so no request could be sent.".to_owned(),
         );
     };
-    let url = match endpoint(&settings.base_url, CHAT_PATH) {
+    let url = match endpoint(&settings.base_url, path) {
         Ok(url) => url,
         Err(reason) => return unreachable(reason),
+    };
+
+    let body = if path == RESPONSES_PATH {
+        json!({
+            "model": settings.model,
+            "input": "Reply with the word ok.",
+            "max_output_tokens": PROBE_MAX_TOKENS,
+            "store": false,
+        })
+    } else {
+        json!({
+            "model": settings.model,
+            "max_tokens": PROBE_MAX_TOKENS,
+            "messages": [{ "role": "user", "content": "Reply with the word ok." }],
+        })
     };
 
     let mut request = client
@@ -142,11 +181,7 @@ pub async fn probe_with_headers(
         .timeout(PROBE_TIMEOUT)
         // Not streamed: there is nothing to watch arrive, and a whole-response
         // deadline is exactly what a probe wants.
-        .json(&json!({
-            "model": settings.model,
-            "max_tokens": PROBE_MAX_TOKENS,
-            "messages": [{ "role": "user", "content": "Reply with the word ok." }],
-        }));
+        .json(&body);
 
     if let Some(key) = key {
         match authorization(key) {
@@ -215,7 +250,7 @@ pub async fn probe_with_headers(
             }
         ),
         StatusCode::NOT_FOUND => format!(
-            "There is no chat endpoint at `{}{CHAT_PATH}` ({status}). The base URL is probably \
+            "There is no endpoint at `{}{path}` ({status}). The base URL is probably \
              wrong — it usually ends in `/v1`.",
             settings.base_url
         ),
@@ -237,6 +272,15 @@ pub async fn probe_with_headers(
 // Provider
 // ---------------------------------------------------------------------------
 
+/// Which request this provider writes.
+#[derive(Debug, Clone)]
+enum Dialect {
+    /// `POST /chat/completions`.
+    Chat,
+    /// `POST /responses`. `conversation_id` is the prompt-cache key.
+    Responses { conversation_id: Option<String> },
+}
+
 /// Everything a request needs, once it is known there is one to send.
 #[derive(Debug, Clone)]
 struct Ready {
@@ -244,6 +288,8 @@ struct Ready {
     endpoint: Url,
     key: ApiKey,
     extra_headers: Vec<(String, String)>,
+    dialect: Dialect,
+    max_output_tokens: Option<u32>,
 }
 
 /// Why no request can be sent, in the shape the turn loop reports.
@@ -270,16 +316,54 @@ impl OpenAiProvider {
     }
 
     /// As [`Self::new`], attaching extra headers to every request.
-    ///
-    /// Grok's CLI proxy is OpenAI-compatible except for an identity header.
-    /// Putting that here keeps the SSE loop in one place.
     pub fn with_extra_headers(
         client: Option<Client>,
         settings: &ProviderSettings,
         key: Option<ApiKey>,
         extra_headers: Vec<(String, String)>,
     ) -> Self {
-        let ready = Self::prepare(client, settings, key, extra_headers);
+        Self::build(client, settings, key, extra_headers, Dialect::Chat, None)
+    }
+
+    /// A Grok CLI login: the Responses API, with the session id as cache key.
+    pub fn responses(
+        client: Option<Client>,
+        settings: &ProviderSettings,
+        key: Option<ApiKey>,
+        extra_headers: Vec<(String, String)>,
+        conversation_id: Option<String>,
+    ) -> Self {
+        Self::build(
+            client,
+            settings,
+            key,
+            extra_headers,
+            Dialect::Responses { conversation_id },
+            settings.max_output_tokens,
+        )
+    }
+
+    fn build(
+        client: Option<Client>,
+        settings: &ProviderSettings,
+        key: Option<ApiKey>,
+        extra_headers: Vec<(String, String)>,
+        dialect: Dialect,
+        max_output_tokens: Option<u32>,
+    ) -> Self {
+        let path = match dialect {
+            Dialect::Chat => CHAT_PATH,
+            Dialect::Responses { .. } => RESPONSES_PATH,
+        };
+        let ready = Self::prepare(
+            client,
+            settings,
+            key,
+            extra_headers,
+            path,
+            dialect,
+            max_output_tokens,
+        );
 
         if let Err(unusable) = &ready {
             tracing::warn!(code = unusable.code, "the provider cannot send a request");
@@ -297,6 +381,9 @@ impl OpenAiProvider {
         settings: &ProviderSettings,
         key: Option<ApiKey>,
         extra_headers: Vec<(String, String)>,
+        path: &str,
+        dialect: Dialect,
+        max_output_tokens: Option<u32>,
     ) -> Result<Ready, Unusable> {
         let Some(client) = client else {
             return Err(Unusable {
@@ -308,7 +395,7 @@ impl OpenAiProvider {
             });
         };
 
-        let endpoint = endpoint(&settings.base_url, CHAT_PATH).map_err(|reason| Unusable {
+        let endpoint = endpoint(&settings.base_url, path).map_err(|reason| Unusable {
             code: ErrorCode::ProviderHttp.as_str(),
             message: reason,
             retryable: false,
@@ -331,6 +418,8 @@ impl OpenAiProvider {
             endpoint,
             key,
             extra_headers,
+            dialect,
+            max_output_tokens,
         })
     }
 }
@@ -406,7 +495,15 @@ async fn run(ready: Ready, mut request: ModelRequest, tx: mpsc::Sender<ModelEven
         }
     }
 
-    let sending = sending.json(&request.to_body()).send();
+    let body = match &ready.dialect {
+        Dialect::Chat => request.to_body(),
+        Dialect::Responses { conversation_id } => {
+            // One id per HTTP call. The proxy counts retries by it.
+            sending = sending.header("x-grok-req-id", uuid::Uuid::new_v4().to_string());
+            request.to_responses_body(ready.max_output_tokens, conversation_id.as_deref())
+        }
+    };
+    let sending = sending.json(&body).send();
 
     let mut response = tokio::select! {
         biased;
@@ -540,6 +637,12 @@ impl StreamState {
             }
         };
 
+        if let Some(kind) = frame.get("type").and_then(Value::as_str) {
+            if kind.starts_with("response.") || kind == "error" {
+                return self.absorb_responses(&frame, kind);
+            }
+        }
+
         // An error can arrive with a 200 and a `data:` frame — that is how
         // several gateways report a mid-stream failure, having already
         // committed to a status.
@@ -591,6 +694,88 @@ impl StreamState {
         events
     }
 
+    /// One Responses SSE event (`response.output_text.delta`, a function-call
+    /// item, `response.completed`). Chat chunks never carry these `type`s.
+    fn absorb_responses(&mut self, frame: &Value, kind: &str) -> Vec<ModelEvent> {
+        match kind {
+            "response.output_text.delta" => {
+                let text = frame.get("delta").and_then(Value::as_str).unwrap_or("");
+                if text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![ModelEvent::TextDelta {
+                        text: text.to_owned(),
+                    }]
+                }
+            }
+            "response.output_item.added" => {
+                let item = frame.get("item").unwrap_or(&Value::Null);
+                if item.get("type").and_then(Value::as_str) != Some("function_call") {
+                    return Vec::new();
+                }
+                self.saw_tool_call = true;
+                let arguments = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                vec![ModelEvent::ToolCallDelta {
+                    index: output_index(frame),
+                    id: text_field(item.get("call_id").or_else(|| item.get("id"))),
+                    name: text_field(item.get("name")),
+                    args_delta: arguments.to_owned(),
+                    thought_signature: None,
+                }]
+            }
+            "response.function_call_arguments.delta" => {
+                self.saw_tool_call = true;
+                vec![ModelEvent::ToolCallDelta {
+                    index: output_index(frame),
+                    id: None,
+                    name: None,
+                    args_delta: frame
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    thought_signature: None,
+                }]
+            }
+            "response.completed" | "response.incomplete" => {
+                let response = frame.get("response").unwrap_or(frame);
+                if let Some(usage) = usage_of(response) {
+                    self.usage = Some(usage);
+                }
+                let incomplete = response
+                    .get("incomplete_details")
+                    .and_then(|details| details.get("reason"))
+                    .and_then(Value::as_str);
+                self.reason = Some(if incomplete == Some("max_output_tokens") {
+                    StopReason::Length
+                } else if self.saw_tool_call {
+                    StopReason::ToolCalls
+                } else {
+                    StopReason::Stop
+                });
+                self.done = true;
+                Vec::new()
+            }
+            "response.failed" | "error" => {
+                self.done = true;
+                let error = frame
+                    .get("response")
+                    .and_then(|response| response.get("error"))
+                    .or_else(|| frame.get("error"))
+                    .unwrap_or(frame);
+                vec![ModelEvent::Error {
+                    code: ErrorCode::ProviderHttp.as_str().to_owned(),
+                    message: format!("The server reported: {}", error_message(error)),
+                    retryable: false,
+                }]
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The one finish event for this response, if it is owed.
     fn finish(self) -> Option<ModelEvent> {
         let reason = match (self.reason, self.done) {
@@ -607,6 +792,21 @@ impl StreamState {
             usage: self.usage,
         })
     }
+}
+
+fn output_index(frame: &Value) -> u32 {
+    frame
+        .get("output_index")
+        .and_then(Value::as_u64)
+        .and_then(|index| u32::try_from(index).ok())
+        .unwrap_or(0)
+}
+
+fn text_field(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|found| !found.is_empty())
+        .map(str::to_owned)
 }
 
 /// One streamed tool-call fragment.
@@ -664,13 +864,15 @@ fn usage_of(frame: &Value) -> Option<Usage> {
     let usage = frame.get("usage").filter(|usage| !usage.is_null())?;
     let count = |field: &str| usage.get(field).and_then(Value::as_u64).unwrap_or(0);
 
-    let prompt = count("prompt_tokens");
-    let completion = count("completion_tokens");
+    let prompt = count("prompt_tokens").max(count("input_tokens"));
+    let completion = count("completion_tokens").max(count("output_tokens"));
 
-    // A share of `prompt_tokens`, not added to it. Zero when unreported
-    // (including Anthropic's compatibility layer).
+    // A share of the prompt, not added to it. Zero when unreported.
+    // Chat Completions nests it under `prompt_tokens_details`; Responses
+    // under `input_tokens_details`.
     let cached = usage
         .get("prompt_tokens_details")
+        .or_else(|| usage.get("input_tokens_details"))
         .and_then(|details| details.get("cached_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);

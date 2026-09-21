@@ -22,8 +22,8 @@ use crate::secrets::ApiKey;
 pub use claude::{peek as peek_claude, resolve as resolve_claude};
 pub use codex::{peek as peek_codex, resolve as resolve_codex};
 pub use grok::{
-    extra_headers as grok_headers, peek as peek_grok, resolve as resolve_grok,
-    DEFAULT_BASE_URL as GROK_BASE_URL,
+    extra_headers as grok_headers, peek as peek_grok, request_headers as grok_request_headers,
+    resolve as resolve_grok, DEFAULT_BASE_URL as GROK_BASE_URL,
 };
 
 /// How long before expiry a token is treated as already gone.

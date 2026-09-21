@@ -46,7 +46,7 @@ pub fn fallback(kind: AuthKind) -> &'static [&'static str] {
             "gpt-5.3-codex",
             "gpt-5.3-codex-spark",
         ],
-        AuthKind::GrokCli => &["grok-4", "grok-4.5", "grok-3", "grok-3-mini", "grok-2"],
+        AuthKind::GrokCli => &["grok-4.7", "grok-4.6", "grok-4.5"],
     }
 }
 
@@ -140,7 +140,10 @@ pub fn models_url(kind: AuthKind, override_url: &str) -> Option<String> {
         AuthKind::ApiKey if speaks_anthropic(kind, override_url) => {
             format!("{}/v1/models", anthropic_origin(&base))
         }
-        AuthKind::ApiKey | AuthKind::GrokCli | AuthKind::Gemini => format!("{base}/models"),
+        // The CLI proxy retired `/models`. Its login catalog is `/models-v2`
+        // (`{ "data": [{ "id", "acceptsImages" | "inputModalities", ... }] }`).
+        AuthKind::GrokCli => format!("{base}/models-v2"),
+        AuthKind::ApiKey | AuthKind::Gemini => format!("{base}/models"),
         AuthKind::ClaudeCli => format!("{}/v1/models", anthropic_origin(&base)),
         AuthKind::CodexCli => {
             let base = base
@@ -232,6 +235,8 @@ pub async fn list(
 
     let mut models = if matches!(kind, AuthKind::Gemini) {
         parse_gemini_ids(&value)
+    } else if matches!(kind, AuthKind::GrokCli) {
+        parse_grok_ids(&value)
     } else {
         parse_ids(&value)
     };
@@ -254,36 +259,96 @@ pub async fn list(
 /// The models whose entry says whether they take images.
 ///
 /// OpenRouter: `architecture.input_modalities` (a list), or the older
-/// `architecture.modality` (`"text+image->text"`). Anything else says nothing.
+/// `architecture.modality` (`"text+image->text"`). The Grok CLI catalog says
+/// `acceptsImages` or `inputModalities` on the entry (or its `_meta`).
+/// Anything else says nothing.
 fn vision_flags(value: &Value) -> BTreeMap<String, bool> {
     let mut flags = BTreeMap::new();
     let Some(items) = value.get("data").and_then(Value::as_array) else {
         return flags;
     };
     for item in items {
-        let (Some(id), Some(architecture)) = (
-            item.get("id").and_then(Value::as_str),
-            item.get("architecture"),
-        ) else {
+        let Some(id) = item
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("model").and_then(Value::as_str))
+        else {
             continue;
         };
-        let takes = if let Some(inputs) = architecture
-            .get("input_modalities")
-            .and_then(Value::as_array)
-        {
-            Some(inputs.iter().any(|input| input.as_str() == Some("image")))
-        } else {
-            architecture
-                .get("modality")
-                .and_then(Value::as_str)
-                .and_then(|modality| modality.split("->").next())
-                .map(|inputs| inputs.split('+').any(|input| input.trim() == "image"))
-        };
+        let takes = item
+            .get("architecture")
+            .and_then(openrouter_vision)
+            .or_else(|| {
+                explicit_vision(item).or_else(|| item.get("_meta").and_then(explicit_vision))
+            });
         if let Some(takes) = takes {
             flags.insert(id.trim().to_owned(), takes);
         }
     }
     flags
+}
+
+/// OpenRouter's `architecture` object, when it actually names its inputs.
+fn openrouter_vision(architecture: &Value) -> Option<bool> {
+    if let Some(inputs) = architecture
+        .get("input_modalities")
+        .and_then(Value::as_array)
+    {
+        return Some(inputs.iter().any(|input| input.as_str() == Some("image")));
+    }
+    architecture
+        .get("modality")
+        .and_then(Value::as_str)
+        .and_then(|modality| modality.split("->").next())
+        .map(|inputs| inputs.split('+').any(|input| input.trim() == "image"))
+}
+
+/// A boolean or a modality list the entry itself published.
+fn explicit_vision(item: &Value) -> Option<bool> {
+    if let Some(flag) = item
+        .get("acceptsImages")
+        .or_else(|| item.get("accepts_images"))
+        .and_then(Value::as_bool)
+    {
+        return Some(flag);
+    }
+    item.get("inputModalities")
+        .or_else(|| item.get("input_modalities"))
+        .and_then(Value::as_array)
+        .map(|inputs| inputs.iter().any(|input| input.as_str() == Some("image")))
+}
+
+/// Ids from a Grok `/models-v2` payload.
+///
+/// Hidden entries are the proxy's own, not choices. A payload that is not
+/// that shape falls through to [`parse_ids`].
+fn parse_grok_ids(value: &Value) -> Vec<String> {
+    let Some(items) = value.get("data").and_then(Value::as_array) else {
+        return parse_ids(value);
+    };
+    let mut ids = Vec::new();
+    for item in items {
+        let hidden = item
+            .get("hidden")
+            .or_else(|| item.get("_meta").and_then(|meta| meta.get("hidden")))
+            .and_then(Value::as_bool);
+        if hidden == Some(true) {
+            continue;
+        }
+        let Some(id) = item
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("model").and_then(Value::as_str))
+        else {
+            continue;
+        };
+        push_id(&mut ids, id);
+    }
+    if ids.is_empty() {
+        parse_ids(value)
+    } else {
+        ids
+    }
 }
 
 async fn authorized_get(
@@ -421,12 +486,18 @@ fn find_cap(value: &Value, model: &str) -> Option<u32> {
                 .any(|id| model_id(id) == model_id(model));
 
             if is_this_model {
-                let cap = ["max_tokens", "max_output_tokens", "outputTokenLimit"]
-                    .iter()
-                    .filter_map(|key| map.get(*key))
-                    .filter_map(Value::as_u64)
-                    .find(|cap| *cap > 0)
-                    .and_then(|cap| u32::try_from(cap).ok());
+                let cap = [
+                    "max_tokens",
+                    "max_output_tokens",
+                    "max_completion_tokens",
+                    "maxCompletionTokens",
+                    "outputTokenLimit",
+                ]
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .filter_map(Value::as_u64)
+                .find(|cap| *cap > 0)
+                .and_then(|cap| u32::try_from(cap).ok());
                 if cap.is_some() {
                     return cap;
                 }
@@ -675,6 +746,27 @@ mod tests {
     fn the_longer_field_name_is_read_too() {
         let gateway = serde_json::json!({ "models": [{ "id": "m", "max_output_tokens": 32_000 }] });
         assert_eq!(find_cap(&gateway, "m"), Some(32_000));
+
+        let grok = serde_json::json!({
+            "data": [{ "id": "grok-4.6", "maxCompletionTokens": 64_000 }]
+        });
+        assert_eq!(find_cap(&grok, "grok-4.6"), Some(64_000));
+    }
+
+    #[test]
+    fn a_grok_catalog_keeps_visible_ids_and_only_stated_vision() {
+        let body = serde_json::json!({
+            "data": [
+                { "id": "grok-4.6", "model": "grok-4.6", "acceptsImages": true, "name": "Grok 4.6" },
+                { "id": "grok-4.5", "inputModalities": ["text"] },
+                { "id": "internal", "hidden": true, "acceptsImages": false }
+            ]
+        });
+        assert_eq!(parse_grok_ids(&body), vec!["grok-4.6", "grok-4.5"]);
+        let flags = vision_flags(&body);
+        assert_eq!(flags.get("grok-4.6"), Some(&true));
+        assert_eq!(flags.get("grok-4.5"), Some(&false));
+        assert_eq!(flags.get("internal"), Some(&false), "the flag is explicit");
     }
 
     #[test]
@@ -705,7 +797,7 @@ mod tests {
         );
         assert_eq!(
             models_url(AuthKind::GrokCli, "").as_deref(),
-            Some("https://cli-chat-proxy.grok.com/v1/models")
+            Some("https://cli-chat-proxy.grok.com/v1/models-v2")
         );
         assert_eq!(
             models_url(AuthKind::Gemini, "").as_deref(),

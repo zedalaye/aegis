@@ -12,7 +12,8 @@ use super::json::{read_value, string_field, write_value};
 use super::refresh;
 use super::{now_unix, Missing, Peek, Resolved};
 
-/// Official Grok CLI chat proxy. OpenAI-compatible `/chat/completions`.
+/// Official Grok CLI chat proxy. The login's models are listed at
+/// `/models-v2` and sampled on `/responses`.
 pub const DEFAULT_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
 /// Floor the proxy currently advertises on a 426.
@@ -40,6 +41,25 @@ pub fn extra_headers() -> Vec<(String, String)> {
         ),
         ("User-Agent".to_owned(), format!("xai-grok-cli/{version}")),
     ]
+}
+
+/// [`extra_headers`] plus the per-request headers the proxy routes and caches on.
+///
+/// `x-grok-model-override` is what selects the backend; the JSON `model` field
+/// is not enough. `x-grok-conv-id` sticks a conversation to one server so the
+/// shared prefix can be served from the prompt cache. Both are omitted when
+/// empty — a model list has neither.
+pub fn request_headers(model: &str, conversation_id: Option<&str>) -> Vec<(String, String)> {
+    let mut headers = extra_headers();
+    let model = model.trim();
+    if !model.is_empty() {
+        headers.push(("x-grok-model-override".to_owned(), model.to_owned()));
+    }
+    if let Some(id) = conversation_id.map(str::trim).filter(|id| !id.is_empty()) {
+        headers.push(("x-grok-conv-id".to_owned(), id.to_owned()));
+        headers.push(("x-grok-session-id".to_owned(), id.to_owned()));
+    }
+    headers
 }
 
 /// Version the proxy will see for this machine.
@@ -269,6 +289,32 @@ mod tests {
         );
         let user_agent = format!("xai-grok-cli/{version}");
         assert_eq!(get("User-Agent"), Some(user_agent.as_str()));
+    }
+
+    #[test]
+    fn a_turn_names_its_model_and_conversation() {
+        let headers = request_headers(" grok-4.6 ", Some(" sess-1 "));
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(get("X-XAI-Token-Auth"), Some("xai-grok-cli"));
+        assert_eq!(get("x-grok-model-override"), Some("grok-4.6"));
+        assert_eq!(get("x-grok-conv-id"), Some("sess-1"));
+        assert_eq!(get("x-grok-session-id"), Some("sess-1"));
+    }
+
+    #[test]
+    fn a_model_list_sends_no_routing_header() {
+        let headers = request_headers("  ", Some(""));
+        assert!(headers
+            .iter()
+            .all(|(key, _)| !key.eq_ignore_ascii_case("x-grok-model-override")));
+        assert!(headers
+            .iter()
+            .all(|(key, _)| !key.eq_ignore_ascii_case("x-grok-conv-id")));
     }
 
     #[test]

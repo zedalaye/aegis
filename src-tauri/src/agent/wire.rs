@@ -61,6 +61,38 @@ impl ModelRequest {
         }
         body
     }
+
+    /// The Responses API body (`input`, flat tools, `max_output_tokens`).
+    ///
+    /// `store` stays false: the transcript already lives here, and the default
+    /// would keep the conversation on the server for 30 days. `cache_key` is
+    /// `prompt_cache_key`, the same affinity as the `x-grok-conv-id` header.
+    pub fn to_responses_body(
+        &self,
+        max_output_tokens: Option<u32>,
+        cache_key: Option<&str>,
+    ) -> Value {
+        let mut body = json!({
+            "model": self.model,
+            "stream": true,
+            "store": false,
+            "input": responses_input(&self.messages),
+        });
+        if let Some(object) = body.as_object_mut() {
+            if let Some(cap) = max_output_tokens.filter(|cap| *cap > 0) {
+                object.insert("max_output_tokens".to_owned(), json!(cap));
+            }
+            if let Some(key) = cache_key.map(str::trim).filter(|key| !key.is_empty()) {
+                object.insert("prompt_cache_key".to_owned(), json!(key));
+            }
+            if !self.tools.is_empty() {
+                let tools: Vec<Value> = self.tools.iter().map(responses_tool).collect();
+                object.insert("tools".to_owned(), Value::Array(tools));
+                object.insert("tool_choice".to_owned(), json!("auto"));
+            }
+        }
+        body
+    }
 }
 
 /// One message in the request body.
@@ -248,6 +280,100 @@ fn image_part(image: &WireImage) -> Option<Value> {
     image
         .data_url()
         .map(|url| json!({ "type": "image_url", "image_url": { "url": url } }))
+}
+
+/// Responses `input`: role messages, then one `function_call` item per call
+/// and a `function_call_output` for each result. Images use `input_image`.
+fn responses_input(messages: &[WireMessage]) -> Vec<Value> {
+    let mut out = Vec::with_capacity(messages.len());
+    let mut pending: Vec<Value> = Vec::new();
+
+    for message in messages {
+        if !matches!(message, WireMessage::Tool { .. }) && !pending.is_empty() {
+            out.push(responses_image_turn(&mut pending));
+        }
+        match message {
+            WireMessage::System { content } => {
+                out.push(json!({ "role": "system", "content": content }));
+            }
+            WireMessage::User { content, images } => out.push(responses_user(content, images)),
+            WireMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
+                if let Some(text) = content.as_deref().filter(|text| !text.is_empty()) {
+                    out.push(json!({ "role": "assistant", "content": text }));
+                }
+                for call in tool_calls {
+                    out.push(json!({
+                        "type": "function_call",
+                        "call_id": call.id,
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    }));
+                }
+            }
+            WireMessage::Tool {
+                tool_call_id,
+                content,
+                images,
+            } => {
+                out.push(json!({
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": with_notes(content, images),
+                }));
+                pending.extend(images.iter().filter_map(responses_image_part));
+            }
+        }
+    }
+    if !pending.is_empty() {
+        out.push(responses_image_turn(&mut pending));
+    }
+    out
+}
+
+fn responses_user(text: &str, images: &[WireImage]) -> Value {
+    let text = with_notes(text, images);
+    let parts: Vec<Value> = images.iter().filter_map(responses_image_part).collect();
+    if parts.is_empty() {
+        return json!({ "role": "user", "content": text });
+    }
+    let mut content = Vec::with_capacity(parts.len() + 1);
+    if !text.is_empty() {
+        content.push(json!({ "type": "input_text", "text": text }));
+    }
+    content.extend(parts);
+    json!({ "role": "user", "content": content })
+}
+
+fn responses_image_part(image: &WireImage) -> Option<Value> {
+    image
+        .data_url()
+        .map(|url| json!({ "type": "input_image", "image_url": url }))
+}
+
+fn responses_image_turn(pending: &mut Vec<Value>) -> Value {
+    let mut content = vec![json!({ "type": "input_text", "text": TOOL_IMAGES_LEAD })];
+    content.append(pending);
+    json!({ "role": "user", "content": content })
+}
+
+/// Chat Completions nests the function under `function`. Responses puts
+/// `name`, `description` and `parameters` on the tool itself.
+fn responses_tool(tool: &Value) -> Value {
+    let Some(function) = tool.get("function") else {
+        return tool.clone();
+    };
+    let mut flat = json!({ "type": "function" });
+    if let Some(object) = flat.as_object_mut() {
+        for key in ["name", "description", "parameters", "strict"] {
+            if let Some(value) = function.get(key) {
+                object.insert(key.to_owned(), value.clone());
+            }
+        }
+    }
+    flat
 }
 
 fn tool_images_turn(pending: &mut Vec<Value>) -> Value {
@@ -700,6 +826,64 @@ mod tests {
 
         assert_eq!(body["messages"][0]["content"], "hi");
         assert!(body["messages"][0].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn a_responses_body_uses_input_and_flat_tools() {
+        let body = ModelRequest {
+            model: "grok-4.6".to_owned(),
+            messages: vec![
+                WireMessage::System {
+                    content: "rules".to_owned(),
+                },
+                WireMessage::User {
+                    content: "look".to_owned(),
+                    images: vec![inline()],
+                },
+                WireMessage::Assistant {
+                    content: Some("checking".to_owned()),
+                    tool_calls: vec![WireToolCall::new("call_1", "fs_read", "{}")],
+                },
+                WireMessage::Tool {
+                    tool_call_id: "call_1".to_owned(),
+                    content: "{}".to_owned(),
+                    images: vec![inline()],
+                },
+            ],
+            tools: vec![json!({
+                "type": "function",
+                "function": {
+                    "name": "fs_read",
+                    "description": "Read a file",
+                    "parameters": { "type": "object" }
+                }
+            })],
+        }
+        .to_responses_body(Some(1024), Some(" sess-1 "));
+
+        assert_eq!(body["model"], "grok-4.6");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["store"], false);
+        assert_eq!(body["max_output_tokens"], 1024);
+        assert_eq!(body["prompt_cache_key"], "sess-1");
+        assert_eq!(body["tools"][0]["name"], "fs_read");
+        assert!(body["tools"][0].get("function").is_none());
+
+        let input = body["input"].as_array().expect("input");
+        assert_eq!(input[0]["role"], "system");
+        assert_eq!(input[1]["content"][0]["type"], "input_text");
+        assert_eq!(input[1]["content"][1]["type"], "input_image");
+        assert_eq!(
+            input[1]["content"][1]["image_url"],
+            "data:image/png;base64,iVBOR"
+        );
+        assert_eq!(input[2]["role"], "assistant");
+        assert_eq!(input[3]["type"], "function_call");
+        assert_eq!(input[3]["call_id"], "call_1");
+        assert_eq!(input[3]["arguments"], "{}");
+        assert_eq!(input[4]["type"], "function_call_output");
+        assert_eq!(input[5]["role"], "user");
+        assert_eq!(input[5]["content"][1]["type"], "input_image");
     }
 
     /// An empty `tools` array is rejected outright by some OpenAI-compatible

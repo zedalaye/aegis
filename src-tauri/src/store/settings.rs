@@ -94,7 +94,7 @@ impl AuthKind {
             Self::Gemini => "gemini-2.5-flash",
             Self::ClaudeCli => "claude-sonnet-4-6",
             Self::CodexCli => "gpt-5.5",
-            Self::GrokCli => "grok-4",
+            Self::GrokCli => "grok-4.6",
         }
     }
 

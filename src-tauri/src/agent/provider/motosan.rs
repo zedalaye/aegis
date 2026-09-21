@@ -46,6 +46,9 @@ pub struct SubscriptionProvider {
     /// read from disk per stream.
     key: Option<ApiKey>,
     http: Option<reqwest::Client>,
+    /// Aegis session id, sent as the Grok prompt-cache key. `None` for a
+    /// provider built with no session (the settings probe).
+    conversation_id: Option<String>,
 }
 
 impl SubscriptionProvider {
@@ -55,11 +58,13 @@ impl SubscriptionProvider {
         settings: ProviderSettings,
         key: Option<ApiKey>,
         http: Option<reqwest::Client>,
+        conversation_id: Option<String>,
     ) -> Self {
         Self {
             settings,
             key,
             http,
+            conversation_id,
         }
     }
 }
@@ -74,9 +79,10 @@ impl Provider for SubscriptionProvider {
         let settings = self.settings.clone();
         let key = self.key.clone();
         let http = self.http.clone();
+        let conversation_id = self.conversation_id.clone();
 
         tokio::spawn(async move {
-            run(settings, key, http, request, tx).await;
+            run(settings, key, http, conversation_id, request, tx).await;
         });
 
         rx
@@ -117,6 +123,7 @@ async fn run(
     settings: ProviderSettings,
     key: Option<ApiKey>,
     http: Option<reqwest::Client>,
+    conversation_id: Option<String>,
     mut request: ModelRequest,
     tx: mpsc::Sender<ModelEvent>,
 ) {
@@ -179,19 +186,20 @@ async fn run(
             access_token,
             base_url,
         } => {
-            // Grok's proxy is OpenAI-compatible, so it goes back out through
-            // that provider with the endpoint the login named.
+            // The CLI catalog's models are sampled on `/responses`. The proxy
+            // routes on `x-grok-model-override` and caches on `x-grok-conv-id`.
             let grok = ProviderSettings {
                 base_url,
-                model,
+                model: model.clone(),
                 auth_kind: AuthKind::GrokCli,
                 max_output_tokens: settings.max_output_tokens,
             };
-            let inner = OpenAiProvider::with_extra_headers(
+            let inner = OpenAiProvider::responses(
                 http,
                 &grok,
                 Some(access_token),
-                oauth::grok_headers(),
+                oauth::grok_request_headers(&model, conversation_id.as_deref()),
+                conversation_id,
             );
             let mut stream = inner.stream(request);
             loop {
@@ -253,11 +261,11 @@ pub async fn probe(
                 auth_kind: AuthKind::GrokCli,
                 max_output_tokens: None,
             };
-            return openai::probe_with_headers(
+            return openai::probe_responses(
                 http,
                 &settings,
                 Some(&access_token),
-                &oauth::grok_headers(),
+                &oauth::grok_request_headers(model, None),
             )
             .await;
         }

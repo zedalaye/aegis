@@ -491,6 +491,46 @@ fn a_long_error_body_is_shortened_rather_than_shown_whole() {
 }
 
 #[test]
+fn a_responses_stream_keeps_text_calls_and_cached_usage() {
+    let mut stream = StreamState::default();
+
+    let text = stream.absorb(r#"{"type":"response.output_text.delta","delta":"Hi"}"#);
+    assert!(matches!(text.as_slice(), [ModelEvent::TextDelta { text }] if text == "Hi"));
+
+    let added = stream.absorb(
+        r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"fs_read","arguments":""}}"#,
+    );
+    assert!(matches!(
+        added.as_slice(),
+        [ModelEvent::ToolCallDelta { index: 0, id: Some(id), name: Some(name), args_delta, .. }]
+            if id == "call_1" && name == "fs_read" && args_delta.is_empty()
+    ));
+
+    let args = stream.absorb(
+        r#"{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{}"}"#,
+    );
+    assert!(matches!(
+        args.as_slice(),
+        [ModelEvent::ToolCallDelta { args_delta, .. }] if args_delta == "{}"
+    ));
+
+    let completed = stream.absorb(
+        r#"{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":7}}}}"#,
+    );
+    assert!(completed.is_empty());
+
+    let ModelEvent::Finish { reason, usage } = stream.finish().expect("a finish") else {
+        panic!("expected finish");
+    };
+    assert_eq!(reason, StopReason::ToolCalls);
+    let usage = usage.expect("usage");
+    assert_eq!(usage.prompt_tokens, 10);
+    assert_eq!(usage.completion_tokens, 4);
+    assert_eq!(usage.cache_read_tokens, 7);
+    assert_eq!(usage.total_tokens, 14);
+}
+
+#[test]
 fn an_error_body_is_reduced_to_the_servers_own_message() {
     assert_eq!(
         error_message(&json!({ "message": "invalid model", "code": 400 })),

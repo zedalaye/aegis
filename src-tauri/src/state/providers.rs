@@ -7,7 +7,7 @@ impl AppState {
     /// The default row's provider, as a session of the built-in identity with no
     /// override would get it.
     pub fn provider(&self) -> Box<dyn Provider> {
-        self.build_provider(&self.binding(&Agent::builtin(), None))
+        self.build_provider(&self.binding(&Agent::builtin(), None), None)
     }
 
     /// Who answers one turn of `session_id` as `agent` (PLAN 7.19), decided per
@@ -20,6 +20,7 @@ impl AppState {
         });
         self.build_provider(
             &self.binding(agent, Some((binding.0.as_deref(), binding.1.as_deref()))),
+            Some(session_id),
         )
     }
 
@@ -43,7 +44,11 @@ impl AppState {
     /// real one even with no key, so the user sees `E_NO_API_KEY` rather than a
     /// silent fake
     /// ([`ProviderSettings::is_configured`](crate::store::ProviderSettings::is_configured)).
-    pub(super) fn build_provider(&self, binding: &Binding) -> Box<dyn Provider> {
+    pub(super) fn build_provider(
+        &self,
+        binding: &Binding,
+        conversation_id: Option<&str>,
+    ) -> Box<dyn Provider> {
         let settings = binding.settings.clone();
 
         if !settings.is_configured() {
@@ -55,7 +60,12 @@ impl AppState {
         // motosan handles the CLI logins, Gemini, and an API key for
         // Anthropic's own host, whose compatibility layer drops prompt caching.
         if catalog::uses_motosan(settings.auth_kind, &settings.base_url) {
-            return Box::new(SubscriptionProvider::new(settings, key, self.http.clone()));
+            return Box::new(SubscriptionProvider::new(
+                settings,
+                key,
+                self.http.clone(),
+                conversation_id.map(str::to_owned),
+            ));
         }
 
         Box::new(OpenAiProvider::new(self.http.clone(), &settings, key))
