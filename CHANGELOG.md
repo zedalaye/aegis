@@ -75,6 +75,13 @@ under an approval that did not describe it.
   the folder or the verb it wanted, not the whole workspace or program. A narrow approval only
   matches where the wide one would, so `.git/`, `world/` and git's read-only rules still hold under
   it, and a shape over a program that runs workspace code says so (`PLAN.md` § 7.23).
+- **A run can be taken back.** Before and after a routine's run or a delegated brief, when its
+  identity can write, Aegis records the workspace on a side ref (`refs/aegis/runs/<session>/…`),
+  through a temporary index: your index, `HEAD`, branches and stash are not touched, nothing is
+  pushed, and no commit appears on a branch. Opening the run on the board lists what it created,
+  changed and removed, with the diff; *Restore* puts those paths back as they were, and leaves
+  alone any you changed since. Files git ignores are not captured. Kept 30 days, 200 runs at most
+  (`PLAN.md` § 7.24).
 
 - **Markdown in the chat.** Replies and your messages render headings, lists, code blocks and tables,
   with the parser the file preview already used: HTML stays text. A web link opens in your browser
@@ -120,8 +127,8 @@ under an approval that did not describe it.
   in force, with its section numbers unchanged; `IDEAS.md`, `COS.md` and `CONTROL.md` are tightened.
 - `PLAN.md` § 7.21–7.30 propose the autonomy ladder: parked asks and notifications, narrow standing
   grants, run checkpoints, gates run by the harness, budgets (allocated or earned), the CoS on a
-  clock, ingestion, and mandates for irreversible acts. § 7.22 and § 7.23 have landed; the rest
-  are proposed, not built.
+  clock, ingestion, and mandates for irreversible acts. § 7.22, § 7.23 and § 7.24 have landed;
+  the rest are proposed, not built.
 
 ### Internal
 

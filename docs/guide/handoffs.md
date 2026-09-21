@@ -172,6 +172,16 @@ there.
 
 Opening a run shows its audit lines, oldest first, and the artefact paths it named.
 
+**Checkpoints.** A routine's run and each brief of a delegation are recorded before and after, when
+the identity can write (`fs_write` or `shell_exec`) and the workspace is a git work tree. Opening
+such a run lists what it created (**A**), changed (**M**) and removed (**D**), with the diff behind
+*Show the diff*. *Restore…* asks once more, then puts those paths back as they were before the
+run: files it created are deleted, the rest are written back. A path you or another run changed
+after it ended is left alone and named. Your index, `HEAD` and branches are never touched, so `git
+status` afterwards reads as it did before the run. Files git ignores are not in a checkpoint. They
+are kept on `refs/aegis/runs/`, which a plain `git push` does not send, for 30 days and at most 200
+runs.
+
 **Cost** is tokens per turn as the provider reports them, joined to runs by turn id. Aegis asks for
 usage (`stream_options.include_usage`); a turn whose server sent none is *unknown*, and a total
 including it reads *at least*. Every turn belongs to exactly one run, so the runs add up to the

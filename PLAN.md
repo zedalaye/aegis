@@ -785,7 +785,7 @@ no command, tool, matrix row, binding or UI change. What each settled:
 - An in-app browser tab, or markdown drawn as HTML (§ 7.20).
 - Teaching the model to call `wsl.exe` or `bash -c`; falling back to Windows when WSL is missing.
 - `git init` on `project_create`, a nested repository, auto-committing writes, or a GitHub product in
-  the runtime.
+  the runtime. A run's checkpoint on a side ref (§ 7.24) is not a commit on a branch.
 - Running the CoS as Scrum; a specialist exploring a repository whose world is already in `world/`,
   or reopening a declared dump.
 - Hashing `world/` as the permission system; a `world.amend` skill on every identity; the world novel
@@ -923,7 +923,9 @@ history makes the transcript the only log again.
   a worktree or submodule), answerable without `git` installed. It does not copy
   `GIT_CEILING_DIRECTORIES`; an ancestor across a mount reads as versioned, visibly.
 - **Never**: a nested repository, a remote or forge product, a language `.gitignore`, a git identity
-  written for the user, an auto-commit, Aegis' own documents in the repository.
+  written for the user, an auto-commit, Aegis' own documents in the repository. The harness's run
+  checkpoints (§ 7.24) are commits on `refs/aegis/runs/`, never on a branch, never pushed, and
+  authored in the child's environment only.
 - **How you commit**: outside Aegis, or `git` through `shell_exec` in a session — the `git` grant
   covers read-only lines only (§ 3.1), and writing into `.git/` asks every time. A later
   checkpoint skill may sequence status, add and commit; it still never fires from `fs_write`. There
@@ -1804,7 +1806,7 @@ and the ledger, never on a claim. Demotion is automatic; promotion is a human ac
 | --- | --- | --- | --- |
 | L0 — propose | nothing; every mutation is asked | today | — |
 | L1 — unattended files | a routine, narrow standing grants | § 7.22 (landed), § 7.23 | one watched run (Phase 16's door) |
-| L2 — verified | L1, every run checked by a gate, checkpointed | § 7.24, § 7.25, § 7.26 | *N* consecutive runs passing the gate (default 5) |
+| L2 — verified | L1, every run checked by a gate, checkpointed | § 7.24 (landed), § 7.25, § 7.26 | *N* consecutive runs passing the gate (default 5) |
 | L3 — orchestrated | the CoS on a clock, delegating with grants that narrow | § 7.27, § 7.28 | L2 on every runbook it routes to |
 | L4 — mandated | irreversible acts under a mandate | § 7.29 | L3, a gate on the act, a budget in force |
 
@@ -1814,13 +1816,12 @@ recipient, instrument); raising a cap; installing a connector; anything outside 
 the kill switch. An agent may *propose* each of these as a file (§ 7.13's pattern); it never
 applies one.
 
-**Order.** § 7.22 (landed) → § 7.23 → § 7.24 → § 7.26 → § 7.25 → § 7.30 → § 7.28 → § 7.27 →
+**Order.** § 7.22 (landed) → § 7.23 → § 7.24 (landed) → § 7.26 → § 7.25 → § 7.30 → § 7.28 → § 7.27 →
 § 7.29. Each slice is usable alone; § 7.29 depends on all the others and lands last.
 
 **Amends on landing** (not before): § 7.1 *Policy* (a mandate is a gate, not a skipped one);
 § 7.4 bullets 2 and 6 and § 7.5 *Auto-sending…* (irreversible acts: human, or a mandate);
-§ 7.11 and § 7.5 *auto-committing* (a harness checkpoint on a side ref is not a commit on a
-branch, § 7.24); § 7.3 Phase 16 (a scheduled run may delegate, § 7.27); `AGENTS.md`
+§ 7.11 and § 7.5 *auto-committing* (done with § 7.24); § 7.3 Phase 16 (a scheduled run may delegate, § 7.27); `AGENTS.md`
 *Permissions* and *North star* (revenue experiments may execute under a mandate); `COS.md`
 *Loop* (trust order).
 
@@ -1973,7 +1974,7 @@ elsewhere parks; a `cargo test …` shape does not cover `cargo install`.
   `rg`), which need a per-project home that § 13 has not settled; and authoring a shape anywhere but
   a parked answer or a hand-edited routine.
 
-### 7.24 Run checkpoints — proposed
+### 7.24 Run checkpoints — landed
 
 Autonomous writes accumulate in the working tree with no point to return to; the audit says which
 run wrote a path, not what the tree was before. A commit is never grantable unattended (§ 3.1),
@@ -1998,6 +1999,36 @@ and § 7.11 refuses auto-commit. Reversibility is what makes autonomy defensible
 
 *Exit*: a routine writes three files, the board shows its diff, *Restore* returns them, `git
 status` and `git log` of the operator's branch are unchanged.
+
+*As landed* (`git/checkpoint.rs`, `commands/board.rs`, `components/board/RunCheckpoint.tsx`):
+
+- **The run id is its session.** A scheduled run and each delegated brief are one session, so
+  `refs/aegis/runs/<session>/{before,after}`. A resumed run (§ 7.22) or a retried brief keeps the
+  first `before` and moves the `after`, so the diff is the whole run however many turns it took.
+- **"May write"** is the identity holding `fs_write` or `shell_exec`; a read-only identity's runs
+  cost no `git`. A workspace that is not a work tree is skipped silently, and a `git` that refuses
+  is logged at `warn` and never fails the run — L1 does not depend on it (§ 7.21).
+- **The temporary index is seeded from a copy of the operator's** (or `read-tree HEAD` when there is
+  none), so `add -A -- .` reuses its stat cache rather than hashing every file. It lives beside the
+  real one in the git dir and is removed afterwards. `-- .` from the workspace root: a workspace
+  inside a larger repository snapshots its own folder over the rest of that repository's index.
+  `commit-tree --no-gpg-sign`: a checkpoint is not the operator's commit, and a signing prompt
+  would hang an unattended run. On WSL every step runs as `wsl.exe --exec env … git -C <dir>`, since
+  `--cd` falls back to `~` and a snapshot of the wrong repository is worse than none.
+- **Restore is worktree-only** (`git restore --source=<before> --worktree`), so the index is not
+  written. A file the run created is deleted, with the folders only it filled. A path whose content
+  moved since the run's `after` — the tree is snapshotted again to find out — is somebody else's
+  work and is **kept**, and the board lists it. Restoring twice is therefore harmless.
+- **The board reads a checkpoint only when a run is opened** (`board_checkpoint`), never with the
+  board: reading runs `git`. A routine run shows its own; a delegation shows each brief's session.
+  Conversations and runbooks run attended and are not checkpointed.
+- **Retention** is pruned after every `after`: runs older than 30 days, and beyond the newest 200,
+  lose both refs in one `update-ref --stdin`. Counted per repository, which is per project unless
+  two projects share one.
+- Not done, deliberately: the L2 promotion rule that requires a work tree, since the ladder's levels
+  do not exist in code yet (§ 7.25 brings the first evidence); an audit line for a restore;
+  checkpoints of two concurrent runs in one tree tell their writes apart only by time — each diff
+  can include the other's.
 
 ### 7.25 Gates: verification as a program — proposed
 

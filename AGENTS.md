@@ -55,7 +55,7 @@ The WebView renders UI only. The agent loop and tool execution live in Rust.
 ## State
 
 The MVP (Phases 0–10) is done. The post-MVP phases of `PLAN.md` § 7.3 (11–19) have landed, and so
-have the slices § 7.10–7.23 (§ 7.23 in part), and `world/` (§ 7.2). New work is proposed as a section of
+have the slices § 7.10–7.24 (§ 7.23 in part), and `world/` (§ 7.2). New work is proposed as a section of
 `PLAN.md` § 7 before it is coded: what it settles, what it refuses, its exit.
 
 ## Out of scope (do not start, even as a head start)

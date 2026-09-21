@@ -81,7 +81,8 @@ in* in the sidebar). The list comes from `wsl -l -q`, read each time a project o
 - The model is told which distribution it is in and the workspace path from inside it.
 - **The file tools do not move.** Containment is still the Windows-canonical workspace, `fs_*`
   still go through Windows, and a capture is still this display.
-- The `git init` behind *Set up shared files* uses the distribution's `git` too.
+- The `git init` behind *Set up shared files*, and a run's checkpoint and restore, use the
+  distribution's `git` too.
 - **It never falls back.** A missing distribution, a WSL service that does not answer, or a folder
   the distribution cannot see fails with `E_EXEC_HOST` before anything runs. The working directory
   is probed first (about 150 ms), because `wsl --cd` silently starts in `/` when it cannot find the

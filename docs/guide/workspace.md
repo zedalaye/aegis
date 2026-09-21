@@ -91,7 +91,9 @@ Setting up shared files also makes the folder a git work tree when it is not in 
 | neither | runs `git init`, and says so |
 
 It runs `git init` and stops: **no commit**, then or ever, and no remote, `.gitignore`, `user.name`
-or `user.email`. Aegis' own records are never in this repository.
+or `user.email`. Aegis' own records are never in this repository. The one thing it writes into a
+repository later is a run's checkpoint, on `refs/aegis/runs/` and never on a branch (see *The
+board* in [handoffs](handoffs.md)).
 
 - A folder set up before versioning existed shows *Make it a git repository*.
 - Without `git` on PATH, the directories are still created and the panel says the folder is not

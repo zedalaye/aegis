@@ -118,8 +118,11 @@ Only with a TypeSafe key set (*Settings → Decision model*); without one, nothi
 ## Files, git and the window
 
 - **Nothing commits for you.** *Set up shared files* may run `git init`; the runtime never makes a
-  commit or writes a remote, a `.gitignore` or a git identity. A commit is a `git` command you
-  approve.
+  commit on a branch or writes a remote, a `.gitignore` or a git identity. A commit is a `git`
+  command you approve. The exception is not a commit of yours: unattended and delegated runs are
+  checkpointed on `refs/aegis/runs/`, through a temporary index, authored *Aegis* in the child's
+  environment only, and never pushed by anything in Aegis. *Restore* on the board writes files
+  back; it does not touch the index.
 - **The window shows files; it does not write them.** *Files* uses the same containment, the window
   holds no filesystem or opener permission, and markdown is drawn as elements (no HTML, no remote
   images). The only write is a file you drop, copied by the runtime into `.aegis/briefs/`. Tauri
