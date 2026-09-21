@@ -14,13 +14,14 @@
   being Chromium — refuses it. Clear the variable first: `unset CHROME_CRASHPAD_PIPE_NAME` (or
   `Remove-Item Env:CHROME_CRASHPAD_PIPE_NAME` in PowerShell), or start Aegis from an ordinary
   terminal.
-- **No notification when something parks** (PLAN 7.22). Look in the log for the one `warn` line
-  saying notifications are not reaching this desktop: it carries the error and is printed once per
-  run of the application. Without that line the toast was handed to Windows, and where it went is
-  Windows' business — Focus assist, notification settings for the application, or the Action
-  Centre rather than the screen. Either way nothing else changes: what is waiting is on the board,
-  and the title bar's *Board* wears the count. (Toasts do work from `tauri dev`; an installed
-  build is not required.)
+- **No notification when something parks** (PLAN 7.22). The log says which of three things
+  happened. `a notification was posted` means Windows took it, and `held` on that line counts what
+  was coalesced before it. No line at all means it was held: one per routine per hour, counted
+  from the last one *this run of the application* posted — the window restarts when Aegis does, so
+  a restart makes the next park speak again. The one `warn` line, printed once per run, means the
+  desktop refused it and carries the error. Nothing else changes either way: what is waiting is on
+  the board, and the title bar's *Board* wears the count. (Toasts do work from `tauri dev`; an
+  installed build is not required.)
 - **`Failed to unregister class Chrome_WidgetWin_0. Error = 1412` on quit.** Chromium's own
   shutdown message (`ERROR_CLASS_HAS_WINDOWS`), also printed by Chrome. Harmless.
 - **SmartScreen warns about a built binary.** Builds are unsigned.

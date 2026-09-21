@@ -170,7 +170,7 @@ impl<R: tauri::Runtime> Notifier for Desktop<'_, R> {
         // that Aegis would reach them while the window is shut has to learn
         // that it cannot; the quiet debug line this used to be meant the whole
         // feature failed invisibly.
-        if let Err(err) = self
+        match self
             .app
             .notification()
             .builder()
@@ -178,15 +178,29 @@ impl<R: tauri::Runtime> Notifier for Desktop<'_, R> {
             .body(body(&note.body, held))
             .show()
         {
-            if COMPLAINED.swap(true, Ordering::Relaxed) {
-                tracing::debug!(%err, "a notification could not be posted");
-            } else {
-                tracing::warn!(
-                    %err,
-                    "notifications are not reaching this desktop, so nothing will tell you \
-                     something is waiting while the window is shut; what is waiting is still on \
-                     the board"
-                );
+            // At `info`, and with what the desktop says it allows. A
+            // notification is a rare event aimed at a person, and "posted",
+            // "held" and "refused" have to be told apart in a log a week
+            // later — otherwise a toast nobody saw is indistinguishable from
+            // one that was never sent, which is exactly the hole this line
+            // fills.
+            Ok(()) => tracing::info!(
+                key = %note.key,
+                held,
+                permission = ?self.app.notification().permission_state().ok(),
+                "a notification was posted"
+            ),
+            Err(err) => {
+                if COMPLAINED.swap(true, Ordering::Relaxed) {
+                    tracing::debug!(%err, "a notification could not be posted");
+                } else {
+                    tracing::warn!(
+                        %err,
+                        "notifications are not reaching this desktop, so nothing will tell you \
+                         something is waiting while the window is shut; what is waiting is still \
+                         on the board"
+                    );
+                }
             }
         }
     }

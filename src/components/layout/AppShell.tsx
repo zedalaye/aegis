@@ -55,6 +55,10 @@ function ErrorBanner() {
   const projectError = useProjects((s) => s.error);
   const sessionError = useSessions((s) => s.error);
   const approvalError = useApprovals((s) => s.error);
+  // An answer to a parked ask is an approval given late (PLAN 7.22), and it
+  // can be refused — by the routine's door, or by a run that is already
+  // going. The board is where that is read.
+  const boardError = useBoard((s) => s.error);
   const settingsError = useSettings((s) => s.error);
   const workspaceError = useWorkspace((s) => s.error);
   const hostError = useHosts((s) => s.error);
@@ -65,15 +69,18 @@ function ErrorBanner() {
   const dismissProject = useProjects((s) => s.dismissError);
   const dismissSession = useSessions((s) => s.dismissError);
   const dismissApproval = useApprovals((s) => s.dismissError);
+  const dismissBoard = useBoard((s) => s.dismissError);
   const dismissSettings = useSettings((s) => s.dismissError);
   const dismissWorkspace = useWorkspace((s) => s.dismissError);
   const dismissHosts = useHosts((s) => s.dismissError);
   const dismissAgents = useAgents((s) => s.dismissError);
   const dismissExplorer = useExplorer((s) => s.dismissError);
 
-  // One banner, never stacked; approvals first, then settings.
+  // One banner, never stacked; approvals first — including one answered
+  // late from the board — then settings.
   const error =
     approvalError ??
+    boardError ??
     settingsError ??
     agentError ??
     hostError ??
@@ -101,6 +108,7 @@ function ErrorBanner() {
         className="banner__dismiss"
         onClick={() => {
           dismissApproval();
+          dismissBoard();
           dismissSettings();
           dismissAgents();
           dismissHosts();
