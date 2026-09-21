@@ -228,7 +228,8 @@ fn front_matter(front: &str) -> Result<(String, Vec<String>, Vec<String>), Strin
             .any(|name| name == crate::policy::tool::FS_WRITE)
     {
         return Err(
-            "`writes:` names where this runbook's writes land, and `tools:` does not list              `fs_write`. Declare the tool, or drop `writes:`"
+            "`writes:` names where this runbook's writes land, and `tools:` does not list \
+             `fs_write`. Declare the tool, or drop `writes:`"
                 .to_owned(),
         );
     }

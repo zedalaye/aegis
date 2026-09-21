@@ -133,7 +133,8 @@ impl Grant {
                     .to_owned()
             }
             Self::FsWriteUnder { prefix } => format!(
-                "write files under `{prefix}/` in this workspace, for the rest of this session —                  a write anywhere else is still asked about"
+                "write files under `{prefix}/` in this workspace, for the rest of this session — \
+                 a write anywhere else is still asked about"
             ),
             Self::WorldAmend => {
                 "amend world/, this workspace's constitution, for the rest of this session — \
@@ -158,7 +159,8 @@ impl Grant {
                 );
                 if narrow::runs_workspace_code(program) {
                     label.push_str(&format!(
-                        ". `{program}` runs code this workspace holds, so the shape narrows what                          is asked for, not what that code can do"
+                        ". `{program}` runs code this workspace holds, so the shape narrows what \
+                         is asked for, not what that code can do"
                     ));
                 }
                 label
@@ -419,6 +421,10 @@ mod tests {
 
         for grant in every {
             let scope = grant.scope_label();
+            assert!(
+                !scope.contains("  "),
+                "{scope}: a label is one line of words, not a line break's indentation"
+            );
             assert!(
                 scope.contains(Grant::SESSION_CLAUSE),
                 "{scope}: every scope says how long it holds"
