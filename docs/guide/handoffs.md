@@ -128,9 +128,13 @@ it is the same question asked later. *Allow once* runs that exact call, with the
 of you, and nothing else — a run that comes back with different arguments asks again. *Allow
 standing* signs the approval onto the routine, through the same checks as saving one. *Deny*
 records the refusal. All three pick the run up in the session it stopped in, so what it had already
-done is not repeated. Aegis can also notify you while the window is hidden: the routine's name and
-one sentence, never the path or the command line, and the click opens the window rather than
-answering anything.
+done is not repeated.
+
+You are told two ways. In the window, *Board* in the title bar wears the number waiting. Away from
+it, Aegis notifies you: the routine's name and one sentence, never the path or the command line,
+and the click opens the window rather than answering anything. A desktop that will not show
+notifications — Windows needs the app installed, not run from a development build — says so once
+in the log and changes nothing else; the badge and the board are still there.
 
 **Runs** are folded from the tail of `audit.jsonl`, using the widest id on each line:
 

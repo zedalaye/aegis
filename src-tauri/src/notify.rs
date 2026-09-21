@@ -17,12 +17,17 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use tokio::time::{Duration, Instant};
 
 /// How long one key stays quiet after a notification.
 pub const COALESCE: Duration = Duration::from_secs(60 * 60);
+
+/// Whether this process has already said that notifications do not work here.
+/// One line is a fact worth knowing; one per park is noise.
+static COMPLAINED: AtomicBool = AtomicBool::new(false);
 
 /// Longest body a notification carries. A lock screen truncates anyway; this
 /// decides where.
@@ -156,8 +161,14 @@ impl<R: tauri::Runtime> Notifier for Desktop<'_, R> {
         };
 
         // A failure here is a machine that will not show notifications (no
-        // permission, no toast registration): logged, never surfaced as an
-        // error on whatever raised it.
+        // permission, no toast registration, an unpackaged build with no
+        // AppUserModelID): never surfaced as an error on whatever raised it,
+        // because a toast that did not appear must not fail a run.
+        //
+        // Said out loud once per process all the same. A person who was told
+        // that Aegis would reach them while the window is shut has to learn
+        // that it cannot; the quiet debug line this used to be meant the whole
+        // feature failed invisibly.
         if let Err(err) = self
             .app
             .notification()
@@ -166,7 +177,16 @@ impl<R: tauri::Runtime> Notifier for Desktop<'_, R> {
             .body(body(&note.body, held))
             .show()
         {
-            tracing::debug!(%err, "a notification could not be posted");
+            if COMPLAINED.swap(true, Ordering::Relaxed) {
+                tracing::debug!(%err, "a notification could not be posted");
+            } else {
+                tracing::warn!(
+                    %err,
+                    "notifications are not reaching this desktop, so nothing will tell you \
+                     something is waiting while the window is shut; what is waiting is still on \
+                     the board"
+                );
+            }
         }
     }
 }

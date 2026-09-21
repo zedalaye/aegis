@@ -13,6 +13,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { Board, Decision, ParkedAsk, RunRef, RunTrace } from "../ipc/bindings";
 import { boardRead, boardTrace, parkedAnswer, parkedList } from "../ipc/commands";
 import { subscribe } from "../ipc/events";
+import { useProjects } from "./projects";
 import { toIpcError } from "../lib/errors";
 import type { IpcError } from "../lib/errors";
 
@@ -37,6 +38,12 @@ export type BoardState = {
   readonly board: Board | null;
   /** The calls its runs parked, oldest first (PLAN 7.22). */
   readonly parked: readonly ParkedAsk[];
+  /**
+   * How many are waiting in the open project, counted whether or not the panel
+   * is showing: the title bar wears this, because a question nobody can see is
+   * the failure this section exists to end.
+   */
+  readonly waiting: number;
   /** The parked asks an answer is in flight for. */
   readonly answering: readonly string[];
   readonly status: LoadStatus;
@@ -51,6 +58,8 @@ export type BoardState = {
   closePanel: () => void;
   /** Re-reads, if the panel is open on a project. */
   refresh: () => Promise<void>;
+  /** Re-counts what is parked in the open project, panel or no panel. */
+  recount: () => Promise<void>;
   /** Follows the open project; a no-op while the panel is closed. */
   followProject: (projectId: string | null) => Promise<void>;
   /** Answers one parked ask, and picks its run up (PLAN 7.22). */
@@ -66,6 +75,7 @@ export const useBoard = create<BoardState>((set, get) => ({
   projectId: null,
   board: null,
   parked: [],
+  waiting: 0,
   answering: [],
   status: "idle",
   trace: null,
@@ -100,7 +110,7 @@ export const useBoard = create<BoardState>((set, get) => ({
       // Guarded: a slow read that lands after the panel was closed, or after
       // the project changed, must not draw another project's board.
       if (get().open && get().projectId === projectId) {
-        set({ board, parked, status: "ready", error: null });
+        set({ board, parked, waiting: parked.length, status: "ready", error: null });
       }
     } catch (cause) {
       set({ status: "error", error: toIpcError(cause, "board_read") });
@@ -113,6 +123,26 @@ export const useBoard = create<BoardState>((set, get) => ({
     }
     set({ projectId, board: null, parked: [], trace: null });
     await get().refresh();
+  },
+
+  recount: async () => {
+    const projectId = useProjects.getState().detail?.project.id ?? null;
+    if (projectId === null) {
+      set({ waiting: 0 });
+      return;
+    }
+
+    try {
+      const parked = await parkedList(projectId);
+      // Guarded like `refresh`: a slow count that lands after the project
+      // changed would put another project's number on the button.
+      if (useProjects.getState().detail?.project.id === projectId) {
+        set({ waiting: parked.length });
+      }
+    } catch (cause) {
+      // A count is not worth an error banner; the panel reports for itself.
+      console.warn("the parked count could not be read", cause);
+    }
   },
 
   answer: async (parkedId, decision) => {
@@ -174,6 +204,12 @@ export function attachBoardEvents(): Promise<UnlistenFn> {
   const again = () => {
     void useBoard.getState().refresh();
   };
+  // The count is kept up whether or not the panel is open; the board itself
+  // is only re-read when somebody is looking at it.
+  const parked = () => {
+    void useBoard.getState().recount();
+    again();
+  };
 
   return subscribe({
     "turn:started": again,
@@ -181,7 +217,7 @@ export function attachBoardEvents(): Promise<UnlistenFn> {
     "tool:approval_required": again,
     "tool:approval_resolved": again,
     "routine:updated": again,
-    "parked:updated": again,
-    "parked:resolved": again,
+    "parked:updated": parked,
+    "parked:resolved": parked,
   });
 }

@@ -36,12 +36,15 @@ function IconButton({
   label,
   pressed,
   disabled,
+  badge = 0,
   onClick,
   children,
 }: {
   readonly label: string;
   readonly pressed?: boolean;
   readonly disabled?: boolean;
+  /** A count worn on the button; zero wears nothing. */
+  readonly badge?: number;
   readonly onClick: () => void;
   readonly children: ReactNode;
 }) {
@@ -56,6 +59,11 @@ function IconButton({
       onClick={onClick}
     >
       {children}
+      {badge > 0 ? (
+        <span className="button__badge" aria-hidden="true">
+          {badge > 9 ? "9+" : badge}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -69,6 +77,7 @@ export default function TitleBar() {
   const auditOpen = useAudit((s) => s.open);
   const toggleAudit = useAudit((s) => s.toggleDrawer);
   const boardOpen = useBoard((s) => s.open);
+  const waiting = useBoard((s) => s.waiting);
   const openBoard = useBoard((s) => s.openPanel);
   const closeBoard = useBoard((s) => s.closePanel);
   const filesOpen = useExplorer((s) => s.open);
@@ -131,7 +140,15 @@ export default function TitleBar() {
           <FilesIcon />
         </IconButton>
         <IconButton
-          label="Board"
+          // The label carries the count as well as the badge: a number drawn
+          // beside an icon is not something a screen reader announces, and
+          // "something is waiting for you" is the whole point of it.
+          label={
+            waiting === 0
+              ? "Board"
+              : `Board — ${waiting} call${waiting === 1 ? "" : "s"} parked for you`
+          }
+          badge={waiting}
           pressed={boardOpen}
           // Disabled with nothing open rather than hidden: a board is a fact
           // about a project, and a button that vanished would read as a feature

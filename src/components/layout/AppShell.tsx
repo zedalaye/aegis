@@ -131,6 +131,7 @@ export default function AppShell() {
   const loadAgents = useAgents((s) => s.load);
   const loadRoutines = useRoutines((s) => s.load);
   const boardOpen = useBoard((s) => s.open);
+  const recountParked = useBoard((s) => s.recount);
   const filesOpen = useExplorer((s) => s.open);
   // The *set* of projects, as a value that only changes when one is added or
   // removed — not on every refetch, which hands back a new array each time.
@@ -161,6 +162,13 @@ export default function AppShell() {
   useEffect(() => {
     void loadRoutines();
   }, [projectIds, loadRoutines]);
+
+  // What is parked is counted for the open project whether or not the board is
+  // showing, because the title bar is where a person learns there is something
+  // to answer (PLAN 7.22).
+  useEffect(() => {
+    void recountParked();
+  }, [projectId, recountParked]);
 
   // One listener set per store for the app. The attach is asynchronous, so the
   // cleanup has to wait for it rather than assume it has finished —

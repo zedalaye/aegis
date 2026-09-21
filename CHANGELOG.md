@@ -62,7 +62,10 @@ under an approval that did not describe it.
 - **Aegis can tell you something is waiting while the window is hidden.** An OS notification for a
   parked call, a run that returned `needs_you` and a routine that stopped itself — the routine's
   name and one sentence, never a path, a command line or an amount, and at most one per routine per
-  hour. Clicking it opens the window; nothing is approved from a notification (`PLAN.md` § 7.22).
+  hour. Clicking it opens the window; nothing is approved from a notification. In the window,
+  *Board* in the title bar wears the number of calls waiting for you. A desktop that will not post
+  notifications — Windows wants the application installed, not run from a development build — says
+  so once in the log and changes nothing else (`PLAN.md` § 7.22).
 
 - **Markdown in the chat.** Replies and your messages render headings, lists, code blocks and tables,
   with the parser the file preview already used: HTML stays text. A web link opens in your browser

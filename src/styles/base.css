@@ -102,6 +102,29 @@ body {
   height: 2rem;
   padding: 0;
   flex-shrink: 0;
+  position: relative;
+}
+
+/*
+ * A count worn on an icon button: what is parked and waiting for a person
+ * (PLAN 7.22). Warning-coloured rather than danger: something wants an answer,
+ * nothing has gone wrong. `aria-hidden`, because the button's label already
+ * says the number in words.
+ */
+.button__badge {
+  position: absolute;
+  top: -0.2rem;
+  right: -0.2rem;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.2rem;
+  border-radius: 999px;
+  background: var(--warning);
+  color: var(--accent-fg);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1rem;
+  text-align: center;
 }
 
 .button--primary {

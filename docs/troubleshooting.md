@@ -7,6 +7,17 @@
   `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 - **Blank window or no start.** WebView2 may be missing: install the *Evergreen WebView2 Runtime*.
   Installers built by `pnpm tauri build` download it when absent.
+- **No window at all, only the tray icon**, with `failed to create webview … HRESULT(0x80070057)`
+  in the log. The runtime is there; the terminal is the problem. Launching from a shell inside an
+  Electron application (VS Code's integrated terminal, and others) inherits
+  `CHROME_CRASHPAD_PIPE_NAME`, which points at *that* application's crash handler, and WebView2 —
+  being Chromium — refuses it. Clear the variable first: `unset CHROME_CRASHPAD_PIPE_NAME` (or
+  `Remove-Item Env:CHROME_CRASHPAD_PIPE_NAME` in PowerShell), or start Aegis from an ordinary
+  terminal.
+- **No notification when something parks** (PLAN 7.22). Windows posts toasts on behalf of an
+  *installed* application, so a development build — `tauri dev`, no Start-menu entry carrying the
+  bundle identifier — has nothing to post as, and the log says so once at `warn`. Nothing else
+  changes: what is waiting is on the board, and the title bar's *Board* wears the count.
 - **`Failed to unregister class Chrome_WidgetWin_0. Error = 1412` on quit.** Chromium's own
   shutdown message (`ERROR_CLASS_HAS_WINDOWS`), also printed by Chrome. Harmless.
 - **SmartScreen warns about a built binary.** Builds are unsigned.
