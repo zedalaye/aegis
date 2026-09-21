@@ -133,8 +133,8 @@ done is not repeated.
 You are told two ways. In the window, *Board* in the title bar wears the number waiting. Away from
 it, Aegis notifies you: the routine's name and one sentence, never the path or the command line,
 and the click opens the window rather than answering anything. A desktop that will not show
-notifications — Windows needs the app installed, not run from a development build — says so once
-in the log and changes nothing else; the badge and the board are still there.
+notifications says so once in the log and changes nothing else; the badge and the board are still
+there.
 
 **Runs** are folded from the tail of `audit.jsonl`, using the widest id on each line:
 

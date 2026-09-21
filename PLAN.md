@@ -1897,9 +1897,10 @@ attended ask left for ten minutes is answerable after.
 - **Notifications** carry the routine's name and one sentence, never the summary — which is the
   path, the command line or the amount. One per key per hour (`notify::Coalescer`), counting what
   it held into the next one. The plugin is registered on the builder and granted to no window.
-  A desktop that will not post them (no permission, an unpackaged build with no AppUserModelID)
-  never fails a run, and says so once per process at `warn`: a feature that promised to reach you
-  while the window is shut must not fail quietly.
+  A desktop that will not post them never fails a run, and says so once per process at `warn`: a
+  feature that promised to reach you while the window is shut must not fail quietly. Where a toast
+  goes once Windows has it is Windows' business, which is the other half of why the window says it
+  too.
 - **The window says so too.** The title bar's *Board* wears the number of parked asks in the open
   project, counted whether or not the panel is showing, and its label says it in words for a
   screen reader. A notification is how you learn away from the machine; the badge is how you learn

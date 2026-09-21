@@ -161,9 +161,10 @@ impl<R: tauri::Runtime> Notifier for Desktop<'_, R> {
         };
 
         // A failure here is a machine that will not show notifications (no
-        // permission, no toast registration, an unpackaged build with no
-        // AppUserModelID): never surfaced as an error on whatever raised it,
-        // because a toast that did not appear must not fail a run.
+        // permission, no toast registration): never surfaced as an error on
+        // whatever raised it, because a toast that did not appear must not
+        // fail a run. What Windows does with one it accepted is its own
+        // business, which is the other half of why the window says it too.
         //
         // Said out loud once per process all the same. A person who was told
         // that Aegis would reach them while the window is shut has to learn
