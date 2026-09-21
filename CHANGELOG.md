@@ -86,9 +86,10 @@ under an approval that did not describe it.
   it serves (*Settings → Providers → Prices*; *Suggest prices* fills them from the provider's catalog
   when it publishes prices, else from LiteLLM's public table, and saves nothing until you do), and an
   identity or a routine takes a cap per run and
-  per day, in dollars. Every round a turn makes is priced and written to `ledger.json`; a round that
-  passes a cap has its tool calls refused (`E_BUDGET`) and the model gets one reply to wrap up, and a
-  turn that starts past one sends nothing. A routine whose day is spent does not fire, and says why.
+  per day, in dollars. Every round a turn makes is priced and written to `ledger.json`. A cap is an
+  intent to stop: the round that crosses it is already paid for, so its tools run, and nothing is
+  sent after it (`E_BUDGET`); a scheduled run stopped this way is recorded `blocked`, not `failed`. A
+  turn that starts past a cap sends nothing. A routine whose day is spent does not fire, and says why.
   A capped model with no price is refused rather than let through unmeasured; usage a provider does
   not report is estimated high. Crossing 80 % of a daily cap, and reaching it, each notify once. The
   routine list and the forms show today's spend, and the board shows what each run cost

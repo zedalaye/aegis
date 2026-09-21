@@ -1,17 +1,17 @@
 //! When a turn should stop calling tools (PLAN 7.16).
 //!
-//! Three guards, all deterministic, none a permission gate:
+//! Two guards, both deterministic, neither a permission gate:
 //!
 //! * **A loop** is the same round fingerprint [`LOOP_STREAK`] times running.
 //!   The fingerprint is the tool names and canonical arguments, not the call
 //!   ids, so a retry of the same work is visible.
 //! * **A ceiling** ([`MAX_TOOL_ROUNDS`]) bounds the bill when the work is
 //!   still progressing. It is the same with or without a runbook.
-//! * **A budget** is a model-spend cap the last round passed (PLAN 7.26),
-//!   decided by the [`Meter`](crate::spend::Meter), not here.
 //!
-//! Hitting any refuses the pending calls and lets the model have one wrap-up
-//! round. The recovery is not "ask the user to continue".
+//! Hitting either refuses the pending calls and lets the model have one
+//! wrap-up round, in which it may still file its report ([`is_report`]). The
+//! recovery is not "ask the user to continue". A spend cap is not a guard: its
+//! round runs, and nothing follows it (PLAN 7.26).
 
 use serde_json::Value;
 
@@ -37,8 +37,6 @@ pub enum Halt {
     Loop,
     /// [`MAX_TOOL_ROUNDS`] rounds already ran in this turn.
     Ceiling,
-    /// A model-spend cap is reached (PLAN 7.26).
-    Budget,
 }
 
 impl Halt {
@@ -47,12 +45,11 @@ impl Halt {
         match self {
             Self::Loop => ErrorCode::ToolLoop,
             Self::Ceiling => ErrorCode::TooManyToolRounds,
-            Self::Budget => ErrorCode::Budget,
         }
     }
 
     /// What the model is told. Finish now; do not ask the user to continue.
-    pub fn reason(self, skill: Option<&str>) -> String {
+    pub fn reason(self, skill: Option<&str>, delegated: bool) -> String {
         let head = match self {
             Self::Loop => format!(
                 "this turn called the same tools with the same arguments {LOOP_STREAK} times in \
@@ -63,16 +60,30 @@ impl Halt {
                 "this turn already ran {MAX_TOOL_ROUNDS} rounds of tools, which is the limit; \
                  finish with what you have"
             ),
-            Self::Budget => "this turn reached the model-spend cap it runs under, so no more                              tools run; finish with what you have, in this reply"
-                .to_owned(),
         };
-        match skill {
-            Some(name) => format!(
-                "{head}. The `{name}` run stays open until you close it with `skill_return`"
+        // The report is the one call a wrap-up may still make (see
+        // `is_report`): an unattended run that cannot file one is a silence.
+        match (skill, delegated) {
+            (_, true) => format!(
+                "{head}. The one call still accepted is `handoff_return`: file your report with \
+                 it now, `blocked` if the work is unfinished"
             ),
-            None => head,
+            (Some(name), false) => format!(
+                "{head}. The one call still accepted is `skill_return`: close the `{name}` run \
+                 with it now, `blocked` if it is unfinished"
+            ),
+            (None, false) => head,
         }
     }
+}
+
+/// Whether a call only files a report — `skill_return` or `handoff_return` —
+/// which a wrap-up round may still make: it runs nothing and spends nothing.
+pub fn is_report(call: &AssembledCall) -> bool {
+    matches!(
+        call.name.as_str(),
+        crate::policy::tool::SKILL_RETURN | crate::policy::tool::HANDOFF_RETURN
+    )
 }
 
 /// The identity of a round: names and arguments, sorted, so parallel call
@@ -222,7 +233,7 @@ mod tests {
 
     #[test]
     fn loop_reason_does_not_ask_the_user_to_continue() {
-        let text = Halt::Loop.reason(None);
+        let text = Halt::Loop.reason(None, false);
         assert!(text.contains("loop"), "{text}");
         assert!(
             !text.to_lowercase().contains("continue"),

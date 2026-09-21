@@ -114,9 +114,10 @@ export default function SpendCapsFields({
         </p>
       ) : (
         <p className="field__hint">
-          A run is {runMeans}. A day is UTC. Past a cap, the tools a turn
-          asked for are refused and the model gets one reply to wrap up; a
-          turn that starts past it sends nothing. A cap needs the model's
+          A run is {runMeans}. A day is UTC. A cap is checked between rounds:
+          the round that crosses it is already paid for, so its tools run,
+          and nothing more is sent — a small cap can be passed by that one
+          round, a large one barely. A cap needs the model's
           price under Settings → Providers — without one, its turns are
           refused rather than let through unmeasured.
         </p>

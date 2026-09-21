@@ -500,9 +500,6 @@ impl Turn<'_> {
                     let budget = self
                         .meter
                         .and_then(|meter| meter.charge(reported.as_ref(), estimate));
-                    if let Some(reached) = &budget {
-                        tracing::info!(session_id = %plan.session_id, %reached, "a spend cap was reached");
-                    }
 
                     // Summed over rounds: each request was paid for.
                     if let Some(round) = reported {
@@ -520,9 +517,7 @@ impl Turn<'_> {
                     }
 
                     let incoming = guard::fingerprint(&calls);
-                    let halt = wrapping
-                        .or_else(|| guard::halt(rounds, &fingerprints, &incoming))
-                        .or_else(|| budget.map(|_| Halt::Budget));
+                    let halt = wrapping.or_else(|| guard::halt(rounds, &fingerprints, &incoming));
                     if let Some(halt) = halt {
                         tracing::warn!(
                             session_id = %plan.session_id,
@@ -531,14 +526,35 @@ impl Turn<'_> {
                             skill = skill.as_deref().unwrap_or(""),
                             "tool round halted"
                         );
+                        if wrapping.is_some() && calls.iter().all(guard::is_report) {
+                            // The wrap-up filed its report, which is what it was
+                            // for; it runs nothing else, and the turn ends.
+                            self.execute(plan, &calls, offered, cancel, &progress_seq, &mut skill)
+                                .await;
+                            break StopReason::Stop;
+                        }
                         self.refuse_all(plan, &calls, &held, skill.as_deref(), halt);
                         if wrapping.is_some() {
                             // Already had the wrap-up request and still called
                             // tools. Stop rather than refuse forever.
                             break StopReason::Stop;
                         }
+                        if let Some(reached) = &budget {
+                            // No wrap-up past a cap: it would resend the whole
+                            // context, the dearest request of the turn.
+                            break self.stop_at_budget(plan, reached);
+                        }
                         wrapping = Some(halt);
                         continue;
+                    }
+
+                    // PLAN 7.26: the round that crossed a cap is paid for, and
+                    // running its calls costs no tokens — they still pass the
+                    // gate. The next request is what the cap stops.
+                    if let Some(reached) = &budget {
+                        self.execute(plan, &calls, offered, cancel, &progress_seq, &mut skill)
+                            .await;
+                        break self.stop_at_budget(plan, reached);
                     }
 
                     self.execute(plan, &calls, offered, cancel, &progress_seq, &mut skill)
@@ -660,6 +676,21 @@ impl Turn<'_> {
                 tracing::error!(%err, session_id = %plan.session_id, "could not persist the reply");
             }
         }
+    }
+
+    /// Ends a turn at a spend cap (PLAN 7.26): the person is told, and the
+    /// session rests idle — the work done is kept, and raising the cap lets
+    /// the next message carry on from it.
+    fn stop_at_budget(&self, plan: &TurnPlan, reached: &str) -> StopReason {
+        tracing::info!(session_id = %plan.session_id, %reached, "a turn stopped at its spend cap");
+        self.sink.emit(Event::TurnError(TurnError {
+            session_id: plan.session_id.clone(),
+            turn_id: plan.turn_id.clone(),
+            code: ErrorCode::Budget.as_str().to_owned(),
+            message: format!("{reached}. The last round's tools ran; nothing more was sent."),
+            retryable: false,
+        }));
+        StopReason::Stop
     }
 
     /// Emits a `turn:error` and reports the stop reason that follows it.

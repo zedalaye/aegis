@@ -316,6 +316,28 @@ impl App {
         runner::fire(&self.host(sink, &provider), routine_id).await;
     }
 
+    /// Fires one routine whose model costs $10 per million reply tokens
+    /// (PLAN 7.26).
+    async fn fire_priced(&self, routine_id: &str, sink: &Recorder, rounds: Rounds) {
+        let provider = move |_: &Agent, _: &str| {
+            let tariff = Tariff {
+                price: Some(aegis_lib::store::ModelPrice {
+                    model: "fake".to_owned(),
+                    input: 0,
+                    output: 10_000_000,
+                    cache_read: None,
+                    cache_write: None,
+                }),
+                ..Tariff::unpriced("fake")
+            };
+            (
+                Box::new(FakeProvider::scripted(rounds.clone())) as Box<dyn Provider>,
+                tariff,
+            )
+        };
+        runner::fire(&self.host(sink, &provider), routine_id).await;
+    }
+
     /// Picks a parked run up, the way answering it from the board does.
     async fn resume_scripted(
         &self,
@@ -1063,5 +1085,49 @@ fn the_store_refuses_a_routine_nobody_could_read_or_survive() {
                 .expect_err("two routines cannot share a name")
         ),
         Some("name".to_owned())
+    );
+}
+
+/// PLAN 7.26: a run stopped at its model budget keeps the round it crossed
+/// on, sends nothing after it, and is recorded `blocked` by the harness — an
+/// answer, never a silence that would pause the routine.
+#[tokio::test]
+async fn a_run_stopped_at_its_budget_is_blocked_not_silent() {
+    let app = App::new();
+    let agent = app.watcher();
+    app.witness(&agent, WATCH_SKILL);
+
+    let mut draft = app.draft(&agent, vec![Grant::FsWrite]);
+    draft.spend.per_run = Some(10_000);
+    let routine = app.routines.create(&draft).expect("the routine is stored");
+
+    // $0.02 of reply in the first round: past the $0.01 cap at once.
+    let mut rounds = watch_rounds("r1", "done");
+    if let Some(ModelEvent::Finish { usage, .. }) = rounds[0].last_mut() {
+        *usage = Some(aegis_lib::agent::wire::Usage {
+            prompt_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            completion_tokens: 2_000,
+            total_tokens: 2_000,
+        });
+    }
+
+    for _ in 0..2 {
+        app.fire_priced(&routine.id, &Recorder::default(), rounds.clone())
+            .await;
+    }
+
+    let row = app.routines.get(&routine.id).expect("still on file");
+    let last = row.last.expect("the run is on the row");
+    assert_eq!(last.outcome, RunOutcome::Blocked, "{}", last.detail);
+    assert!(last.detail.contains("model budget"), "{}", last.detail);
+    assert!(
+        !row.paused,
+        "two budget stops are two answers, not two silences"
+    );
+    assert!(
+        !app.workspace.join(STATUS_PATH).exists(),
+        "the status write came after the cap, so it was never asked for"
     );
 }

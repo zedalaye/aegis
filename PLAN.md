@@ -2144,10 +2144,16 @@ spend is guarded now: § 7.25's `eval` check and every gate run are paid for in 
   at theirs, completion at `output`. A round with no usage reported counts the request's size in
   bytes divided by three as prompt tokens and the row's `max_output_tokens` (else 32 000) as
   completion, and marks the turn `estimated`.
-- **Enforcement** is in the turn, per round. Before the first request, a cap already reached fails
-  the turn with `E_BUDGET` and nothing is sent. After a round, a cap passed refuses the pending calls
-  with `E_BUDGET` and gives the model one wrap-up round (§ 7.16's shape). A cap on a model with no
-  price refuses the turn: a cap that cannot be measured stops rather than passes.
+- **A cap is an intent to stop, not a fence.** It is checked between rounds, so a run can pass it by
+  the one round that crosses it: large against $0.01, negligible against $100. That round is paid
+  for and running its calls costs no tokens, so they run — through the gate as ever — and nothing is
+  sent after it: no wrap-up, which would resend the whole context. The turn ends with `E_BUDGET` and
+  the session rests idle on the results. A request is never *started* past a cap: a cap already
+  reached fails the turn before it sends. A cap on a model with no price refuses the turn: a cap
+  that cannot be measured stops rather than passes.
+- **The harness answers for a stopped run.** A scheduled run stopped at a cap without a report is
+  recorded `blocked` with the cap in its detail, never a silence that would pause the routine; a
+  brief stopped so fails at once, since a retry would meet the same cap.
 - **The scheduler** treats a spent day cap like a spent `runs_per_day`: the routine's problem says
   so, no session opens, and it is not a silence.
 - **Visible.** A routine row and an identity show today's spend against their caps; a run on the
@@ -2158,11 +2164,12 @@ spend is guarded now: § 7.25's `eval` check and every gate run are paid for in 
 
 *Refuses*: a price or a cap read from the workspace; a price applied without the operator's save,
 or refreshed on a clock; a model matched to a price by anything looser than its id and a vendor
-prefix; a local tokenizer (the byte estimate errs high
-on purpose); a cap in tokens beside the cap in money; stopping mid-stream — a request already sent
-is paid for, and the next round is the one refused.
+prefix; a local tokenizer (the byte estimate errs high on purpose); a cap in tokens beside the cap
+in money; stopping mid-stream, or throwing away a round already paid for — the next request is the
+one refused.
 
-*Exit*: a routine with a $0.50 per-run cap passes it in a round and gets one wrap-up round; the next
+*Exit*: a routine with a $0.50 per-run cap runs the round that passes it, sends nothing after it and
+is recorded `blocked`; the next
 fire after its day cap is reached does not open a session; an unpriced model under a cap is refused
 before its first request.
 
@@ -2174,10 +2181,15 @@ before its first request.
   sent. The routine and handoff hosts take that resolver (`spend::Answering`).
 - **A `Meter` per turn** carries the tariff and the caps in force — the routine's, then the
   identity's. It is asked before *every* request that is not a wrap-up, not only the first: a run
-  that a concurrent one pushed past a shared day cap stops at its next request. After a round,
-  `Halt::Budget` joins § 7.16's loop and ceiling in `guard`, with the same one wrap-up.
-- **A cap bounds when a turn stops, not the last cent.** The round that crosses it is already paid
-  for, and so is the wrap-up; two runs sharing a day cap can each pass it by that much.
+  that a concurrent one pushed past a shared day cap stops at its next request. It remembers why it
+  stopped (`Meter::halted`), which is what the scheduler and the bus read. A budget is not one of
+  § 7.16's halts: a loop's round is waste and is refused; a cap's round is work and runs.
+- **The wrap-up may still file the report.** A round made only of `skill_return` or
+  `handoff_return` runs in the wrap-up of a loop or ceiling halt and ends the turn; the refusal says
+  so. Refusing it made such a halt of a scheduled run a silence, which pauses the routine (found by
+  hand on the first capped run, which is also what showed the budget's wrap-up to be the dearest
+  request of the turn).
+- **Concurrent runs** sharing a day cap can each pass it by their crossing round.
 - **The ledger is authoritative; the session keeps a copy.** Each turn's total is also written on
   its `TurnCost` (`micros`), so the board's existing fold shows a run's cost in dollars ("at least"
   when some turns had no price). Enforcement never reads the copy.

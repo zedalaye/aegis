@@ -399,7 +399,7 @@ impl Turn<'_> {
         halt: Halt,
     ) {
         let refused = CancellationToken::new();
-        let reason = halt.reason(skill);
+        let reason = halt.reason(skill, self.standing.open().is_some());
 
         for call in calls {
             let ctx = ToolCtx {

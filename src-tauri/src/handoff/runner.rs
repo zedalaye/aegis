@@ -299,7 +299,13 @@ impl Delegating {
                 .emit(crate::agent::Event::SessionUpdated(Box::new(summary)));
         }
 
+        let halted = meter.halted();
         open.take().ok_or_else(|| match reason {
+            // A second attempt would be refused at the same cap (PLAN 7.26).
+            _ if halted.is_some() => bus::Failure::fatal(format!(
+                "it stopped at its model budget: {}",
+                halted.unwrap_or_default()
+            )),
             // The user pressed Stop, or the bus's deadline expired. Either way
             // nobody is waiting for a second attempt at it.
             StopReason::Cancelled => bus::Failure::fatal("it was stopped before it returned"),

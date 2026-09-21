@@ -163,6 +163,9 @@ pub struct Meter<'a> {
     run_is_session: bool,
     day: String,
     caps: Vec<Cap>,
+    /// Why the turn was stopped, once it was: read by whoever started an
+    /// unattended run, so a stop at a cap is an answer and not a silence.
+    halted: std::sync::Mutex<Option<String>>,
 }
 
 impl<'a> Meter<'a> {
@@ -220,6 +223,7 @@ impl<'a> Meter<'a> {
             run_is_session: payer.run_is_session,
             day: ledger::today(),
             caps,
+            halted: std::sync::Mutex::new(None),
         }
     }
 
@@ -235,18 +239,37 @@ impl<'a> Meter<'a> {
             .then(|| self.ledger.spent(Scope::Turn(&self.turn_id)))
     }
 
-    /// Why this turn must not send its first request, or `None`.
+    /// Why this turn stopped at a cap, if it did.
+    pub fn halted(&self) -> Option<String> {
+        self.halted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Records why the turn stopped, and hands the reason back.
+    fn halt(&self, reason: Option<String>) -> Option<String> {
+        if let Some(reason) = &reason {
+            *self
+                .halted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reason.clone());
+        }
+        reason
+    }
+
+    /// Why this turn must not send its next request, or `None`.
     pub fn refusal(&self) -> Option<String> {
         let first = self.caps.first()?;
         if self.tariff.price.is_none() {
-            return Some(format!(
+            return self.halt(Some(format!(
                 "`{}` has no price on its provider row, and {} has a model-spend cap that cannot \
                  be measured without one. Add the model's price under Settings → Providers",
                 self.tariff.model,
                 first.owner.label()
-            ));
+            )));
         }
-        self.reached()
+        self.halt(self.reached())
     }
 
     /// Prices one round, writes it to the ledger, and says which cap it
@@ -295,7 +318,7 @@ impl<'a> Meter<'a> {
                 self.warn(cap, was, was.saturating_add(micros));
             }
         }
-        self.reached()
+        self.halt(self.reached())
     }
 
     /// The first cap already at or past its limit, described.

@@ -1301,10 +1301,11 @@ fn error_codes(fx: &Fixture) -> Vec<String> {
         .collect()
 }
 
-/// PLAN 7.26: a round that passes the cap refuses the calls it asked for
-/// and gives the model one wrap-up round.
+/// PLAN 7.26: the round that crosses the cap is paid for, so its calls run;
+/// nothing is sent after it — not even a wrap-up, which would resend the
+/// whole context.
 #[tokio::test]
-async fn a_spend_cap_halts_the_turn_with_a_wrap_up_round() {
+async fn a_spend_cap_runs_the_round_it_crossed_on_and_sends_nothing_more() {
     let mut fx = Fixture::new();
     fx.agent.spend.per_run = Some(crate::store::ledger::DOLLAR / 2);
     std::fs::write(fx.workspace.join("a.txt"), "x").expect("write");
@@ -1316,7 +1317,7 @@ async fn a_spend_cap_halts_the_turn_with_a_wrap_up_round() {
         paid_call_script("call_2", "b.txt", 30),
         vec![
             ModelEvent::TextDelta {
-                text: "over budget; here is what I have".to_owned(),
+                text: "a wrap-up nobody paid for".to_owned(),
             },
             ModelEvent::Finish {
                 reason: StopReason::Stop,
@@ -1332,35 +1333,42 @@ async fn a_spend_cap_halts_the_turn_with_a_wrap_up_round() {
     .run(&fx.plan(), &CancellationToken::new())
     .await;
 
-    assert_eq!(reason, StopReason::Stop);
+    assert_eq!(
+        reason,
+        StopReason::Stop,
+        "the session rests idle, not in error"
+    );
     let started = fx
         .sink
         .names()
         .iter()
         .filter(|name| **name == "tool:started")
         .count();
-    assert_eq!(started, 1, "the round that passed the cap did not run");
+    assert_eq!(started, 2, "the round that crossed the cap ran");
+    assert_eq!(error_codes(&fx), ["E_BUDGET"], "and the person is told");
+    assert!(
+        meter.halted().is_some(),
+        "an unattended caller can tell why"
+    );
 
     let transcript = fx.transcript();
-    let refused = transcript.iter().any(|message| {
-        serde_json::from_str::<serde_json::Value>(&message.text)
-            .is_ok_and(|envelope| envelope["error"]["code"] == "E_BUDGET")
-    });
-    assert!(refused, "the pending call carries E_BUDGET");
-    let last = transcript.last().expect("a wrap-up");
-    assert!(last.text.contains("what I have"), "{}", last.text);
-    // Two paid rounds of $0.30, and a wrap-up that reported nothing: charged
-    // at the unknown ceiling of 32 000 reply tokens, $0.32.
+    assert!(
+        !transcript
+            .iter()
+            .any(|message| message.text.contains("nobody paid for")),
+        "no request followed the crossing round"
+    );
+    assert_eq!(
+        transcript.last().map(|message| message.role),
+        Some(crate::store::Role::Tool),
+        "the transcript ends on the results, so a next turn carries on from them"
+    );
     assert_eq!(
         fx.spend.spent(crate::store::ledger::Scope::Turn(TURN_ID)),
-        600_000 + 320_000
+        600_000
     );
     let recorded = fx.sessions.costs(&fx.session_id).expect("costs");
-    assert_eq!(
-        recorded.last().and_then(|cost| cost.micros),
-        Some(920_000),
-        "the session's cost carries the price for the board"
-    );
+    assert_eq!(recorded.last().and_then(|cost| cost.micros), Some(600_000));
 }
 
 /// PLAN 7.26: a turn whose cap is already spent sends nothing.
@@ -1414,4 +1422,66 @@ async fn a_cap_on_an_unpriced_model_sends_nothing() {
 
     assert_eq!(reason, StopReason::Error);
     assert_eq!(error_codes(&fx), ["E_BUDGET"]);
+}
+
+/// A halted run may still file its report in the wrap-up (PLAN 7.16): the
+/// one call it can make. Refusing it made a scheduled run's halt a silence,
+/// which pauses the routine.
+#[tokio::test]
+async fn a_halted_run_may_still_file_its_report() {
+    let mut fx = Fixture::new();
+    grant_runbook(&mut fx, "inbox.triage");
+    std::fs::write(fx.workspace.join("a.txt"), "x").expect("write");
+    fx.say("triage it");
+
+    let mut script = vec![tool_call_script(
+        "call_open",
+        tool::SKILL_RUN,
+        r#"{"name":"inbox.triage"}"#,
+    )];
+    script.extend((0..LOOP_STREAK).map(|round| {
+        tool_call_script(
+            &format!("call_{round}"),
+            tool::FS_READ,
+            r#"{"path":"a.txt"}"#,
+        )
+    }));
+    script.push(tool_call_script(
+        "call_return",
+        tool::SKILL_RETURN,
+        r#"{"status":"blocked","summary":"stuck reading a.txt","open_questions":["what next?"]}"#,
+    ));
+
+    let provider = FakeProvider::scripted(script);
+    let reason = fx
+        .turn(&provider)
+        .run(&fx.plan(), &CancellationToken::new())
+        .await;
+
+    assert_eq!(reason, StopReason::Stop);
+    let envelopes: Vec<serde_json::Value> = fx
+        .transcript()
+        .iter()
+        .filter_map(|message| serde_json::from_str(&message.text).ok())
+        .collect();
+    let refusal = envelopes
+        .iter()
+        .find(|envelope| envelope["error"]["code"] == "E_TOOL_LOOP")
+        .expect("the loop was refused");
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("`skill_return`") && !text.contains("  ")),
+        "the refusal names the one call left, in one clean sentence: {refusal}"
+    );
+    let returned = envelopes
+        .iter()
+        .find(|envelope| envelope["tool"] == "skill_return")
+        .expect("the report was answered");
+    assert_eq!(returned["ok"], true, "the report was filed: {returned}");
+    assert_eq!(
+        fx.turns.open_run(&fx.session_id),
+        None,
+        "and the run closed"
+    );
 }

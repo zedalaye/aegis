@@ -37,8 +37,10 @@ A session runs as an identity. **Settings → Identities** is where they are mad
 - A roster you apply binds every new identity to the default provider; pick another afterwards.
 - **A model budget** is enforced in the runtime, round by round. A *run* is a routine's run or a
   brief; in a session you type into, it is one message's turn. A *day* is UTC and counts everything
-  the identity ran. Past a cap, the tools a turn asked for are refused (`E_BUDGET`) and the model
-  gets one reply to wrap up; a turn that starts past it sends nothing. A cap needs its model's price
+  the identity ran. A cap is an intent to stop, checked between rounds: the round that crosses it is
+  already paid for, so its tools run, and nothing more is sent (`E_BUDGET`). A $0.01 cap can
+  therefore be passed several times over by one round; a $100 cap by a fraction of a percent. A turn
+  that starts past a cap sends nothing, and a scheduled run stopped at one ends `blocked`. A cap needs its model's price
   under *Settings → Providers → Prices*: a capped identity on an unpriced model is refused. A roster
   never carries a budget, and applying one keeps the budgets you set. The built-in Assistant has
   none.

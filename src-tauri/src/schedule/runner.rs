@@ -496,12 +496,19 @@ async fn drive(
         host.sink.emit(Event::SessionUpdated(Box::new(summary)));
     }
 
-    let ended = match reported.take() {
-        Some(returned) => (outcome_of(&returned.status), returned.summary),
+    let halted = meter.halted();
+    let ended = match (reported.take(), halted) {
+        (Some(returned), _) => (outcome_of(&returned.status), returned.summary),
+        // Stopped at a spend cap (PLAN 7.26): an answer the harness gives for
+        // it, so a budget never pauses a routine as silences do.
+        (None, Some(halted)) => (
+            RunOutcome::Blocked,
+            format!("it stopped at its model budget: {halted}"),
+        ),
         // The one thing a run owes is a return. Anything else — a turn that
         // stopped talking, a deadline, a provider that failed — is a silence,
         // and two silences running pause the routine (`RoutineStore::end_run`).
-        None => (
+        (None, None) => (
             RunOutcome::Failed,
             match reason {
                 StopReason::Cancelled => {
