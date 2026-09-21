@@ -348,7 +348,8 @@ pub enum AppError {
     /// name it (PLAN 7.19). Refused, never cascaded: deleting it would change
     /// who answers.
     #[error(
-        "this provider cannot be deleted while {identities} identities and {sessions} sessions          still answer from it"
+        "this provider cannot be deleted while {identities} identities and {sessions} sessions \
+         still answer from it"
     )]
     ProviderInUse {
         /// How many identities are bound to it.
