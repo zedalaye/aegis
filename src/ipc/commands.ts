@@ -43,7 +43,9 @@ import type {
   RosterProposal,
   Routine,
   RoutineDraft,
+  RunCheckpoint,
   RunRef,
+  RunRestored,
   RunTrace,
   ScaffoldReport,
   SessionDetail,
@@ -378,6 +380,36 @@ export function boardTrace(
   run: RunRef,
 ): Promise<RunTrace> {
   return call<RunTrace>("board_trace", { project_id: projectId, run });
+}
+
+/**
+ * What a run changed, from its checkpoint (PLAN 7.24). `sessionId` is the run.
+ * `null` when it has none: the workspace is not a work tree, its identity
+ * could not write, or it has been pruned.
+ */
+export function boardCheckpoint(
+  projectId: string,
+  sessionId: string,
+): Promise<RunCheckpoint | null> {
+  return call<RunCheckpoint | null>("board_checkpoint", {
+    project_id: projectId,
+    session_id: sessionId,
+  });
+}
+
+/**
+ * Puts back what a run changed, from its `before` tree. Paths changed again
+ * since the run ended are left alone and listed as kept. Rejects with
+ * `E_TOOL_FAILED` when the run has no finished checkpoint or `git` refuses.
+ */
+export function boardRestore(
+  projectId: string,
+  sessionId: string,
+): Promise<RunRestored> {
+  return call<RunRestored>("board_restore", {
+    project_id: projectId,
+    session_id: sessionId,
+  });
 }
 
 /**

@@ -250,6 +250,8 @@ pub fn run() {
             commands::audit::audit_log_path,
             commands::board::board_read,
             commands::board::board_trace,
+            commands::board::board_checkpoint,
+            commands::board::board_restore,
             commands::parked::parked_list,
             commands::parked::parked_answer,
             commands::settings::settings_get,

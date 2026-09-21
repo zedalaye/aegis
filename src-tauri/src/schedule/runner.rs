@@ -27,6 +27,7 @@ use crate::audit::AuditLog;
 use crate::commands::session::WindowSink;
 use crate::error::{AppError, AppResult};
 use crate::exec_host::ExecHost;
+use crate::git::checkpoint::{self, Side};
 use crate::mcp::Connectors;
 use crate::notify::{Note, Notifier};
 use crate::park::{Parking, Parks};
@@ -283,13 +284,16 @@ pub async fn fire(host: &Host<'_>, routine_id: &str) {
         host.grants.insert(&session.id, grant.clone());
     }
 
-    let outcome = drive(
-        host,
-        &routine,
-        &ready,
-        &session.id,
-        super::opening(&routine, &ready.skill),
-    )
+    let outcome = checkpointed(&ready, &session.id, async {
+        drive(
+            host,
+            &routine,
+            &ready,
+            &session.id,
+            super::opening(&routine, &ready.skill),
+        )
+        .await
+    })
     .await;
 
     host.grants.clear(&session.id);
@@ -336,17 +340,38 @@ pub async fn resume(host: &Host<'_>, ask: &ParkedAsk, decision: crate::approval:
         host.turns.carry_run(&ask.session_id, Some(&ask.skill));
     }
 
-    let outcome = drive(
-        host,
-        &routine,
-        &ready,
-        &ask.session_id,
-        crate::park::resumption(ask, decision),
-    )
+    let outcome = checkpointed(&ready, &ask.session_id, async {
+        drive(
+            host,
+            &routine,
+            &ready,
+            &ask.session_id,
+            crate::park::resumption(ask, decision),
+        )
+        .await
+    })
     .await;
 
     host.grants.clear(&ask.session_id);
     finish(host, &routine, &ask.session_id, outcome.0, &outcome.1);
+}
+
+/// Runs `work` between the two ends of a checkpoint (PLAN 7.24), when the
+/// identity can write at all. The session is the run: a resume keeps the
+/// first `before` and moves the `after`.
+async fn checkpointed<T>(
+    ready: &Ready,
+    run_id: &str,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    if !checkpoint::may_write(&ready.agent.tools) {
+        return work.await;
+    }
+    let host = ready.exec_host.as_ref();
+    checkpoint::mark(&ready.workspace, host, run_id, Side::Before).await;
+    let out = work.await;
+    checkpoint::mark(&ready.workspace, host, run_id, Side::After).await;
+    out
 }
 
 /// Opens the turn, runs it under the deadline, and reads the report out.

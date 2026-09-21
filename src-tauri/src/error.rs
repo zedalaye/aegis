@@ -417,6 +417,14 @@ pub enum AppError {
         reason: String,
     },
 
+    /// A run's checkpoint could not be read or restored (PLAN 7.24): `git`
+    /// refused, or the run has nothing to restore yet.
+    #[error("that run's checkpoint cannot be used: {reason}")]
+    Checkpoint {
+        /// Why, in words somebody can act on.
+        reason: String,
+    },
+
     /// A runtime invariant broke outside the agent and tool domains. Diagnosis
     /// goes to the log.
     #[error("{what}")]
@@ -467,6 +475,7 @@ impl AppError {
             | Self::Connector { .. } => ErrorCode::InvalidSetting,
             Self::Keyring => ErrorCode::KeyringUnavailable,
             Self::ExecHost { .. } => ErrorCode::ExecHost,
+            Self::Checkpoint { .. } => ErrorCode::ToolFailed,
             Self::RevealOutside { .. } => ErrorCode::PathOutsideWorkspace,
             Self::RevealPath { .. }
             | Self::BriefImport { .. }

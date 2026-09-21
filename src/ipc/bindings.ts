@@ -639,6 +639,24 @@ name: string,
 reason: string, };
 
 /**
+ * One path the run changed, relative to the workspace root, `/`-separated.
+ */
+export type Change = { 
+/**
+ * The path.
+ */
+path: string, 
+/**
+ * What the run did to it.
+ */
+kind: ChangeKind, };
+
+/**
+ * How one path differs between a run's two trees.
+ */
+export type ChangeKind = "added" | "modified" | "deleted";
+
+/**
  * What a session has folded (Phase 14): a pointer and derived state, never a
  * deletion ([`compact`](crate::compact)).
  */
@@ -1851,6 +1869,36 @@ tool_ms: number,
 cost: Cost, };
 
 /**
+ * A run's checkpoint, as the board shows it.
+ */
+export type RunCheckpoint = { 
+/**
+ * The run: its session.
+ */
+run_id: string, 
+/**
+ * When the `before` tree was taken, RFC3339.
+ */
+before_at: string, 
+/**
+ * When the `after` tree was taken, RFC3339; empty while the run has not
+ * ended, or if it never did.
+ */
+after_at: string, 
+/**
+ * What the run changed, by path. Empty without an `after`.
+ */
+changes: Array<Change>, 
+/**
+ * The unified diff, cut at [`PATCH_MAX_BYTES`].
+ */
+patch: string, 
+/**
+ * Whether [`Checkpoint::patch`] was cut.
+ */
+truncated: boolean, };
+
+/**
  * What kind of work a run was.
  */
 export type RunKind = "handoff" | "routine" | "skill" | "session";
@@ -1880,6 +1928,23 @@ id: string,
  * The session it happened in. Empty for a delegation.
  */
 session_id: string, };
+
+/**
+ * What a restore did, path by path.
+ */
+export type RunRestored = { 
+/**
+ * Paths written back from the `before` tree.
+ */
+restored: Array<string>, 
+/**
+ * Paths the run created, now removed.
+ */
+removed: Array<string>, 
+/**
+ * Paths changed again since the run ended, left as they are.
+ */
+kept: Array<string>, };
 
 /**
  * How a run ended, in the vocabulary `COS.md` already uses.

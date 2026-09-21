@@ -354,6 +354,77 @@
   border-color: var(--muted);
 }
 
+/* --- One run's checkpoint (PLAN 7.24) ---------------------------------------- */
+
+.checkpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.checkpoint__note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.checkpoint__changes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.checkpoint__change {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.checkpoint__change code {
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.checkpoint__mark {
+  width: 1rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.checkpoint__change--deleted .checkpoint__mark {
+  color: var(--danger);
+}
+
+.checkpoint__diff summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.checkpoint__patch {
+  max-height: 24rem;
+  margin: 0.3rem 0 0;
+  padding: 0.5rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 0.72rem;
+  white-space: pre;
+}
+
+.checkpoint__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.checkpoint__ask {
+  flex: 1 1 16rem;
+}
+
 /* --- One run's replay ------------------------------------------------------ */
 
 .trace {

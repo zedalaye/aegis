@@ -14,6 +14,8 @@ import {
   formatTimeOfDay,
 } from "../../lib/format";
 
+import RunCheckpoint from "./RunCheckpoint";
+
 /** What each kind of run is called. */
 const KIND: Record<RunKind, string> = {
   handoff: "delegation",
@@ -31,12 +33,30 @@ const STATUS: Record<RunStatus, string> = {
   ran: "ran",
 };
 
+/**
+ * The sessions whose checkpoints this run has (PLAN 7.24): a routine's one,
+ * or each session a delegation opened. Conversations and runbooks run
+ * attended and are not checkpointed.
+ */
+function checkpointed(run: Run): readonly string[] {
+  switch (run.run.kind) {
+    case "routine":
+      return [run.run.session_id];
+    case "handoff":
+      return run.sessions;
+    default:
+      return [];
+  }
+}
+
 export default function RunRow({
+  projectId,
   run,
   open,
   onToggle,
   onOpenSession,
 }: {
+  readonly projectId: string;
   readonly run: Run;
   /** Whether this run's replay is the one on screen. */
   readonly open: boolean;
@@ -136,6 +156,24 @@ export default function RunRow({
                     </li>
                   ))}
                 </ul>
+              </dd>
+            </>
+          ) : null}
+
+          {checkpointed(run).length > 0 ? (
+            <>
+              <dt>Changed</dt>
+              <dd>
+                {checkpointed(run).map((sessionId) => (
+                  <RunCheckpoint
+                    key={sessionId}
+                    projectId={projectId}
+                    sessionId={sessionId}
+                    // A delegation lists the delegating session too, which
+                    // is a conversation and never has a checkpoint.
+                    explainAbsence={run.run.kind === "routine"}
+                  />
+                ))}
               </dd>
             </>
           ) : null}

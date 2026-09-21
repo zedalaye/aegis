@@ -227,6 +227,7 @@ export default function BoardPanel() {
               {board.runs.map((run) => (
                 <RunRow
                   key={`${run.run.kind}-${run.run.id}-${run.run.session_id}`}
+                  projectId={board.project_id}
                   run={run}
                   open={trace !== null && sameRun(trace.run.run, run.run)}
                   onToggle={() => void toggleTrace(run.run)}

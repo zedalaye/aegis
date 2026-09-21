@@ -14,9 +14,12 @@
 //! `git init` goes through `wsl.exe --exec` after a `test -d` probe, since
 //! `wsl.exe --cd` silently falls back to the home directory.
 //!
-//! **Not a git client**: no commit, remote, `.gitignore` or identity is ever
-//! written. Commits are `shell_exec` of `git` under the gate (grant rules:
-//! PLAN 3.1).
+//! **Not a git client**: no commit on a branch, remote, `.gitignore` or
+//! identity is ever written. Commits are `shell_exec` of `git` under the gate
+//! (grant rules: PLAN 3.1). The one thing written is a run's
+//! [`checkpoint`] on a side ref (PLAN 7.24).
+
+pub mod checkpoint;
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};

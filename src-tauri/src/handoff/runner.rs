@@ -28,6 +28,7 @@ use crate::approval::ApprovalRegistry;
 use crate::audit::AuditLog;
 use crate::commands::session::WindowSink;
 use crate::exec_host::ExecHost;
+use crate::git::checkpoint::{self, Side};
 use crate::handoff::{self, bus, Brief};
 use crate::mcp::Connectors;
 use crate::park::{Parking, Parks};
@@ -235,6 +236,16 @@ impl Delegating {
             exec_host: self.exec_host.clone(),
         };
 
+        // A retry continues the session, so it keeps the first `before`
+        // (PLAN 7.24).
+        let checkpointed = self
+            .workspace
+            .as_deref()
+            .filter(|_| checkpoint::may_write(&agent.tools));
+        if let Some(root) = checkpointed {
+            checkpoint::mark(root, self.exec_host.as_ref(), &session_id, Side::Before).await;
+        }
+
         let reason = Turn {
             agent: &agent,
             sessions: host.sessions,
@@ -260,6 +271,9 @@ impl Delegating {
         .await;
 
         relay.abort();
+        if let Some(root) = checkpointed {
+            checkpoint::mark(root, self.exec_host.as_ref(), &session_id, Side::After).await;
+        }
         let resting = turn::resting_state(reason);
         host.turns.finish(&session_id, &turn_id, resting);
         if let Some(summary) = turn::summarize(host.sessions, &session_id, resting) {
