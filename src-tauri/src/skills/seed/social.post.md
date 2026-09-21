@@ -1,6 +1,7 @@
 ---
-version: 1
+version: 2
 tools: fs_list, fs_read, fs_write
+writes: .aegis/artefacts
 ---
 
 # social.post

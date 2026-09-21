@@ -67,6 +67,14 @@ under an approval that did not describe it.
   hour. Clicking it opens the window; nothing is approved from a notification. In the window,
   *Board* in the title bar wears the number of calls waiting for you. A desktop that will not post
   notifications says so once in the log and changes nothing else (`PLAN.md` § 7.22).
+- **Standing approvals can be narrow.** A routine can be signed to write under one folder rather
+  than anywhere in the workspace, and to run one command shape — `cargo test …` — rather than a
+  program with any arguments. A runbook's new `writes:` front-matter key names its folders, and the
+  routine form offers those first, with write-anywhere as a widening; the seeded runbooks that only
+  file artefacts declare `.aegis/artefacts`. *Allow standing* on a parked write or command signs
+  the folder or the verb it wanted, not the whole workspace or program. A narrow approval only
+  matches where the wide one would, so `.git/`, `world/` and git's read-only rules still hold under
+  it, and a shape over a program that runs workspace code says so (`PLAN.md` § 7.23).
 
 - **Markdown in the chat.** Replies and your messages render headings, lists, code blocks and tables,
   with the parser the file preview already used: HTML stays text. A web link opens in your browser
@@ -105,8 +113,8 @@ under an approval that did not describe it.
   in force, with its section numbers unchanged; `IDEAS.md`, `COS.md` and `CONTROL.md` are tightened.
 - `PLAN.md` § 7.21–7.30 propose the autonomy ladder: parked asks and notifications, narrow standing
   grants, run checkpoints, gates run by the harness, budgets (allocated or earned), the CoS on a
-  clock, ingestion, and mandates for irreversible acts. The first of them, § 7.22, has landed; the
-  rest are proposed, not built.
+  clock, ingestion, and mandates for irreversible acts. § 7.22 and § 7.23 have landed; the rest
+  are proposed, not built.
 
 ### Internal
 

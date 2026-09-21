@@ -16,6 +16,7 @@
 
 pub mod grants;
 pub mod matrix;
+pub mod narrow;
 mod parse;
 pub mod path;
 
@@ -818,7 +819,7 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
     };
 
     match &request.grant {
-        Some(grant) if ctx.grants.holds(ctx.session_id, grant) => {
+        Some(grant) if ctx.grants.covers(ctx.session_id, grant, &call, workspace) => {
             tracing::debug!(tool = tool_name, "covered by a session grant");
             Decision::Auto {
                 call,
@@ -847,8 +848,16 @@ pub fn decide_call(ctx: &PolicyCtx<'_>, call: ToolCall) -> Decision {
         // Nobody can answer (Phase 16). Checked last, so only a call that would
         // have opened a dialog is parked; what the run has already done is kept,
         // and the question survives the run (PLAN 7.22).
+        // The answer a person can give it is a standing grant, so it offers
+        // the narrowest one that covers this call (PLAN 7.23).
         _ if ctx.unattended => {
             tracing::info!(tool = tool_name, "an unattended run asked to ask");
+            let mut request = request;
+            if let Some(grant) = request.grant.take() {
+                let narrow = grant.narrowed(&call, workspace);
+                request.scope_label = narrow.scope_label();
+                request.grant = Some(narrow);
+            }
             Decision::Park { request }
         }
         _ => Decision::Ask { call, request },

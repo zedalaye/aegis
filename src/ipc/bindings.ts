@@ -952,11 +952,26 @@ body: PreviewBody, };
 /**
  * One `allow_session` grant. The variants are scopes, not tools.
  */
-export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "kind": "world_amend" } | { "kind": "shell", 
+export type Grant = { "kind": "fs_read_large" } | { "kind": "fs_write" } | { "kind": "fs_write_under", 
+/**
+ * `/`-separated, normalized by [`narrow::prefix`]; a segment may end
+ * in one `*`.
+ *
+ * [`narrow::prefix`]: super::narrow::prefix
+ */
+prefix: string, } | { "kind": "world_amend" } | { "kind": "shell", 
 /**
  * The normalized program key — see [`Grant::shell`].
  */
-program: string, } | { "kind": "screen_capture" } | { "kind": "memory_write" } | { "kind": "handoff_delegate" } | { "kind": "connector", 
+program: string, } | { "kind": "shell_shape", 
+/**
+ * The program key, as [`Grant::shell`] makes it.
+ */
+program: string, 
+/**
+ * The closed pattern its arguments must fit.
+ */
+args: Array<string>, } | { "kind": "screen_capture" } | { "kind": "memory_write" } | { "kind": "handoff_delegate" } | { "kind": "connector", 
 /**
  * The full tool name the dialog named.
  */
@@ -2079,6 +2094,11 @@ summary: string,
  * The tools its steps declare they will call.
  */
 tools: Array<string>, 
+/**
+ * The folders its writes land in (PLAN 7.23): what signing it onto a
+ * routine offers before `fs_write` over the whole workspace.
+ */
+writes: Array<string>, 
 /**
  * The `SKILL.md` itself, so a person can go and open it.
  */

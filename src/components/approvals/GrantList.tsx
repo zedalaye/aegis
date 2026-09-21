@@ -7,6 +7,7 @@
  */
 
 import type { Grant } from "../../ipc/bindings";
+import { grantKey, shapeLine } from "../../lib/grants";
 import { useApprovals } from "../../state/approvals";
 
 /**
@@ -19,6 +20,8 @@ function scopeLabel(grant: Grant): string {
       return "Read any file over 1 MB inside this workspace";
     case "fs_write":
       return "Write any file inside this workspace, except under .git/ and world/";
+    case "fs_write_under":
+      return `Write files under \`${grant.prefix}/\` in this workspace — a write anywhere else is still asked about`;
     case "world_amend":
       return "Amend world/, this workspace’s constitution";
     case "shell":
@@ -26,6 +29,8 @@ function scopeLabel(grant: Grant): string {
         return "Run read-only `git` in this workspace (status, log, diff, show, …) — any other verb, an option before the verb, and a line that writes a file or runs a program are still asked about";
       }
       return `Run \`${grant.program}\` in this workspace, with any arguments`;
+    case "shell_shape":
+      return `Run \`${shapeLine(grant)}\` in this workspace — any other line is still asked about`;
     case "screen_capture":
       return "Capture the primary display";
     case "memory_write":
@@ -42,22 +47,6 @@ function scopeLabel(grant: Grant): string {
     case "jev_ask":
       return "Send model-written questions and state to TypeSafe";
   }
-}
-
-/** A stable key for a grant. The variant, plus what narrows it. */
-function grantKey(grant: Grant): string {
-  if (grant.kind === "shell") {
-    return `shell:${grant.program}`;
-  }
-  // Two connector grants differ by the tool they name, so the variant alone
-  // would collapse them into one row.
-  if (grant.kind === "connector") {
-    return `connector:${grant.tool}`;
-  }
-  if (grant.kind === "jev_eval") {
-    return `jev_eval:${grant.name}`;
-  }
-  return grant.kind;
 }
 
 export default function GrantList() {

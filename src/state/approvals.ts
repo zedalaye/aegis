@@ -11,6 +11,7 @@
 import { create } from "zustand";
 
 import type { ApprovalRequest, Decision, Grant } from "../ipc/bindings";
+import { sameGrant } from "../lib/grants";
 import {
   approvalGrants,
   approvalListPending,
@@ -42,16 +43,6 @@ export type ApprovalsState = {
   /** Clears the last error. */
   dismissError: () => void;
 };
-
-/** Whether two grants name the same thing. */
-function sameGrant(a: Grant, b: Grant): boolean {
-  if (a.kind !== b.kind) {
-    return false;
-  }
-  return a.kind === "shell" && b.kind === "shell"
-    ? a.program === b.program
-    : true;
-}
 
 export const useApprovals = create<ApprovalsState>((set, get) => {
   /** Refetches both lists for whichever session is open. */

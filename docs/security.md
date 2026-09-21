@@ -40,7 +40,11 @@ Read this before pointing Aegis at anything you care about.
 - **A routine's standing approvals are the one grant that outlives a session**, and you sign them
   when saving the routine — or when you answer *allow standing* on something it parked, which goes
   through the same checks. They cannot exceed what the runbook declares or the identity holds, and
-  cannot cover anything outside the workspace, under `.git/` or in `world/`.
+  cannot cover anything outside the workspace, under `.git/` or in `world/`. A write approval can
+  be narrowed to one folder and a command approval to one shape (`cargo test …`); the narrow ones
+  only ever match where the wide one would, so they inherit every one of those exclusions. A shape
+  over a program that runs workspace code (`cargo`, `pnpm`, `make`, …) is still that program
+  running that code.
 - **A scheduled run parks what it was not signed for.** Nothing runs, the run ends saying so, and
   the question waits on the board until you answer it — *allow once* covers that exact call and
   nothing else, *allow standing* signs it onto the routine, *deny* refuses it. Answering picks the

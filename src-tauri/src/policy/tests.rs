@@ -500,3 +500,103 @@ fn a_wsl_host_on_a_build_without_wsl_refuses_before_asking() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
+
+/// PLAN 7.23's exit, at the gate: a routine signed for writes under
+/// `.aegis/artefacts/` writes there and parks anywhere else, and the park
+/// offers the folder it wanted rather than the workspace.
+#[test]
+fn a_write_prefix_covers_its_folder_and_parks_the_rest() {
+    let (_dir, root) = with_a_world();
+    let grants = GrantStore::new();
+    grants.insert(
+        "s1",
+        Grant::write_under(".aegis/artefacts").expect("a prefix"),
+    );
+    let ctx = PolicyCtx::new("s1", Some(&root), &grants).unattended(true);
+
+    let write = |path: &str| json!({ "path": path, "content": "x", "create_dirs": true });
+    assert!(matches!(
+        decide(&ctx, tool::FS_WRITE, write(".aegis/artefacts/watch-a.md")),
+        Decision::Auto { .. }
+    ));
+
+    match decide(&ctx, tool::FS_WRITE, write(".aegis/status/STATUS.md")) {
+        Decision::Park { request } => {
+            assert_eq!(
+                request.grant,
+                Some(Grant::write_under(".aegis/status").expect("a prefix"))
+            );
+            assert!(
+                request.scope_label.contains(".aegis/status/"),
+                "{}",
+                request.scope_label
+            );
+        }
+        other => panic!("a write elsewhere parks, got {other:?}"),
+    }
+
+    // The prefix narrows `fs_write`'s ordinary row, so `world/` keeps its own.
+    assert!(matches!(
+        decide(&ctx, tool::FS_WRITE, write("world/essence.md")),
+        Decision::Deny { .. }
+    ));
+}
+
+/// PLAN 7.23's exit, for commands: `cargo test …` is a shape, and it does not
+/// cover `cargo install`.
+#[test]
+fn a_command_shape_covers_its_lines_and_parks_the_rest() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    let grants = GrantStore::new();
+    let shape = Grant::shape("cargo", &["test".to_owned(), "…".to_owned()]).expect("a shape");
+    grants.insert("s1", shape);
+    let ctx = PolicyCtx::new("s1", Some(&root), &grants).unattended(true);
+
+    let run = |args: &[&str]| json!({ "program": "cargo", "args": args });
+    assert!(matches!(
+        decide(&ctx, tool::SHELL_EXEC, run(&["test", "--lib"])),
+        Decision::Auto { .. }
+    ));
+    match decide(&ctx, tool::SHELL_EXEC, run(&["install", "ripgrep"])) {
+        Decision::Park { request } => {
+            assert_eq!(
+                request.grant,
+                Some(Grant::ShellShape {
+                    program: "cargo".to_owned(),
+                    args: vec!["install".to_owned(), "ripgrep".to_owned()],
+                })
+            );
+            assert!(
+                request
+                    .scope_label
+                    .contains("runs code this workspace holds"),
+                "{}",
+                request.scope_label
+            );
+        }
+        other => panic!("another verb parks, got {other:?}"),
+    }
+}
+
+/// A shape on git still meets git's read-only rules: the row for a line that
+/// writes offers no grant, so no shape can match it.
+#[test]
+fn a_git_shape_does_not_reach_past_the_read_only_rules() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let root = dunce::canonicalize(dir.path()).expect("canonical");
+    let grants = GrantStore::new();
+    let shape = Grant::shape("git", &["diff".to_owned(), "…".to_owned()]).expect("a shape");
+    grants.insert("s1", shape);
+    let ctx = PolicyCtx::new("s1", Some(&root), &grants);
+
+    let run = |args: &[&str]| json!({ "program": "git", "args": args });
+    assert!(matches!(
+        decide(&ctx, tool::SHELL_EXEC, run(&["diff", "HEAD"])),
+        Decision::Auto { .. }
+    ));
+    match decide(&ctx, tool::SHELL_EXEC, run(&["diff", "--output=../x"])) {
+        Decision::Ask { request, .. } => assert_eq!(request.grant, None),
+        other => panic!("a writing git line is asked with nothing to sign, got {other:?}"),
+    }
+}

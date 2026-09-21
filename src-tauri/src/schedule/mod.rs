@@ -155,6 +155,19 @@ pub fn check(
             });
         }
 
+        // A narrow grant read back from a file is judged as if it were being
+        // built (PLAN 7.23): a prefix into `.git/`, or a shape that is every
+        // argument, is not what the form would have signed.
+        if let Some(reason) = grant.malformed() {
+            return Err(AppError::Routine {
+                field: "grants",
+                reason: format!(
+                    "`{}` is not a standing approval as written: {reason}",
+                    grant.standing_label()
+                ),
+            });
+        }
+
         let tool = grant.tool();
         if !skill.tools.iter().any(|declared| declared == tool) {
             return Err(AppError::Routine {
@@ -441,7 +454,7 @@ pub fn opening(routine: &Routine, skill: &Skill) -> String {
     } else {
         out.push_str("This routine was signed for exactly this, and nothing else:\n");
         for grant in &routine.grants {
-            out.push_str(&format!("- {}\n", grant.scope_label()));
+            out.push_str(&format!("- {}\n", grant.standing_label()));
         }
         out.push('\n');
     }
@@ -531,6 +544,7 @@ mod tests {
             version: "1".to_owned(),
             summary: "looks".to_owned(),
             tools: vec![crate::policy::tool::FS_WRITE.to_owned()],
+            writes: vec![".aegis/artefacts".to_owned()],
             path: "watch.digest/SKILL.md".to_owned(),
             shadows: false,
             problem: None,
@@ -552,6 +566,15 @@ mod tests {
         let refused = check(&draft(vec![Grant::WorldAmend]), &agent, Some(&skill), true)
             .expect_err("the world is not");
         assert!(refused.to_string().contains("human decision"), "{refused}");
+
+        // PLAN 7.23: so is a prefix into it, written by hand.
+        let prefix = Grant::write_under(".aegis/artefacts").expect("a prefix");
+        check(&draft(vec![prefix]), &agent, Some(&skill), true).expect("signable");
+        let smuggled = Grant::FsWriteUnder {
+            prefix: "world/essence".to_owned(),
+        };
+        check(&draft(vec![smuggled]), &agent, Some(&skill), true)
+            .expect_err("a prefix into the world is not a write prefix");
     }
 
     #[test]

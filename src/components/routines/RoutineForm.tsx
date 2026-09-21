@@ -20,12 +20,16 @@ import { useAgents } from "../../state/agents";
 import { useProjects } from "../../state/projects";
 import { useRoutines, blankDraft, draftOf } from "../../state/routines";
 import { useSkills } from "../../state/skills";
+import { grantKey, sameGrant, toolOf } from "../../lib/grants";
 
 import { grantLabel } from "./RoutineList";
 
-/** Every standing approval a routine could carry, in the order they are shown. */
+/**
+ * Every fixed standing approval a routine could carry, in the order they are
+ * shown. `fs_write` over the whole workspace is not here: it is offered after
+ * the runbook's own write prefixes, as a widening (PLAN 7.23).
+ */
 const SIGNABLE: readonly Grant[] = [
-  { kind: "fs_write" },
   { kind: "fs_read_large" },
   { kind: "screen_capture" },
   { kind: "memory_write" },
@@ -33,31 +37,6 @@ const SIGNABLE: readonly Grant[] = [
   // PLAN 7.18: model-written questions to TypeSafe may be signed in advance.
   { kind: "jev_ask" },
 ];
-
-/** The tool a grant can ever apply to. Mirrors `Grant::tool` in Rust. */
-function toolOf(grant: Grant): string {
-  switch (grant.kind) {
-    case "fs_read_large":
-      return "fs_read";
-    case "fs_write":
-    case "world_amend":
-      return "fs_write";
-    case "shell":
-      return "shell_exec";
-    case "screen_capture":
-      return "screen_capture";
-    case "memory_write":
-      return "memory_write";
-    case "handoff_delegate":
-      return "handoff_delegate";
-    case "connector":
-      return grant.tool;
-    case "jev_eval":
-      return "jev_eval";
-    case "jev_ask":
-      return "jev_ask";
-  }
-}
 
 /** Minutes in a day, for what a cadence asks of a routine. */
 const DAY_MINUTES = 1440;
@@ -110,39 +89,6 @@ function ceilingsSentence(
       ? `${identity?.name ?? "the identity"}'s ${identityCap} across every routine that fires as it`
       : `this routine's ${routineCap}`;
   return `That is ${asks} runs a day, more than ${binding}: it will stop after ${held} and start again tomorrow.`;
-}
-
-/** Whether two grants are the same standing approval. */
-function same(one: Grant, other: Grant): boolean {
-  if (one.kind !== other.kind) {
-    return false;
-  }
-  if (one.kind === "shell") {
-    return one.program === (other as { program: string }).program;
-  }
-  // A connector grant is one tool, so two of them differ by the tool they name
-  // — the variant alone would fold every connector approval into one.
-  if (one.kind === "connector") {
-    return one.tool === (other as { tool: string }).tool;
-  }
-  if (one.kind === "jev_eval") {
-    return one.name === (other as { name: string }).name;
-  }
-  return true;
-}
-
-/** A stable key for one row of the list. */
-function grantKey(grant: Grant): string {
-  if (grant.kind === "shell") {
-    return `shell:${grant.program}`;
-  }
-  if (grant.kind === "connector") {
-    return `connector:${grant.tool}`;
-  }
-  if (grant.kind === "jev_eval") {
-    return `jev_eval:${grant.name}`;
-  }
-  return grant.kind;
 }
 
 /** The refusal that belongs under `field`, if the last save produced one. */
@@ -238,6 +184,16 @@ export default function RoutineForm({
   // What this routine could be signed for: declared by the runbook, held by the
   // identity. Both halves are checked again in Rust; showing only what would
   // pass is what keeps the form from offering an approval that cannot be saved.
+  const writes = (chosen?.tools.includes("fs_write") ?? false) &&
+    (identity?.tools.includes("fs_write") ?? false);
+
+  // Where the runbook says its writes land, first; the whole workspace only as
+  // a widening, and said so (PLAN 7.23).
+  const narrow: Grant[] = writes
+    ? (chosen?.writes ?? []).map((prefix) => ({ kind: "fs_write_under", prefix }))
+    : [];
+  const widening: Grant | null = writes ? { kind: "fs_write" } : null;
+
   const signable: Grant[] = SIGNABLE.filter((grant) => {
     const tool = toolOf(grant);
     return (
@@ -259,11 +215,25 @@ export default function RoutineForm({
     }
   }
 
+  // What is already signed and offered by nothing above — a folder or a
+  // command shape added by answering a parked ask *allow standing* — stays
+  // on the list, so unticking it is as visible as ticking it was.
+  const offered = [...narrow, ...(widening ? [widening] : []), ...signable];
+  const held = draft.grants.filter(
+    (grant) => !offered.some((one) => sameGrant(one, grant)),
+  );
+  const rows: { grant: Grant; widens: boolean }[] = [
+    ...narrow.map((grant) => ({ grant, widens: false })),
+    ...held.map((grant) => ({ grant, widens: false })),
+    ...(widening ? [{ grant: widening, widens: narrow.length > 0 }] : []),
+    ...signable.map((grant) => ({ grant, widens: false })),
+  ];
+
   const toggleGrant = (grant: Grant, on: boolean) =>
     patch({
       grants: on
         ? [...draft.grants, grant]
-        : draft.grants.filter((held) => !same(held, grant)),
+        : draft.grants.filter((one) => !sameGrant(one, grant)),
     });
 
   const schedule = draft.schedule;
@@ -494,22 +464,25 @@ export default function RoutineForm({
         <legend className="field__label">Standing approvals</legend>
         {draft.skill === "" ? (
           <p className="field__hint">Pick a runbook first.</p>
-        ) : signable.length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="field__hint">
             This runbook declares nothing that would ask. Its runs will read and
             report, which is the safest kind of routine there is.
           </p>
         ) : (
           <ul className="routineform__grantlist">
-            {signable.map((grant) => (
+            {rows.map(({ grant, widens }) => (
               <li key={grantKey(grant)}>
                 <label className="routineform__grant">
                   <input
                     type="checkbox"
-                    checked={draft.grants.some((held) => same(held, grant))}
+                    checked={draft.grants.some((one) => sameGrant(one, grant))}
                     onChange={(event) => toggleGrant(grant, event.target.checked)}
                   />
-                  <span>{grantLabel(grant)}</span>
+                  <span>
+                    {widens ? "Widen: " : ""}
+                    {grantLabel(grant)}
+                  </span>
                 </label>
               </li>
             ))}

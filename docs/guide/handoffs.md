@@ -86,7 +86,15 @@ Write the runbook, run it once and watch, then put it on a clock.
 **Nobody is watching**, so a scheduled run never asks: it *parks* instead. What it may do beyond
 reading is the list of standing approvals you ticked when saving — the same grants the dialog
 creates, checked at save time against what the runbook declares and what the identity holds. Nothing
-outside the workspace, under `.git/` or in `world/` can be signed for. A scheduled run cannot
+outside the workspace, under `.git/` or in `world/` can be signed for.
+
+Sign the narrowest thing that works. A write can be signed under one folder — the ones the
+runbook lists under `writes:` are offered first — and a command as a *shape*: `cargo test …`
+covers `cargo test` with any further arguments and not `cargo install`; `<path>` in a shape stands
+for one path inside the workspace. Answering *allow standing* on a parked write or command signs
+the folder it wanted, or the command's verb, not the whole workspace or the whole program. A shape
+narrows what is asked for, not what can happen: `cargo test` still runs the project's build
+scripts, and the approval says so. A scheduled run cannot
 delegate. **Run now** takes exactly the unattended path.
 
 - **Budgets.** Three numbers bound a routine, and the tightest of them wins:

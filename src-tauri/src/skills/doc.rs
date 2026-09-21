@@ -1,7 +1,9 @@
 //! One `SKILL.md`, parsed and judged.
 //!
 //! * **Front matter**: `version` and `tools`, so the catalog is machine-readable
-//!   and a run can fail closed before starting (PLAN 7.6).
+//!   and a run can fail closed before starting (PLAN 7.6); optionally
+//!   `writes`, the folders its writes land in, which is what signing it onto a
+//!   routine offers (PLAN 7.23).
 //! * **The seven `COS.md` *Skills* headings**, required in order and nothing
 //!   else; a refusal names the missing heading.
 //!
@@ -27,7 +29,7 @@ pub const HEADINGS: [&str; 7] = [
 ///
 /// Named in the refusal for an unknown one: "unknown key" without the list is
 /// a message that sends the author to the source code.
-const KEYS: [&str; 2] = ["version", "tools"];
+const KEYS: [&str; 3] = ["version", "tools", "writes"];
 
 /// Longest `SKILL.md` the runner will load.
 ///
@@ -51,6 +53,10 @@ pub struct SkillDoc {
     pub version: String,
     /// The tools its steps will call, validated against the registry.
     pub tools: Vec<String>,
+    /// The folders its `fs_write` calls land in, as write prefixes
+    /// ([`narrow::prefix`](crate::policy::narrow::prefix)). Empty when it
+    /// does not say.
+    pub writes: Vec<String>,
     /// The first paragraph of *When to use it*, capped — the catalog line.
     pub summary: String,
     /// The runbook itself: everything after the front matter.
@@ -74,13 +80,14 @@ pub fn parse(text: &str) -> Result<SkillDoc, String> {
     }
 
     let (front, body) = split(text)?;
-    let (version, tools) = front_matter(front)?;
+    let (version, tools, writes) = front_matter(front)?;
     let sections = sections(body)?;
     let summary = summarize(&sections[0]);
 
     Ok(SkillDoc {
         version,
         tools,
+        writes,
         summary,
         body: body.trim().to_owned(),
     })
@@ -122,10 +129,11 @@ fn split(text: &str) -> Result<(&str, &str), String> {
     )
 }
 
-/// Reads `version` and `tools` out of the front matter.
-fn front_matter(front: &str) -> Result<(String, Vec<String>), String> {
+/// Reads `version`, `tools` and `writes` out of the front matter.
+fn front_matter(front: &str) -> Result<(String, Vec<String>, Vec<String>), String> {
     let mut version: Option<String> = None;
     let mut declared: Vec<String> = Vec::new();
+    let mut writes: Vec<String> = Vec::new();
 
     for line in front.lines() {
         let line = line.trim();
@@ -151,6 +159,20 @@ fn front_matter(front: &str) -> Result<(String, Vec<String>), String> {
                     .filter(|name| !name.is_empty())
                     .map(str::to_owned)
                     .collect();
+            }
+            "writes" => {
+                writes.clear();
+                for raw in value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|raw| !raw.is_empty())
+                {
+                    let prefix = crate::policy::narrow::prefix(raw)
+                        .map_err(|reason| format!("`writes:` {reason}"))?;
+                    if !writes.contains(&prefix) {
+                        writes.push(prefix);
+                    }
+                }
             }
             other => {
                 return Err(format!(
@@ -200,7 +222,18 @@ fn front_matter(front: &str) -> Result<(String, Vec<String>), String> {
         tools.push(wanted.clone());
     }
 
-    Ok((version.to_owned(), tools))
+    if !writes.is_empty()
+        && !tools
+            .iter()
+            .any(|name| name == crate::policy::tool::FS_WRITE)
+    {
+        return Err(
+            "`writes:` names where this runbook's writes land, and `tools:` does not list              `fs_write`. Declare the tool, or drop `writes:`"
+                .to_owned(),
+        );
+    }
+
+    Ok((version.to_owned(), tools, writes))
 }
 
 /// Splits the runbook into its seven sections, refusing anything else.
@@ -333,6 +366,37 @@ mod tests {
             !doc.body.contains("version:"),
             "the front matter is not part of the runbook"
         );
+    }
+
+    /// PLAN 7.23: a runbook may say where its writes land.
+    #[test]
+    fn writes_are_prefixes_and_need_the_write_tool() {
+        let doc = parse(&skill(
+            "version: 1
+tools: fs_read, fs_write
+writes: ./.aegis/artefacts/, notes/drafts-*",
+            &HEADINGS,
+        ))
+        .expect("accepted");
+        assert_eq!(doc.writes, vec![".aegis/artefacts", "notes/drafts-*"]);
+        assert!(parse(&whole()).expect("accepted").writes.is_empty());
+
+        let refused = parse(&skill(
+            "version: 1
+tools: fs_read
+writes: notes",
+            &HEADINGS,
+        ))
+        .expect_err("refused");
+        assert!(refused.contains("fs_write"), "{refused}");
+        let world = parse(&skill(
+            "version: 1
+tools: fs_write
+writes: world/essence",
+            &HEADINGS,
+        ))
+        .expect_err("refused");
+        assert!(world.contains("world/"), "{world}");
     }
 
     /// The seven headings are the contract. A file missing one is refused, and

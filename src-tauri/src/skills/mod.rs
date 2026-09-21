@@ -94,6 +94,9 @@ pub struct Skill {
     pub summary: String,
     /// The tools its steps declare they will call.
     pub tools: Vec<String>,
+    /// The folders its writes land in (PLAN 7.23): what signing it onto a
+    /// routine offers before `fs_write` over the whole workspace.
+    pub writes: Vec<String>,
     /// The `SKILL.md` itself, so a person can go and open it.
     pub path: String,
     /// Whether this workspace skill hides a library one of the same name, so
@@ -202,6 +205,7 @@ fn entry_for(name: &str, scope: SkillScope, path: &Path) -> Skill {
         version: String::new(),
         summary: String::new(),
         tools: Vec::new(),
+        writes: Vec::new(),
         path: path.display().to_string(),
         shadows: false,
         problem: None,
@@ -212,6 +216,7 @@ fn entry_for(name: &str, scope: SkillScope, path: &Path) -> Skill {
             skill.version = doc.version;
             skill.summary = doc.summary;
             skill.tools = doc.tools;
+            skill.writes = doc.writes;
         }
         Err(problem) => {
             tracing::info!(skill = name, %problem, "a runbook will not run as written");

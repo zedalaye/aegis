@@ -13,6 +13,7 @@ digits, `.`, `-` and `_`.
 ---
 version: 1
 tools: fs_read, fs_write
+writes: .aegis/artefacts
 ---
 
 # inbox.triage
@@ -31,6 +32,10 @@ tools: fs_read, fs_write
   is a runbook whose failure mode is inventing an answer.
 - A file that does not parse is listed with the reason and never offered to a model.
 - `tools:` lets a run be refused before it starts.
+- `writes:` (optional) names the folders the runbook's `fs_write` calls land in, comma-separated,
+  relative to the workspace; a segment may end in one `*`. It needs `fs_write` in `tools:`, and it
+  can never name `.git/` or `world/`. Putting the runbook on a clock offers exactly those folders as
+  standing approvals, and write-anywhere only as a widening.
 - The catalog line is the first paragraph of *When to use it*, cut at 160 characters. Keep that
   paragraph short.
 

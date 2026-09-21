@@ -1,6 +1,7 @@
 ---
-version: 1
+version: 2
 tools: fs_list, fs_read, fs_write, shell_exec
+writes: .aegis/artefacts
 ---
 
 # alert.draft

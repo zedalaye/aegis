@@ -11,6 +11,8 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use super::{narrow, ResolvedCall};
+
 /// One `allow_session` grant. The variants are scopes, not tools.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -20,6 +22,16 @@ pub enum Grant {
     FsReadLarge,
     /// Write anywhere in the workspace subtree, except `.git/` and `world/`.
     FsWrite,
+    /// Writes strictly under one workspace-relative folder (PLAN 7.23). Only
+    /// ever collapses an ask whose row offers [`Grant::FsWrite`], so it
+    /// inherits every exclusion of that row.
+    FsWriteUnder {
+        /// `/`-separated, normalized by [`narrow::prefix`]; a segment may end
+        /// in one `*`.
+        ///
+        /// [`narrow::prefix`]: super::narrow::prefix
+        prefix: String,
+    },
     /// Writes under `world/` (PLAN 7.2). Its own scope: a workspace-write grant
     /// never reaches the constitution, and this one reaches nothing else. Never
     /// offered to delegated or unattended runs.
@@ -28,6 +40,16 @@ pub enum Grant {
     Shell {
         /// The normalized program key — see [`Grant::shell`].
         program: String,
+    },
+    /// One shape of one program (PLAN 7.23): literal words, `<path>` for one
+    /// contained path, `…` for any tail. Only ever collapses an ask whose row
+    /// offers [`Grant::Shell`] for the same program, so the read-only rules
+    /// for git still apply under it.
+    ShellShape {
+        /// The program key, as [`Grant::shell`] makes it.
+        program: String,
+        /// The closed pattern its arguments must fit.
+        args: Vec<String>,
     },
     /// Capture the primary display.
     ScreenCapture,
@@ -69,8 +91,8 @@ impl Grant {
             // One tool, two scopes that never overlap: the matrix names which
             // of them a given path's row offers, and a held grant only ever
             // matches the row it was created on.
-            Self::FsWrite | Self::WorldAmend => "fs_write",
-            Self::Shell { .. } => "shell_exec",
+            Self::FsWrite | Self::FsWriteUnder { .. } | Self::WorldAmend => "fs_write",
+            Self::Shell { .. } | Self::ShellShape { .. } => "shell_exec",
             Self::ScreenCapture => "screen_capture",
             Self::MemoryWrite => "memory_write",
             Self::HandoffDelegate => "handoff_delegate",
@@ -110,6 +132,9 @@ impl Grant {
                  rest of this session"
                     .to_owned()
             }
+            Self::FsWriteUnder { prefix } => format!(
+                "write files under `{prefix}/` in this workspace, for the rest of this session —                  a write anywhere else is still asked about"
+            ),
             Self::WorldAmend => {
                 "amend world/, this workspace's constitution, for the rest of this session — \
                  every other file is still asked about on its own"
@@ -125,6 +150,19 @@ impl Grant {
                 "run `{program}` in this workspace, with any arguments, for the rest of this \
                  session"
             ),
+            Self::ShellShape { program, args } => {
+                let mut label = format!(
+                    "run `{}` in this workspace, for the rest of this session — {}",
+                    narrow::shape_line(program, args),
+                    narrow::shape_meaning(args)
+                );
+                if narrow::runs_workspace_code(program) {
+                    label.push_str(&format!(
+                        ". `{program}` runs code this workspace holds, so the shape narrows what                          is asked for, not what that code can do"
+                    ));
+                }
+                label
+            }
             Self::ScreenCapture => {
                 "capture the primary display, for the rest of this session".to_owned()
             }
@@ -161,7 +199,7 @@ impl Grant {
 }
 
 /// Normalizes a program into a grant key. See [`Grant::shell`].
-fn shell_key(program: &str) -> String {
+pub(super) fn shell_key(program: &str) -> String {
     let trimmed = program.trim();
     if !names_a_path(trimmed) {
         return program_name(trimmed);
@@ -233,6 +271,23 @@ impl GrantStore {
         self.sessions()
             .get(session)
             .is_some_and(|grants| grants.contains(grant))
+    }
+
+    /// Whether any grant `session` holds collapses an ask whose row offered
+    /// `offered` for `call`: the grant itself, or a narrow one inside it
+    /// (PLAN 7.23).
+    pub fn covers(
+        &self,
+        session: &str,
+        offered: &Grant,
+        call: &ResolvedCall,
+        workspace: &std::path::Path,
+    ) -> bool {
+        self.sessions().get(session).is_some_and(|grants| {
+            grants
+                .iter()
+                .any(|held| held.covers(offered, call, workspace))
+        })
     }
 
     /// Records a grant. Returns `false` when it was already held.
@@ -344,9 +399,12 @@ mod tests {
         let every = [
             Grant::FsReadLarge,
             Grant::FsWrite,
+            Grant::write_under(".aegis/artefacts").expect("a prefix"),
             Grant::WorldAmend,
             Grant::shell("git"),
             Grant::shell("cargo"),
+            Grant::shape("cargo", &["test".to_owned(), "…".to_owned()]).expect("a shape"),
+            Grant::shape("rg", &["<path>".to_owned()]).expect("a shape"),
             Grant::ScreenCapture,
             Grant::MemoryWrite,
             Grant::HandoffDelegate,

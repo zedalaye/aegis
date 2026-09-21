@@ -6,6 +6,7 @@
  */
 
 import type { Grant, Routine } from "../../ipc/bindings";
+import { grantKey, shapeLine } from "../../lib/grants";
 import { useRoutines } from "../../state/routines";
 import { useAgents } from "../../state/agents";
 
@@ -16,6 +17,8 @@ export function grantLabel(grant: Grant): string {
   switch (grant.kind) {
     case "fs_write":
       return "write files inside the workspace, except under .git/ and world/";
+    case "fs_write_under":
+      return `write files under ${grant.prefix}/`;
     // Never signable on a routine — the form does not offer it and the
     // runtime refuses it — but the union is exhaustive, and a row read back
     // from a hand-edited routines.json still has to render.
@@ -24,7 +27,9 @@ export function grantLabel(grant: Grant): string {
     case "fs_read_large":
       return "read files over 1 MB";
     case "shell":
-      return `run ${grant.program}`;
+      return `run ${grant.program}, with any arguments`;
+    case "shell_shape":
+      return `run ${shapeLine(grant)}`;
     case "screen_capture":
       return "capture the primary display";
     case "memory_write":
@@ -157,7 +162,7 @@ function Row({ routine }: { readonly routine: Routine }) {
         <p className="routine__grants">
           May{" "}
           {routine.grants.map((grant, at) => (
-            <span key={`${grant.kind}-${at}`} className="routine__grant">
+            <span key={`${grantKey(grant)}-${at}`} className="routine__grant">
               {grantLabel(grant)}
             </span>
           ))}{" "}

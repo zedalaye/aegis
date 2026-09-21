@@ -156,8 +156,10 @@ A session grant is created by answering `allow_session`. It is:
   | --- | --- |
   | `FsReadLarge` | contained reads over 1 MB |
   | `FsWrite` | the `WS` subtree, except `.git/` and `world/` |
+  | `FsWriteUnder { prefix }` | writes strictly under one workspace folder; only where `FsWrite` is offered (§ 7.23) |
   | `WorldAmend` | writes under `world/`; never matches the `FsWrite` rows, nor they it |
   | `Shell { program }` | a bare name: the program name (basename; on Windows without its executable suffix, lower case). A name with a separator: its **resolved absolute path** (lower case on Windows), so `scripts\git.cmd` is not `git` |
+  | `ShellShape { program, args }` | one program key and a closed pattern (literals, `<path>`, a final `…`); only where `Shell` for that key is offered (§ 7.23) |
   | `ScreenCapture`, `MemoryWrite`, `HandoffDelegate` | that call type |
   | `Connector { tool }` | the full tool name, never the connector: a server may add tools mid-session |
   | `JevEval { name }` | one signed eval by name |
@@ -1914,7 +1916,7 @@ attended ask left for ten minutes is answerable after.
   *Refuses*); the messaging face (§ 7.7, which this makes cheap); the budget and mandate notes of
   § 7.26 and § 7.29, which have nothing to announce yet.
 
-### 7.23 Narrow standing grants — proposed
+### 7.23 Narrow standing grants — landed (1 of 2)
 
 A standing grant is only as safe as its scope. `FsWrite` covers the workspace minus `.git/` and
 `world/`; `Shell { program }` covers every argument of that program. Signing either on a routine
@@ -1938,6 +1940,38 @@ is signing almost everything, so an operator signs nothing — and the routine s
 
 *Exit*: `watch.sweep` on a clock signs `fs_write` under `.aegis/artefacts/` only, and a write
 elsewhere parks; a `cargo test …` shape does not cover `cargo install`.
+
+*As landed* (`policy/narrow.rs`, `lib/grants.ts`):
+
+- **A narrowing, not a row.** `Grant::covers` matches a held grant against the grant the row
+  offered: equal, or `FsWriteUnder` inside an offered `FsWrite`, or `ShellShape` inside an offered
+  `Shell` for the same program key. The table is unchanged, so every row that offers no grant —
+  outside the workspace, `.git/`, `world/`, a proposal's apply, a git line that is not read-only —
+  still cannot be matched by anything; § 3.1's *only ever a collapsed ask* holds for both.
+- **Prefixes** are normalized (`/`, no `./`, no trailing `/`) by `narrow::prefix`, which refuses
+  `..`, a root or a drive, `.git` anywhere and `world` first; a match is strictly below the prefix,
+  segment by segment, case-folded on Windows. A shape is literal words, `<path>` (one argument, not
+  an option, resolving inside the workspace from the working directory) and a final `…`; `...` is
+  read as `…`, and `…` alone comes back as `Shell { program }`. A literal can therefore not be the
+  string `<path>` or `…`.
+- **A parked ask offers the narrowest grant** that covers its call (`Grant::narrowed`, applied in
+  `decide_call` when it parks): the written file's folder, or the program with its first plain words
+  (at most two; not an option or a path) and `…` if more followed. A file at the root keeps
+  `FsWrite`, and a line that opens with an option keeps `Shell`. The session dialog still offers
+  the wide grant: narrowing is for what outlives the session.
+- **The door** re-validates a routine's narrow grants as if they were being built
+  (`Grant::malformed`), so a hand-edited `routines.json` cannot carry a prefix into `world/` or a
+  shape that is every argument. `writes:` requires `fs_write` in `tools:`; the door does not confine
+  a prefix to what the runbook declared, since any prefix is narrower than the `FsWrite` the tool
+  already allowed. The opening message of a scheduled run now lists grants in their standing words.
+- **Workspace code** is a fixed list of runners (`cargo`, `pnpm`, `make`, interpreters, shells, …)
+  plus any program named by a path; a shape over one says in its label that it narrows the ask, not
+  the power. Every shell ask was already badged high.
+- Seeded runbooks that only file artefacts declare `writes: .aegis/artefacts` (and `cabinet.found`
+  `.aegis/roster`), at version 2; existing libraries keep what they were seeded with.
+- **Not yet** (landing 2): `IDEAS.md` § 12's per-project auto-allowed read-only shapes (`ls`,
+  `rg`), which need a per-project home that § 13 has not settled; and authoring a shape anywhere but
+  a parked answer or a hand-edited routine.
 
 ### 7.24 Run checkpoints — proposed
 
