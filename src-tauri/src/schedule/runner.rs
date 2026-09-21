@@ -329,6 +329,13 @@ pub async fn resume(host: &Host<'_>, ask: &ParkedAsk, decision: crate::approval:
         host.grants.insert(&ask.session_id, grant.clone());
     }
 
+    // The parked run closed its runbook with a `blocked` return, and the
+    // opening tells the model it is still inside it: reopen it, so the return
+    // that finishes the work is accepted and on the runbook's record.
+    if !ask.skill.is_empty() {
+        host.turns.carry_run(&ask.session_id, Some(&ask.skill));
+    }
+
     let outcome = drive(
         host,
         &routine,

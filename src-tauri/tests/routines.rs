@@ -739,6 +739,61 @@ async fn an_answer_resumes_the_run_and_the_write_lands_once() {
     );
 }
 
+/// A parked run already returned `blocked`, which closes its runbook. The
+/// resumed turn is told it is still inside that runbook and does not load it
+/// again, so the run is reopened for it: its return is accepted, and the
+/// row reads `done` rather than `failed` (PLAN 7.22).
+#[tokio::test]
+async fn a_resumed_run_can_return_without_loading_its_runbook_again() {
+    let app = App::new();
+    let agent = app.watcher();
+    app.witness(&agent, WATCH_SKILL);
+
+    let routine = app
+        .routines
+        .create(&app.draft(&agent, Vec::new()))
+        .expect("the routine is stored");
+
+    let sink = Recorder::default();
+    app.fire_scripted(&routine.id, &sink, watch_rounds("first", "blocked"))
+        .await;
+    let ask = app
+        .parked
+        .list(None)
+        .first()
+        .cloned()
+        .expect("the write is waiting for somebody");
+    app.grants.allow_once(&ask.session_id, &ask.fingerprint);
+    let answered = app.parked.take(&ask.id).expect("it was still open");
+
+    // What a model does with "you are inside `skill:…`": the call, then the
+    // return — no second `skill_run`.
+    let rounds: Rounds = watch_rounds("second", "done").split_off(1);
+    app.resume_scripted(&answered, ApprovalDecision::AllowOnce, &sink, rounds)
+        .await;
+
+    let last = app
+        .routines
+        .get(&routine.id)
+        .expect("still on file")
+        .last
+        .expect("a run on the row");
+    assert_eq!(last.outcome, RunOutcome::Done, "{}", last.detail);
+    // One accepted return per run, both on the runbook's record: the parked
+    // run's `blocked`, and the resumed run's `done`.
+    let accepted = app
+        .audit_lines()
+        .into_iter()
+        .filter(|entry| {
+            entry.session_id == answered.session_id
+                && entry.tool == tool::SKILL_RETURN
+                && entry.outcome == Outcome::Ok
+                && entry.skill == WATCH_SKILL
+        })
+        .count();
+    assert_eq!(accepted, 2, "the resumed run's return was accepted");
+}
+
 // ---------------------------------------------------------------------------
 // 4. The ledger
 // ---------------------------------------------------------------------------
