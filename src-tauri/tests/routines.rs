@@ -632,7 +632,12 @@ async fn an_unsigned_run_parks_its_write_instead_of_losing_it() {
     assert_eq!(ask.tool, tool::FS_WRITE);
     assert_eq!(ask.routine_id, routine.id);
     assert_eq!(ask.skill, WATCH_SKILL);
-    assert_eq!(ask.grant, Some(Grant::FsWrite), "this one can be signed");
+    // The narrowest grant that covers the write (PLAN 7.23): its folder.
+    assert_eq!(
+        ask.grant,
+        Some(Grant::write_under(".aegis/status").expect("a prefix")),
+        "this one can be signed, for the folder it wanted"
+    );
     assert_eq!(ask.session_id, last.session_id);
 
     // And somebody who is not at the window is told — without the path.
