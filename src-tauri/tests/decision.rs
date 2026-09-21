@@ -384,6 +384,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: client,
+            meter: None,
         };
         let running = runtime.run(&plan, &cancel);
 

@@ -24,6 +24,7 @@ use uuid::Uuid;
 use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 use crate::policy::Grant;
+use crate::store::SpendCaps;
 
 /// Name of the document under the application-data directory.
 const ROUTINES_FILE: &str = "routines.json";
@@ -167,6 +168,8 @@ pub struct Routine {
     pub grants: Vec<Grant>,
     /// Most runs it may make in one day.
     pub runs_per_day: u32,
+    /// Its model-spend caps (PLAN 7.26).
+    pub spend: SpendCaps,
     /// How many it has made today.
     pub runs_today: u32,
     /// Whether the clock is stopped.
@@ -206,6 +209,9 @@ pub struct RoutineDraft {
     pub grants: Vec<Grant>,
     /// Most runs a day. Capped at [`RUNS_PER_DAY_MAX`].
     pub runs_per_day: u32,
+    /// Model-spend caps (PLAN 7.26); none for older callers.
+    #[serde(default)]
+    pub spend: SpendCaps,
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +237,8 @@ struct StoredRoutine {
     #[serde(default)]
     grants: Vec<Grant>,
     runs_per_day: u32,
+    #[serde(default)]
+    spend: SpendCaps,
     /// The UTC date the counter below belongs to, `2026-09-01`.
     #[serde(default)]
     day: String,
@@ -266,6 +274,7 @@ impl StoredRoutine {
             schedule: self.schedule.clone(),
             grants: self.grants.clone(),
             runs_per_day: self.runs_per_day,
+            spend: self.spend,
             // Reset on read too: yesterday's count is not today's.
             runs_today: if self.day == today {
                 self.runs_today
@@ -390,6 +399,7 @@ impl RoutineStore {
             schedule: valid.schedule,
             grants: valid.grants,
             runs_per_day: valid.runs_per_day,
+            spend: valid.spend,
             day: today.clone(),
             runs_today: 0,
             paused: false,
@@ -428,6 +438,7 @@ impl RoutineStore {
         stored.schedule = valid.schedule;
         stored.grants = valid.grants;
         stored.runs_per_day = valid.runs_per_day;
+        stored.spend = valid.spend;
         stored.updated_at = stamp.clone();
         if rearm {
             stored.armed_at = stamp;
@@ -727,6 +738,7 @@ struct Valid {
     schedule: Schedule,
     grants: Vec<Grant>,
     runs_per_day: u32,
+    spend: SpendCaps,
 }
 
 impl Valid {
@@ -807,6 +819,11 @@ impl Valid {
             });
         }
 
+        let spend = draft.spend.check().map_err(|reason| AppError::Routine {
+            field: "spend",
+            reason,
+        })?;
+
         // Sorted and deduplicated, so two routines signed for the same things
         // hold the same list and a row reads the same way twice.
         let mut grants = draft.grants.clone();
@@ -821,6 +838,7 @@ impl Valid {
             schedule,
             grants,
             runs_per_day: draft.runs_per_day,
+            spend,
         })
     }
 }

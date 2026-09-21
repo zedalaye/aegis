@@ -17,9 +17,10 @@ Aegis keeps its own records in eight JSON documents in the application-data dire
 | `agents.json` | the identities you made. The built-in Assistant is a constant in the runtime, not a row |
 | `memories.json` | what each identity remembers. Deleting an identity deletes its memories |
 | `routines.json` | what is on a clock, its standing approvals, and today's run count |
+| `ledger.json` | what each turn's model calls cost, in micro-dollars, with the session, identity, routine and model it was charged to. Written by the runtime only; kept 62 days |
 | `parked.json` | the calls runs stopped at, waiting for an answer: what the dialog would have shown, and which run to pick up. Never in a workspace |
 | `connectors.json` | external MCP servers: id, program, arguments, and the *names* of the environment variables they need |
-| `settings.json` | the provider roster: for each provider an id, a label, the authentication kind, base URL and model id |
+| `settings.json` | the provider roster: for each provider an id, a label, the authentication kind, base URL, model id, and the prices you entered per model |
 
 - **No document holds a key**, and none records whether something is running: after a crash a
   session comes back idle and a connector comes back disconnected.

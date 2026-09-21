@@ -17,6 +17,7 @@ use aegis_lib::board::{self, trace};
 use aegis_lib::policy::tool;
 use aegis_lib::schedule::runner;
 use aegis_lib::skills;
+use aegis_lib::spend::Tariff;
 use aegis_lib::store::routines::{RoutineDraft, Schedule};
 use aegis_lib::{
     Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditEntry, AuditLog, Event, FakeProvider,
@@ -110,6 +111,7 @@ struct App {
     memories: MemoryStore,
     /// Where an ask nobody can answer is filed (PLAN 7.22).
     parked: aegis_lib::ParkedStore,
+    spend: aegis_lib::store::SpendLedger,
     /// What is told to somebody who is not at the window.
     notifier: aegis_lib::Quiet,
 }
@@ -156,6 +158,7 @@ impl App {
             captures: data.join("captures"),
             memories: MemoryStore::load(&data),
             parked: aegis_lib::ParkedStore::load(&data),
+            spend: aegis_lib::store::SpendLedger::load(&data),
             notifier: aegis_lib::Quiet,
         }
     }
@@ -178,6 +181,7 @@ impl App {
                 ],
                 skills: vec![WATCH_SKILL.to_owned()],
                 runs_per_day: 24,
+                spend: Default::default(),
             })
             .expect("the identity is accepted")
     }
@@ -193,6 +197,7 @@ impl App {
                 schedule: Schedule::Every { minutes: 60 },
                 grants,
                 runs_per_day: 4,
+                spend: Default::default(),
             })
             .expect("the routine is stored")
             .id
@@ -201,7 +206,12 @@ impl App {
     /// Fires one routine the way the scheduler fires it.
     async fn fire(&self, routine_id: &str) {
         let sink = Silent::default();
-        let provider = |_: &Agent, _: &str| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
+        let provider = |_: &Agent, _: &str| {
+            (
+                Box::new(FakeProvider::instant()) as Box<dyn Provider>,
+                Tariff::unpriced("fake"),
+            )
+        };
         let host = runner::Host {
             projects: &self.projects,
             routines: &self.routines,
@@ -220,6 +230,7 @@ impl App {
             memories: &self.memories,
             connectors: aegis_lib::Connectors::none(),
             provider: &provider,
+            spend: &self.spend,
             decision: None,
         };
 

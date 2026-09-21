@@ -305,6 +305,12 @@ pub struct TurnCost {
     /// Whether the provider actually said. `false` means the counts above
     /// are zero because nothing was reported, not because nothing was spent.
     pub reported: bool,
+    /// What the turn cost in micro-dollars, as the spend ledger priced it
+    /// (PLAN 7.26). `None` when its model has no price. A copy for display:
+    /// caps are enforced from the ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null")]
+    pub micros: Option<u64>,
     /// RFC3339, UTC. When the turn finished.
     pub at: String,
 }
@@ -319,6 +325,7 @@ impl TurnCost {
             cache_creation_tokens: 0,
             completion_tokens,
             reported: true,
+            micros: None,
             at: now(),
         }
     }
@@ -331,6 +338,12 @@ impl TurnCost {
         self
     }
 
+    /// What the turn cost in money, when its model has a price.
+    pub const fn with_micros(mut self, micros: Option<u64>) -> Self {
+        self.micros = micros;
+        self
+    }
+
     /// A turn whose provider said nothing about what it spent.
     pub fn unreported(turn_id: &str) -> Self {
         Self {
@@ -340,6 +353,7 @@ impl TurnCost {
             cache_creation_tokens: 0,
             completion_tokens: 0,
             reported: false,
+            micros: None,
             at: now(),
         }
     }
@@ -374,6 +388,14 @@ pub struct Cost {
     /// Tokens out of it.
     #[ts(type = "number")]
     pub completion_tokens: u64,
+    /// Micro-dollars, over the turns that had a price (PLAN 7.26).
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub micros: u64,
+    /// Of the turns summed, how many had a price. Fewer than `turns` means
+    /// `micros` is "at least".
+    #[serde(default)]
+    pub priced: u32,
 }
 
 impl Cost {
@@ -381,6 +403,10 @@ impl Cost {
     pub fn of<'a>(turns: impl IntoIterator<Item = &'a TurnCost>) -> Self {
         turns.into_iter().fold(Self::default(), |mut cost, turn| {
             cost.turns = cost.turns.saturating_add(1);
+            if let Some(micros) = turn.micros {
+                cost.micros = cost.micros.saturating_add(micros);
+                cost.priced = cost.priced.saturating_add(1);
+            }
             if turn.reported {
                 cost.prompt_tokens = cost.prompt_tokens.saturating_add(turn.prompt_tokens);
                 cost.cache_read_tokens = cost
@@ -418,6 +444,8 @@ impl Cost {
         self.completion_tokens = self
             .completion_tokens
             .saturating_add(other.completion_tokens);
+        self.micros = self.micros.saturating_add(other.micros);
+        self.priced = self.priced.saturating_add(other.priced);
     }
 
     /// Whether nothing is known: a board then draws nothing, not "0 tokens".

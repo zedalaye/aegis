@@ -24,7 +24,7 @@ use super::{now, quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 use crate::policy::tool;
 use crate::skills;
-use crate::store::{connectors, settings};
+use crate::store::{connectors, settings, SpendCaps};
 use crate::tools;
 
 /// Name of the document under the application-data directory.
@@ -98,6 +98,9 @@ pub struct Agent {
     /// Most scheduled runs it may make in a day (Phase 16); zero means never
     /// scheduled.
     pub runs_per_day: u32,
+    /// Its model-spend caps (PLAN 7.26), over everything it runs. Set in
+    /// Settings only; a roster carries none.
+    pub spend: SpendCaps,
     /// Whether this is the built-in identity, which cannot be edited or
     /// deleted. Derived, never stored.
     pub builtin: bool,
@@ -123,6 +126,7 @@ impl Agent {
             // names a granted skill). The default is written out rather than
             // zeroed so that the number means the same thing on every row.
             runs_per_day: AGENT_RUNS_PER_DAY_DEFAULT,
+            spend: SpendCaps::default(),
             builtin: true,
         }
     }
@@ -140,6 +144,7 @@ impl Agent {
             tools: Vec::new(),
             skills: Vec::new(),
             runs_per_day: 0,
+            spend: SpendCaps::default(),
             builtin: false,
         }
     }
@@ -180,6 +185,9 @@ pub struct AgentDraft {
     /// defaulted for older callers.
     #[serde(default = "default_runs_per_day")]
     pub runs_per_day: u32,
+    /// Model-spend caps (PLAN 7.26); none for older callers.
+    #[serde(default)]
+    pub spend: SpendCaps,
 }
 
 /// The ceiling a draft that names none carries.
@@ -216,6 +224,8 @@ struct StoredAgent {
     /// have scheduled it before there were routines.
     #[serde(default = "default_runs_per_day")]
     runs_per_day: u32,
+    #[serde(default)]
+    spend: SpendCaps,
     created_at: String,
     updated_at: String,
 }
@@ -233,6 +243,7 @@ impl StoredAgent {
             tools: self.tools.clone(),
             skills: self.skills.clone(),
             runs_per_day: self.runs_per_day,
+            spend: self.spend,
             builtin: false,
         }
     }
@@ -440,6 +451,7 @@ impl AgentStore {
         stored.tools = valid.tools;
         stored.skills = valid.skills;
         stored.runs_per_day = valid.runs_per_day;
+        stored.spend = valid.spend;
         stored.updated_at = now();
         let updated = stored.to_agent();
 
@@ -531,6 +543,7 @@ struct Valid {
     tools: Vec<String>,
     skills: Vec<String>,
     runs_per_day: u32,
+    spend: SpendCaps,
 }
 
 impl Valid {
@@ -545,6 +558,7 @@ impl Valid {
             tools: self.tools.clone(),
             skills: self.skills.clone(),
             runs_per_day: self.runs_per_day,
+            spend: self.spend,
         }
     }
 
@@ -560,6 +574,7 @@ impl Valid {
             tools: self.tools,
             skills: self.skills,
             runs_per_day: self.runs_per_day,
+            spend: self.spend,
             created_at: stamp.to_owned(),
             updated_at: stamp.to_owned(),
         }
@@ -740,6 +755,11 @@ impl Valid {
             });
         }
 
+        let spend = draft.spend.check().map_err(|reason| AppError::Agent {
+            field: "spend",
+            reason,
+        })?;
+
         Ok(Self {
             name: name.to_owned(),
             role: role.to_owned(),
@@ -749,6 +769,7 @@ impl Valid {
             tools,
             skills,
             runs_per_day: draft.runs_per_day,
+            spend,
         })
     }
 }

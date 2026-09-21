@@ -96,6 +96,8 @@ struct Fixture {
     notifier: crate::notify::Quiet,
     /// The built-in identity, which holds every tool.
     agent: Agent,
+    /// Where a metered turn's rounds are charged (PLAN 7.26).
+    spend: crate::store::SpendLedger,
 }
 
 impl Fixture {
@@ -134,6 +136,7 @@ impl Fixture {
             parked: crate::store::ParkedStore::load(&data),
             notifier: crate::notify::Quiet,
             agent: Agent::builtin(),
+            spend: crate::store::SpendLedger::load(&data),
         }
     }
 
@@ -179,7 +182,38 @@ impl Fixture {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         }
+    }
+
+    /// A meter for this fixture's turn at $10 per million reply tokens, or
+    /// with no price (PLAN 7.26).
+    fn meter(&self, priced: bool) -> Meter<'_> {
+        let price = crate::store::ModelPrice {
+            model: "fake".to_owned(),
+            input: 0,
+            output: 10 * crate::store::ledger::DOLLAR,
+            cache_read: None,
+            cache_write: None,
+        };
+        Meter::new(
+            &self.spend,
+            &self.notifier,
+            spend::Tariff {
+                provider_id: "default".to_owned(),
+                model: "fake".to_owned(),
+                price: priced.then_some(price),
+                max_output_tokens: None,
+            },
+            spend::Payer {
+                project_id: "p1",
+                session_id: &self.session_id,
+                turn_id: TURN_ID,
+                agent: &self.agent,
+                routine: None,
+                run_is_session: false,
+            },
+        )
     }
 
     /// The approval the turn is blocked on, polled the way a click finds it.
@@ -1237,4 +1271,147 @@ fn a_finished_turn_leaves_the_session_in_a_drawable_state() {
     assert_eq!(resting_state(StopReason::Cancelled), SessionState::Idle);
     assert_eq!(resting_state(StopReason::Length), SessionState::Idle);
     assert_eq!(resting_state(StopReason::Error), SessionState::Error);
+}
+
+/// A tool round that reports `cents` worth of reply at [`Fixture::meter`]'s
+/// price.
+fn paid_call_script(id: &str, path: &str, cents: u64) -> Vec<ModelEvent> {
+    let mut script = tool_call_script(id, tool::FS_READ, &format!(r#"{{"path":"{path}"}}"#));
+    if let Some(ModelEvent::Finish { usage, .. }) = script.last_mut() {
+        *usage = Some(Usage {
+            prompt_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            completion_tokens: cents * 1_000,
+            total_tokens: cents * 1_000,
+        });
+    }
+    script
+}
+
+/// The `turn:error` codes this fixture's sink saw.
+fn error_codes(fx: &Fixture) -> Vec<String> {
+    fx.sink
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::TurnError(error) => Some(error.code),
+            _ => None,
+        })
+        .collect()
+}
+
+/// PLAN 7.26: a round that passes the cap refuses the calls it asked for
+/// and gives the model one wrap-up round.
+#[tokio::test]
+async fn a_spend_cap_halts_the_turn_with_a_wrap_up_round() {
+    let mut fx = Fixture::new();
+    fx.agent.spend.per_run = Some(crate::store::ledger::DOLLAR / 2);
+    std::fs::write(fx.workspace.join("a.txt"), "x").expect("write");
+    std::fs::write(fx.workspace.join("b.txt"), "x").expect("write");
+    fx.say("read both");
+
+    let provider = FakeProvider::scripted(vec![
+        paid_call_script("call_1", "a.txt", 30),
+        paid_call_script("call_2", "b.txt", 30),
+        vec![
+            ModelEvent::TextDelta {
+                text: "over budget; here is what I have".to_owned(),
+            },
+            ModelEvent::Finish {
+                reason: StopReason::Stop,
+                usage: None,
+            },
+        ],
+    ]);
+    let meter = fx.meter(true);
+    let reason = Turn {
+        meter: Some(&meter),
+        ..fx.turn(&provider)
+    }
+    .run(&fx.plan(), &CancellationToken::new())
+    .await;
+
+    assert_eq!(reason, StopReason::Stop);
+    let started = fx
+        .sink
+        .names()
+        .iter()
+        .filter(|name| **name == "tool:started")
+        .count();
+    assert_eq!(started, 1, "the round that passed the cap did not run");
+
+    let transcript = fx.transcript();
+    let refused = transcript.iter().any(|message| {
+        serde_json::from_str::<serde_json::Value>(&message.text)
+            .is_ok_and(|envelope| envelope["error"]["code"] == "E_BUDGET")
+    });
+    assert!(refused, "the pending call carries E_BUDGET");
+    let last = transcript.last().expect("a wrap-up");
+    assert!(last.text.contains("what I have"), "{}", last.text);
+    // Two paid rounds of $0.30, and a wrap-up that reported nothing: charged
+    // at the unknown ceiling of 32 000 reply tokens, $0.32.
+    assert_eq!(
+        fx.spend.spent(crate::store::ledger::Scope::Turn(TURN_ID)),
+        600_000 + 320_000
+    );
+    let recorded = fx.sessions.costs(&fx.session_id).expect("costs");
+    assert_eq!(
+        recorded.last().and_then(|cost| cost.micros),
+        Some(920_000),
+        "the session's cost carries the price for the board"
+    );
+}
+
+/// PLAN 7.26: a turn whose cap is already spent sends nothing.
+#[tokio::test]
+async fn a_spent_cap_sends_nothing() {
+    let mut fx = Fixture::new();
+    fx.agent.spend.per_day = Some(crate::store::ledger::DOLLAR);
+    fx.say("hello");
+    let account = crate::store::ledger::Account {
+        turn_id: "earlier",
+        session_id: "elsewhere",
+        project_id: "p1",
+        agent_id: &fx.agent.id,
+        routine_id: "",
+        provider_id: "default",
+        model: "fake",
+    };
+    fx.spend
+        .charge(&account, crate::store::ledger::DOLLAR, false)
+        .expect("charged");
+
+    let provider = FakeProvider::instant();
+    let meter = fx.meter(true);
+    let reason = Turn {
+        meter: Some(&meter),
+        ..fx.turn(&provider)
+    }
+    .run(&fx.plan(), &CancellationToken::new())
+    .await;
+
+    assert_eq!(reason, StopReason::Error);
+    assert_eq!(error_codes(&fx), ["E_BUDGET"]);
+    assert!(fx.sink.streamed().is_empty(), "no request went out");
+}
+
+/// PLAN 7.26: a cap that cannot be measured stops rather than passes.
+#[tokio::test]
+async fn a_cap_on_an_unpriced_model_sends_nothing() {
+    let mut fx = Fixture::new();
+    fx.agent.spend.per_run = Some(crate::store::ledger::DOLLAR);
+    fx.say("hello");
+
+    let provider = FakeProvider::instant();
+    let meter = fx.meter(false);
+    let reason = Turn {
+        meter: Some(&meter),
+        ..fx.turn(&provider)
+    }
+    .run(&fx.plan(), &CancellationToken::new())
+    .await;
+
+    assert_eq!(reason, StopReason::Error);
+    assert_eq!(error_codes(&fx), ["E_BUDGET"]);
 }

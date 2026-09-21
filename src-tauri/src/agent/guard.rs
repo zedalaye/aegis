@@ -1,14 +1,16 @@
 //! When a turn should stop calling tools (PLAN 7.16).
 //!
-//! Two guards, both deterministic, neither a permission gate:
+//! Three guards, all deterministic, none a permission gate:
 //!
 //! * **A loop** is the same round fingerprint [`LOOP_STREAK`] times running.
 //!   The fingerprint is the tool names and canonical arguments, not the call
 //!   ids, so a retry of the same work is visible.
 //! * **A ceiling** ([`MAX_TOOL_ROUNDS`]) bounds the bill when the work is
 //!   still progressing. It is the same with or without a runbook.
+//! * **A budget** is a model-spend cap the last round passed (PLAN 7.26),
+//!   decided by the [`Meter`](crate::spend::Meter), not here.
 //!
-//! Hitting either refuses the pending calls and lets the model have one wrap-up
+//! Hitting any refuses the pending calls and lets the model have one wrap-up
 //! round. The recovery is not "ask the user to continue".
 
 use serde_json::Value;
@@ -35,6 +37,8 @@ pub enum Halt {
     Loop,
     /// [`MAX_TOOL_ROUNDS`] rounds already ran in this turn.
     Ceiling,
+    /// A model-spend cap is reached (PLAN 7.26).
+    Budget,
 }
 
 impl Halt {
@@ -43,6 +47,7 @@ impl Halt {
         match self {
             Self::Loop => ErrorCode::ToolLoop,
             Self::Ceiling => ErrorCode::TooManyToolRounds,
+            Self::Budget => ErrorCode::Budget,
         }
     }
 
@@ -58,6 +63,8 @@ impl Halt {
                 "this turn already ran {MAX_TOOL_ROUNDS} rounds of tools, which is the limit; \
                  finish with what you have"
             ),
+            Self::Budget => "this turn reached the model-spend cap it runs under, so no more                              tools run; finish with what you have, in this reply"
+                .to_owned(),
         };
         match skill {
             Some(name) => format!(

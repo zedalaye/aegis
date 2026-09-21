@@ -33,9 +33,11 @@ import type {
   EvalEntry,
   EvalProposal,
   ModelCatalog,
+  ModelPrice,
   Memory,
   MemoryDraft,
   ParkedAsk,
+  PriceSuggestion,
   Project,
   ProjectDetail,
   ProviderProbe,
@@ -52,6 +54,7 @@ import type {
   SessionSummary,
   Skill,
   SkillProposal,
+  SpendToday,
   TreeListing,
   TurnHandle,
   WorkspaceLayout,
@@ -518,6 +521,40 @@ export function settingsListModels(
     base_url: baseUrl,
     provider_id: providerId ?? null,
   });
+}
+
+/**
+ * Replaces one row's price list (PLAN 7.26). Amounts are micro-dollars per
+ * million tokens; `E_INVALID_SETTING` with `field: "prices"` names the fault.
+ */
+export function settingsSetPrices(
+  providerId: string,
+  prices: readonly ModelPrice[],
+): Promise<MaskedSettings> {
+  return call<MaskedSettings>("settings_set_prices", {
+    provider_id: providerId,
+    prices,
+  });
+}
+
+/**
+ * Suggested prices for `models` on a saved row (PLAN 7.26): its own catalog,
+ * then LiteLLM's public table. Stores nothing; never rejects for a source that
+ * could not be read — that is a note in the result.
+ */
+export function settingsSuggestPrices(
+  providerId: string,
+  models: readonly string[],
+): Promise<PriceSuggestion> {
+  return call<PriceSuggestion>("settings_suggest_prices", {
+    provider_id: providerId,
+    models,
+  });
+}
+
+/** What each routine and identity has spent on models today, UTC (PLAN 7.26). */
+export function spendToday(): Promise<SpendToday> {
+  return call<SpendToday>("spend_today");
 }
 
 /**

@@ -14,13 +14,20 @@ impl AppState {
     /// turn so a settings, identity or override change applies to the next
     /// message. Turns, handoffs and routines all come through here.
     pub fn provider_for(&self, agent: &Agent, session_id: &str) -> Box<dyn Provider> {
+        self.answering(agent, session_id).0
+    }
+
+    /// [`AppState::provider_for`], with what its model costs (PLAN 7.26) —
+    /// both from one binding, so the price is the price of the model sent.
+    pub fn answering(&self, agent: &Agent, session_id: &str) -> (Box<dyn Provider>, Tariff) {
         let binding = self.sessions.binding_of(session_id).unwrap_or_else(|err| {
             tracing::warn!(%err, session_id, "no session to read a binding from");
             (None, None)
         });
-        self.build_provider(
-            &self.binding(agent, Some((binding.0.as_deref(), binding.1.as_deref()))),
-            Some(session_id),
+        let binding = self.binding(agent, Some((binding.0.as_deref(), binding.1.as_deref())));
+        (
+            self.build_provider(&binding, Some(session_id)),
+            Tariff::of(&binding),
         )
     }
 
@@ -130,6 +137,7 @@ impl AppState {
                     max_output_tokens: entry.settings.max_output_tokens,
                     key_source,
                     key_hint,
+                    prices: entry.settings.prices,
                 }
             })
             .collect();
@@ -391,6 +399,31 @@ impl AppState {
             .or_else(|| self.row_key(provider_id, kind));
 
         catalog::output_cap(kind, base_url, model, self.http.as_ref(), key.as_ref()).await
+    }
+
+    /// Suggested prices for `models` on a saved row (PLAN 7.26): its own
+    /// catalog, then LiteLLM's table. Nothing is stored.
+    pub async fn suggest_prices(
+        &self,
+        provider_id: &str,
+        models: &[String],
+    ) -> AppResult<PriceSuggestion> {
+        let entry = self
+            .settings
+            .entry(provider_id)
+            .ok_or_else(|| AppError::ProviderNotFound {
+                id: provider_id.to_owned(),
+            })?;
+        let kind = entry.settings.auth_kind;
+        let key = self.row_key(provider_id, kind);
+        Ok(pricing::suggest(
+            kind,
+            &entry.settings.base_url,
+            models,
+            self.http.as_ref(),
+            key.as_ref(),
+        )
+        .await)
     }
 
     /// The models an authentication kind accepts, for the base URL in the form,

@@ -352,8 +352,8 @@ A denial is an ordinary result (`ok: false`, `E_DENIED`); the turn continues.
 Stable strings, shared by IPC and envelopes: `E_TURN_BUSY`, `E_NO_WORKSPACE`,
 `E_PATH_OUTSIDE_WORKSPACE`, `E_PATH_INVALID`, `E_DENIED`, `E_GRANT_NOT_ALLOWED`, `E_APPROVAL_STALE`,
 `E_TIMEOUT`, `E_TOOL_FAILED`, `E_EXEC_HOST`, `E_PROVIDER_HTTP`, `E_PROVIDER_PARSE`, `E_NO_API_KEY`,
-`E_KEYRING_UNAVAILABLE`, `E_CANCELLED`, `E_TOO_MANY_TOOL_ROUNDS`, `E_TOOL_LOOP`, `E_SCREEN_PERMISSION`,
-`E_INVALID_SETTING`, `E_INTERNAL`.
+`E_KEYRING_UNAVAILABLE`, `E_CANCELLED`, `E_TOO_MANY_TOOL_ROUNDS`, `E_TOOL_LOOP`, `E_BUDGET`,
+`E_SCREEN_PERMISSION`, `E_INVALID_SETTING`, `E_INTERNAL`.
 
 `E_EXEC_HOST` is its own code because it says what no other does: the command ran nowhere, and the
 project's host — not the call — has to change (§ 7.12).
@@ -1806,7 +1806,7 @@ and the ledger, never on a claim. Demotion is automatic; promotion is a human ac
 | --- | --- | --- | --- |
 | L0 — propose | nothing; every mutation is asked | today | — |
 | L1 — unattended files | a routine, narrow standing grants | § 7.22 (landed), § 7.23 | one watched run (Phase 16's door) |
-| L2 — verified | L1, every run checked by a gate, checkpointed | § 7.24 (landed), § 7.25, § 7.26 | *N* consecutive runs passing the gate (default 5) |
+| L2 — verified | L1, every run checked by a gate, checkpointed | § 7.24 (landed), § 7.25, § 7.26 (1 of 2) | *N* consecutive runs passing the gate (default 5) |
 | L3 — orchestrated | the CoS on a clock, delegating with grants that narrow | § 7.27, § 7.28 | L2 on every runbook it routes to |
 | L4 — mandated | irreversible acts under a mandate | § 7.29 | L3, a gate on the act, a budget in force |
 
@@ -1816,7 +1816,7 @@ recipient, instrument); raising a cap; installing a connector; anything outside 
 the kill switch. An agent may *propose* each of these as a file (§ 7.13's pattern); it never
 applies one.
 
-**Order.** § 7.22 (landed) → § 7.23 → § 7.24 (landed) → § 7.26 → § 7.25 → § 7.30 → § 7.28 → § 7.27 →
+**Order.** § 7.22 (landed) → § 7.23 → § 7.24 (landed) → § 7.26 (model spend landed) → § 7.25 → § 7.30 → § 7.28 → § 7.27 →
 § 7.29. Each slice is usable alone; § 7.29 depends on all the others and lands last.
 
 **Amends on landing** (not before): § 7.1 *Policy* (a mandate is a gate, not a skipped one);
@@ -2078,7 +2078,7 @@ an irreversible act.
 *Exit*: a routine whose gate runs the tests is `rejected` when a test fails and paused after the
 second; a run that edits the coverage configuration returns `needs_you` although the gate passed.
 
-### 7.26 Budgets — proposed
+### 7.26 Budgets — landed (1 of 2)
 
 Routines are bounded by runs per day and 15 minutes; not by tokens or money, although
 `TurnCost` is recorded per turn. And any act that spends (§ 7.29) needs an envelope the model
@@ -2112,6 +2112,87 @@ counted after the fact only; an envelope shared across projects.
 *Exit*: a routine with a $0.50 per-run cap halts with a wrap-up round when it passes it; an act
 costing more than the remaining envelope parks; the earned envelope moves only when its source
 shows a settled amount.
+
+#### Landing 1 — Model spend
+
+Money envelopes have no act to guard until § 7.29, and an earned one needs § 7.28's source. Model
+spend is guarded now: § 7.25's `eval` check and every gate run are paid for in tokens.
+
+*Settles*:
+
+- **One unit.** Model spend is US dollars, stored as whole micro-dollars (`u64`, 1 $ = 1 000 000).
+  No float is summed. Envelopes per currency arrive with landing 2.
+- **Prices on the row.** Each provider row carries `prices: [{ model, input, output, cache_read?,
+  cache_write? }]`, dollars per million tokens as entered, stored in micro-dollars. The price that
+  applies is the one for the model the turn sends (§ 7.19's binding), matched exactly. A cache price
+  left blank charges the input price, which errs high. A CLI login still has a price: it is what the
+  operator decides a token is worth, not what an invoice says.
+- **Suggested, never applied.** *Suggest prices* reads the row's own model catalog where it publishes
+  `pricing` (OpenRouter and compatible gateways), then LiteLLM's public price table, and fills the
+  form for the row's models, naming each figure's source. Nothing is stored until the operator saves:
+  a price read wrong or stale would silently move every cap that depends on it. The table is fetched
+  with a plain `GET` to GitHub that carries nothing of the operator's.
+- **Caps** are `spend: { per_run?, per_day? }` on a routine and on an identity, set in Settings or
+  the routine form only. A **run** is the session of a routine's run or of a brief (a resume or a
+  retry is the same run); for a session someone opened it is the turn. A **day** is UTC, like
+  `runs_per_day`. An identity's day counts everything it ran, attended or not.
+- **The ledger** is `ledger.json` in the app data: one row per turn — project, session, turn,
+  identity, routine, provider row, model, micro-dollars, `estimated` — written after every round,
+  so a concurrent run sees it at its next check. Rows older than 62 days are pruned. No command
+  writes it and no tool reads it.
+- **Pricing a round.** Reported usage is priced: uncached prompt at `input`, cache reads and writes
+  at theirs, completion at `output`. A round with no usage reported counts the request's size in
+  bytes divided by three as prompt tokens and the row's `max_output_tokens` (else 32 000) as
+  completion, and marks the turn `estimated`.
+- **Enforcement** is in the turn, per round. Before the first request, a cap already reached fails
+  the turn with `E_BUDGET` and nothing is sent. After a round, a cap passed refuses the pending calls
+  with `E_BUDGET` and gives the model one wrap-up round (§ 7.16's shape). A cap on a model with no
+  price refuses the turn: a cap that cannot be measured stops rather than passes.
+- **The scheduler** treats a spent day cap like a spent `runs_per_day`: the routine's problem says
+  so, no session opens, and it is not a silence.
+- **Visible.** A routine row and an identity show today's spend against their caps; a run on the
+  board shows what it cost. Crossing 80 % of a day cap, and reaching it, each notify once a day
+  (§ 7.22), in words and a percentage, never an amount.
+- **Writing is not granting.** A roster (§ 7.14) carries no caps, and applying one keeps an existing
+  identity's.
+
+*Refuses*: a price or a cap read from the workspace; a price applied without the operator's save,
+or refreshed on a clock; a model matched to a price by anything looser than its id and a vendor
+prefix; a local tokenizer (the byte estimate errs high
+on purpose); a cap in tokens beside the cap in money; stopping mid-stream — a request already sent
+is paid for, and the next round is the one refused.
+
+*Exit*: a routine with a $0.50 per-run cap passes it in a round and gets one wrap-up round; the next
+fire after its day cap is reached does not open a session; an unpriced model under a cap is refused
+before its first request.
+
+*As landed* (`store/ledger.rs`, `spend.rs`, `components/settings/PriceTable.tsx`,
+`components/spend/SpendCapsFields.tsx`):
+
+- **One resolution.** `AppState::answering` resolves § 7.19's binding once and returns the provider
+  with its `Tariff` (row, model, price, output ceiling), so the price is always that of the model
+  sent. The routine and handoff hosts take that resolver (`spend::Answering`).
+- **A `Meter` per turn** carries the tariff and the caps in force — the routine's, then the
+  identity's. It is asked before *every* request that is not a wrap-up, not only the first: a run
+  that a concurrent one pushed past a shared day cap stops at its next request. After a round,
+  `Halt::Budget` joins § 7.16's loop and ceiling in `guard`, with the same one wrap-up.
+- **A cap bounds when a turn stops, not the last cent.** The round that crosses it is already paid
+  for, and so is the wrap-up; two runs sharing a day cap can each pass it by that much.
+- **The ledger is authoritative; the session keeps a copy.** Each turn's total is also written on
+  its `TurnCost` (`micros`), so the board's existing fold shows a run's cost in dollars ("at least"
+  when some turns had no price). Enforcement never reads the copy.
+- **Notifications** key on owner, day and threshold, so each crossing is posted once, with a
+  percentage and never an amount.
+- **Validation.** A cap is above zero, at most $10 000, and a run's no larger than its day; a price
+  names its model once and stays under $1 000 per million tokens. Both are refused with a field
+  (`spend`, `prices`).
+- `spend_today` is the only command reading the ledger; `settings_set_prices` is the only one writing
+  a price, apart from the row save that keeps them. `settings_suggest_prices`
+  (`agent/provider/pricing.rs`) returns figures and their source for the row's model, its priced
+  models and those of identities bound to it; LiteLLM is fetched only when the catalog left one out.
+  OpenRouter's negative "varies by route" is no price, not a free one.
+- **Not yet** (landing 2): money envelopes per currency, allocated or earned, with reserve and
+  settle; a cap on the built-in Assistant, which is a constant; envelopes on the board.
 
 ### 7.27 The CoS on a clock — proposed
 

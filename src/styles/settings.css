@@ -512,3 +512,60 @@
   display: flex;
   gap: 0.5rem;
 }
+
+/* Model-spend caps (PLAN 7.26), on an identity and a routine. */
+.spendcaps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.spendcaps__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.spendcaps__spent {
+  color: var(--muted);
+}
+
+/* A provider row's prices (PLAN 7.26). */
+.prices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
+  padding: 1rem 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.prices__table {
+  border-collapse: collapse;
+}
+
+.prices__table th {
+  color: var(--muted);
+  font-weight: normal;
+  text-align: left;
+  padding: 0 0.25rem 0.25rem;
+}
+
+.prices__table td {
+  padding: 0.125rem 0.25rem;
+}
+
+.prices__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.prices__notes {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}

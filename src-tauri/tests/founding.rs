@@ -109,6 +109,7 @@ impl App {
                 tools: assistant.tools,
                 skills: vec![skills::FOUND_SKILL.to_owned()],
                 runs_per_day: assistant.runs_per_day,
+                spend: Default::default(),
             })
             .expect("the duplicate is accepted")
     }
@@ -199,6 +200,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         };
         let running = turn.run(&plan, &cancel);
 
@@ -258,6 +260,7 @@ async fn a_duplicate_proposes_the_cabinet_and_only_the_apply_creates_it() {
             tools: assistant.tools.clone(),
             skills: vec![skills::FOUND_SKILL.to_owned()],
             runs_per_day: assistant.runs_per_day,
+            spend: Default::default(),
         },
     );
     assert!(edit.is_err(), "no Edit on the built-in row");
@@ -386,6 +389,7 @@ async fn a_duplicate_proposes_the_cabinet_and_only_the_apply_creates_it() {
             schedule: Schedule::Every { minutes: 60 },
             grants: Vec::new(),
             runs_per_day: 1,
+            spend: Default::default(),
         },
         chief,
         loop_skill,

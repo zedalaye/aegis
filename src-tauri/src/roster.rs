@@ -391,6 +391,8 @@ impl RosterEntry {
             tools: self.tools.clone(),
             skills: self.skills.clone(),
             runs_per_day: self.runs_per_day,
+            // Writing is not granting (PLAN 7.26): caps are set in Settings.
+            spend: crate::store::SpendCaps::default(),
         }
     }
 }

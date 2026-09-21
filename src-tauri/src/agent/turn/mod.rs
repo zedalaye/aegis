@@ -44,6 +44,7 @@ use crate::mcp::{self, Connectors};
 use crate::park::{self, Parking};
 use crate::policy::{self, AskRequest, Decision, GrantStore, Identity, PolicyCtx};
 use crate::skills::{self, SkillCtx};
+use crate::spend::{self, Meter};
 use crate::store::memories::{self, MemoryStore};
 use crate::store::{
     Agent, Message, SessionState, SessionStore, SessionSummary, ToolCallRecord, ToolCallStatus,
@@ -277,6 +278,9 @@ pub struct Turn<'a> {
     /// annotation. `None` without a TypeSafe key: those tools are then not
     /// offered, and dialogs open unannotated.
     pub decision: Option<&'a DecisionClient>,
+    /// What this turn's rounds cost and the caps they run under (PLAN 7.26).
+    /// `None` is unmetered — only a test.
+    pub meter: Option<&'a Meter<'a>>,
 }
 
 /// The [`ProgressSink`] one tool call writes to. The turn, not the tool,
@@ -450,6 +454,20 @@ impl Turn<'_> {
                 tools::schemas_for(&offered_tools(&held, self.decision.is_some()), &connectors),
             );
 
+            // Nothing is sent past a cap. Asked before each request rather
+            // than once, so a wrap-up round is the only one after a halt.
+            if wrapping.is_none() {
+                if let Some(refused) = self.meter.and_then(Meter::refusal) {
+                    tracing::info!(session_id = %plan.session_id, %refused, "a turn was not sent");
+                    break self.fail(plan, ErrorCode::Budget, &refused, false);
+                }
+            }
+            // Read only when the provider reports no usage (PLAN 7.26).
+            let estimate = self
+                .meter
+                .filter(|meter| meter.priced())
+                .map_or(0, |_| spend::prompt_estimate(&request));
+
             let stream = self.provider.stream(request);
             match self.consume(plan, stream, cancel, &mut seq).await {
                 Streamed::Cancelled { text } => {
@@ -478,6 +496,14 @@ impl Turn<'_> {
                     reason,
                     usage: reported,
                 } => {
+                    // Charged per round, so a concurrent run sees it.
+                    let budget = self
+                        .meter
+                        .and_then(|meter| meter.charge(reported.as_ref(), estimate));
+                    if let Some(reached) = &budget {
+                        tracing::info!(session_id = %plan.session_id, %reached, "a spend cap was reached");
+                    }
+
                     // Summed over rounds: each request was paid for.
                     if let Some(round) = reported {
                         match &mut usage {
@@ -494,7 +520,9 @@ impl Turn<'_> {
                     }
 
                     let incoming = guard::fingerprint(&calls);
-                    let halt = wrapping.or_else(|| guard::halt(rounds, &fingerprints, &incoming));
+                    let halt = wrapping
+                        .or_else(|| guard::halt(rounds, &fingerprints, &incoming))
+                        .or_else(|| budget.map(|_| Halt::Budget));
                     if let Some(halt) = halt {
                         tracing::warn!(
                             session_id = %plan.session_id,
@@ -577,7 +605,8 @@ impl Turn<'_> {
                     .with_cache(spent.cache_read_tokens, spent.cache_creation_tokens)
             }
             None => TurnCost::unreported(&plan.turn_id),
-        };
+        }
+        .with_micros(self.meter.and_then(Meter::turn_spent));
         if let Err(err) = self.sessions.charge(&plan.session_id, charge) {
             tracing::warn!(
                 %err,

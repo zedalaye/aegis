@@ -6,7 +6,7 @@
  * field.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type {
   Agent,
@@ -20,7 +20,10 @@ import { useAgents } from "../../state/agents";
 import { useProjects } from "../../state/projects";
 import { useRoutines, blankDraft, draftOf } from "../../state/routines";
 import { useSkills } from "../../state/skills";
+import { useSpend } from "../../state/spend";
 import { grantKey, sameGrant, toolOf } from "../../lib/grants";
+
+import SpendCapsFields from "../spend/SpendCapsFields";
 
 import { grantLabel } from "./RoutineList";
 
@@ -168,6 +171,18 @@ export default function RoutineForm({
   const patch = (change: Partial<RoutineDraft>) =>
     setDraft((current) => ({ ...current, ...change }));
 
+  // Whether both cap fields hold an amount (PLAN 7.26); saving is refused
+  // until they do, rather than sending the last amount that parsed.
+  const [capsReadable, setCapsReadable] = useState(true);
+  const spendError = useFieldError("spend");
+  const spentToday = useSpend((s) =>
+    editing === null ? undefined : (s.today.routines[editing.id] ?? 0),
+  );
+  const refreshSpend = useSpend((s) => s.refresh);
+  useEffect(() => {
+    void refreshSpend();
+  }, [refreshSpend]);
+
   const identity: Agent | undefined = identities.find(
     (agent) => agent.id === draft.agent_id,
   );
@@ -244,7 +259,9 @@ export default function RoutineForm({
       className="routineform"
       onSubmit={(event) => {
         event.preventDefault();
-        void save(draft);
+        if (capsReadable) {
+          void save(draft);
+        }
       }}
     >
       <Field
@@ -531,11 +548,25 @@ export default function RoutineForm({
         {ceilingsSentence(draft.schedule, draft.runs_per_day, identity)}
       </p>
 
+      <SpendCapsFields
+        idPrefix="routine-spend"
+        value={draft.spend}
+        onChange={(next) => {
+          setCapsReadable(next !== null);
+          if (next !== null) {
+            patch({ spend: next });
+          }
+        }}
+        error={spendError}
+        runMeans="one fire of this routine, however many turns it takes — a resumed run included"
+        spentToday={spentToday}
+      />
+
       <div className="routineform__actions">
         <button
           type="submit"
           className="button button--primary"
-          disabled={busy}
+          disabled={busy || !capsReadable}
         >
           {busy ? "Saving…" : editing === null ? "Create routine" : "Save"}
         </button>

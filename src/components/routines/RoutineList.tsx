@@ -5,10 +5,14 @@
  * the runtime's current problem if it cannot fire.
  */
 
+import { useEffect } from "react";
+
 import type { Grant, Routine } from "../../ipc/bindings";
 import { grantKey, shapeLine } from "../../lib/grants";
+import { formatDollars } from "../../lib/money";
 import { useRoutines } from "../../state/routines";
 import { useAgents } from "../../state/agents";
+import { useSpend } from "../../state/spend";
 
 import RoutineForm from "./RoutineForm";
 
@@ -85,8 +89,25 @@ function LastRun({ routine }: { readonly routine: Routine }) {
   );
 }
 
+/**
+ * Today's model spend against the routine's caps (PLAN 7.26), or nothing for
+ * a routine with no caps that has spent nothing.
+ */
+function spendLabel(routine: Routine, spent: number): string {
+  const { per_run: perRun, per_day: perDay } = routine.spend;
+  if (perDay !== null) {
+    return ` · ${formatDollars(spent)}/${formatDollars(perDay)} today`;
+  }
+  if (spent > 0 || perRun !== null) {
+    const cap = perRun === null ? "" : `, ${formatDollars(perRun)} a run`;
+    return ` · ${formatDollars(spent)} today${cap}`;
+  }
+  return "";
+}
+
 /** One routine. */
 function Row({ routine }: { readonly routine: Routine }) {
+  const spent = useSpend((s) => s.today.routines[routine.id] ?? 0);
   const busy = useRoutines((s) => s.busy);
   const startEdit = useRoutines((s) => s.startEdit);
   const remove = useRoutines((s) => s.remove);
@@ -151,6 +172,7 @@ function Row({ routine }: { readonly routine: Routine }) {
         <code>{routine.skill}</code> as <strong>{identity}</strong>,{" "}
         {scheduleLabel(routine)} · {routine.runs_today}/{routine.runs_per_day}{" "}
         runs today
+        {spendLabel(routine, spent)}
       </p>
 
       {routine.grants.length === 0 ? (
@@ -184,6 +206,10 @@ function Row({ routine }: { readonly routine: Routine }) {
 
 export default function RoutineList() {
   const routines = useRoutines((s) => s.routines);
+  const refreshSpend = useSpend((s) => s.refresh);
+  useEffect(() => {
+    void refreshSpend();
+  }, [refreshSpend]);
   const status = useRoutines((s) => s.status);
   const busy = useRoutines((s) => s.busy);
   const editing = useRoutines((s) => s.editing);

@@ -17,6 +17,8 @@ import {
   useSettings,
 } from "../../state/settings";
 
+import PriceTable from "./PriceTable";
+
 const AUTH_LABELS: Readonly<Record<AuthKind, string>> = {
   api_key: "API key (OpenAI-compatible)",
   gemini: "Gemini (Google AI Studio key)",
@@ -260,221 +262,225 @@ export default function ProviderForm() {
   const defaultModel = preset?.default_model ?? "";
 
   return (
-    <form
-      className="provider"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void save();
-      }}
-    >
-      <Field
-        id="provider-label"
-        label="Label"
-        value={draft.label}
-        maxLength={48}
-        placeholder={isDefault ? "Default" : "Local server, Claude for review…"}
-        error={errorFor("label")}
-        hint="How identities and the session picker name this provider. May be left empty."
-        onChange={(event) => edit({ label: event.target.value })}
-        disabled={busy}
-      />
-
-      <div className="field">
-        <label className="field__label" htmlFor="provider-auth">
-          Authentication
-        </label>
-        <select
-          id="provider-auth"
-          className="field__input"
-          value={draft.authKind}
-          disabled={busy}
-          onChange={(event) => {
-            const authKind = event.target.value as AuthKind;
-            const next = presetOf(settings.presets, authKind);
-            const previous = presetOf(settings.presets, draft.authKind);
-            const model =
-              draft.model.length === 0 ||
-              draft.model === previous?.default_model
-                ? (next?.default_model ?? draft.model)
-                : draft.model;
-            const baseUrl =
-              draft.baseUrl.length === 0 ||
-              draft.baseUrl === previous?.default_base_url
-                ? (next?.default_base_url ?? draft.baseUrl)
-                : draft.baseUrl;
-            edit({ authKind, model, baseUrl });
-          }}
-        >
-          {settings.presets.map((item) => (
-            <option key={item.auth_kind} value={item.auth_kind}>
-              {AUTH_LABELS[item.auth_kind]}
-            </option>
-          ))}
-        </select>
-        <p className="field__hint">
-          {cliAuth
-            ? "Reuses a login the official CLI already wrote on this machine. Aegis presents itself as that CLI. That is widely done and may be outside the provider's terms."
-            : geminiAuth
-              ? "A Google AI Studio key (AIza…), stored in this machine's credential store or AEGIS_API_KEY. Aegis talks to the Generative Language API, not an OpenAI-compatible server."
-              : isDefault
-                ? "An API key stored in this machine's credential store, or AEGIS_API_KEY."
-                : "An API key stored in this machine's credential store. Only the default provider reads AEGIS_API_KEY."}
-        </p>
-      </div>
-
-      <Field
-        id="provider-base-url"
-        label="Base URL"
-        value={draft.baseUrl}
-        placeholder={defaultUrl || "https://api.openai.com/v1"}
-        error={errorFor("base URL")}
-        hint={
-          cliAuth
-            ? `Leave empty to use ${defaultUrl || "the CLI's own endpoint"}. Change it to point at a proxy or another host.`
-            : geminiAuth
-              ? `Leave empty to use ${defaultUrl || "Google's Generative Language API"}. Aegis talks to /v1beta/models/{id}:generateContent, so the URL stops at /v1beta.`
-              : "Any OpenAI-compatible server. Aegis appends /chat/completions, so the URL stops at /v1. Over http:// the key crosses the network in clear text — use it only for a server on this machine."
-        }
-        onChange={(event) => edit({ baseUrl: event.target.value })}
-        disabled={busy}
-      />
-
-      <div className="field">
-        <label className="field__label" htmlFor="provider-model">
-          Model
-        </label>
-        <input
-          id="provider-model"
-          className={`field__input${errorFor("model") === null ? "" : " field__input--bad"}`}
-          list="provider-models"
-          spellCheck={false}
-          autoComplete="off"
-          value={draft.model}
-          placeholder={defaultModel || "gpt-4o-mini"}
-          aria-invalid={errorFor("model") !== null}
-          aria-describedby={
-            errorFor("model") === null ? undefined : "provider-model-error"
-          }
-          onChange={(event) => edit({ model: event.target.value })}
-          disabled={busy}
-        />
-        <datalist id="provider-models">
-          {models.map((id) => (
-            <option key={id} value={id} />
-          ))}
-        </datalist>
-        {errorFor("model") === null ? (
-          <p className="field__hint">
-            {modelsBusy
-              ? "Asking the provider which models it has…"
-              : modelsLive
-                ? `${models.length} models from the server. Pick one, or type an id it did not list.`
-                : modelsMessage.length === 0
-                  ? "Sent with every request, exactly as the server spells it."
-                  : `${modelsMessage} A built-in list is offered instead.`}
-          </p>
-        ) : (
-          <p className="field__error" id="provider-model-error" role="alert">
-            {errorFor("model")}
-          </p>
-        )}
-        {/*
-          The ceiling read from the provider's catalog when these settings were
-          saved. Shown only while the field still holds the model it was
-          resolved for, so an edited-but-unsaved id never borrows the previous
-          model's number. Its absence is meaningful too: no line means the
-          catalog did not publish one, and the provider's own default applies.
-        */}
-        {row !== undefined &&
-        row.max_output_tokens !== null &&
-        draft.model === row.model ? (
-          <p className="field__hint">
-            Replies — and files written by <code>fs_write</code>, which are
-            emitted as tool-call arguments — are capped at{" "}
-            {row.max_output_tokens.toLocaleString()} tokens, from this
-            provider&rsquo;s catalog.
-          </p>
-        ) : null}
-      </div>
-
-      {cliAuth ? null : (
+    <>
+      <form
+        className="provider"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
         <Field
-          id="provider-key"
-          label="API key"
-          type="password"
-          value={draft.apiKey}
-          placeholder={
-            row === undefined || row.key_source === "none"
-              ? geminiAuth
-                ? "Paste an AI Studio key (AIza…)"
-                : "Paste a key"
-              : "Leave empty to keep the current key"
+          id="provider-label"
+          label="Label"
+          value={draft.label}
+          maxLength={48}
+          placeholder={isDefault ? "Default" : "Local server, Claude for review…"}
+          error={errorFor("label")}
+          hint="How identities and the session picker name this provider. May be left empty."
+          onChange={(event) => edit({ label: event.target.value })}
+          disabled={busy}
+        />
+
+        <div className="field">
+          <label className="field__label" htmlFor="provider-auth">
+            Authentication
+          </label>
+          <select
+            id="provider-auth"
+            className="field__input"
+            value={draft.authKind}
+            disabled={busy}
+            onChange={(event) => {
+              const authKind = event.target.value as AuthKind;
+              const next = presetOf(settings.presets, authKind);
+              const previous = presetOf(settings.presets, draft.authKind);
+              const model =
+                draft.model.length === 0 ||
+                draft.model === previous?.default_model
+                  ? (next?.default_model ?? draft.model)
+                  : draft.model;
+              const baseUrl =
+                draft.baseUrl.length === 0 ||
+                draft.baseUrl === previous?.default_base_url
+                  ? (next?.default_base_url ?? draft.baseUrl)
+                  : draft.baseUrl;
+              edit({ authKind, model, baseUrl });
+            }}
+          >
+            {settings.presets.map((item) => (
+              <option key={item.auth_kind} value={item.auth_kind}>
+                {AUTH_LABELS[item.auth_kind]}
+              </option>
+            ))}
+          </select>
+          <p className="field__hint">
+            {cliAuth
+              ? "Reuses a login the official CLI already wrote on this machine. Aegis presents itself as that CLI. That is widely done and may be outside the provider's terms."
+              : geminiAuth
+                ? "A Google AI Studio key (AIza…), stored in this machine's credential store or AEGIS_API_KEY. Aegis talks to the Generative Language API, not an OpenAI-compatible server."
+                : isDefault
+                  ? "An API key stored in this machine's credential store, or AEGIS_API_KEY."
+                  : "An API key stored in this machine's credential store. Only the default provider reads AEGIS_API_KEY."}
+          </p>
+        </div>
+
+        <Field
+          id="provider-base-url"
+          label="Base URL"
+          value={draft.baseUrl}
+          placeholder={defaultUrl || "https://api.openai.com/v1"}
+          error={errorFor("base URL")}
+          hint={
+            cliAuth
+              ? `Leave empty to use ${defaultUrl || "the CLI's own endpoint"}. Change it to point at a proxy or another host.`
+              : geminiAuth
+                ? `Leave empty to use ${defaultUrl || "Google's Generative Language API"}. Aegis talks to /v1beta/models/{id}:generateContent, so the URL stops at /v1beta.`
+                : "Any OpenAI-compatible server. Aegis appends /chat/completions, so the URL stops at /v1. Over http:// the key crosses the network in clear text — use it only for a server on this machine."
           }
-          error={null}
-          onChange={(event) => edit({ apiKey: event.target.value })}
-          disabled={busy || !settings.keyring_available}
+          onChange={(event) => edit({ baseUrl: event.target.value })}
+          disabled={busy}
         />
-      )}
 
-      {row === undefined ? null : <KeyStatus row={row} />}
-      {cliAuth ? null : (
-        <KeyStorage
-          available={settings.keyring_available}
-          isDefault={isDefault}
-        />
-      )}
+        <div className="field">
+          <label className="field__label" htmlFor="provider-model">
+            Model
+          </label>
+          <input
+            id="provider-model"
+            className={`field__input${errorFor("model") === null ? "" : " field__input--bad"}`}
+            list="provider-models"
+            spellCheck={false}
+            autoComplete="off"
+            value={draft.model}
+            placeholder={defaultModel || "gpt-4o-mini"}
+            aria-invalid={errorFor("model") !== null}
+            aria-describedby={
+              errorFor("model") === null ? undefined : "provider-model-error"
+            }
+            onChange={(event) => edit({ model: event.target.value })}
+            disabled={busy}
+          />
+          <datalist id="provider-models">
+            {models.map((id) => (
+              <option key={id} value={id} />
+            ))}
+          </datalist>
+          {errorFor("model") === null ? (
+            <p className="field__hint">
+              {modelsBusy
+                ? "Asking the provider which models it has…"
+                : modelsLive
+                  ? `${models.length} models from the server. Pick one, or type an id it did not list.`
+                  : modelsMessage.length === 0
+                    ? "Sent with every request, exactly as the server spells it."
+                    : `${modelsMessage} A built-in list is offered instead.`}
+            </p>
+          ) : (
+            <p className="field__error" id="provider-model-error" role="alert">
+              {errorFor("model")}
+            </p>
+          )}
+          {/*
+            The ceiling read from the provider's catalog when these settings were
+            saved. Shown only while the field still holds the model it was
+            resolved for, so an edited-but-unsaved id never borrows the previous
+            model's number. Its absence is meaningful too: no line means the
+            catalog did not publish one, and the provider's own default applies.
+          */}
+          {row !== undefined &&
+          row.max_output_tokens !== null &&
+          draft.model === row.model ? (
+            <p className="field__hint">
+              Replies — and files written by <code>fs_write</code>, which are
+              emitted as tool-call arguments — are capped at{" "}
+              {row.max_output_tokens.toLocaleString()} tokens, from this
+              provider&rsquo;s catalog.
+            </p>
+          ) : null}
+        </div>
 
-      <div className="provider__actions">
-        <button type="submit" className="button button--primary" disabled={busy}>
-          {adding ? "Add provider" : "Save"}
-        </button>
-        {adding ? (
+        {cliAuth ? null : (
+          <Field
+            id="provider-key"
+            label="API key"
+            type="password"
+            value={draft.apiKey}
+            placeholder={
+              row === undefined || row.key_source === "none"
+                ? geminiAuth
+                  ? "Paste an AI Studio key (AIza…)"
+                  : "Paste a key"
+                : "Leave empty to keep the current key"
+            }
+            error={null}
+            onChange={(event) => edit({ apiKey: event.target.value })}
+            disabled={busy || !settings.keyring_available}
+          />
+        )}
+
+        {row === undefined ? null : <KeyStatus row={row} />}
+        {cliAuth ? null : (
+          <KeyStorage
+            available={settings.keyring_available}
+            isDefault={isDefault}
+          />
+        )}
+
+        <div className="provider__actions">
+          <button type="submit" className="button button--primary" disabled={busy}>
+            {adding ? "Add provider" : "Save"}
+          </button>
+          {adding ? (
+            <button
+              type="button"
+              className="button"
+              onClick={() => select(DEFAULT_PROVIDER_ID)}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="button"
+              onClick={() => void runProbe()}
+              disabled={busy || probing}
+            >
+              Test connection
+            </button>
+          )}
           <button
             type="button"
             className="button"
-            onClick={() => select(DEFAULT_PROVIDER_ID)}
-            disabled={busy}
+            onClick={() => void loadModels()}
+            disabled={busy || modelsBusy}
           >
-            Cancel
+            Refresh models
           </button>
-        ) : (
-          <button
-            type="button"
-            className="button"
-            onClick={() => void runProbe()}
-            disabled={busy || probing}
-          >
-            Test connection
-          </button>
-        )}
-        <button
-          type="button"
-          className="button"
-          onClick={() => void loadModels()}
-          disabled={busy || modelsBusy}
-        >
-          Refresh models
-        </button>
-        {adding || isDefault ? null : (
-          <button
-            type="button"
-            className="button button--danger"
-            onClick={() => void remove(selected)}
-            disabled={busy}
-            title="Refused while an identity or a session still answers from it. Its stored key goes with it."
-          >
-            Delete provider
-          </button>
-        )}
-      </div>
+          {adding || isDefault ? null : (
+            <button
+              type="button"
+              className="button button--danger"
+              onClick={() => void remove(selected)}
+              disabled={busy}
+              title="Refused while an identity or a session still answers from it. Its stored key goes with it."
+            >
+              Delete provider
+            </button>
+          )}
+        </div>
 
-      <p className="field__hint">
-        Testing sends one very short message to the endpoint above, using the
-        model named here — a few tokens, and the only way to tell a wrong
-        address from a wrong key from a model that server does not have.
-      </p>
+        <p className="field__hint">
+          Testing sends one very short message to the endpoint above, using the
+          model named here — a few tokens, and the only way to tell a wrong
+          address from a wrong key from a model that server does not have.
+        </p>
 
-      <ProbeResult />
-    </form>
+        <ProbeResult />
+      </form>
+      {/* Outside the form: Enter in a price must not save the row. */}
+      {row === undefined ? null : <PriceTable key={row.id} row={row} />}
+    </>
   );
 }

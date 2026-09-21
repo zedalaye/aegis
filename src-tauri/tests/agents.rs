@@ -107,6 +107,7 @@ impl App {
                 tools: vec![tool::FS_LIST.to_owned(), tool::FS_READ.to_owned()],
                 skills: Vec::new(),
                 runs_per_day: 24,
+                spend: Default::default(),
             })
             .expect("the identity is accepted")
     }
@@ -207,6 +208,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         }
         .run(&plan, &cancel)
         .await;
@@ -512,6 +514,7 @@ fn an_identity_cannot_be_deleted_while_a_session_still_runs_as_it() {
             tools: vec![tool::FS_READ.to_owned()],
             skills: Vec::new(),
             runs_per_day: 24,
+            spend: Default::default(),
         })
         .expect("created");
     let session = state
@@ -579,6 +582,7 @@ fn an_identity_and_its_sessions_survive_a_restart_of_the_runtime() {
             tools: vec![tool::FS_READ.to_owned()],
             skills: Vec::new(),
             runs_per_day: 24,
+            spend: Default::default(),
         })
         .expect("created");
     let session = first

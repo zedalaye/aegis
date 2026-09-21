@@ -317,6 +317,7 @@ fn the_watch_pack_can_be_put_on_a_clock() {
         schedule: Schedule::DailyAt { hour: 7, minute: 0 },
         grants,
         runs_per_day: 4,
+        spend: Default::default(),
     };
 
     for name in [WATCH_SWEEP_SKILL, WATCH_DIGEST_SKILL, WATCH_IMPACT_SKILL] {

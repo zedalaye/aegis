@@ -51,6 +51,8 @@ pub enum ErrorCode {
     TooManyToolRounds,
     /// The turn repeated the same tool calls and was stopped as a loop.
     ToolLoop,
+    /// A model-spend cap is reached, or cannot be measured (PLAN 7.26).
+    Budget,
     /// Screen capture is not permitted, or the session type forbids it.
     ScreenPermission,
     /// A settings value cannot be used, and the user has to change it.
@@ -81,6 +83,7 @@ impl ErrorCode {
             Self::Cancelled => "E_CANCELLED",
             Self::TooManyToolRounds => "E_TOO_MANY_TOOL_ROUNDS",
             Self::ToolLoop => "E_TOOL_LOOP",
+            Self::Budget => "E_BUDGET",
             Self::ScreenPermission => "E_SCREEN_PERMISSION",
             Self::InvalidSetting => "E_INVALID_SETTING",
             Self::Internal => "E_INTERNAL",
@@ -106,6 +109,7 @@ impl ErrorCode {
             | Self::Cancelled
             | Self::TooManyToolRounds
             | Self::ToolLoop
+            | Self::Budget
             | Self::ScreenPermission
             | Self::InvalidSetting
             | Self::Internal => false,
@@ -650,7 +654,7 @@ mod tests {
 
     #[test]
     fn codes_are_unique_and_prefixed() {
-        const ALL: [ErrorCode; 20] = [
+        const ALL: [ErrorCode; 21] = [
             ErrorCode::TurnBusy,
             ErrorCode::NoWorkspace,
             ErrorCode::PathOutsideWorkspace,
@@ -668,6 +672,7 @@ mod tests {
             ErrorCode::Cancelled,
             ErrorCode::TooManyToolRounds,
             ErrorCode::ToolLoop,
+            ErrorCode::Budget,
             ErrorCode::ScreenPermission,
             ErrorCode::InvalidSetting,
             ErrorCode::Internal,

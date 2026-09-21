@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::agent::decision::{self, DecisionClient};
+use crate::agent::provider::pricing::{self, PriceSuggestion};
 use crate::agent::provider::{catalog, motosan, openai};
 use crate::agent::{
     FakeProvider, ModelCatalog, OpenAiProvider, Provider, ProviderProbe, SubscriptionProvider,
@@ -26,11 +27,12 @@ use crate::oauth;
 use crate::policy::GrantStore;
 use crate::schedule::runner::Scheduler;
 use crate::secrets::{self, key_hint, ApiKey, KeySource, SecretStore};
+use crate::spend::Tariff;
 use crate::store::{
     self, Agent, AgentDraft, AgentStore, AuthKind, Binding, BindingRequest, Connector,
     ConnectorStore, MaskedDecision, MaskedProvider, MaskedSettings, Memory, MemoryDraft,
     MemoryStore, ParkedAsk, ParkedStore, ProviderEntry, Routine, RoutineStore, RowDraft,
-    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, Store,
+    SessionDetail, SessionState, SessionStore, SessionSummary, SettingsStore, SpendLedger, Store,
     DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID,
 };
 
@@ -67,6 +69,9 @@ pub struct AppState {
     /// memory only: nothing is running after a crash.
     scheduler: Scheduler,
     settings: SettingsStore,
+    /// What every turn's model calls cost (PLAN 7.26). Written by the turn
+    /// loop only.
+    spend: SpendLedger,
     /// The connectors somebody configured (Phase 18).
     connector_store: ConnectorStore,
     /// The connectors actually running. Processes, unlike the document above;
@@ -107,6 +112,7 @@ impl AppState {
             coalescer: Coalescer::new(),
             scheduler: Scheduler::new(),
             settings: SettingsStore::load(data_dir),
+            spend: SpendLedger::load(data_dir),
             connector_store: ConnectorStore::load(data_dir),
             // Empty here: connectors start asynchronously
             // (`commands::connector::spawn`), so the window does not wait.
@@ -155,6 +161,11 @@ impl AppState {
     /// The provider settings on disk.
     pub fn settings(&self) -> &SettingsStore {
         &self.settings
+    }
+
+    /// The spend ledger (PLAN 7.26).
+    pub fn spend(&self) -> &SpendLedger {
+        &self.spend
     }
 
     /// The API keys, wherever this machine keeps them — never in a document

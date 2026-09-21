@@ -260,6 +260,7 @@ fn reviewer_on(state: &AppState, provider_id: &str, model: &str) -> Agent {
             tools: Vec::new(),
             skills: Vec::new(),
             runs_per_day: 0,
+            spend: Default::default(),
         })
         .expect("created")
 }
@@ -384,6 +385,7 @@ fn an_identity_cannot_name_a_row_that_is_not_on_file() {
                 tools: Vec::new(),
                 skills: Vec::new(),
                 runs_per_day: 0,
+                spend: Default::default(),
             },
         )
         .expect_err("refused");

@@ -2,6 +2,7 @@
 //! Phase 17).
 
 use super::*;
+use crate::store::ledger::Scope;
 
 impl AppState {
     /// Which routines are running right now.
@@ -64,6 +65,16 @@ impl AppState {
             skill.as_ref(),
             self.routines.runs_today_for_agent(&routine.agent_id),
         )
+        .or_else(|| {
+            let agent = agent.as_ref()?;
+            let day = crate::store::ledger::today();
+            crate::schedule::spend_problem(
+                routine,
+                agent,
+                self.spend.spent(Scope::RoutineDay(&routine.id, &day)),
+                self.spend.spent(Scope::AgentDay(&agent.id, &day)),
+            )
+        })
     }
 
     /// The project's board (Phase 17), composed from `STATUS.md`, the session,

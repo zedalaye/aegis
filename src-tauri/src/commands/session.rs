@@ -16,6 +16,7 @@ use crate::approval::Decision;
 use crate::handoff::bus;
 use crate::handoff::runner::AppRunner;
 use crate::park::{Parking, Parks};
+use crate::spend::{Meter, Payer};
 use crate::state::AppState;
 use crate::store::{Message, ParkedAsk, SessionDetail, SessionState, SessionSummary, TurnHandle};
 
@@ -219,7 +220,7 @@ async fn run_turn<R: Runtime>(
     // identity — an identity edited between two messages should reach the next
     // turn whole, rather than halfway through one.
     let agent = state.agent_of(&plan.session_id);
-    let provider = state.provider_for(&agent, &plan.session_id);
+    let (provider, tariff) = state.answering(&agent, &plan.session_id);
     let decision = state.decision_client();
 
     // Per-turn delegation state (Phase 15); none without a workspace, since a
@@ -257,6 +258,20 @@ async fn run_turn<R: Runtime>(
         skill: "",
         parks: &parks,
     };
+    // A session someone opened: each turn is a run of its own (PLAN 7.26).
+    let meter = Meter::new(
+        state.spend(),
+        &notifier,
+        tariff,
+        Payer {
+            project_id: &project_id,
+            session_id: &plan.session_id,
+            turn_id: &plan.turn_id,
+            agent: &agent,
+            routine: None,
+            run_is_session: false,
+        },
+    );
 
     let reason = Turn {
         agent: &agent,
@@ -276,6 +291,7 @@ async fn run_turn<R: Runtime>(
         standing: Standing::Own(bus.as_ref()),
         unattended: None,
         parking: Some(&parking),
+        meter: Some(&meter),
     }
     .run(&plan, &cancel)
     .await;

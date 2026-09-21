@@ -241,6 +241,7 @@ fn provider(base_url: &str) -> OpenAiProvider {
             base_url: base_url.to_owned(),
             model: "test-model".to_owned(),
             max_output_tokens: None,
+            prices: Vec::new(),
         },
         ApiKey::new("sk-test-key-abcd1234"),
     )
@@ -691,6 +692,7 @@ async fn a_real_provider_drives_a_whole_turn_including_a_tool_call() {
         unattended: None,
         parking: None,
         decision: None,
+        meter: None,
     }
     .run(&plan, &cancel)
     .await;
@@ -753,6 +755,7 @@ fn probe_settings(base_url: &str) -> ProviderSettings {
         base_url: base_url.to_owned(),
         model: "test-model".to_owned(),
         max_output_tokens: None,
+        prices: Vec::new(),
     }
 }
 

@@ -10,6 +10,7 @@
 
 pub mod agents;
 pub mod connectors;
+pub mod ledger;
 pub mod memories;
 pub mod parked;
 pub mod projects;
@@ -26,6 +27,7 @@ use chrono::{SecondsFormat, Utc};
 
 pub use agents::{Agent, AgentDraft, AgentStore, DEFAULT_AGENT_ID, DEFAULT_PROVIDER_ID};
 pub use connectors::{Connector, ConnectorDraft, ConnectorStore};
+pub use ledger::{ModelPrice, SpendCaps, SpendLedger, SpendToday};
 pub use memories::{Memory, MemoryDraft, MemoryKind, MemoryStore};
 pub use parked::{ParkCause, ParkDraft, ParkedAsk, ParkedStore};
 pub use projects::{canonical_workspace, Project, ProjectDetail, Store};

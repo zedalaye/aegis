@@ -26,6 +26,8 @@ import {
   useSettings,
 } from "../../state/settings";
 import { useSkills } from "../../state/skills";
+import { useSpend } from "../../state/spend";
+import SpendCapsFields from "../spend/SpendCapsFields";
 
 /** What each tool does, in the fewest words that distinguish it. */
 const TOOL_SUMMARY: Record<string, string> = {
@@ -217,6 +219,17 @@ export default function AgentForm({
   const patch = (change: Partial<AgentDraft>) =>
     setDraft((current) => ({ ...current, ...change }));
 
+  // Whether both cap fields hold an amount (PLAN 7.26).
+  const [capsReadable, setCapsReadable] = useState(true);
+  const spendError = useFieldError("spend");
+  const spentToday = useSpend((s) =>
+    editing === null ? undefined : (s.today.agents[editing.id] ?? 0),
+  );
+  const refreshSpend = useSpend((s) => s.refresh);
+  useEffect(() => {
+    void refreshSpend();
+  }, [refreshSpend]);
+
   const toggleTool = (tool: string, granted: boolean) =>
     patch({
       tools: granted
@@ -247,7 +260,9 @@ export default function AgentForm({
       className="agentform"
       onSubmit={(event) => {
         event.preventDefault();
-        void save({ ...draft, skills: parseSkills(skillsText) });
+        if (capsReadable) {
+          void save({ ...draft, skills: parseSkills(skillsText) });
+        }
       }}
     >
       <Field
@@ -480,11 +495,25 @@ export default function AgentForm({
         )}
       </Field>
 
+      <SpendCapsFields
+        idPrefix="agent-spend"
+        value={draft.spend}
+        onChange={(next) => {
+          setCapsReadable(next !== null);
+          if (next !== null) {
+            patch({ spend: next });
+          }
+        }}
+        error={spendError}
+        runMeans="one routine run or one brief; in a session you type into, one message's turn. The day counts everything this identity runs, attended or not"
+        spentToday={spentToday}
+      />
+
       <div className="agentform__actions">
         <button
           type="submit"
           className="button button--primary"
-          disabled={busy}
+          disabled={busy || !capsReadable}
         >
           {busy ? "Saving…" : editing === null ? "Create identity" : "Save"}
         </button>

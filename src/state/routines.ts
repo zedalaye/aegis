@@ -20,6 +20,8 @@ import {
 import { toIpcError } from "../lib/errors";
 import type { IpcError } from "../lib/errors";
 
+import { useSpend } from "./spend";
+
 /** Whether the list has been fetched yet. */
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
 
@@ -36,6 +38,7 @@ export function blankDraft(projectId: string, agentId: string): RoutineDraft {
     // somebody decided to add.
     grants: [],
     runs_per_day: 24,
+    spend: { per_run: null, per_day: null },
   };
 }
 
@@ -49,6 +52,7 @@ export function draftOf(routine: Routine): RoutineDraft {
     schedule: routine.schedule,
     grants: [...routine.grants],
     runs_per_day: routine.runs_per_day,
+    spend: { ...routine.spend },
   };
 }
 
@@ -205,6 +209,8 @@ export function attachRoutineEvents(): Promise<UnlistenFn> {
   return subscribe({
     "routine:updated": (routine) => {
       useRoutines.getState().observed(routine);
+      // A run that ended has spent something (PLAN 7.26).
+      void useSpend.getState().refresh();
     },
   });
 }

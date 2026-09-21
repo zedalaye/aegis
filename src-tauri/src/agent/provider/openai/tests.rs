@@ -396,6 +396,7 @@ fn settings() -> ProviderSettings {
         base_url: "https://api.example.test/v1".to_owned(),
         model: "some-model".to_owned(),
         max_output_tokens: None,
+        prices: Vec::new(),
     }
 }
 
@@ -428,6 +429,7 @@ async fn a_provider_with_an_unusable_base_url_says_so() {
         base_url: "not a url".to_owned(),
         model: "m".to_owned(),
         max_output_tokens: None,
+        prices: Vec::new(),
     };
     let provider = OpenAiProvider::new(Some(Client::new()), &broken, ApiKey::new("sk-test-1234"));
 
@@ -469,6 +471,7 @@ async fn a_probe_with_no_model_says_so_without_sending_anything() {
         base_url: "https://api.example.test/v1".to_owned(),
         model: String::new(),
         max_output_tokens: None,
+        prices: Vec::new(),
     };
     let probe = probe(Some(&Client::new()), &half_configured, None).await;
 

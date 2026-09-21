@@ -193,6 +193,7 @@ async fn run(
                 model: model.clone(),
                 auth_kind: AuthKind::GrokCli,
                 max_output_tokens: settings.max_output_tokens,
+                prices: Vec::new(),
             };
             let inner = OpenAiProvider::responses(
                 http,
@@ -260,6 +261,7 @@ pub async fn probe(
                 model: model.to_owned(),
                 auth_kind: AuthKind::GrokCli,
                 max_output_tokens: None,
+                prices: Vec::new(),
             };
             return openai::probe_responses(
                 http,

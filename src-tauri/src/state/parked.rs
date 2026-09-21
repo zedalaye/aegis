@@ -78,6 +78,7 @@ impl AppState {
             schedule: routine.schedule.clone(),
             grants,
             runs_per_day: routine.runs_per_day,
+            spend: routine.spend,
         };
         crate::schedule::check(
             &draft,

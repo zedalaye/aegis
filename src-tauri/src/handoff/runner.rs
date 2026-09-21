@@ -21,7 +21,6 @@ use tauri::{AppHandle, Manager as _, Runtime};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::event::EventSink;
-use crate::agent::provider::Provider;
 use crate::agent::turn::{self, Standing, Turn, TurnPlan};
 use crate::agent::{StopReason, TurnRegistry};
 use crate::approval::ApprovalRegistry;
@@ -33,9 +32,10 @@ use crate::handoff::{self, bus, Brief};
 use crate::mcp::Connectors;
 use crate::park::{Parking, Parks};
 use crate::policy::GrantStore;
+use crate::spend::{Answering, Meter, Payer};
 use crate::state::AppState;
 use crate::store::{
-    Agent, AgentStore, Delegated, MemoryStore, Message, SessionState, SessionStore,
+    Agent, AgentStore, Delegated, MemoryStore, Message, SessionState, SessionStore, SpendLedger,
 };
 use crate::workspace;
 use crate::world;
@@ -75,8 +75,11 @@ pub struct Host<'a> {
     /// The running connectors (Phase 18); a specialist gets only its own
     /// identity's tools and grants.
     pub connectors: &'a Connectors,
-    /// Which provider answers for an identity (per identity, PLAN 7.1).
-    pub provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
+    /// Which provider answers for an identity (per identity, PLAN 7.1), and
+    /// what its model costs (PLAN 7.26).
+    pub provider: &'a Answering<'a>,
+    /// Where each round's spend is written (PLAN 7.26).
+    pub spend: &'a SpendLedger,
     /// The decision client (PLAN 7.18), or `None` without a TypeSafe key.
     pub decision: Option<&'a crate::agent::decision::DecisionClient>,
     /// Where a dialog nobody answers is filed (PLAN 7.22). A brief is watched
@@ -228,7 +231,21 @@ impl Delegating {
             skill: "",
             parks: &parks,
         };
-        let provider = (host.provider)(&agent, &session_id);
+        let (provider, tariff) = (host.provider)(&agent, &session_id);
+        // A brief's session is one run: a retry is charged to the same one.
+        let meter = Meter::new(
+            host.spend,
+            host.notifier,
+            tariff,
+            Payer {
+                project_id: &self.project_id,
+                session_id: &session_id,
+                turn_id: &turn_id,
+                agent: &agent,
+                routine: None,
+                run_is_session: true,
+            },
+        );
         let plan = TurnPlan {
             session_id: session_id.clone(),
             turn_id: turn_id.clone(),
@@ -266,6 +283,7 @@ impl Delegating {
             standing: Standing::Delegated(&open),
             unattended: None,
             parking: Some(&parking),
+            meter: Some(&meter),
         }
         .run(&plan, &own_cancel)
         .await;
@@ -383,7 +401,7 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
 
             let sink = WindowSink::new(self.app.clone());
             let notifier = crate::notify::Desktop::new(self.app.clone(), state.coalescer());
-            let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
+            let provider = |agent: &Agent, session_id: &str| state.answering(agent, session_id);
             let decision = state.decision_client();
             let host = Host {
                 agents: state.agents(),
@@ -401,6 +419,7 @@ impl<R: Runtime> bus::Runner for AppRunner<R> {
                 memories: state.memories(),
                 connectors: state.connectors(),
                 provider: &provider,
+                spend: state.spend(),
                 decision: decision.as_ref(),
             };
 

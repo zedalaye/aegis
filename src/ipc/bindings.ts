@@ -44,6 +44,11 @@ skills: Array<string>,
  */
 runs_per_day: number, 
 /**
+ * Its model-spend caps (PLAN 7.26), over everything it runs. Set in
+ * Settings only; a roster carries none.
+ */
+spend: SpendCaps, 
+/**
  * Whether this is the built-in identity, which cannot be edited or
  * deleted. Derived, never stored.
  */
@@ -87,7 +92,11 @@ skills: Array<string>,
  * Most scheduled runs a day, capped at [`AGENT_RUNS_PER_DAY_MAX`];
  * defaulted for older callers.
  */
-runs_per_day: number, };
+runs_per_day: number, 
+/**
+ * Model-spend caps (PLAN 7.26); none for older callers.
+ */
+spend: SpendCaps, };
 
 /**
  * What the approval dialog draws: one variant per tool, so the user reads a
@@ -809,7 +818,16 @@ cache_creation_tokens: number,
 /**
  * Tokens out of it.
  */
-completion_tokens: number, };
+completion_tokens: number, 
+/**
+ * Micro-dollars, over the turns that had a price (PLAN 7.26).
+ */
+micros: number, 
+/**
+ * Of the turns summed, how many had a price. Fewer than `turns` means
+ * `micros` is "at least".
+ */
+priced: number, };
 
 /**
  * What the user answered (PLAN 2.1, `Decision`).
@@ -1139,7 +1157,11 @@ key_source: KeySource,
  * A few characters of the key, for recognition. `None` when there is no
  * key at all.
  */
-key_hint: string | null, };
+key_hint: string | null, 
+/**
+ * What each model costs on this row (PLAN 7.26).
+ */
+prices: Array<ModelPrice>, };
 
 /**
  * Everything the WebView is allowed to know about the provider roster.
@@ -1281,6 +1303,35 @@ message: string,
  * never "no": nothing is guessed from an id.
  */
 vision: Record<string, boolean>, };
+
+/**
+ * What one model costs on one provider row, per million tokens.
+ *
+ * The operator's word: typed, or accepted from a suggestion
+ * ([`pricing`](crate::agent::provider::pricing)) and saved. Nothing stores a
+ * price the operator did not save, and nothing reads one from the workspace.
+ */
+export type ModelPrice = { 
+/**
+ * The model id, exactly as the row or an identity sends it.
+ */
+model: string, 
+/**
+ * Prompt tokens not served from the cache.
+ */
+input: number, 
+/**
+ * Reply tokens.
+ */
+output: number, 
+/**
+ * Prompt tokens read from the cache. `None` charges [`Self::input`].
+ */
+cache_read: number | null, 
+/**
+ * Prompt tokens written to the cache. `None` charges [`Self::input`].
+ */
+cache_write: number | null, };
 
 /**
  * A file that was not attached, and why.
@@ -1443,6 +1494,29 @@ mime: string, } | { "kind": "binary",
  * The type its first bytes say it is, when they say.
  */
 mime: string | null, };
+
+/**
+ * Where a suggested price was read.
+ */
+export type PriceSource = "catalog" | "litellm";
+
+/**
+ * What [`suggest`] found.
+ */
+export type PriceSuggestion = { 
+/**
+ * One per model found, in the order asked.
+ */
+prices: Array<SuggestedPrice>, 
+/**
+ * The models neither source knows.
+ */
+missing: Array<string>, 
+/**
+ * Why a source could not be read, one sentence each. Empty when both
+ * answered or were not needed.
+ */
+notes: Array<string>, };
 
 /**
  * How soon a brief wants attention: three words, not an uncalibrated number.
@@ -1723,6 +1797,10 @@ grants: Array<Grant>,
  */
 runs_per_day: number, 
 /**
+ * Its model-spend caps (PLAN 7.26).
+ */
+spend: SpendCaps, 
+/**
  * How many it has made today.
  */
 runs_today: number, 
@@ -1789,7 +1867,11 @@ grants: Array<Grant>,
 /**
  * Most runs a day. Capped at [`RUNS_PER_DAY_MAX`].
  */
-runs_per_day: number, };
+runs_per_day: number, 
+/**
+ * Model-spend caps (PLAN 7.26); none for older callers.
+ */
+spend: SpendCaps, };
 
 /**
  * One run, as the board lists it and the detail pane reads it.
@@ -2229,6 +2311,33 @@ export type SkillScope = "library" | "workspace";
 export type SourceState = "in_step" | "drifted" | "missing" | "unrecorded";
 
 /**
+ * A routine's or an identity's model-spend ceilings. `None` is no cap.
+ */
+export type SpendCaps = { 
+/**
+ * Most one run may spend: a routine's run or a brief's session, or a
+ * turn in a session someone opened.
+ */
+per_run: number | null, 
+/**
+ * Most one UTC day may spend.
+ */
+per_day: number | null, };
+
+/**
+ * Today's model spend, by routine and by identity (PLAN 7.26).
+ */
+export type SpendToday = { 
+/**
+ * Routine id to micro-dollars.
+ */
+routines: Record<string, number>, 
+/**
+ * Identity id to micro-dollars.
+ */
+agents: Record<string, number>, };
+
+/**
  * Where one connector is in its life.
  */
 export type State = "off" | "starting" | "ready" | "failed";
@@ -2248,6 +2357,24 @@ export type StopReason = "stop" | "tool_calls" | "cancelled" | "length" | "error
  * Which pipe a chunk of tool output came from (PLAN 2.2, `tool:progress`).
  */
 export type Stream = "stdout" | "stderr";
+
+/**
+ * One suggested price and where it came from.
+ */
+export type SuggestedPrice = { 
+/**
+ * The price, under the model id that was asked about.
+ */
+price: ModelPrice, 
+/**
+ * Where it was read.
+ */
+source: PriceSource, 
+/**
+ * The id it was found under, when not the one asked about
+ * (`anthropic/claude-…`, `gemini/…`).
+ */
+matched: string | null, };
 
 /**
  * How many times one tool was called in a run.
@@ -2630,6 +2757,12 @@ completion_tokens: number,
  * are zero because nothing was reported, not because nothing was spent.
  */
 reported: boolean, 
+/**
+ * What the turn cost in micro-dollars, as the spend ledger priced it
+ * (PLAN 7.26). `None` when its model has no price. A copy for display:
+ * caps are enforced from the ledger.
+ */
+micros?: number | null, 
 /**
  * RFC3339, UTC. When the turn finished.
  */

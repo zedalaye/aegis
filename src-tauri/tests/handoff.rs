@@ -20,6 +20,7 @@ use aegis_lib::agent::wire::{ModelEvent, StopReason};
 use aegis_lib::handoff::bus::{self, Runner};
 use aegis_lib::handoff::{Brief, Priority, ReturnFormat};
 use aegis_lib::policy::tool;
+use aegis_lib::spend::{Answering, Tariff};
 use aegis_lib::{
     Agent, AgentDraft, AgentStore, ApprovalRegistry, AuditEntry, AuditLog, Delegating, Event,
     FakeProvider, GrantStore, HandoffHost, HandoffPlan, MemoryStore, Message, Provider,
@@ -56,6 +57,7 @@ struct App {
     memories: MemoryStore,
     /// Where an ask nobody can answer is filed (PLAN 7.22).
     parked: aegis_lib::ParkedStore,
+    spend: aegis_lib::store::SpendLedger,
     /// What is told to somebody who is not at the window.
     notifier: aegis_lib::Quiet,
     sink: Recorder,
@@ -89,6 +91,7 @@ impl App {
             audit: AuditLog::new(&data),
             memories: MemoryStore::load(&data),
             parked: aegis_lib::ParkedStore::load(&data),
+            spend: aegis_lib::store::SpendLedger::load(&data),
             notifier: aegis_lib::Quiet,
             sink: Recorder::default(),
             _dir: dir,
@@ -107,6 +110,7 @@ impl App {
                 tools,
                 skills: Vec::new(),
                 runs_per_day: 24,
+                spend: Default::default(),
             })
             .expect("the identity is accepted")
     }
@@ -131,10 +135,7 @@ impl App {
     }
 
     /// What a delegated run borrows, with a provider the test chooses.
-    fn host<'a>(
-        &'a self,
-        provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
-    ) -> HandoffHost<'a> {
+    fn host<'a>(&'a self, provider: &'a Answering<'a>) -> HandoffHost<'a> {
         HandoffHost {
             agents: &self.agents,
             parked: &self.parked,
@@ -151,6 +152,7 @@ impl App {
             memories: &self.memories,
             connectors: aegis_lib::Connectors::none(),
             provider,
+            spend: &self.spend,
             decision: None,
         }
     }
@@ -226,8 +228,11 @@ impl Runner for TestRunner {
         Box::pin(async move {
             let rounds = self.script.get(&brief.owner).cloned().unwrap_or_default();
 
-            let provider = move |_: &Agent, _: &str| -> Box<dyn Provider> {
-                Box::new(FakeProvider::scripted(rounds.clone()))
+            let provider = move |_: &Agent, _: &str| -> (Box<dyn Provider>, Tariff) {
+                (
+                    Box::new(FakeProvider::scripted(rounds.clone())),
+                    Tariff::unpriced("fake"),
+                )
             };
             let host = self.app.host(&provider);
 
@@ -703,6 +708,7 @@ async fn an_ordinary_session_is_not_offered_the_tool_that_closes_a_brief() {
         unattended: None,
         parking: None,
         decision: None,
+        meter: None,
     }
     .run(
         &TurnPlan {

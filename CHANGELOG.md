@@ -82,6 +82,17 @@ under an approval that did not describe it.
   changed and removed, with the diff; *Restore* puts those paths back as they were, and leaves
   alone any you changed since. Files git ignores are not captured. Kept 30 days, 200 runs at most
   (`PLAN.md` § 7.24).
+- **Model spend has a ceiling.** Each provider row takes a price per million tokens for the models
+  it serves (*Settings → Providers → Prices*; *Suggest prices* fills them from the provider's catalog
+  when it publishes prices, else from LiteLLM's public table, and saves nothing until you do), and an
+  identity or a routine takes a cap per run and
+  per day, in dollars. Every round a turn makes is priced and written to `ledger.json`; a round that
+  passes a cap has its tool calls refused (`E_BUDGET`) and the model gets one reply to wrap up, and a
+  turn that starts past one sends nothing. A routine whose day is spent does not fire, and says why.
+  A capped model with no price is refused rather than let through unmeasured; usage a provider does
+  not report is estimated high. Crossing 80 % of a daily cap, and reaching it, each notify once. The
+  routine list and the forms show today's spend, and the board shows what each run cost
+  (`PLAN.md` § 7.26, landing 1).
 
 - **Markdown in the chat.** Replies and your messages render headings, lists, code blocks and tables,
   with the parser the file preview already used: HTML stays text. A web link opens in your browser
@@ -127,8 +138,8 @@ under an approval that did not describe it.
   in force, with its section numbers unchanged; `IDEAS.md`, `COS.md` and `CONTROL.md` are tightened.
 - `PLAN.md` § 7.21–7.30 propose the autonomy ladder: parked asks and notifications, narrow standing
   grants, run checkpoints, gates run by the harness, budgets (allocated or earned), the CoS on a
-  clock, ingestion, and mandates for irreversible acts. § 7.22, § 7.23 and § 7.24 have landed;
-  the rest are proposed, not built.
+  clock, ingestion, and mandates for irreversible acts. § 7.22, § 7.23 and § 7.24 have landed, and
+  § 7.26's model spend; the rest are proposed, not built.
 
 ### Internal
 

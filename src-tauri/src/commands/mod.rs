@@ -22,5 +22,6 @@ pub mod routine;
 pub mod session;
 pub mod settings;
 pub mod skill;
+pub mod spend;
 pub mod window;
 pub mod workspace;

@@ -38,6 +38,7 @@ export function blankDraft(): AgentDraft {
     tools: [],
     skills: [],
     runs_per_day: DEFAULT_RUNS_PER_DAY,
+    spend: { per_run: null, per_day: null },
   };
 }
 
@@ -71,6 +72,7 @@ export function draftOf(agent: Agent): AgentDraft {
     tools: [...agent.tools],
     skills: [...agent.skills],
     runs_per_day: agent.runs_per_day,
+    spend: { ...agent.spend },
   };
 }
 

@@ -418,6 +418,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         };
         let running = turn.run(&plan, &cancel);
 
@@ -686,6 +687,7 @@ async fn a_connector_tool_outside_the_allow_list_is_refused_by_name() {
         tools: vec!["fs_read".to_owned(), "mock__status".to_owned()],
         skills: Vec::new(),
         runs_per_day: 0,
+        spend: Default::default(),
         builtin: false,
     };
 

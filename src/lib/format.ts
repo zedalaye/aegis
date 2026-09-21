@@ -7,6 +7,8 @@
 
 import type { Cost } from "../ipc/bindings";
 
+import { formatDollars } from "./money";
+
 /** Matches a path separator on either platform family. */
 const SEPARATOR = /[\\/]+/;
 
@@ -132,9 +134,19 @@ export function formatCost(cost: Cost): string {
 
   const total = formatTokens(cost.prompt_tokens + cost.completion_tokens);
   const turns = `${cost.turns} turn${cost.turns === 1 ? "" : "s"}`;
-  return cost.unreported > 0
-    ? `at least ${total} tokens · ${turns}`
-    : `${total} tokens · ${turns}`;
+  const tokens =
+    cost.unreported > 0
+      ? `at least ${total} tokens · ${turns}`
+      : `${total} tokens · ${turns}`;
+  // Money only where a price was on file (PLAN 7.26); "at least" when some
+  // turns had none.
+  if (cost.priced === 0) {
+    return tokens;
+  }
+  const money = formatDollars(cost.micros);
+  return cost.priced < cost.turns
+    ? `at least ${money} · ${tokens}`
+    : `${money} · ${tokens}`;
 }
 
 /**

@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::agents::DEFAULT_PROVIDER_ID;
+use super::ledger::{self, ModelPrice};
 use super::{quarantine, strip_bom, write_atomic};
 use crate::error::{AppError, AppResult};
 use crate::secrets::KeySource;
@@ -197,6 +198,8 @@ pub struct MaskedProvider {
     /// A few characters of the key, for recognition. `None` when there is no
     /// key at all.
     pub key_hint: Option<String>,
+    /// What each model costs on this row (PLAN 7.26).
+    pub prices: Vec<ModelPrice>,
 }
 
 // ---------------------------------------------------------------------------
@@ -349,9 +352,19 @@ pub struct ProviderSettings {
     /// Looked up on save, not per turn. `None` leaves the ceiling unset.
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    /// What each model costs on this row, as the operator entered it
+    /// (PLAN 7.26). Set on its own ([`SettingsStore::set_prices`]); a row save
+    /// keeps it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prices: Vec<ModelPrice>,
 }
 
 impl ProviderSettings {
+    /// The price of `model` on this row, matched exactly.
+    pub fn price_of(&self, model: &str) -> Option<&ModelPrice> {
+        self.prices.iter().find(|price| price.model == model)
+    }
+
     /// Whether these settings name somewhere to send a request.
     ///
     /// The key is not considered, so a keyless configured provider fails loudly.
@@ -547,6 +560,7 @@ impl RowDraft<'_> {
             base_url: normalize_base_url(self.base_url)?,
             model: normalize_model(self.model)?,
             max_output_tokens: self.max_output_tokens,
+            prices: Vec::new(),
         })
     }
 }
@@ -730,7 +744,10 @@ impl SettingsStore {
             .iter_mut()
             .find(|entry| entry.id == id)
             .ok_or_else(|| AppError::ProviderNotFound { id: id.to_owned() })?;
-        entry.settings = settings;
+        entry.settings = ProviderSettings {
+            prices: std::mem::take(&mut entry.settings.prices),
+            ..settings
+        };
         if let Some(label) = label {
             entry.label = label;
         }
@@ -738,6 +755,32 @@ impl SettingsStore {
 
         self.save(&next, &document)?;
         document.providers = next;
+        Ok(updated)
+    }
+
+    /// Replaces one row's price list (PLAN 7.26), validated first.
+    pub fn set_prices(&self, id: &str, prices: &[ModelPrice]) -> AppResult<ProviderEntry> {
+        let prices = ledger::check_prices(prices).map_err(|reason| AppError::Settings {
+            field: "prices",
+            reason,
+        })?;
+
+        let mut document = self.document();
+        let mut next = document.providers.clone();
+        let entry = next
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| AppError::ProviderNotFound { id: id.to_owned() })?;
+        entry.settings.prices = prices;
+        let updated = entry.clone();
+
+        self.save(&next, &document)?;
+        document.providers = next;
+        tracing::info!(
+            id,
+            count = updated.settings.prices.len(),
+            "provider prices saved"
+        );
         Ok(updated)
     }
 

@@ -161,6 +161,7 @@ fn a_cli_login_is_configured_with_a_model_alone() {
         base_url: String::new(),
         model: "claude-sonnet-4-6".to_owned(),
         max_output_tokens: None,
+        prices: Vec::new(),
     };
     assert!(provider.is_configured());
 }
@@ -172,6 +173,7 @@ fn gemini_is_configured_with_a_model_alone() {
         base_url: String::new(),
         model: "gemini-2.5-flash".to_owned(),
         max_output_tokens: None,
+        prices: Vec::new(),
     };
     assert!(provider.is_configured());
     assert!(!provider.auth_kind.is_cli());
@@ -220,6 +222,7 @@ fn entry(id: &str, model: &str, cap: Option<u32>) -> ProviderEntry {
             base_url: format!("https://{id}.test/v1"),
             model: model.to_owned(),
             max_output_tokens: cap,
+            prices: Vec::new(),
         },
     }
 }
@@ -553,4 +556,43 @@ fn a_decision_url_that_names_the_endpoint_is_refused() {
         .to_string()
         .contains("api.typesafe.ai"));
     assert_eq!(store.decision(), DecisionSettings::default());
+}
+
+/// PLAN 7.26: prices are set on their own, a row save keeps them, a bad list
+/// changes nothing, and they survive a restart.
+#[test]
+fn prices_are_kept_through_a_row_save() {
+    use crate::store::ledger::DOLLAR;
+
+    let dir = TempDir::new().expect("temp dir");
+    let store = SettingsStore::load(dir.path());
+    let price = ModelPrice {
+        model: "m".to_owned(),
+        input: 3 * DOLLAR,
+        output: 15 * DOLLAR,
+        cache_read: None,
+        cache_write: None,
+    };
+
+    store
+        .set_prices(DEFAULT_PROVIDER_ID, std::slice::from_ref(&price))
+        .expect("priced");
+    store
+        .update(DEFAULT_PROVIDER_ID, &row("Local", "m"))
+        .expect("saved");
+    assert_eq!(store.get().prices, std::slice::from_ref(&price));
+    assert_eq!(store.get().price_of("m"), Some(&price));
+    assert_eq!(store.get().price_of("other"), None);
+
+    let twice = [price.clone(), price.clone()];
+    assert!(store.set_prices(DEFAULT_PROVIDER_ID, &twice).is_err());
+    assert_eq!(
+        store.get().prices.len(),
+        1,
+        "a refused list changes nothing"
+    );
+    assert!(store.set_prices("nope", &[]).is_err());
+
+    let reopened = SettingsStore::load(dir.path());
+    assert_eq!(reopened.get().prices, [price]);
 }

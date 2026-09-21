@@ -19,6 +19,7 @@ use aegis_lib::agent::event::EventSink;
 use aegis_lib::policy::tool;
 use aegis_lib::schedule::{self, runner};
 use aegis_lib::skills;
+use aegis_lib::spend::{Answering, Tariff};
 use aegis_lib::store::routines::{RoutineDraft, RunOutcome, Schedule, RUNS_PER_DAY_MAX};
 use aegis_lib::{
     Agent, AgentDraft, AgentStore, ApprovalDecision, ApprovalRegistry, AuditDecision, AuditEntry,
@@ -136,6 +137,7 @@ struct App {
     memories: MemoryStore,
     /// Where an ask nobody can answer is filed (PLAN 7.22).
     parked: aegis_lib::ParkedStore,
+    spend: aegis_lib::store::SpendLedger,
     /// What is told to somebody who is not at the window.
     notifier: Heard,
 }
@@ -184,6 +186,7 @@ impl App {
             captures: data.join("captures"),
             memories: MemoryStore::load(&data),
             parked: aegis_lib::ParkedStore::load(&data),
+            spend: aegis_lib::store::SpendLedger::load(&data),
             notifier: Heard::default(),
         }
     }
@@ -206,6 +209,7 @@ impl App {
                 ],
                 skills: vec![WATCH_SKILL.to_owned()],
                 runs_per_day: 24,
+                spend: Default::default(),
             })
             .expect("the identity is accepted")
     }
@@ -228,6 +232,7 @@ impl App {
             schedule: Schedule::Every { minutes: 60 },
             grants,
             runs_per_day: 4,
+            spend: Default::default(),
         }
     }
 
@@ -258,11 +263,7 @@ impl App {
     }
 
     /// What a run borrows, with a provider the test chooses.
-    fn host<'a>(
-        &'a self,
-        sink: &'a Recorder,
-        provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
-    ) -> runner::Host<'a> {
+    fn host<'a>(&'a self, sink: &'a Recorder, provider: &'a Answering<'a>) -> runner::Host<'a> {
         runner::Host {
             projects: &self.projects,
             routines: &self.routines,
@@ -281,6 +282,7 @@ impl App {
             memories: &self.memories,
             connectors: aegis_lib::Connectors::none(),
             provider,
+            spend: &self.spend,
             decision: None,
         }
     }
@@ -289,7 +291,12 @@ impl App {
     ///
     /// Through [`runner::fire`] itself, not a copy.
     async fn fire(&self, routine_id: &str, sink: &Recorder) {
-        let provider = |_: &Agent, _: &str| Box::new(FakeProvider::instant()) as Box<dyn Provider>;
+        let provider = |_: &Agent, _: &str| {
+            (
+                Box::new(FakeProvider::instant()) as Box<dyn Provider>,
+                Tariff::unpriced("fake"),
+            )
+        };
         runner::fire(&self.host(sink, &provider), routine_id).await;
     }
 
@@ -301,7 +308,10 @@ impl App {
     /// time round, which is true of a real model too.
     async fn fire_scripted(&self, routine_id: &str, sink: &Recorder, rounds: Rounds) {
         let provider = move |_: &Agent, _: &str| {
-            Box::new(FakeProvider::scripted(rounds.clone())) as Box<dyn Provider>
+            (
+                Box::new(FakeProvider::scripted(rounds.clone())) as Box<dyn Provider>,
+                Tariff::unpriced("fake"),
+            )
         };
         runner::fire(&self.host(sink, &provider), routine_id).await;
     }
@@ -315,7 +325,10 @@ impl App {
         rounds: Rounds,
     ) {
         let provider = move |_: &Agent, _: &str| {
-            Box::new(FakeProvider::scripted(rounds.clone())) as Box<dyn Provider>
+            (
+                Box::new(FakeProvider::scripted(rounds.clone())) as Box<dyn Provider>,
+                Tariff::unpriced("fake"),
+            )
         };
         runner::resume(&self.host(sink, &provider), ask, decision).await;
     }
@@ -383,6 +396,7 @@ fn a_routine_may_only_name_a_live_granted_skill_somebody_has_already_watched() {
                 tools: agent.tools.clone(),
                 skills: vec![WATCH_SKILL.to_owned(), "watch.proposed".to_owned()],
                 runs_per_day: agent.runs_per_day,
+                spend: Default::default(),
             },
         )
         .expect("the identity is edited");
@@ -406,6 +420,7 @@ fn a_routine_may_only_name_a_live_granted_skill_somebody_has_already_watched() {
             tools: vec![tool::FS_WRITE.to_owned()],
             skills: Vec::new(),
             runs_per_day: 24,
+            spend: Default::default(),
         })
         .expect("a second identity");
     let refused =
@@ -950,6 +965,7 @@ fn a_routine_says_what_is_wrong_instead_of_firing() {
                 tools: agent.tools.clone(),
                 skills: Vec::new(),
                 runs_per_day: agent.runs_per_day,
+                spend: Default::default(),
             },
         )
         .expect("the identity is edited");

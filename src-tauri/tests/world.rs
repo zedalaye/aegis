@@ -217,6 +217,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         }
         .run(&plan, &cancel)
         .await;

@@ -180,6 +180,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         }
     }
 

@@ -132,6 +132,7 @@ impl App {
                 ],
                 skills: vec!["inbox.triage".to_owned(), skills::REVIEW_SKILL.to_owned()],
                 runs_per_day: 24,
+                spend: Default::default(),
             })
             .expect("the identity is accepted")
     }
@@ -253,6 +254,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         }
         .run(&plan, &cancel)
         .await;
@@ -668,6 +670,7 @@ async fn a_skill_outside_the_allow_list_never_reaches_the_library() {
             ],
             skills: vec![skills::REVIEW_SKILL.to_owned()],
             runs_per_day: 24,
+            spend: Default::default(),
         })
         .expect("the identity is accepted");
 
@@ -718,6 +721,7 @@ async fn a_runbook_the_identity_cannot_carry_out_fails_closed() {
             ],
             skills: vec!["inbox.triage".to_owned()],
             runs_per_day: 24,
+            spend: Default::default(),
         })
         .expect("the identity is accepted");
 

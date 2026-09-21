@@ -78,6 +78,7 @@ impl Fixture {
                 tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
                 skills: Vec::new(),
                 runs_per_day: 0,
+                spend: Default::default(),
             })
             .expect("created")
     }

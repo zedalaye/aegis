@@ -28,6 +28,7 @@ pub mod roster;
 pub mod schedule;
 pub mod secrets;
 pub mod skills;
+pub mod spend;
 mod state;
 pub mod store;
 pub mod tools;
@@ -259,6 +260,9 @@ pub fn run() {
             commands::settings::settings_add_provider,
             commands::settings::settings_delete_provider,
             commands::settings::settings_clear_key,
+            commands::settings::settings_set_prices,
+            commands::settings::settings_suggest_prices,
+            commands::spend::spend_today,
             commands::settings::settings_probe_provider,
             commands::settings::settings_list_models,
             commands::settings::settings_set_decision,

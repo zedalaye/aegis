@@ -7,10 +7,11 @@
 
 use tauri::{AppHandle, Emitter, Runtime, State};
 
+use crate::agent::provider::pricing::PriceSuggestion;
 use crate::agent::{ModelCatalog, ProviderProbe};
 use crate::error::AppResult;
 use crate::state::AppState;
-use crate::store::{AuthKind, MaskedSettings, RowDraft, DEFAULT_PROVIDER_ID};
+use crate::store::{AuthKind, MaskedSettings, ModelPrice, RowDraft, DEFAULT_PROVIDER_ID};
 
 use super::window::MAIN_WINDOW;
 
@@ -93,6 +94,32 @@ pub fn settings_delete_provider<R: Runtime>(
     state.delete_provider(&provider_id)?;
 
     Ok(announce(&app, state.masked_settings()))
+}
+
+/// Replaces one row's price list (PLAN 7.26). What a model costs is the
+/// operator's word, read by the spend caps; nothing else writes it.
+#[tauri::command(rename_all = "snake_case")]
+pub fn settings_set_prices<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    provider_id: String,
+    prices: Vec<ModelPrice>,
+) -> AppResult<MaskedSettings> {
+    state.settings().set_prices(&provider_id, &prices)?;
+
+    Ok(announce(&app, state.masked_settings()))
+}
+
+/// Suggests prices for `models` on a saved row (PLAN 7.26), from its own
+/// catalog, then LiteLLM's public table. Stores nothing: the form is filled,
+/// and [`settings_set_prices`] is still the operator's.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn settings_suggest_prices(
+    state: State<'_, AppState>,
+    provider_id: String,
+    models: Vec<String>,
+) -> AppResult<PriceSuggestion> {
+    state.suggest_prices(&provider_id, &models).await
 }
 
 /// Removes one row's stored key.

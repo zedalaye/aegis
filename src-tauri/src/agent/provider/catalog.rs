@@ -471,6 +471,56 @@ pub async fn output_cap(
     cap
 }
 
+/// The provider's whole models payload, as JSON, asked with `api_key` — for a
+/// reader that wants more than ids (PLAN 7.26's prices).
+pub async fn listing(
+    kind: AuthKind,
+    override_url: &str,
+    client: Option<&Client>,
+    api_key: Option<&ApiKey>,
+    timeout: std::time::Duration,
+) -> Result<Value, String> {
+    let url = models_url(kind, override_url)
+        .ok_or_else(|| "This provider has no address to ask.".to_owned())?;
+    let http = client.ok_or_else(|| "No HTTP client in this process.".to_owned())?;
+    let request = authorized_get(http, kind, &url, override_url, api_key).await?;
+    let response = request
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|err| format!("The provider could not be reached: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!("The provider answered {}.", response.status()));
+    }
+    response
+        .json()
+        .await
+        .map_err(|_| "The provider's model list is not JSON.".to_owned())
+}
+
+/// The entry for `model` in a models payload, in the shapes [`parse_ids`]
+/// reads.
+pub fn find_entry<'a>(value: &'a Value, model: &str) -> Option<&'a serde_json::Map<String, Value>> {
+    match value {
+        Value::Array(items) => items.iter().find_map(|item| find_entry(item, model)),
+        Value::Object(map) => {
+            let is_this_model = ["id", "slug", "model", "name"]
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .filter_map(Value::as_str)
+                .any(|id| model_id(id) == model_id(model));
+            if is_this_model {
+                return Some(map);
+            }
+            ["data", "models", "items"]
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .find_map(|nested| find_entry(nested, model))
+        }
+        _ => None,
+    }
+}
+
 /// Finds `model` in a models payload and reads its output ceiling.
 ///
 /// Same shapes as [`parse_ids`]; accepts `max_tokens` and `max_output_tokens`.

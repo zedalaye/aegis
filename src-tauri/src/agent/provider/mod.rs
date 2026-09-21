@@ -14,6 +14,7 @@ pub mod fake;
 pub mod image;
 pub mod motosan;
 pub mod openai;
+pub mod pricing;
 
 use tokio::sync::mpsc;
 

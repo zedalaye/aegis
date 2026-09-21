@@ -500,6 +500,7 @@ _Nothing blocked._
             schedule: Schedule::Every { minutes: 60 },
             grants: Vec::new(),
             runs_per_day: 4,
+            spend: Default::default(),
             runs_today: 1,
             paused: false,
             paused_reason: String::new(),

@@ -22,6 +22,7 @@ fn draft(name: &str) -> AgentDraft {
         tools: vec![tool::FS_READ.to_owned(), tool::FS_LIST.to_owned()],
         skills: Vec::new(),
         runs_per_day: AGENT_RUNS_PER_DAY_DEFAULT,
+        spend: Default::default(),
     }
 }
 

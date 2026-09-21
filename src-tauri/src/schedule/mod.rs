@@ -23,6 +23,7 @@ use chrono::{DateTime, Local, SecondsFormat, TimeZone as _, Utc};
 use crate::error::{AppError, AppResult};
 use crate::policy::Grant;
 use crate::skills::Skill;
+use crate::store::ledger::{dollars, Micros};
 use crate::store::routines::{Routine, RoutineDraft, Schedule, EVERY_MIN_MINUTES};
 use crate::store::Agent;
 
@@ -264,6 +265,31 @@ pub fn inspect(
         ));
     }
 
+    None
+}
+
+/// Why a spent day cap keeps this routine from firing today, or `None`
+/// (PLAN 7.26). Asked after [`inspect`], with what the ledger says the routine
+/// and its identity have spent today.
+pub fn spend_problem(
+    routine: &Routine,
+    agent: &Agent,
+    routine_spent: Micros,
+    agent_spent: Micros,
+) -> Option<String> {
+    if let Some(cap) = routine.spend.per_day.filter(|cap| routine_spent >= *cap) {
+        return Some(format!(
+            "its model budget for today ({}) is spent; it starts again at midnight UTC",
+            dollars(cap)
+        ));
+    }
+    if let Some(cap) = agent.spend.per_day.filter(|cap| agent_spent >= *cap) {
+        return Some(format!(
+            "`{}` has spent its model budget for today ({}), across everything it runs",
+            agent.name,
+            dollars(cap)
+        ));
+    }
     None
 }
 
@@ -516,6 +542,7 @@ mod tests {
             schedule,
             grants: Vec::new(),
             runs_per_day: 24,
+            spend: Default::default(),
             runs_today: 0,
             paused: false,
             paused_reason: String::new(),
@@ -563,6 +590,7 @@ mod tests {
             schedule: Schedule::Every { minutes: 60 },
             grants,
             runs_per_day: 4,
+            spend: Default::default(),
         };
 
         // The ordinary write grant is fine: the runbook declares `fs_write` and
@@ -823,5 +851,41 @@ mod tests {
             after > before,
             "a removal has to read as a change: {after} is not after {before}"
         );
+    }
+
+    /// PLAN 7.26: a spent day cap, the routine's or its identity's, keeps a
+    /// routine from firing; a run cap does not.
+    #[test]
+    fn a_spent_day_cap_is_a_problem_and_a_run_cap_is_not() {
+        use crate::store::ledger::DOLLAR;
+        use crate::store::SpendCaps;
+
+        let mut routine = routine(
+            Schedule::Every { minutes: 60 },
+            Utc.with_ymd_and_hms(2026, 9, 1, 8, 0, 0)
+                .single()
+                .expect("a time"),
+        );
+        let mut agent = Agent {
+            name: "Scribe".to_owned(),
+            ..Agent::stranded("a1")
+        };
+        assert_eq!(
+            spend_problem(&routine, &agent, 5 * DOLLAR, 5 * DOLLAR),
+            None
+        );
+
+        routine.spend = SpendCaps {
+            per_run: Some(DOLLAR / 2),
+            per_day: Some(2 * DOLLAR),
+        };
+        assert_eq!(spend_problem(&routine, &agent, DOLLAR, 0), None);
+        let spent = spend_problem(&routine, &agent, 2 * DOLLAR, 0).expect("spent");
+        assert!(spent.contains("$2.00"), "{spent}");
+
+        routine.spend = SpendCaps::default();
+        agent.spend.per_day = Some(DOLLAR);
+        let spent = spend_problem(&routine, &agent, 0, DOLLAR).expect("spent");
+        assert!(spent.contains("Scribe"), "{spent}");
     }
 }

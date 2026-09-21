@@ -19,11 +19,13 @@ import type {
   MaskedProvider,
   MaskedSettings,
   ModelCatalog,
+  ModelPrice,
   ProviderProbe,
 } from "../ipc/bindings";
 import {
   settingsAddProvider,
   settingsClearKey,
+  settingsSetPrices,
   settingsDeleteProvider,
   settingsGet,
   settingsListModels,
@@ -128,6 +130,11 @@ export type SettingsState = {
   remove: (providerId: string) => Promise<boolean>;
   /** Removes the selected row's key from the credential store. */
   clearKey: () => Promise<void>;
+  /**
+   * Replaces the selected row's prices (PLAN 7.26). Resolves to whether they
+   * were accepted.
+   */
+  savePrices: (prices: readonly ModelPrice[]) => Promise<boolean>;
   /** Asks the runtime to try the selected row's server. */
   runProbe: () => Promise<void>;
   /** Asks the chosen authentication which models it will accept. */
@@ -357,6 +364,16 @@ export const useSettings = create<SettingsState>((set, get) => {
         return;
       }
       await guard("settings_clear_key", () => settingsClearKey(selected));
+    },
+
+    savePrices: async (prices) => {
+      const { selected } = get();
+      if (selected === NEW_ROW) {
+        return false;
+      }
+      return guard("settings_set_prices", () =>
+        settingsSetPrices(selected, prices),
+      );
     },
 
     runProbe: async () => {

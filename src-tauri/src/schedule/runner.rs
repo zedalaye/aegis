@@ -19,7 +19,6 @@ use tauri::{AppHandle, Manager as _, Runtime};
 use tokio::time::Duration;
 
 use crate::agent::event::EventSink;
-use crate::agent::provider::Provider;
 use crate::agent::turn::{self, Standing, Turn, TurnPlan, Unattended};
 use crate::agent::{Event, StopReason, TurnRegistry};
 use crate::approval::ApprovalRegistry;
@@ -33,11 +32,13 @@ use crate::notify::{Note, Notifier};
 use crate::park::{Parking, Parks};
 use crate::policy::GrantStore;
 use crate::skills::{self, Reported};
+use crate::spend::{Answering, Meter, Payer};
 use crate::state::AppState;
+use crate::store::ledger::{self, Scope};
 use crate::store::parked::{ParkedAsk, ParkedStore};
 use crate::store::routines::{Routine, RoutineStore, RunOutcome, Schedule};
 use crate::store::{
-    Agent, AgentStore, MemoryStore, Message, Scheduled, SessionState, SessionStore,
+    Agent, AgentStore, MemoryStore, Message, Scheduled, SessionState, SessionStore, SpendLedger,
 };
 
 use super::{Watch, MAX_IN_FLIGHT, TICK};
@@ -85,8 +86,11 @@ pub struct Host<'a> {
     /// The running connectors (Phase 18); a run may call a tool only if the
     /// routine signed for it by name.
     pub connectors: &'a Connectors,
-    /// Which provider answers for an identity (PLAN 7.1, *Provider*).
-    pub provider: &'a (dyn Fn(&Agent, &str) -> Box<dyn Provider> + Send + Sync),
+    /// Which provider answers for an identity (PLAN 7.1, *Provider*), and what
+    /// its model costs (PLAN 7.26).
+    pub provider: &'a Answering<'a>,
+    /// Where each round's spend is written, and today's is read (PLAN 7.26).
+    pub spend: &'a SpendLedger,
     /// The decision client (PLAN 7.18), or `None` without a TypeSafe key.
     pub decision: Option<&'a crate::agent::decision::DecisionClient>,
 }
@@ -203,7 +207,19 @@ fn ready(host: &Host<'_>, routine: &Routine, budget: Budget) -> Result<Ready, St
             Some(&workspace),
             Some(&skill),
             host.routines.runs_today_for_agent(&routine.agent_id),
-        ),
+        )
+        .or_else(|| {
+            // A spent day cap is a day's ceiling like the run count (PLAN
+            // 7.26). A resume is not asked: its turn is refused before it
+            // sends if the cap is spent.
+            let day = ledger::today();
+            super::spend_problem(
+                routine,
+                &agent,
+                host.spend.spent(Scope::RoutineDay(&routine.id, &day)),
+                host.spend.spent(Scope::AgentDay(&agent.id, &day)),
+            )
+        }),
         Budget::Spent => {
             let mut resumed = routine.clone();
             resumed.runs_today = 0;
@@ -423,7 +439,21 @@ async fn drive(
         skill: &routine.skill,
         parks: &parks,
     };
-    let provider = (host.provider)(&ready.agent, session_id);
+    let (provider, tariff) = (host.provider)(&ready.agent, session_id);
+    // The session is the run: a resume is charged to the same one.
+    let meter = Meter::new(
+        host.spend,
+        host.notifier,
+        tariff,
+        Payer {
+            project_id: &routine.project_id,
+            session_id,
+            turn_id: &turn_id,
+            agent: &ready.agent,
+            routine: Some(routine),
+            run_is_session: true,
+        },
+    );
     let plan = TurnPlan {
         session_id: session_id.to_owned(),
         turn_id: turn_id.clone(),
@@ -454,6 +484,7 @@ async fn drive(
             reported: &reported,
         }),
         parking: Some(&parking),
+        meter: Some(&meter),
     }
     .run(&plan, &cancel)
     .await;
@@ -725,7 +756,7 @@ async fn resume_in<R: Runtime>(
 
     let sink = WindowSink::new(app.clone());
     let notifier = crate::notify::Desktop::new(app.clone(), state.coalescer());
-    let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
+    let provider = |agent: &Agent, session_id: &str| state.answering(agent, session_id);
     let decision_client = state.decision_client();
     let host = Host {
         projects: state.store(),
@@ -745,6 +776,7 @@ async fn resume_in<R: Runtime>(
         memories: state.memories(),
         connectors: state.connectors(),
         provider: &provider,
+        spend: state.spend(),
         decision: decision_client.as_ref(),
     };
 
@@ -784,7 +816,7 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
 
     let sink = WindowSink::new(app.clone());
     let notifier = crate::notify::Desktop::new(app.clone(), state.coalescer());
-    let provider = |agent: &Agent, session_id: &str| state.provider_for(agent, session_id);
+    let provider = |agent: &Agent, session_id: &str| state.answering(agent, session_id);
     let decision = state.decision_client();
     let host = Host {
         projects: state.store(),
@@ -804,6 +836,7 @@ async fn run_in<R: Runtime>(app: &AppHandle<R>, routine_id: &str) {
         memories: state.memories(),
         connectors: state.connectors(),
         provider: &provider,
+        spend: state.spend(),
         decision: decision.as_ref(),
     };
 

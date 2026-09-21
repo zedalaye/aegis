@@ -105,6 +105,7 @@ impl App {
                 ],
                 skills: Vec::new(),
                 runs_per_day: 24,
+                spend: Default::default(),
             })
             .expect("the identity is accepted")
     }
@@ -254,6 +255,7 @@ impl App {
             unattended: None,
             parking: None,
             decision: None,
+            meter: None,
         };
         let running = turn.run(&plan, &cancel);
 
