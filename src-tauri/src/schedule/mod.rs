@@ -443,16 +443,22 @@ pub fn opening(routine: &Routine, skill: &Skill) -> String {
          it does not run, and the question is kept for a person to answer afterwards. That is not \
          a fault to work around. Keep what you have already done, do what you can without the \
          call, and finish with `skill_return` `blocked` naming what is parked — if it is allowed, \
-         this run is picked up again with the answer.\n\n",
+         this run is picked up again with the answer.\n\n\
+         So make every call the runbook asks for, including one you expect to be outside what was \
+         signed: parking it is how the question reaches a person, and a step you skip is a \
+         question nobody is ever asked. Only a call you made, and were told is parked, is \
+         parked.\n\n",
     );
 
     if routine.grants.is_empty() {
         out.push_str(
             "This routine was signed for nothing beyond reading, so a write or a command will be \
-             parked rather than done.\n\n",
+             parked rather than done — make it anyway.\n\n",
         );
     } else {
-        out.push_str("This routine was signed for exactly this, and nothing else:\n");
+        out.push_str(
+            "This routine was signed for exactly this; anything else is parked when you call it:\n",
+        );
         for grant in &routine.grants {
             out.push_str(&format!("- {}\n", grant.standing_label()));
         }
@@ -575,6 +581,42 @@ mod tests {
         };
         check(&draft(vec![smuggled]), &agent, Some(&skill), true)
             .expect_err("a prefix into the world is not a write prefix");
+    }
+
+    /// A run that skips a call it expects to be parked never puts the question
+    /// to anybody, so the routine can never be signed for it (PLAN 7.22,
+    /// PLAN 7.23). The opening says to make the call, and names what was
+    /// signed in its standing words.
+    #[test]
+    fn the_opening_says_to_make_the_call_rather_than_skip_it() {
+        let skill = Skill {
+            name: "watch.digest".to_owned(),
+            scope: crate::skills::SkillScope::Library,
+            version: "1".to_owned(),
+            summary: "looks".to_owned(),
+            tools: vec![crate::policy::tool::FS_WRITE.to_owned()],
+            writes: Vec::new(),
+            path: "watch.digest/SKILL.md".to_owned(),
+            shadows: false,
+            problem: None,
+        };
+        let mut signed = routine(Schedule::Every { minutes: 60 }, Utc::now());
+        signed.grants = vec![Grant::write_under(".aegis/artefacts").expect("a prefix")];
+
+        let text = opening(&signed, &skill);
+        assert!(
+            text.contains("make every call the runbook asks for"),
+            "{text}"
+        );
+        assert!(text.contains("a step you skip is a question nobody is ever asked"));
+        assert!(
+            text.contains("write files under `.aegis/artefacts/`"),
+            "{text}"
+        );
+        assert!(text.contains("on every run of this routine"), "{text}");
+
+        signed.grants.clear();
+        assert!(opening(&signed, &skill).contains("make it anyway"));
     }
 
     #[test]
