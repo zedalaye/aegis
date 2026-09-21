@@ -89,8 +89,18 @@ creates, checked at save time against what the runbook declares and what the ide
 outside the workspace, under `.git/` or in `world/` can be signed for. A scheduled run cannot
 delegate. **Run now** takes exactly the unattended path.
 
-- **Budgets.** Each routine and each identity has a daily ceiling, spent before a run opens its
-  session, under the store's lock.
+- **Budgets.** Three numbers bound a routine, and the tightest of them wins:
+
+  | Bound | Most | What it limits |
+  | --- | --- | --- |
+  | interval | every 5 minutes | how *often* one routine may fire |
+  | runs a day | 96 | how many times *that routine* may fire in a day |
+  | the identity's runs a day | 200 | how many times *that identity* may be fired at, across every routine that runs as it |
+
+  They are independent, so a cadence can ask for more than it will get: every five minutes is 288
+  runs a day, and a routine set to it stops after its 96th — or sooner, if the identity's ceiling
+  is lower. The routine form says which one binds. Each is charged before a run opens its session,
+  under the store's lock.
 - **Silence.** A run that ends without returning is a silence. Two in a row pause the routine, with
   the reason on its row. `blocked` and `parked` are answers, not silences.
 - **Parked.** A call the routine was not signed for does not run and is not thrown away: it is kept

@@ -8,7 +8,14 @@
 
 import { useState } from "react";
 
-import type { Agent, Grant, Routine, RoutineDraft, Skill } from "../../ipc/bindings";
+import type {
+  Agent,
+  Grant,
+  Routine,
+  RoutineDraft,
+  Schedule,
+  Skill,
+} from "../../ipc/bindings";
 import { useAgents } from "../../state/agents";
 import { useProjects } from "../../state/projects";
 import { useRoutines, blankDraft, draftOf } from "../../state/routines";
@@ -50,6 +57,59 @@ function toolOf(grant: Grant): string {
     case "jev_ask":
       return "jev_ask";
   }
+}
+
+/** Minutes in a day, for what a cadence asks of a routine. */
+const DAY_MINUTES = 1440;
+
+/**
+ * How many runs a cadence asks for in a day, or `null` when it asks for no
+ * fixed number — a watched folder fires as often as it changes, at most once
+ * per five minutes.
+ */
+function impliedRuns(schedule: Schedule): number | null {
+  switch (schedule.kind) {
+    case "every":
+      return Math.floor(DAY_MINUTES / schedule.minutes);
+    case "daily_at":
+      return 1;
+    default:
+      return null;
+  }
+}
+
+/**
+ * What the clock and the two daily ceilings add up to, in one sentence.
+ *
+ * Three numbers bound a routine and nothing on this form said how they meet:
+ * how often it may fire, how many times it may fire, and how many times the
+ * identity may be fired at across every routine that runs as it. The tightest
+ * wins, and a cadence that asks for more than it will get should say so here
+ * rather than be discovered a day later in the ledger.
+ */
+function ceilingsSentence(
+  schedule: Schedule,
+  routineCap: number,
+  identity: Agent | undefined,
+): string {
+  const identityCap = identity?.runs_per_day ?? 0;
+  const held = Math.min(routineCap, identityCap);
+  const asks = impliedRuns(schedule);
+
+  if (identityCap === 0) {
+    return `${identity?.name ?? "This identity"} is allowed no scheduled runs a day, so this routine would never fire.`;
+  }
+  if (asks === null) {
+    return `A change is acted on at most every five minutes, and stops after ${held} runs in a day — ${routineCap} is this routine's ceiling, ${identityCap} is ${identity?.name ?? "the identity"}'s across every routine that fires as it.`;
+  }
+  if (asks <= held) {
+    return `That is ${asks} run${asks === 1 ? "" : "s"} a day, inside this routine's ${routineCap} and ${identity?.name ?? "the identity"}'s ${identityCap}.`;
+  }
+  const binding =
+    identityCap <= routineCap
+      ? `${identity?.name ?? "the identity"}'s ${identityCap} across every routine that fires as it`
+      : `this routine's ${routineCap}`;
+  return `That is ${asks} runs a day, more than ${binding}: it will stop after ${held} and start again tomorrow.`;
 }
 
 /** Whether two grants are the same standing approval. */
@@ -493,6 +553,10 @@ export default function RoutineForm({
           />
         )}
       </Field>
+
+      <p className="field__hint">
+        {ceilingsSentence(draft.schedule, draft.runs_per_day, identity)}
+      </p>
 
       <div className="routineform__actions">
         <button

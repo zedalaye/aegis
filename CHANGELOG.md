@@ -79,6 +79,12 @@ under an approval that did not describe it.
 
 ### Changed
 
+- **The routine form says what a cadence actually gets.** Three numbers bound a routine — the
+  five-minute interval floor, its own 96 runs a day, and the identity's 200 across every routine
+  that fires as it — and nothing said how they meet. Choosing *every 5 minutes* now reads: *"That
+  is 288 runs a day, more than this routine's 96: it will stop after 96 and start again
+  tomorrow."*
+
 - **A turn no longer stops after eight tool rounds and asks you to type continue.** Repeating the
   same calls three times is a loop (`E_TOOL_LOOP`) and stops those calls; a progressing turn may run
   up to 64 rounds, with or without a runbook. Hitting either guard gives the model one more round to
