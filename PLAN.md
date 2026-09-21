@@ -1891,9 +1891,14 @@ attended ask left for ten minutes is answerable after.
   grant and runs `schedule::check` on it, so a grant the runbook never declared, or a tool the
   identity does not hold, is refused with the question still on the board. `Grant::standing_label`
   says "on every run of this routine" where `scope_label` says "for the rest of this session".
-- **Claim, record, resume**, in that order: the scheduler slot (or the turn registration) is taken
-  before the answer is recorded and given back if recording fails, so the board and the runtime
-  cannot disagree about whether an answer happened.
+- **Claim, record, resume** for an allow, in that order: the scheduler slot (or the turn
+  registration) is taken before the answer is recorded and given back if recording fails, so an
+  approval is never recorded for a call that cannot then be made. A **refusal** is recorded whether
+  or not the run can be picked up, and resumes it only if the slot is free: the run has already
+  ended, the call cannot be made now whatever happens next, and a person clearing eight stale
+  questions should not pay a model turn for each. A refusal that does not resume closes the
+  routine's row the way an expired park closes one, so no row reads `parked` with nothing left on
+  the board to answer.
 - **Notifications** carry the routine's name and one sentence, never the summary — which is the
   path, the command line or the amount. One per key per hour (`notify::Coalescer`), counting what
   it held into the next one. The plugin is registered on the builder and granted to no window.

@@ -127,8 +127,10 @@ board writes `STATUS.md`: correct it in your editor or through an approved write
 it is the same question asked later. *Allow once* runs that exact call, with the arguments in front
 of you, and nothing else — a run that comes back with different arguments asks again. *Allow
 standing* signs the approval onto the routine, through the same checks as saving one. *Deny*
-records the refusal. All three pick the run up in the session it stopped in, so what it had already
-done is not repeated.
+records the refusal. An allow picks the run up in the session it stopped in, so what it had already
+done is not repeated and the call is actually made; one routine runs at a time, so if its run is
+busy the approval is refused and the question stays until you try again. A refusal never waits for
+anything: it is recorded at once, and picks the run up only if it happens to be free.
 
 You are told two ways. In the window, *Board* in the title bar wears the number waiting. Away from
 it, Aegis notifies you: the routine's name and one sentence, never the path or the command line,

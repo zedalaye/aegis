@@ -1,9 +1,12 @@
 //! Parked asks: what is waiting for a person, and answering it (PLAN 7.22).
 //!
-//! The board reads [`parked_list`] and answers with [`parked_answer`]. The run
-//! is claimed, then the answer recorded, then the run picked up — in that
-//! order, so a question is never taken off the board by an answer that could
-//! not start anything.
+//! The board reads [`parked_list`] and answers with [`parked_answer`]. An
+//! **allow** claims the run, records the answer, then picks the run up — in
+//! that order, so a question is never taken off the board by an approval that
+//! could not start the call it approves. A **refusal** is recorded whatever
+//! the run is doing ([`park::needs_the_run`]), and picks it up only if the
+//! slot is free: the run it belongs to has already ended, and clearing a
+//! backlog of questions must not cost a model turn each.
 //!
 //! Nothing here approves by itself: the three answers are the three the dialog
 //! has always offered, and a notification is not one of them.
@@ -36,13 +39,15 @@ pub fn parked_list(
 ///
 /// `allow_once` mints a one-shot on that exact call, `allow_session` signs a
 /// standing approval onto the routine (through Phase 16's door, PLAN 7.13),
-/// and `deny` records the refusal. All three resume the run, so it can finish
-/// or return `blocked` rather than being left half-done.
+/// and `deny` records the refusal. An allow resumes the run, so the call it
+/// approved is actually made; a refusal resumes it when it can, so the run can
+/// close itself rather than being left half-done.
 ///
 /// Errors: `E_APPROVAL_STALE` (answered already, or expired — refetch),
 /// `E_GRANT_NOT_ALLOWED` (no standing approval is on offer for this row),
 /// `E_INVALID_SETTING` (the routine's door refuses the grant, or its run is
-/// already going) and `E_TURN_BUSY` (the session is working on something).
+/// already going) and `E_TURN_BUSY` (the session is working on something). The
+/// last two apply to an allow only: a refusal is never held up by a busy run.
 #[tauri::command(rename_all = "snake_case")]
 pub fn parked_answer<R: Runtime>(
     app: AppHandle<R>,
@@ -53,11 +58,17 @@ pub fn parked_answer<R: Runtime>(
     // Read before it is answered, so the run can be claimed first.
     let waiting = state.parked().get(&parked_id)?;
 
-    let resume = Resume::claim(&state, &waiting)?;
+    let resume = if park::needs_the_run(decision) {
+        Some(Resume::claim(&state, &waiting)?)
+    } else {
+        Resume::claim(&state, &waiting).ok()
+    };
     let answered = match state.answer_parked(&parked_id, decision) {
         Ok(answered) => answered,
         Err(err) => {
-            resume.give_up(&state, &waiting);
+            if let Some(resume) = resume {
+                resume.give_up(&state, &waiting);
+            }
             return Err(err);
         }
     };
@@ -74,8 +85,36 @@ pub fn parked_answer<R: Runtime>(
         answer: park::answer_word(decision).to_owned(),
     }));
 
-    resume.go(&app, &answered, decision);
+    match resume {
+        Some(resume) => resume.go(&app, &answered, decision),
+        // Refused while its run was busy. The question is closed and the run
+        // is not told: it stopped at that call and has no way to make it now.
+        // Its ledger row would otherwise read `parked` for ever with nothing
+        // on the board to answer, so it is closed the way an expired park
+        // closes one.
+        None => closed_unresumed(&state, &sink, &answered),
+    }
     Ok(())
+}
+
+/// Records that a refusal closed a run's question without picking the run up.
+fn closed_unresumed<R: Runtime>(state: &AppState, sink: &WindowSink<R>, ask: &ParkedAsk) {
+    tracing::info!(
+        id = %ask.id,
+        routine = %ask.routine_name,
+        "a parked ask was refused while its run was busy"
+    );
+    if ask.routine_id.is_empty() {
+        return;
+    }
+
+    let detail = format!("it parked `{}` for you, and you refused it", ask.tool);
+    if let Some(updated) = state
+        .routines()
+        .close_parked(&ask.routine_id, &ask.session_id, &detail)
+    {
+        sink.emit(Event::RoutineUpdated(Box::new(updated)));
+    }
 }
 
 /// The claim on whatever will run the answer: a scheduler slot for a routine's

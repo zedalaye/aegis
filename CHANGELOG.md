@@ -56,8 +56,10 @@ under an approval that did not describe it.
   shown. An approval left unanswered for five minutes parks the same way instead of being refused,
   so walking away from the screen no longer costs the turn. Answering *allow once* runs that exact
   call and nothing else, *allow standing* signs the approval onto the routine (through the same
-  checks as saving one), *deny* records the refusal; all three pick the run up in the session it
-  stopped in. A run may park three calls, and a question nobody answers for a week closes itself.
+  checks as saving one), *deny* records the refusal. An allow picks the run up in the session it
+  stopped in, so the call is actually made; a refusal is recorded whether or not the run can be
+  picked up, so a pile of stale questions clears at once. A run may park three calls, and a
+  question nobody answers for a week closes itself.
   Amending `world/` is never parked (`PLAN.md` § 7.22).
 - **Aegis can tell you something is waiting while the window is hidden.** An OS notification for a
   parked call, a run that returned `needs_you` and a routine that stopped itself — the routine's

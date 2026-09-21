@@ -274,3 +274,13 @@ fn a_resumption_says_which_answer_it_is() {
 
     assert_eq!(answer_word(Decision::AllowSession), "allow_standing");
 }
+
+/// PLAN 7.22: an approval that cannot start its run would read as given while
+/// nothing ran, so it waits for the run. A refusal answers a question about a
+/// run that has already ended, so nothing may hold it up.
+#[test]
+fn only_an_allow_has_to_wait_for_the_run() {
+    assert!(needs_the_run(Decision::AllowOnce));
+    assert!(needs_the_run(Decision::AllowSession));
+    assert!(!needs_the_run(Decision::Deny));
+}

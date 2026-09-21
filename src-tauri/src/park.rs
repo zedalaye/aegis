@@ -289,6 +289,25 @@ pub fn resumption(ask: &ParkedAsk, decision: Decision) -> String {
     format!("{answer} {carry}")
 }
 
+/// Whether an answer may only be recorded once its run can be picked up
+/// (PLAN 7.22).
+///
+/// An **allow** may not: the call happens only if the run is resumed, so an
+/// approval recorded while the run cannot be started would read as given while
+/// nothing ran. It claims the run first and is refused when that fails.
+///
+/// A **refusal** is a fact about the person's decision, and the run it belongs
+/// to has already ended — nothing is waiting on a channel, and the call cannot
+/// be made now whatever the run does next. Blocking it on a busy routine would
+/// mean clearing a backlog of questions one model turn at a time, so it is
+/// recorded either way and the run is picked up only if the slot is free.
+pub const fn needs_the_run(decision: Decision) -> bool {
+    match decision {
+        Decision::AllowOnce | Decision::AllowSession => true,
+        Decision::Deny => false,
+    }
+}
+
 /// How a closed park is named on `parked:resolved`, and in the ledger line of
 /// a run that expired.
 pub const fn answer_word(decision: Decision) -> &'static str {
