@@ -835,7 +835,7 @@ async fn the_probe_separates_a_bad_key_from_a_bad_address_from_a_bad_model() {
             json!({ "error": { "message": "invalid x-api-key" } }).to_string(),
             "rejected the API key",
         ),
-        (404, String::from("not found"), "no chat endpoint"),
+        (404, String::from("not found"), "no endpoint"),
         (
             400,
             json!({ "error": { "message": "model: unknown model" } }).to_string(),
