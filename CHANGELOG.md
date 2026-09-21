@@ -104,6 +104,13 @@ under an approval that did not describe it.
 ### Fixed
 
 - The scope sentence of the handoff grant no longer has a run of spaces in the middle.
+- **A routine picked up after you answer what it parked no longer ends `failed`.** Its closing
+  report was refused because the runbook had been closed when the run parked; the resumed run now
+  carries on inside it (`PLAN.md` § 7.22).
+- **A scheduled run no longer skips a step it expects to be parked.** It was told a call outside
+  what was signed "will be parked", and could skip it and report it as parked — so the question
+  never reached anybody. It now makes the call, and only a call the gate parked is reported as
+  parked (`PLAN.md` § 7.22).
 
 ### Documentation
 
